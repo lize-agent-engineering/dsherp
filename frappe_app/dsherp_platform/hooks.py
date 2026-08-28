@@ -1,0 +1,5 @@
+app_name = 'dsherp_platform'
+app_title = 'DSHERP Platform'
+app_publisher = 'dsherp'
+app_description = 'Platform identity and explicit enterprise membership'
+app_email = 'development@example.invalid'

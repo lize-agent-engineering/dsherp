@@ -1,0 +1,67 @@
+{
+  "doctype": "DocType",
+  "name": "DS Enterprise",
+  "module": "Platform",
+  "custom": 0,
+  "autoname": "field:enterprise_id",
+  "engine": "InnoDB",
+  "track_changes": 1,
+  "field_order": [
+    "enterprise_id",
+    "title",
+    "site",
+    "base_url",
+    "status"
+  ],
+  "fields": [
+    {
+      "fieldname": "enterprise_id",
+      "label": "企业标识",
+      "fieldtype": "Data",
+      "reqd": 1,
+      "unique": 1
+    },
+    {
+      "fieldname": "title",
+      "label": "企业名称",
+      "fieldtype": "Data",
+      "reqd": 1
+    },
+    {
+      "fieldname": "site",
+      "label": "业务 Site",
+      "fieldtype": "Data",
+      "reqd": 1,
+      "unique": 1
+    },
+    {
+      "fieldname": "base_url",
+      "label": "服务端地址",
+      "fieldtype": "Data",
+      "reqd": 1
+    },
+    {
+      "fieldname": "status",
+      "label": "开通状态",
+      "fieldtype": "Select",
+      "options": "Provisioning\nReady\nFailed\nDisabled",
+      "default": "Provisioning",
+      "reqd": 1
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1
+    },
+    {
+      "role": "System Manager",
+      "permlevel": 1,
+      "read": 1,
+      "write": 1
+    }
+  ]
+}

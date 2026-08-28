@@ -9,7 +9,9 @@ requires-python = ">=3.11"
 description = "Restricted ERPNext read endpoints for dsherp validation"
 
 [tool.setuptools.packages.find]
-include = ["dsherp_bridge*"]
+include = ["dsherp_bridge*", "dsherp_platform*"]
 
 [tool.setuptools.package-data]
 dsherp_bridge = ["modules.txt", "dsherp_bridge/page/**/*.json", "dsherp_bridge/page/**/*.js", "public/dist/*"]
+
+dsherp_platform = ["modules.txt", "platform/**/*.json", "platform/**/*.js"]

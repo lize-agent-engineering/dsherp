@@ -1,0 +1,74 @@
+{
+  "doctype": "DocType",
+  "name": "DS Membership",
+  "module": "Platform",
+  "custom": 0,
+  "autoname": "hash",
+  "engine": "InnoDB",
+  "track_changes": 1,
+  "field_order": [
+    "enterprise",
+    "platform_user",
+    "enabled",
+    "erp_user",
+    "api_key",
+    "api_secret"
+  ],
+  "fields": [
+    {
+      "fieldname": "enterprise",
+      "label": "企业",
+      "fieldtype": "Link",
+      "options": "DS Enterprise",
+      "reqd": 1
+    },
+    {
+      "fieldname": "platform_user",
+      "label": "平台用户",
+      "fieldtype": "Link",
+      "options": "User",
+      "reqd": 1
+    },
+    {
+      "fieldname": "enabled",
+      "label": "启用",
+      "fieldtype": "Check",
+      "default": 1
+    },
+    {
+      "fieldname": "erp_user",
+      "label": "业务用户",
+      "fieldtype": "Data",
+      "reqd": 1
+    },
+    {
+      "fieldname": "api_key",
+      "label": "业务用户 API Key",
+      "fieldtype": "Data",
+      "reqd": 1,
+      "permlevel": 1
+    },
+    {
+      "fieldname": "api_secret",
+      "label": "业务用户 API Secret",
+      "fieldtype": "Password",
+      "reqd": 1,
+      "permlevel": 1
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1
+    },
+    {
+      "role": "System Manager",
+      "permlevel": 1,
+      "read": 1,
+      "write": 1
+    }
+  ]
+}

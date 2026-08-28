@@ -62,15 +62,19 @@ services:
     restart: "no"
     # Assets are linked by backend; avoid mutating the read-only sites mount.
     entrypoint: []
-    command: ["nginx-entrypoint.sh"]
+    command: ["sh", "/opt/nginx-validation.sh"]
     ports: ["127.0.0.1:18082:8080"]
     environment:
       BACKEND: dsherp-validation.localhost:8000
       SOCKETIO: websocket:9000
       FRAPPE_SITE_NAME_HEADER: dsherp-validation.localhost
+      DSHERP_PUBLIC_ORIGIN: http://127.0.0.1:18082
+      DSHERP_SECONDARY_ORIGIN: http://localhost:18082
+      DSHERP_ALLOWED_HOSTS: "127[.]0[.]0[.]1|localhost"
     volumes:
       - sites:/home/frappe/frappe-bench/sites:ro
-      - ./frappe.conf.template:/templates/nginx/frappe.conf.template:ro
+      - ./frappe.conf.template:/opt/dsherp-frappe.conf.template:ro
+      - ./nginx-validation.sh:/opt/nginx-validation.sh:ro
       - ../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
     depends_on: [backend, websocket]
     networks: [validation, api]
@@ -93,9 +97,9 @@ services:
   worker:
     image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
     pull_policy: never
-    mem_limit: 1024m
-    memswap_limit: 1024m
-    cpus: 0.6
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 0.15
     restart: "no"
     command: ["bench", "worker", "--queue", "short,default,long"]
     environment:
@@ -126,6 +130,80 @@ services:
     networks: [validation]
     logging: *logging
 
+  platform-backend:
+    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    pull_policy: never
+    mem_limit: 320m
+    memswap_limit: 320m
+    cpus: 0.15
+    restart: "no"
+    command: ["start.sh"]
+    environment: {PYTHONPATH: /opt/dsherp-frappe, GUNICORN_WORKERS: "1", GUNICORN_THREADS: "2"}
+    volumes:
+      - platform-sites:/home/frappe/frappe-bench/sites
+      - platform-logs:/home/frappe/frappe-bench/logs
+      - ../frappe_app:/opt/dsherp-frappe:ro
+    networks:
+      validation:
+        aliases: [dsherp-platform.localhost]
+    logging: *logging
+
+  beta-backend:
+    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    pull_policy: never
+    mem_limit: 320m
+    memswap_limit: 320m
+    cpus: 0.15
+    restart: "no"
+    command: ["start.sh"]
+    ports: ["127.0.0.1:18084:8000"]
+    environment: {PYTHONPATH: /opt/dsherp-frappe, GUNICORN_WORKERS: "1", GUNICORN_THREADS: "2"}
+    volumes:
+      - beta-sites:/home/frappe/frappe-bench/sites
+      - beta-logs:/home/frappe/frappe-bench/logs
+      - ../frappe_app:/opt/dsherp-frappe:ro
+    networks: [validation, api]
+    logging: *logging
+
+  platform-websocket:
+    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    pull_policy: never
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.1
+    restart: "no"
+    entrypoint: []
+    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
+    volumes: ["platform-sites:/home/frappe/frappe-bench/sites:ro"]
+    networks: [validation]
+    logging: *logging
+
+  platform-frontend:
+    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    pull_policy: never
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.05
+    restart: "no"
+    entrypoint: []
+    command: ["sh", "/opt/nginx-validation.sh"]
+    ports: ["127.0.0.1:18083:8080"]
+    environment:
+      BACKEND: dsherp-platform.localhost:8000
+      SOCKETIO: platform-websocket:9000
+      FRAPPE_SITE_NAME_HEADER: dsherp-platform.localhost
+      DSHERP_PUBLIC_ORIGIN: http://platform.localhost:18083
+      DSHERP_SECONDARY_ORIGIN: http://platform.localhost
+      DSHERP_ALLOWED_HOSTS: "platform[.]localhost"
+    volumes:
+      - platform-sites:/home/frappe/frappe-bench/sites:ro
+      - ./frappe.conf.template:/opt/dsherp-frappe.conf.template:ro
+      - ./nginx-validation.sh:/opt/nginx-validation.sh:ro
+      - ../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
+    depends_on: [platform-backend, platform-websocket]
+    networks: [validation, api]
+    logging: *logging
+
 networks:
   validation:
     internal: true
@@ -136,6 +214,10 @@ volumes:
   logs:
   db-data:
   redis-data:
+  platform-sites:
+  platform-logs:
+  beta-sites:
+  beta-logs:
 
 secrets:
   db_root_password:

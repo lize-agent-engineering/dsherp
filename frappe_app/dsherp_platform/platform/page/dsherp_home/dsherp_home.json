@@ -1,0 +1,14 @@
+{
+  "doctype": "Page",
+  "name": "dsherp-home",
+  "page_name": "dsherp-home",
+  "title": "业务工作台",
+  "module": "Platform",
+  "standard": "Yes",
+  "roles": [
+    {
+      "role": "Desk User"
+    }
+  ],
+  "modified": "2026-08-28 22:30:00.000000"
+}
