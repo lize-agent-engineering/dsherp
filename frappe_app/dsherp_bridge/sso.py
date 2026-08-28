@@ -43,6 +43,15 @@ def identity_for_token(token):
 
 
 def exchange(code):
+    try:
+        return _exchange(code)
+    except (requests.RequestException,ValueError,KeyError):
+        pass
+    # Raise outside the handler: no chained provider frames containing credentials.
+    raise frappe.PermissionError('平台授权码交换失败，请重新登录')
+
+
+def _exchange(code):
     provider=configuration()['provider']
     flow=get_oauth2_flow(provider)
     with flow.get_auth_session(data={'code':code,'redirect_uri':get_redirect_uri(provider),'grant_type':'authorization_code'},

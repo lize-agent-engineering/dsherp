@@ -15,6 +15,25 @@ class ConsentForm(HTMLParser):
         if tag=='input' and attrs.get('name')=='csrf_token':self.csrf=attrs.get('value')
 
 
+def test_oauth_transport_errors_do_not_escape_with_sensitive_frames():
+    script=r'''
+import os,frappe,traceback
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import sso
+class Flow:
+    def get_auth_session(self,**kwargs):raise ValueError('SYNTHETIC-SENSITIVE-DETAIL')
+sso.get_oauth2_flow=lambda provider:Flow()
+sso.get_redirect_uri=lambda provider:'http://localhost/callback'
+try:sso.exchange('invalid');raise AssertionError('exchange failure ignored')
+except frappe.PermissionError:
+    assert 'SYNTHETIC-SENSITIVE-DETAIL' not in traceback.format_exc()
+frappe.destroy()
+'''
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)
+    assert result.returncode==0,result.stderr
+
+
 def test_real_native_oauth_code_exchange_logs_into_bound_business_user():
     with httpx.Client(base_url='http://localhost:18082',trust_env=False,timeout=30) as business,platform_client() as platform:
         start=business.get('/api/method/dsherp_bridge.sso.start')
