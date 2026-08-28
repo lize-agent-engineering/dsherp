@@ -1,0 +1,138 @@
+"""Explicit configuration confirmations, separate from immutable packages."""
+import hashlib
+import json
+from zoneinfo import ZoneInfo
+import frappe
+from frappe.utils import add_to_date,now_datetime,get_system_timezone
+from dsherp_bridge.configuration import check_bundle,get_bundle
+from dsherp_bridge.configuration_bundle import freeze_bundle
+from dsherp_bridge.context_api import _user,_json
+from dsherp_bridge.configuration_locks import acquire,release
+
+
+@frappe.whitelist(methods=['POST'])
+def prepare_preview(bundle_id,digest):
+    _user()
+    if not frappe.conf.get('dsherp_preview'):frappe.throw('预览应用必须在隔离预览站点执行')
+    bundle=check_bundle(bundle_id,digest)
+    payload={'purpose':'preview','target':frappe.local.site,'bundle_digest':bundle['digest'],
+        'package_digest':freeze_bundle(bundle['package'])['digest'],'baseline':bundle['baseline'],
+        'documents':_documents(bundle['package'])}
+    confirmation=frappe.get_doc({'doctype':'DS Configuration Confirmation','bundle':bundle_id,
+        'payload':_json(payload),'digest':hashlib.sha256(_json(payload).encode()).hexdigest(),
+        'expires_at':add_to_date(now_datetime(),minutes=30),'status':'Pending'}).insert(ignore_permissions=True)
+    return get_confirmation(confirmation.name)
+
+
+def _changes(package):
+    changes=[]
+    for spec in package['doctypes']+package['extensions']:
+        detail='；'.join(f"{field['label']} / {field['fieldname']} / {field['fieldtype']}"+
+                (f" / {field['options']}" if field.get('options') else '') for field in spec['fields'])
+        if 'name' in spec:
+            detail+=f"；模块：{spec['module']}；原生随机编号；可提交：{bool(spec.get('is_submittable'))}；子表：{bool(spec.get('istable'))}"
+            for permission in spec['permissions']:
+                detail+='；权限：'+permission['role']+' / '+','.join(key for key,value in permission.items() if key!='role' and value)
+        changes.append({'object':spec.get('name') or spec['doctype'],
+            'action':'新增 DocType' if 'name' in spec else '新增字段',
+            'detail':detail})
+    for workflow in package['workflows']:
+        changes.append({'object':workflow['workflow_name'],'action':'新应用工作流',
+            'detail':'；'.join(f"{row['state']} → {row['action']} → {row['next_state']} ({row['allowed']})" for row in workflow['transitions'])})
+    return changes
+
+
+@frappe.whitelist(methods=['GET'])
+def get_confirmation(proposal_id):
+    user=_user();doc=frappe.get_doc('DS Configuration Confirmation',proposal_id)
+    if doc.owner!=user:raise frappe.PermissionError('无权读取此配置确认')
+    bundle=get_bundle(doc.bundle);payload=json.loads(doc.payload)
+    if payload['target']!=frappe.local.site:raise frappe.PermissionError('配置确认目标不匹配')
+    result={'id':doc.name,'digest':doc.digest,'purpose':payload['purpose'],'target':payload['target'],
+        'baseline':payload['baseline'],'status':doc.status,
+        'expires_at':doc.expires_at.replace(tzinfo=ZoneInfo(get_system_timezone())).isoformat(),
+        'changes':_changes(bundle['package'])}
+    execution=frappe.db.get_value('DS Configuration Execution',{'confirmation':doc.name},'name')
+    if execution:result['execution']=_result(frappe.get_doc('DS Configuration Execution',execution))
+    return result
+
+
+def _documents(package):
+    # The workflow executor is added separately; do not start a partial package
+    # while a required native operation has not been implemented.
+    if package['workflows']:frappe.throw('工作流预览执行尚未接通，配置未应用')
+    pending={spec['name']:spec for spec in package['doctypes']};documents=[]
+    while pending:
+        ready=[name for name,spec in pending.items() if not any(field['fieldtype'] in ('Link','Table') and field.get('options') in pending for field in spec['fields'])]
+        if not ready:frappe.throw('新配置关联存在循环，当前原生创建顺序无法应用')
+        for name in ready:
+            spec=pending.pop(name)
+            documents.append({'doctype':'DocType',**spec,'custom':1,'autoname':'hash'})
+    for spec in package['extensions']:
+        for field in spec['fields']:documents.append({'doctype':'Custom Field','dt':spec['doctype'],**field})
+    return documents
+
+
+def _matches(actual,expected):
+    if isinstance(expected,dict):return all(_matches(actual.get(key),value) for key,value in expected.items())
+    if isinstance(expected,list):return isinstance(actual,list) and len(actual)>=len(expected) and all(_matches(row,wanted) for row,wanted in zip(actual,expected))
+    return actual==expected
+
+
+def _result(execution):
+    return {'execution_id':execution.name,'status':'Unknown' if execution.status=='Running' else execution.status,
+        'steps':json.loads(execution.steps),'error':execution.error or ('执行已开始，尚未核实；不会重复执行' if execution.status=='Running' else None)}
+
+
+@frappe.whitelist(methods=['POST'])
+def confirm_preview(proposal_id,digest,request_id):
+    _user()
+    if not isinstance(request_id,str) or not 1<=len(request_id)<=128:frappe.throw('请求标识无效')
+    frappe.db.rollback()
+    confirmation=frappe.get_doc('DS Configuration Confirmation',proposal_id,for_update=True)
+    get_confirmation(proposal_id)
+    if digest!=confirmation.digest:frappe.throw('配置确认摘要不匹配')
+    existing=frappe.db.get_value('DS Configuration Execution',{'confirmation':proposal_id},'name',for_update=True)
+    if existing:return _result(frappe.get_doc('DS Configuration Execution',existing,for_update=True))
+    if confirmation.status!='Pending' or confirmation.expires_at<=now_datetime():frappe.throw('配置确认已结束或过期')
+    if not all(frappe.conf.get(key) for key in ('dsherp_preview','mute_emails','disable_scheduler','pause_scheduler')):
+        frappe.throw('隔离预览设置不完整，停止应用')
+    payload=json.loads(confirmation.payload)
+    if payload['purpose']!='preview' or payload['target']!=frappe.local.site:frappe.throw('不是当前预览目标的确认')
+    package=get_bundle(confirmation.bundle)['package']
+    targets=[doc['name'] for doc in package['doctypes']]+[doc['doctype'] for doc in package['extensions']]
+    try:
+        acquire(targets)
+        check_bundle(confirmation.bundle,payload['bundle_digest'])
+        documents=payload['documents']
+        if documents!=_documents(package):frappe.throw('配置执行内容已变化，请重新确认')
+        execution=frappe.get_doc({'doctype':'DS Configuration Execution','confirmation':proposal_id,
+            'request_id':request_id,'status':'Running','steps':'[]'}).insert(ignore_permissions=True)
+        confirmation.status='Running';confirmation.save(ignore_permissions=True)
+        frappe.db.commit()  # Durable intent, before native DDL can commit itself.
+        steps=[]
+        for expected in documents:
+            step={'object':expected.get('name') or expected['dt']+'.'+expected['fieldname'],'status':'Running'}
+            steps.append(step);execution.steps=_json(steps);execution.save(ignore_permissions=True);frappe.db.commit()
+            try:
+                native=frappe.get_doc(json.loads(_json(expected))).insert()
+                saved=frappe.get_doc(native.doctype,native.name);saved.check_permission('read')
+                if not _matches(saved.as_dict(),expected):frappe.throw('原生配置回读与确认内容不一致')
+                step.update(status='Succeeded',doctype=saved.doctype,name=saved.name,version=str(saved.modified))
+                execution.steps=_json(steps);execution.save(ignore_permissions=True);frappe.db.commit()
+            except Exception as error:
+                frappe.db.rollback()
+                step['status']='Unknown'
+                step['error_type']=type(error).__name__
+                execution=frappe.get_doc('DS Configuration Execution',execution.name,for_update=True)
+                execution.status='Partial' if any(row['status']=='Succeeded' for row in steps) else 'Unknown'
+                execution.error='配置执行未全部核实；DDL不保证回滚，不会自动重跑'
+                execution.steps=_json(steps);execution.save(ignore_permissions=True)
+                confirmation=frappe.get_doc('DS Configuration Confirmation',proposal_id,for_update=True)
+                confirmation.status=execution.status;confirmation.save(ignore_permissions=True);frappe.db.commit()
+                return _result(execution)
+        execution.status='Succeeded';execution.save(ignore_permissions=True)
+        confirmation=frappe.get_doc('DS Configuration Confirmation',proposal_id,for_update=True)
+        confirmation.status='Succeeded';confirmation.save(ignore_permissions=True);frappe.db.commit()
+        return _result(execution)
+    finally:release()

@@ -158,3 +158,6 @@ Frappe 15.118.0 / ERPNext 15.119.3；实现时读安装源码核验，auth_hooks
 # 最新接续：预览已完成原生初始化
 
 beta合成公司DPR/China/CNY已通过真实原生向导初始化，setup_complete=1、Sales Order=0。合成配置用户dsherp-preview@example.invalid已创建（私有profile），旧beta-reader角色未变；当前新预览浏览器标签由原生向导自动切到了beta-reader。disable_async改为原生Site配置并删除无效扩展钩子，4项真实回归通过。scheduler已停并移入scheduled profile，原配额转beta448MiB/.25CPU，实际总量仍3712MiB/1.9CPU。下一步直接实现30分钟预览/发布确认、逐项执行、原生DocType/字段/工作流应用与回读。Workflow原生保存会补写状态，须防止对已有/并发新记录隐式回填；日常Site阶段重新核对调度资源。完整目标仍active。
+# 当前接续：预览原生DocType确认执行已通过
+
+独立30分钟DS Configuration Confirmation和逐项DS Configuration Execution已落地，冻结完整原生文档及权限内容；真实beta原生创建DocType→原生记录insert/save回读→重复确认去重通过。10项确认/应用/包测试与4项隔离/配置回归通过，测试结构与记录已清理。当前尚未接前端、真实模型、跨站预览传递、Workflow或目标发布；workflow包在任何DDL前明确报未接通，下一步必须补完而非删减。还需每步权限复核、部分失败验证及Workflow隐式回填/并发记录保护。完整目标继续active，日常Site与既有验收缺口保留。

@@ -1,0 +1,11 @@
+{
+ "doctype":"DocType","name":"DS Configuration Execution","module":"DSHERP Bridge","custom":0,"engine":"InnoDB","autoname":"hash",
+ "field_order":["confirmation","request_id","status","steps","error"],
+ "fields":[
+  {"fieldname":"confirmation","label":"Confirmation","fieldtype":"Link","options":"DS Configuration Confirmation","reqd":1,"unique":1},
+  {"fieldname":"request_id","label":"Request ID","fieldtype":"Data","reqd":1},
+  {"fieldname":"status","label":"Status","fieldtype":"Select","options":"Running\nSucceeded\nPartial\nFailed\nUnknown","reqd":1},
+  {"fieldname":"steps","label":"Step results","fieldtype":"Long Text","reqd":1},
+  {"fieldname":"error","label":"Error","fieldtype":"Small Text"}
+ ],"permissions":[]
+}

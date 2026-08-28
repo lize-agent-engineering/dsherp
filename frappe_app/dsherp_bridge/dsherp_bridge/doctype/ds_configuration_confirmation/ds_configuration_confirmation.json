@@ -1,0 +1,11 @@
+{
+ "doctype":"DocType","name":"DS Configuration Confirmation","module":"DSHERP Bridge","custom":0,"engine":"InnoDB","autoname":"hash",
+ "field_order":["bundle","payload","digest","expires_at","status"],
+ "fields":[
+  {"fieldname":"bundle","label":"Configuration bundle","fieldtype":"Link","options":"DS Configuration Bundle","reqd":1},
+  {"fieldname":"payload","label":"Confirmation binding","fieldtype":"Long Text","reqd":1},
+  {"fieldname":"digest","label":"Digest","fieldtype":"Data","reqd":1},
+  {"fieldname":"expires_at","label":"Expires at","fieldtype":"Datetime","reqd":1},
+  {"fieldname":"status","label":"Status","fieldtype":"Select","options":"Pending\nRunning\nSucceeded\nPartial\nFailed\nUnknown","reqd":1}
+ ],"permissions":[]
+}

@@ -392,3 +392,11 @@
 - 冷启动曾跑满beta原0.15CPU并触发入口超时。停掉本地合成验收不需要的scheduler（Compose profile scheduled），把其128MiB/.1CPU配额转给beta：448MiB/.25CPU。运行中项目仍10容器、3712MiB/1.9CPU，保留Agent384MiB/.1CPU；未扩大总预算。日常Site阶段需要重新核对scheduler资源安排，不能默认同时启用scheduled profile而超预算。
 - beta重建换IP后nginx刚发reload的过渡请求曾502；reload就绪后4项真实身份/原生启动信息/预览隔离/alpha入口通过（15.54s），预览login复测200/0.458741s。不是声称所有冷启动延迟已消除。无新模型调用、应用发布或生产部署。
 - 后续重点：30分钟不可变预览/发布确认、逐项执行与原生保存/工作流。已核对Workflow.on_update会自动创建状态字段并对空状态记录UPDATE；发布计划必须显式包含字段并保证新应用在工作流应用前无业务记录，防止隐式回填及并发窗口，不能将原生DDL视为整体事务。
+# 阶段三：独立预览确认与真实原生应用首链（2026-08-29）
+
+- 新增DS Configuration Confirmation与DS Configuration Execution，分别存储不可变30分钟确认和独立逐项执行记录；确认绑定完整编译后原生文档、包摘要、Site与基线，显示字段、模块、编号方式、可提交/子表及角色权限。不是只绑定可被后续代码改变的抽象配置。
+- prepare_preview限定隔离Site并复查原生权限/基线；确认前无业务DocType或表。confirm_preview单次执行意图先提交，再原生insert与回读；沿用连接锁跨DDL提交，逐项记录，不把Running/未知结果当成功。重复确认返回唯一执行记录，不重放。
+- 真实beta普通合成配置身份确认创建DS Preview Native Apply Test（custom=1），随后原生insert/save将合成记录从Synthetic initial改为Synthetic changed并回读；重复确认换request_id仍同一execution_id。测试先因缺少入口失败，实现后通过；完整原生文档冻结与权限可见展示另经红测补齐。
+- 确认/原生应用/包单测10项通过（12.66s）；预览隔离、配置锁与包4项通过（22.09s）。beta执行标准bench migrate同步当前自定义App审计结构，没有修改上游文件。测试结构/业务记录/确认/执行已清理：独立回读test_doctype=False、test_table=False、confirmation/execution=0。Frappe删除DocType保留空表，测试清理仅对明确自建的固定空表执行DROP，不向Agent开放删除配置或SQL工具。
+- 本切片没有真实模型配置调用、配置确认浏览器UI、目标发布或工作流验收。当前执行器在开始任何DDL前明确拒绝尚未接通的workflow包；这只是待实现部分，不能缩减计划。Custom Field执行路径已写但尚未真实应用验收；新DocType循环关联当前明确拒绝。
+- 下一步：补工作流显式状态字段/原生状态与动作、部分失败和逐步权限变化测试、配置确认前端/API接线与业务Site→预览的受控传递，再独立目标发布。尤其Workflow原生UPDATE不能对已有或并发插入记录隐式回填；每步重新核实身份/权限，不能只依赖开始时检查。整体目标active，阶段一二剩余验收与阶段四不变。
