@@ -58,6 +58,7 @@ def claim_run():
     names=frappe.get_all('DS Model Run',filters={'status':'Queued'},pluck='name',order_by='creation asc',limit_page_length=1)
     if not names:return None
     run=frappe.get_doc('DS Model Run',names[0],for_update=True)
+    if run.status!='Queued':return None
     try:
         with _actor(run):
             conversation=conversations._conversation(run.conversation)
