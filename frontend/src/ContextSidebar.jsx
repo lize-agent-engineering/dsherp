@@ -3,6 +3,7 @@ import {Alert,Button,Drawer,Input,Select} from 'antd';
 import {capturePageContext,contextOptions,selectedContext} from './page-context.js';
 import OperationProposal from './OperationProposal.jsx';
 import ConfigurationProposal from './ConfigurationProposal.jsx';
+import ConfigurationBundle from './ConfigurationBundle.jsx';
 
 const label = context => context?.page_type === 'unknown' ? context.reason : [context?.doctype,context?.name].filter(Boolean).join(' / ');
 export default function ContextSidebar({api,capture=capturePageContext,options=contextOptions,captureSelected=selectedContext,pollInterval=5000}) {
@@ -132,10 +133,12 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
           {m.status==='Cancelled'&&<p>已取消后续工作；已发生的操作不会自动撤销。</p>}
         </article>)}
         {session?.proposals?.map(proposal=><OperationProposal key={proposal.id} proposal={proposal} onConfirm={binding=>api('confirm_operation',binding)} onVerify={binding=>api('verify_operation',binding)}/>)}
+        {session?.configuration_bundles?.filter(bundle=>!session.configuration_confirmations?.some(proposal=>proposal.bundle_id===bundle.id)).map(bundle=><ConfigurationBundle key={`${bundle.id}:${bundle.digest}`} bundle={bundle}
+          onPrepare={binding=>api('prepare_configuration_preview',binding)} onConfirm={binding=>api('confirm_configuration',binding)}/>)}
         {session?.configuration_confirmations?.map(proposal=><ConfigurationProposal key={proposal.id} proposal={proposal} onConfirm={binding=>api('confirm_configuration',binding)}/>)}
       </div>
       <Select aria-label="任务领域" value={domain} onChange={setDomain} disabled={busy||!!session?.active_run} style={{width:'100%',marginBottom:12}}
-        options={[{value:'query',label:'只读查询'},{value:'operation',label:'业务操作'}]}/>
+        options={[{value:'query',label:'只读查询'},{value:'operation',label:'业务操作'},{value:'configuration',label:'应用配置'}]}/>
       <Input.TextArea aria-label="业务问题" value={question} onChange={e=>setQuestion(e.target.value)} autoSize={{minRows:3,maxRows:8}} maxLength={8000}/>
       <div style={{display:'flex',gap:8,marginTop:12}}>
         <Button aria-label="发送问题" type="primary" onClick={send} loading={busy} disabled={busy||!!error||!!session?.active_run||!question.trim()}>发送问题</Button>

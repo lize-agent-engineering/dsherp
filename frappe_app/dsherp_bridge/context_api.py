@@ -134,8 +134,9 @@ def _public(doc):
     bundles=frappe.get_all('DS Configuration Bundle',filters={'conversation':doc.name},pluck='name')
     configurations=[get_confirmation(name) for name in frappe.get_all('DS Configuration Confirmation',
         filters={'bundle':['in',bundles]},pluck='name',order_by='creation asc')] if bundles else []
+    from dsherp_bridge.configuration import get_bundle
     return {'id':doc.name,'title':doc.title,'messages':messages,'active_run':active,'proposals':proposals,
-        'configuration_confirmations':configurations}
+        'configuration_confirmations':configurations,'configuration_bundles':[get_bundle(name) for name in bundles]}
 
 
 @frappe.whitelist(methods=['GET'])

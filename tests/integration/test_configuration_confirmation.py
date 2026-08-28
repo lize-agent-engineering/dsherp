@@ -13,7 +13,10 @@ try:
     conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Preview confirmation test'}).insert(ignore_permissions=True)
     package={'version':1,'doctypes':[{'name':'DS Preview Confirmation Test','module':'DSHERP Bridge','fields':[{'fieldname':'result','label':'Result','fieldtype':'Data'}],'permissions':[{'role':'System Manager','read':1,'write':1,'create':1}]}],'extensions':[],'workflows':[]}
     bundle=propose_bundle(conversation.name,package)
+    assert bundle['preview_available'] and 'Result' in bundle['changes'][0]['detail']
+    assert get_session(conversation.name)['configuration_bundles'][0]['id']==bundle['id']
     confirmation=prepare_preview(bundle['id'],bundle['digest'])
+    assert confirmation['bundle_id']==bundle['id']
     assert confirmation['purpose']=='preview' and confirmation['target']=='dsherp-beta.localhost'
     assert confirmation['status']=='Pending'
     assert get_session(conversation.name)['configuration_confirmations'][0]['id']==confirmation['id']

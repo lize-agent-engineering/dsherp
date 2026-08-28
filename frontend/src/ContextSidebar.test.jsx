@@ -9,6 +9,23 @@ const snapshot={schema_version:1,route:['Form','Item','I-1'],page_type:'form',do
 const session={id:'S-1',title:'查询物料',messages:[{id:'M-1',question:'旧问题',answer:'历史回答',status:'Succeeded',context:snapshot}],active_run:null};
 const open=()=>fireEvent.click(screen.getByRole('button',{name:'打开 Agent'}));
 const apiDefault=async(method)=>method==='list_sessions'?[{id:'S-1',title:'查询物料'}]:session;
+it('配置包准备确认后按同一包恢复，不重复显示或自动执行',async()=>{
+ const bundle={id:'B1',digest:'b1',site:'preview.localhost',preview_available:true,execution_ready:true,changes:[{object:'Inspection',action:'新增 DocType',detail:'配置字段说明'}]};
+ let confirmations=[];
+ const api=vi.fn(async method=>{
+  if(method==='list_sessions')return [{id:session.id,title:session.title}];
+  if(method==='prepare_configuration_preview'){
+   confirmations=[{id:'C1',bundle_id:'B1',digest:'c1',purpose:'preview',target:'preview.localhost',baseline:'v1',status:'Pending',expires_at:'2099-01-01T00:00:00Z',changes:bundle.changes}];return confirmations[0];
+  }
+  return {...session,configuration_bundles:[bundle],configuration_confirmations:confirmations};
+ });
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();await screen.findByText('配置字段说明');
+ fireEvent.click(screen.getByRole('button',{name:'查看预览确认'}));await screen.findByRole('button',{name:'确认应用到隔离预览'});
+ expect(api.mock.calls.find(c=>c[0]==='prepare_configuration_preview')[1]).toEqual({bundle_id:'B1',digest:'b1'});
+ fireEvent.click(screen.getByRole('button',{name:'关闭 Agent'}));open();await screen.findByRole('button',{name:'确认应用到隔离预览'});
+ expect(screen.getAllByText('配置字段说明')).toHaveLength(1);expect(screen.queryByRole('button',{name:'查看预览确认'})).toBeNull();
+ expect(api.mock.calls.some(c=>c[0]==='confirm_configuration')).toBe(false);
+});
 it('配置确认卡来自会话历史，明确确认后执行，重新打开不重放',async()=>{
  let configuration={id:'C1',digest:'d1',purpose:'preview',target:'preview.localhost',baseline:'b1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{object:'Inspection',action:'新增 DocType',detail:'检查结果字段'}]};
  const api=vi.fn(async method=>{
@@ -34,11 +51,11 @@ it('页面版本落后时明确说明，不要求刷新覆盖未保存内容',as
  render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
  expect(await screen.findByText('页面版本与服务器已保存版本不同；查询以实际读取为准，未保存内容不会被覆盖。')).toBeTruthy();
 });
-it('业务操作领域由用户选择并随本条请求发送',async()=>{
+it.each([['业务操作','operation'],['应用配置','configuration']])('%s领域由用户选择并随本条请求发送',async(title,domain)=>{
  const api=vi.fn(apiDefault);render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();await screen.findByText('历史回答');
- fireEvent.mouseDown(screen.getByRole('combobox',{name:'任务领域'}));fireEvent.click(await screen.findByText('业务操作'));
+ fireEvent.mouseDown(screen.getByRole('combobox',{name:'任务领域'}));fireEvent.click(await screen.findByText(title));
  fireEvent.change(screen.getByRole('textbox',{name:'业务问题'}),{target:{value:'修改物料名称'}});fireEvent.click(screen.getByRole('button',{name:'发送问题'}));
- await waitFor(()=>expect(api.mock.calls.find(c=>c[0]==='send_message')[1].domain).toBe('operation'));
+ await waitFor(()=>expect(api.mock.calls.find(c=>c[0]==='send_message')[1].domain).toBe(domain));
 });
 it('会话提案显示冻结差异，切页后确认仍只提交原提案，且不保存或刷新当前表单',async()=>{
  let page=snapshot;

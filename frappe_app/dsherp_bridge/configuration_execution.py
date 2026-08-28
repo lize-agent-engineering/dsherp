@@ -54,10 +54,10 @@ def get_confirmation(proposal_id):
     if doc.owner!=user:raise frappe.PermissionError('无权读取此配置确认')
     bundle=get_bundle(doc.bundle);payload=json.loads(doc.payload)
     if payload['target']!=frappe.local.site:raise frappe.PermissionError('配置确认目标不匹配')
-    result={'id':doc.name,'digest':doc.digest,'purpose':payload['purpose'],'target':payload['target'],
+    result={'id':doc.name,'bundle_id':doc.bundle,'digest':doc.digest,'purpose':payload['purpose'],'target':payload['target'],
         'baseline':payload['baseline'],'status':doc.status,'execution_ready':bundle['execution_ready'],
         'expires_at':doc.expires_at.replace(tzinfo=ZoneInfo(get_system_timezone())).isoformat(),
-        'changes':_changes(bundle['package'])}
+        'changes':bundle['changes']}
     execution=frappe.db.get_value('DS Configuration Execution',{'confirmation':doc.name},'name')
     if execution:result['execution']=_result(frappe.get_doc('DS Configuration Execution',execution))
     return result

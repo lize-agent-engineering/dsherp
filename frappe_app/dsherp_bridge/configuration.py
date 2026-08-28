@@ -112,8 +112,10 @@ def get_bundle(bundle_id):
     if payload['site']!=frappe.local.site or payload['actor']!=user:raise frappe.PermissionError('配置包身份不匹配')
     authorize(payload['package'])
     origin=_origin(payload['model_run'],doc.conversation,user) if payload.get('model_run') else None
+    from dsherp_bridge.configuration_execution import _changes
     return {'id':doc.name,'digest':doc.digest,'baseline':doc.baseline,'site':payload['site'],'package':payload['package'],
-        'execution_ready':not origin or origin.status=='Succeeded'}
+        'execution_ready':not origin or origin.status=='Succeeded','changes':_changes(payload['package']),
+        'preview_available':bool(frappe.conf.get('dsherp_preview'))}
 
 
 def check_authorization(bundle_id):
