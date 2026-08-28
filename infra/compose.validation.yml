@@ -71,7 +71,8 @@ services:
       FRAPPE_SITE_NAME_HEADER: dsherp-validation.localhost
       DSHERP_PUBLIC_ORIGIN: http://127.0.0.1:18082
       DSHERP_SECONDARY_ORIGIN: http://localhost:18082
-      DSHERP_ALLOWED_HOSTS: "127[.]0[.]0[.]1|localhost"
+      DSHERP_CANONICAL_ORIGIN: http://dsherp-validation.localhost:18082
+      DSHERP_ALLOWED_HOSTS: "127[.]0[.]0[.]1|localhost|dsherp-validation[.]localhost"
     volumes:
       - sites:/home/frappe/frappe-bench/sites:ro
       - ./frappe.conf.template:/opt/dsherp-frappe.conf.template:ro
@@ -195,6 +196,7 @@ services:
       FRAPPE_SITE_NAME_HEADER: dsherp-platform.localhost
       DSHERP_PUBLIC_ORIGIN: http://platform.localhost:18083
       DSHERP_SECONDARY_ORIGIN: http://platform.localhost
+      DSHERP_CANONICAL_ORIGIN: http://dsherp-platform.localhost:18083
       DSHERP_ALLOWED_HOSTS: "platform[.]localhost"
     volumes:
       - platform-sites:/home/frappe/frappe-bench/sites:ro
