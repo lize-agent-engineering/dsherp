@@ -73,6 +73,15 @@ def claim_run():
 
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
+def run_status(run_id,capability):
+    run=_run(run_id,capability)
+    if run.status=='Running':
+        with _actor(run):
+            conversations._public(conversations._conversation(run.conversation))
+    return {'run_id':run.name,'status':run.status}
+
+
+@frappe.whitelist(allow_guest=True,methods=['POST'])
 def run_tool(run_id,capability,tool,arguments):
     run=_run(run_id,capability)
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')

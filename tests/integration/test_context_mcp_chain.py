@@ -1,8 +1,11 @@
 """Real DSH stdio/MCP/HTTP/Frappe chain with only the model replaced."""
 import json
 import subprocess
+import httpx
 
 from dsherp.session_runtime import open_runtime
+from dsherp.context_runner import monitored_run
+from dsherp.context_mcp import post
 from test_context_sessions import created
 
 
@@ -28,12 +31,16 @@ print(json.dumps(claim));frappe.destroy()
     settings,requests,state=model_server
     state['tool_call']={'name':'mcp__erp__erp_read_record','arguments':json.dumps({'doctype':'Item','name':'DSHERP-TEST-ITEM'})}
     try:
-        with open_runtime(settings,tmp_path/'native',claim['native_session_id'],resume=False,run_config=secret) as runtime:
-            result=runtime.run('Read the item using the ERP tool',session_id=claim['native_session_id'])
+        with httpx.Client(base_url='http://127.0.0.1:18081',headers={'X-Frappe-Site-Name':'dsherp-validation.localhost'},trust_env=False) as client:
+            cap={'run_id':claim['run_id'],'capability':claim['capability']}
+            with open_runtime(settings,tmp_path/'native',claim['native_session_id'],resume=False,run_config=secret) as runtime:
+                result=monitored_run(runtime,'Read the item using the ERP tool',claim['native_session_id'],
+                    lambda:post(client,'run_status',**cap)['status'])
+            saved=post(client,'finish_run',**cap,**result)
+            assert saved['status']=='Succeeded'
     finally:
         secret.unlink()
-    assert result.finish_reason=='completed'
+    assert result=={'status':'Succeeded','answer':'DSHERP_OK'}
     assert {t['function']['name'] for t in requests[0]['tools']}=={'mcp__erp__erp_read_record','mcp__erp__erp_read_schema','mcp__erp__erp_search_records'}
     results=[m for m in requests[1]['messages'] if m['role']=='tool']
     assert results and 'DSHERP-TEST-ITEM' in str(results)
-    assert any(e['type']=='tool/result' and not e['data'].get('isError') for e in result.events)

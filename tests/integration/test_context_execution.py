@@ -25,6 +25,7 @@ try:
     assert execution.claim_run() is None
     frappe.set_user('Guest')
     cap={'run_id':claim['run_id'],'capability':claim['capability']}
+    assert execution.run_status(**cap)=={'run_id':claim['run_id'],'status':'Running'}
     try:execution.run_tool(**{**cap,'capability':'wrong'},tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'});raise AssertionError('bad cap allowed')
     except frappe.PermissionError:pass
     try:execution.finish_run(**cap,status='Succeeded',answer='fake');raise AssertionError('fake success allowed')
@@ -44,6 +45,18 @@ try:
     saved=api.get_session(doc['id'])
     assert saved['messages'][0]['answer']=='read completed'
     assert saved['active_run'] is None
+    queued=api.send_message('Cancel synthetic run',payload,uuid.uuid4().hex,session_id=doc['id'])
+    frappe.db.commit()
+    claim2=execution.claim_run();frappe.db.commit()
+    cap2={'run_id':claim2['run_id'],'capability':claim2['capability']}
+    api.cancel_run(doc['id'],claim2['run_id'],uuid.uuid4().hex);frappe.db.commit()
+    frappe.set_user('Guest')
+    assert execution.run_status(**cap2)['status']=='Cancelling'
+    try:execution.run_status(**{**cap2,'capability':'wrong'});raise AssertionError('bad status cap allowed')
+    except frappe.PermissionError:pass
+    execution.finish_run(**cap2,status='Cancelled');frappe.db.commit()
+    try:execution.run_status(**cap2);raise AssertionError('terminal status cap allowed')
+    except frappe.PermissionError:pass
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     for run in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):
