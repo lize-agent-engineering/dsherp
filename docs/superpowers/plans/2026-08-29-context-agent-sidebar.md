@@ -161,3 +161,6 @@ beta合成公司DPR/China/CNY已通过真实原生向导初始化，setup_comple
 # 当前接续：预览原生DocType确认执行已通过
 
 独立30分钟DS Configuration Confirmation和逐项DS Configuration Execution已落地，冻结完整原生文档及权限内容；真实beta原生创建DocType→原生记录insert/save回读→重复确认去重通过。10项确认/应用/包测试与4项隔离/配置回归通过，测试结构与记录已清理。当前尚未接前端、真实模型、跨站预览传递、Workflow或目标发布；workflow包在任何DDL前明确报未接通，下一步必须补完而非删减。还需每步权限复核、部分失败验证及Workflow隐式回填/并发记录保护。完整目标继续active，日常Site与既有验收缺口保留。
+# 接续更新：逐步权限复查已验证
+
+真实原生配置创建后禁用合成用户的红测曾复现第二步仍执行；现每步check_authorization，已完成保留Succeeded、未执行步骤Failed、整体Partial。恢复访问后重复确认不补做，5项回归通过，测试身份已恢复且结构清理。接下来实现Workflow（显式状态字段/状态动作/防隐式回填与并发插入）、配置前端和跨站预览/发布。未完成项不缩减，持续目标active。

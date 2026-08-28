@@ -91,14 +91,19 @@ def get_bundle(bundle_id):
     return {'id':doc.name,'digest':doc.digest,'baseline':doc.baseline,'site':payload['site'],'package':payload['package']}
 
 
-def check_bundle(bundle_id,digest):
-    """Read-only revalidation; the caller must hold native configuration locks."""
+def check_authorization(bundle_id):
     result=get_bundle(bundle_id)
-    if not isinstance(digest,str) or digest!=result['digest']:frappe.throw('配置包确认摘要不匹配')
     payload=json.loads(frappe.get_doc('DS Configuration Bundle',bundle_id).payload)
     grant=frappe.session.data.get('dsherp_platform_grant')
     if payload['authorization_revision']!=_authorization_revision(_user(),grant):
         frappe.throw('配置权限或成员关系已变化，请重新提出配置')
+    return result
+
+
+def check_bundle(bundle_id,digest):
+    """Read-only revalidation; the caller must hold native configuration locks."""
+    result=check_authorization(bundle_id)
+    if not isinstance(digest,str) or digest!=result['digest']:frappe.throw('配置包确认摘要不匹配')
     if inspect_baseline(result['package'])!=result['baseline']:
         frappe.throw('原生配置基线已变化，请重新预览并确认')
     return result

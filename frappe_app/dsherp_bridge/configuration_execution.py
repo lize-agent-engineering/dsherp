@@ -4,7 +4,7 @@ import json
 from zoneinfo import ZoneInfo
 import frappe
 from frappe.utils import add_to_date,now_datetime,get_system_timezone
-from dsherp_bridge.configuration import check_bundle,get_bundle
+from dsherp_bridge.configuration import check_bundle,get_bundle,check_authorization
 from dsherp_bridge.configuration_bundle import freeze_bundle
 from dsherp_bridge.context_api import _user,_json
 from dsherp_bridge.configuration_locks import acquire,release
@@ -114,7 +114,10 @@ def confirm_preview(proposal_id,digest,request_id):
         for expected in documents:
             step={'object':expected.get('name') or expected['dt']+'.'+expected['fieldname'],'status':'Running'}
             steps.append(step);execution.steps=_json(steps);execution.save(ignore_permissions=True);frappe.db.commit()
+            started=False
             try:
+                check_authorization(confirmation.bundle)
+                started=True
                 native=frappe.get_doc(json.loads(_json(expected))).insert()
                 saved=frappe.get_doc(native.doctype,native.name);saved.check_permission('read')
                 if not _matches(saved.as_dict(),expected):frappe.throw('原生配置回读与确认内容不一致')
@@ -122,11 +125,11 @@ def confirm_preview(proposal_id,digest,request_id):
                 execution.steps=_json(steps);execution.save(ignore_permissions=True);frappe.db.commit()
             except Exception as error:
                 frappe.db.rollback()
-                step['status']='Unknown'
+                step['status']='Unknown' if started else 'Failed'
                 step['error_type']=type(error).__name__
                 execution=frappe.get_doc('DS Configuration Execution',execution.name,for_update=True)
-                execution.status='Partial' if any(row['status']=='Succeeded' for row in steps) else 'Unknown'
-                execution.error='配置执行未全部核实；DDL不保证回滚，不会自动重跑'
+                execution.status='Partial' if any(row['status']=='Succeeded' for row in steps) else step['status']
+                execution.error='配置执行已停止，请核实逐项结果；DDL不保证回滚，不会整包重跑'
                 execution.steps=_json(steps);execution.save(ignore_permissions=True)
                 confirmation=frappe.get_doc('DS Configuration Confirmation',proposal_id,for_update=True)
                 confirmation.status=execution.status;confirmation.save(ignore_permissions=True);frappe.db.commit()
