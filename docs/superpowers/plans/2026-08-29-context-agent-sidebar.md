@@ -95,6 +95,8 @@
 
 接续更新：模型流前授权/预算与查询领域原生权限版本已接入。真实角色变化停止旧运行并轮换原生会话目录；8项含实际队列容器的回归通过。仍需运行配置/skills 版本、真实压缩及普通用户侧栏多轮与SSO，再进入业务HITL/配置发布/日常站点，不将阶段一基础设施当完整交付。
 
+当前更新：运行配置绑定/挂载文件漂移、erp-query 1.0.0 固定摘要与官方 skill loader 已接入，默认个人目录和 watcher 均关闭，真实原生 skill 正文加载及两轮容器队列回归通过（模型替身）。下一步原生压缩与来源保全、普通用户真实模型侧栏多轮/SSO，然后完成其余三阶段。
+
 再接续：已实现 OS 单写者与 open_runtime，9 项实际 Runtime/锁测试通过；业务 Site claim/tool/finish 与来源再授权已实现，7 项会话/执行回归通过。专用服务身份、HTTP/MCP容器消费及 Desk 接入仍未完成；无新增付费调用。不可将当前能力单测等同真实业务链。
 
 DSH 固定 ref 下：packages/sdk/server/src/index.ts、packages/core/agent/src/runtime-types.ts、docs/subsystems/session.md、packages/session/session-persistence-jsonl/README.md、packages/session/session-checkpoint-policy/README.md、packages/compaction/compaction-basic/README.md、docs/subsystems/skills.md。

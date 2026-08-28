@@ -160,3 +160,12 @@
 - TDD 先复现缺少漂移检测、无绑定入口仍尝试网络、响应期间变化仍放出 finish chunk，再实现。真实 Runtime 测试覆盖授权拒绝零模型请求、授权返回期间配置变化零请求、拒绝后第二次调用仍禁用、正常情况下两轮可完成。最后相关 **7 passed / 4.43s**，Node模型插件 **4 passed**。
 - 容器测试改为预先确定的容器内 loopback SSE 地址，领取摘要与实际执行配置一致，不再在测试中用临时模型地址替换已绑定配置。真实专用账号→两轮业务队列→两容器恢复→模型调用预占与结果回读 **7 passed / 98.54s**（该批包含其他相关测试）；随后响应末尾检查补丁已跑 Node 与真实本机 Runtime，未再重跑容器套件。
 - 这里监测的是当前运行已挂载的配置。宿主 .env 修改由下一轮重新读取，尚不是在途凭据热更新/宿主配置变动主动中断；固定业务 skills 与真实自动压缩仍待接入。未调用付费模型、未启动常驻消费者，整体四阶段目标保持 active。
+
+## 接续：固定业务 skill 与原生加载
+
+- 固定提交现场核对 [skill-filesystem](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/skill/skill-filesystem/src/index.ts)、[agent-spine 组合](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/examples/agent-spine-demo/src/index.ts) 和 [原生 skill 工具](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/skill/tool-skill/src/index.ts)。业务组合启用官方 registry/filesystem/tool；协议验证组合仍关闭，不引入个人目录。
+- 新增 erp-query 1.0.0，限定当前用户 Item/Customer 事实查询、来源标注、未保存上下文区别和只读边界。正文不含可执行脚本，业务权限仍由服务端决定。原生 skill 工具是第四个可见工具，其余三个仍为 ERP 只读工具；没有 Shell/任意 HTTP/数据库工具。
+- includeDefaultRoots=false、watch=false、显式 business-skills 目录，容器只读挂载。Python 领取前与插件启动/调用前校验 manifest、完整内容 SHA-256、版本和目录集合；拒绝额外目录、额外文件及符号链接。manifest 与正文都纳入运行配置摘要，变更不能沿用旧原生会话。
+- 首轮 Runtime 因未引用 YAML 三元表达式，把 customSkillDirs 解析成对象而失败；按错误修正为字符串表达式后复跑，无上游改动。真实 Runtime 的原生 skill 调用把“业务只读查询”正文加入下一次模型请求；放在会话 .agents/skills 中的合成个人 skill 未进入请求。此测试模型为 SSE 替身，不冒称真实模型主动选 skill。
+- 摘要篡改、manifest版本不符、额外目录/符号链接、配置与真实 Runtime 回归 **15 passed / 9.20s**，Node插件 **5 passed**。真实队列两轮容器读取/恢复 **1 passed / 95.76s**，只读 skill 挂载断言通过。业务数据未写入，无本批付费模型调用，测试生成的临时目录按测试生命周期清理。
+- 当前仅查询领域业务 skill；阶段二操作领域、阶段三配置领域仍需各自限制工具和版本。下一步接原生压缩并验证摘要来源/权限/预算，再推进普通用户侧栏真实多轮与 SSO。整体四阶段目标未完成。

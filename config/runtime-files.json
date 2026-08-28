@@ -1,5 +1,7 @@
 [
   "config/runtime-files.json",
+  "config/business-skills.json",
+  "business-skills/erp-query/SKILL.md",
   "config/dsh-business.yml",
   "config/dsh-context.yml",
   "runtime/context-plugin.cjs",

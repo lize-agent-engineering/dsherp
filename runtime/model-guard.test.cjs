@@ -1,11 +1,22 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const {createGuard,watchFiles}=require('./model-guard.cjs');
+const {createGuard,watchFiles,verifyBusinessSkills}=require('./model-guard.cjs');
 const fs=require('node:fs');
 const os=require('node:os');
 const path=require('node:path');
 async function consume(stream){for await(const chunk of stream){}}
 const request={provider:'deepseek-official',model:'deepseek-v4-flash',messages:[],maxTokens:2048};
+test('business catalog rejects unlisted skill directories',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'dsherp-skills-'));
+  try{
+    fs.mkdirSync(path.join(root,'config'));
+    fs.copyFileSync(path.join(__dirname,'../config/business-skills.json'),path.join(root,'config/business-skills.json'));
+    fs.cpSync(path.join(__dirname,'../business-skills'),path.join(root,'business-skills'),{recursive:true});
+    verifyBusinessSkills(root);
+    fs.mkdirSync(path.join(root,'business-skills/extra'));
+    assert.throws(()=>verifyBusinessSkills(root),/catalog/);
+  }finally{fs.rmSync(root,{recursive:true});}
+});
 test('ordinary and direct compaction requests both require authorization',async()=>{
   const seen=[];let calls=0;
   const guard=createGuard(async metadata=>seen.push(metadata));

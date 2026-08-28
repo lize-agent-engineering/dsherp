@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "skills": [
+    {"name":"erp-query","version":"1.0.0","sha256":"6433a861bbd513ac94851d281889d5be7a4a54349ef1dd9f07cf54f5eb1fccca"}
+  ]
+}

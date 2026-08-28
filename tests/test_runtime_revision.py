@@ -1,12 +1,13 @@
 import pytest
 import json
 from dsherp.context_runner import run_business
-from dsherp.runtime_revision import configuration_revision,FILES
+from dsherp.runtime_revision import configuration_revision,FILES,ROOT
 
 
 def test_revision_tracks_model_and_exact_runtime_files(tmp_path):
     for name in FILES:
-        file=tmp_path/name;file.parent.mkdir(parents=True,exist_ok=True);file.write_text('version-one')
+        file=tmp_path/name;file.parent.mkdir(parents=True,exist_ok=True)
+        file.write_bytes((ROOT/name).read_bytes() if name.startswith('business-skills/') or name=='config/business-skills.json' else b'version-one')
     settings={'DEEPSEEK_API_KEY':'synthetic','DSH_MODEL':'model','DEEPSEEK_BASE_URL':'https://provider.invalid'}
     first=configuration_revision(settings,tmp_path)
     assert len(first)==64 and configuration_revision(dict(reversed(list(settings.items()))),tmp_path)==first

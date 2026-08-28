@@ -7,6 +7,7 @@ def docker_command(root,secret,session_directory,name):
         '-v',f'{root}/dsherp:/opt/dsherp/dsherp:ro',
         '-v',f'{root}/config:/opt/dsherp/config:ro',
         '-v',f'{root}/runtime:/opt/dsherp/runtime:ro',
+        '-v',f'{root}/business-skills:/opt/dsherp/business-skills:ro',
         '-v',f'{root}/requirements.lock:/opt/dsherp/requirements.lock:ro',
         '-v','dsherp-agent-runtime:/opt/runtime:ro',
         '-v',f'{secret}:/run/business.json:ro',

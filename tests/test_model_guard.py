@@ -7,13 +7,13 @@ from dsherp.session_runtime import open_runtime
 from dsherp.runtime_revision import configuration_revision
 
 
-@pytest.mark.parametrize('mode',['denied','drift','allow'])
+@pytest.mark.parametrize('mode',['denied','drift','allow','skill'])
 def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,mode):
     observed=[]
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             observed.append((self.path,json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
-            if mode in ('drift','allow'):
+            if mode in ('drift','allow','skill'):
                 if mode=='drift':config.write_text(config.read_text()+'\n')
                 self.send_response(200);self.end_headers();self.wfile.write(b'{"message":{"allowed":true}}')
             else:
@@ -21,7 +21,10 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
         def log_message(self,*args):pass
     server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
-    settings,requests,_=model_server
+    settings,requests,state=model_server
+    if mode=='skill':state['tool_call']={'name':'skill','arguments':json.dumps({'name':'erp-query'})}
+    personal=tmp_path/'native/.agents/skills/personal';personal.mkdir(parents=True)
+    (personal/'SKILL.md').write_text('---\nname: personal\ndescription: PERSONAL_SKILL_FORBIDDEN\n---\nNot authorized')
     config=tmp_path/'run.json'
     config.write_text(json.dumps({**settings,'runtime_revision':configuration_revision(settings),'run_id':'synthetic','capability':'synthetic','site':'synthetic',
         'business_url':f'http://127.0.0.1:{server.server_port}'}));config.chmod(0o600)
@@ -29,9 +32,12 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
         with open_runtime(settings,tmp_path/'native','denied',resume=False,run_config=config) as runtime:
             result=runtime.run('Do not transmit this without permission',session_id='denied')
             second=runtime.run('Do not continue after rejection',session_id='denied')
-        if mode=='allow':
+        if mode in ('allow','skill'):
             assert result.finish_reason==second.finish_reason=='completed'
-            assert len(requests)==len(observed)==2
+            assert len(requests)==len(observed)==(3 if mode=='skill' else 2)
+            assert {tool['function']['name'] for tool in requests[0]['tools']}=={'skill','mcp__erp__erp_read_schema','mcp__erp__erp_read_record','mcp__erp__erp_search_records'}
+            assert 'PERSONAL_SKILL_FORBIDDEN' not in json.dumps(requests)
+            if mode=='skill':assert '业务只读查询' in str(requests[1]['messages'])
         else:
             assert result.finish_reason!='completed'
             assert second.finish_reason!='completed'
