@@ -19,7 +19,7 @@ description: Use when developing dsherp ERPNext or Frappe integration, schema di
 
 实测 ERPNext `15.119.3`、Frappe `15.118.0`、容器 Python `3.11.6`；主机 SDK 环境是 Python `3.12.11`。以 Compose 中 digest 固定镜像，不将标签或候选版本当作镜像实际版本。
 
-只操作 `dsherp-validation` 项目和合成站点。不复制 AgenERP 的卷、数据或凭证。当前已增加原生 nginx、WebSocket、worker 和 scheduler 进程，Desk 为本地 18082；仅登录页和 HTTP 传输已验证，Site 调度仍禁用、完整企业建账未完成。见 [原生 Desk 证据](../../../docs/engineering/native-desk-evidence.md)。
+只操作 `dsherp-validation` 项目和合成站点。不复制 AgenERP 的卷、数据或凭证。当前已增加原生 nginx、WebSocket、worker 和 scheduler 进程，Desk 为本地 18082；已完成合成企业原生初始化和中文物料 UI 录入；调度已启用、普通用户实时认证已验证。明细输入和普通角色 UI 尚未验收，不等于完整企业业务建账。见 [原生 Desk 证据](../../../docs/engineering/native-desk-evidence.md)。
 
 ## API 契约
 
