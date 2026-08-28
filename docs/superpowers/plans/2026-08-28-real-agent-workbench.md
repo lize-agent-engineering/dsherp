@@ -27,3 +27,7 @@ Task前端结构：{id,enterprise,question,status,answer,error,created,events:[{
 ## 验收边界
 
 真实业务链使用合成企业数据，但所有读取/权限/保存都是真实执行。生产部署、注册开通、跨站SSO、草稿写入不在本次范围。模型费用授权与测试运行分别记录。容器资源合计维持4GiB/2CPU，给按需Agent容器预留384MiB/0.1CPU，原alpha后端从1024MiB降为640MiB、0.6降为0.5，实际回归确认足够。
+
+## 2026-08-28 授权与验收完成
+
+用户明确授权启用后，完成两次真实 DeepSeek 页面任务（最多三次额度内），核对真实 ERP 返回、持久工具记录及刷新恢复。本机 worker 保持启用，支持后续用户主动付费查询。验收仅针对隔离合成数据与只读链路，详见 [验收记录](../../engineering/real-agent-workbench-evidence.md)。未推送、未部署生产。
