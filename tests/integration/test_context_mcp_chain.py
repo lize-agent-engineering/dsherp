@@ -2,14 +2,39 @@
 import json
 import subprocess
 import httpx
+import pytest
+from pathlib import Path
+from dsherp.context_container import docker_command
 
-from dsherp.session_runtime import open_runtime
-from dsherp.context_runner import monitored_run
+from dsherp.context_runner import run_business
 from dsherp.context_mcp import post
 from test_context_sessions import created
 
 
-def test_native_context_runtime_reads_actual_erp_through_run_capability(model_server,tmp_path,created):
+CONTAINER_TEST=r'''
+import json,runpy
+from pathlib import Path
+from dsherp.context_runner import run_business
+fixture=runpy.run_path('/run/model_fixture.py')['model_server'].__wrapped__()
+settings,requests,state=next(fixture)
+state['tool_call']={'name':'mcp__erp__erp_read_record','arguments':json.dumps({'doctype':'Item','name':'DSHERP-TEST-ITEM'})}
+try:
+    config=json.loads(Path('/run/business.json').read_text());config.update(settings)
+    path=Path('/tmp/business.json');path.write_text(json.dumps(config));path.chmod(0o600)
+    result=run_business(path,Path('/session'))
+    assert len(requests)==2
+    if config['resume']:
+        assert any(m['role']=='assistant' and m.get('content')=='DSHERP_OK' for m in requests[0]['messages'])
+    assert len(requests[0]['tools'])==3
+    assert 'DSHERP-TEST-ITEM' in str([m for m in requests[1]['messages'] if m['role']=='tool'])
+    print(json.dumps(result))
+finally:
+    fixture.close()
+'''
+
+
+@pytest.mark.parametrize('isolated',[False,True])
+def test_native_context_runtime_reads_actual_erp_through_run_capability(model_server,tmp_path,created,isolated):
     script=r'''
 import os,uuid,json,frappe
 os.chdir('/home/frappe/frappe-bench/sites')
@@ -25,22 +50,43 @@ print(json.dumps(claim));frappe.destroy()
     assert provision.returncode==0,provision.stderr
     claim=json.loads(provision.stdout);created.append(claim['session_id'])
     secret=tmp_path/'run.json'
-    secret.write_text(json.dumps({'run_id':claim['run_id'],'capability':claim['capability'],
-        'business_url':'http://127.0.0.1:18081','site':'dsherp-validation.localhost'}))
-    secret.chmod(0o600)
     settings,requests,state=model_server
+    secret.write_text(json.dumps({**claim,**settings,'resume':False,
+        'business_url':'http://dsherp-validation-backend-1:8000' if isolated else 'http://127.0.0.1:18081','site':'dsherp-validation.localhost'}))
+    secret.chmod(0o600)
     state['tool_call']={'name':'mcp__erp__erp_read_record','arguments':json.dumps({'doctype':'Item','name':'DSHERP-TEST-ITEM'})}
     try:
         with httpx.Client(base_url='http://127.0.0.1:18081',headers={'X-Frappe-Site-Name':'dsherp-validation.localhost'},trust_env=False) as client:
             cap={'run_id':claim['run_id'],'capability':claim['capability']}
-            with open_runtime(settings,tmp_path/'native',claim['native_session_id'],resume=False,run_config=secret) as runtime:
-                result=monitored_run(runtime,'Read the item using the ERP tool',claim['native_session_id'],
-                    lambda:post(client,'run_status',**cap)['status'])
+            if isolated:
+                import uuid
+                root=Path(__file__).resolve().parents[2]
+                directory=tmp_path/'native';directory.mkdir(mode=0o700)
+                name='dsherp-context-test-'+uuid.uuid4().hex
+                command=docker_command(root,secret,directory,name)
+                command[2:2]=['-v',f'{root}/tests/conftest.py:/run/model_fixture.py:ro']
+                command[-2:]=['-c',CONTAINER_TEST]
+                try:
+                    process=subprocess.run(command,capture_output=True,text=True,timeout=140)
+                    assert process.returncode==0,process.stderr
+                    result=json.loads(process.stdout)
+                    restored=json.loads(secret.read_text());restored['resume']=True
+                    secret.write_text(json.dumps(restored))
+                    resumed=subprocess.run(command,capture_output=True,text=True,timeout=140)
+                    assert resumed.returncode==0,resumed.stderr
+                    assert json.loads(resumed.stdout)==result
+                finally:
+                    subprocess.run(['docker','rm','-f',name],capture_output=True,timeout=15)
+                logs=list((directory/'sessions').rglob('session.jsonl.zstd'))
+                assert len(logs)==1 and logs[0].stat().st_size>0
+            else:
+                result=run_business(secret,tmp_path/'native')
             saved=post(client,'finish_run',**cap,**result)
             assert saved['status']=='Succeeded'
     finally:
         secret.unlink()
     assert result=={'status':'Succeeded','answer':'DSHERP_OK'}
+    if isolated:return
     assert {t['function']['name'] for t in requests[0]['tools']}=={'mcp__erp__erp_read_record','mcp__erp__erp_read_schema','mcp__erp__erp_search_records'}
     results=[m for m in requests[1]['messages'] if m['role']=='tool']
     assert results and 'DSHERP-TEST-ITEM' in str(results)

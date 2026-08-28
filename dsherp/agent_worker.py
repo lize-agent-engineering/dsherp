@@ -27,11 +27,15 @@ def load_settings(path):
     return {k: values[k] for k in KEYS}
 
 
-def docker_command(root, secret, name):
+def container_base(name):
     return ['docker', 'run', '--rm', '--pull=never', '--name', name,
             '--memory', '384m', '--memory-swap', '384m', '--cpus', '0.1', '--pids-limit', '96',
             '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--user', '0:0',
-            '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m', '--network', 'dsherp-validation_api',
+            '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m', '--network', 'dsherp-validation_api']
+
+
+def docker_command(root, secret, name):
+    return container_base(name)+[
             '-v', f'{root}/dsherp:/opt/dsherp/dsherp:ro', '-v', f'{root}/config:/opt/dsherp/config:ro',
             '-v', 'dsherp-agent-runtime:/opt/runtime:ro', '-v', f'{secret}:/run/task.json:ro',
             '-e', 'PYTHONPATH=/opt/dsherp', '-e', 'PYTHONDONTWRITEBYTECODE=1',
