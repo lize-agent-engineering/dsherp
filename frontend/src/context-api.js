@@ -1,7 +1,7 @@
 // Identity and authorization are determined by the authenticated business Site.
 const methods = {
   list_sessions:[], get_session:['session_id'],
-  send_message:['session_id','question','context','request_id'],
+  send_message:['session_id','question','context','request_id','domain'],
   cancel_run:['session_id','run_id','request_id'],
   confirm_operation:['proposal_id','digest','request_id'],
 };

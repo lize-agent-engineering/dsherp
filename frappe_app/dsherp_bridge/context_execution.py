@@ -77,7 +77,9 @@ def claim_run(runtime_revision):
         frappe.db.set_value('DS Model Run',run.name,{'status':'Failed','error':'当前用户已无法读取会话来源','capability_hash':''})
         return None
     capability=secrets.token_urlsafe(32)
-    combined_revision=hashlib.sha256((permission_revision+runtime_revision).encode()).hexdigest()
+    domain=run.domain
+    if domain not in ('query','operation'):frappe.throw('未知业务领域')
+    combined_revision=hashlib.sha256((permission_revision+runtime_revision+domain).encode()).hexdigest()
     if identity:
         combined_revision=hashlib.sha256((combined_revision+conversations._json(identity)).encode()).hexdigest()
     if conversation.runtime_revision!=combined_revision:
@@ -87,8 +89,8 @@ def claim_run(runtime_revision):
         'expires_at':add_to_date(now_datetime(),seconds=180),'permission_revision':permission_revision,'runtime_revision':runtime_revision})
     return {'run_id':run.name,'session_id':run.conversation,'native_session_id':conversation.runtime_session,
             'permission_revision':permission_revision,
-            'runtime_revision':runtime_revision,
-            'scope_id':hashlib.sha256(json.dumps([frappe.local.site,run.owner,run.conversation,'query',conversation.runtime_session],separators=(',',':')).encode()).hexdigest(),
+            'runtime_revision':runtime_revision,'domain':domain,
+            'scope_id':hashlib.sha256(json.dumps([frappe.local.site,run.owner,run.conversation,domain,conversation.runtime_session],separators=(',',':')).encode()).hexdigest(),
             'question':run.question,'context':json.loads(run.page_context),'capability':capability}
 
 
@@ -103,10 +105,11 @@ def run_status(run_id,capability):
 
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
-def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,model,purpose,runtime_revision):
+def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,model,purpose,runtime_revision,domain='query'):
     run=_run(run_id,capability)
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')
     if runtime_revision!=run.runtime_revision:raise frappe.PermissionError('模型配置与领取的运行不一致')
+    if domain!=run.domain:raise frappe.PermissionError('模型领域与领取的运行不一致')
     if (provider!='deepseek-official' or model!='deepseek-v4-flash'
         or purpose not in ('conversation','compaction','session-title')
         or type(input_bytes) is not int or not 0<input_bytes<=131072
@@ -130,6 +133,22 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
 def run_tool(run_id,capability,tool,arguments):
     run=_run(run_id,capability)
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')
+    if tool=='erp_propose_update':
+        if run.domain!='operation':raise frappe.PermissionError('当前领域不能提出业务操作')
+        if isinstance(arguments,str):arguments=json.loads(arguments)
+        if (not isinstance(arguments,dict) or set(arguments)!={'doctype','name','values','version'}
+            or not all(isinstance(arguments[key],str) for key in ('doctype','name','version'))
+            or not isinstance(arguments['values'],dict)):
+            frappe.throw('操作提案参数无效')
+        with _actor(run):
+            context_permissions.require_revision(run)
+            sources=json.loads(run.sources or '[]')
+            if not any(source['tool']=='erp_read_record' and source['arguments']=={'doctype':arguments['doctype'],'name':arguments['name']}
+                       and source.get('record_versions',{}).get(arguments['name'])==arguments['version'] for source in sources):
+                frappe.throw('请先读取确切目标及当前版本，再提出操作')
+            authorize_sources(sources)
+            from dsherp_bridge.operations import propose_update
+            return propose_update(run.conversation,**arguments,grant=run.platform_grant,model_run=run.name)
     if tool not in TOOLS:frappe.throw('未知工具')
     if isinstance(arguments,str):arguments=json.loads(arguments)
     if tool=='erp_search_records' and isinstance(arguments,dict):arguments={'query':'',**arguments}

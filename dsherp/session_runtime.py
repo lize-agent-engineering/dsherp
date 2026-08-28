@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import json
 from typing import Literal
 
 from deepseek_harness import DeepSeekHarness
@@ -50,6 +51,10 @@ def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bo
         if not isinstance(settings.get(key),str) or not settings[key].strip():
             raise ValueError('Missing runtime setting: '+key)
     directory=directory.absolute()
+    domain=None
+    if run_config:
+        domain=json.loads(run_config.read_text()).get('domain')
+        if domain not in ('query','operation'):raise ValueError('Unknown business domain')
     with session_writer(directory):
         runtime=DeepSeekHarness(provider='deepseek-official',model=settings['DSH_MODEL'],
             api_key=settings['DEEPSEEK_API_KEY'],base_url=settings['DEEPSEEK_BASE_URL'],
@@ -57,7 +62,7 @@ def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bo
             session_root=str(directory/'sessions'),max_tokens=2048,
             request_timeout_seconds=90,shutdown_timeout_seconds=5,
             env={} if run_config is None else {'DSHERP_RUN_CONFIG':str(run_config.absolute()),
-                'DSHERP_PYTHON':sys.executable,'DSHERP_PROJECT':str(ROOT)})
+                'DSHERP_PYTHON':sys.executable,'DSHERP_PROJECT':str(ROOT),'DSHERP_DOMAIN':domain})
         try:
             runtime.start()
             if resume=='inspect':

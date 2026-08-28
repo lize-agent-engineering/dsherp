@@ -271,3 +271,13 @@
 - 两个真实认证HTTP请求最初得到200/417 UniqueValidationError。安装源码确认原生metadata加载可重新打开一致性快照，单独rollback不足；提案行锁后，执行记录查询也必须使用原生for_update当前读。修复后并发只产生一份执行记录和一次保存。四项真实Frappe测试 **4 passed / 6.34s**；测试账号、物料、会话、提案及执行记录均精确删除/回滚，无生产数据操作。
 - 会话读取包含重新授权后的提案及执行结果，侧栏展示冻结差异并调用同源CSRF确认接口；切页不改变确认目标，刷新恢复结果不触发写入。全前端 **54 passed / 4.43s**，构建及Antd5.27.6检查通过。前一轮会话/权限/执行组合11项通过，随后又完成上述并发修复；不可将该前一轮等同修复后的全套回归。
 - alpha已原生reload执行DocType并重启本项目backend，ping正常；现场无agent_worker/context_worker消费者。无付费模型调用。模型操作领域和提案工具尚未接通，尚未真实浏览器确认操作；下一步完成领域/技能/工具和真实模型→侧栏HITL链，继续Sales Order、填表及阶段三/四。
+
+## 阶段二接续：操作领域、固定技能与模型提案工具
+
+- 侧栏增加本次任务领域选择（只读查询/业务操作），不是另建业务页面或双工作台。领域保存在每个Model Run并绑定请求摘要；领取时纳入原生会话版本及日志scope。切换领域不复用旧Agent上下文，所有模型调用（含摘要）校验所属领域。
+- operation MCP目录在三个原有读工具外仅开放erp_propose_update，没有确认/save/提交接口。服务端从运行取当前操作者、会话和平台grant；只能对本轮实际读取过的确切记录/版本提出修改。query能力即使伪造工具名也不能提出操作。模型不接收用户、Site、授权或会话选择参数。
+- 新增固定erp-operation 1.0.0及SHA256清单，限定当前实际支持的Item/Customer标量修改；明确形成提案即结束本轮、等待侧栏确认，不假称创建/Sales Order/填表已支持。官方固定ref的[技能目录发现实现](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/skill/skill-filesystem/src/index.ts)确认单技能文件夹也可作为根目录。query只加载erp-query，operation只加载erp-operation；默认个人目录继续禁用。
+- 真实固定Runtime测试先复现erp-operation未知，配置后原生skill调用将业务操作提案正文送入下一次模型请求，工具目录含提案、不含确认，查询技能不进入operation首轮上下文。Runtime/技能/MCP组合 **13 passed / 6.77s**；运行器/配置/压缩组合 **12 passed / 6.39s**。这些模型均是SSE替身，未调用付费模型。
+- 真实Runtime→MCP→ERP原有只读/恢复回归 **2 passed / 78.49s**。此时另一组共享站点领取测试并行运行，权限轮换因claim返回None失败；两组结束后串行重跑业务领域/会话/权限组合 **14 passed / 15.85s**。这不是放宽领取约束，后续共享站点任务套件串行执行。
+- 提案另绑定其生成Model Run，原生不可变字段保护。确认要求来源运行Succeeded（worker在容器退出后才finish），运行中/失败/取消的提案不能提前执行。新行为先因缺model_run接口失败，补齐后操作真实Frappe **5 passed / 8.98s**；当前提案原生模型运行状态在该测试中为合成设置，不能当作真实模型容器释放验收。
+- 全前端 **55 passed / 4.60s**、构建及Antd5.27.6检查通过；alpha迁移Model Run/domain与提案model_run并重启backend。尚未真实模型生成业务提案、尚未浏览器确认写入；下一步普通写权限账号完整链路，同时继续Customer实际保存/创建、Item创建、Sales Order、填表、Unknown核实和后续阶段。旧付费消费者未启动，无新常驻服务。

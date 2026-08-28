@@ -41,6 +41,13 @@ frappe.db.commit();frappe.destroy()
 def params():
     return {'session_id':None,'question':'查询当前物料','request_id':uuid.uuid4().hex,'context':{'schema_version':1,'page_type':'form','route':['Form','Item','DSHERP-TEST-ITEM'],'doctype':'Item','name':'DSHERP-TEST-ITEM','version':None,'dirty':False}}
 
+def test_selected_domain_is_persisted_and_bound_to_request_id(clients,created):
+    reader,_=clients;args={**params(),'domain':'operation'}
+    data=send(reader,created,args)
+    assert data['messages'][0]['domain']=='operation'
+    assert reader.post(API+'send_message',json={**args,'domain':'query'}).status_code==417
+    assert reader.post(API+'send_message',json={**params(),'domain':'admin'}).status_code==417
+
 def test_explicit_child_columns_are_context_only_and_reject_foreign_fields(clients,created):
     reader,_=clients;args=params()
     args['context'].update(dirty=True,unsaved={'uoms':[{'name':'new-uom-conversion-detail-1','uom':'DSHERP-TEST-UNIT','conversion_factor':2}]})

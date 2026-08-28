@@ -9,6 +9,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
   const [sessions,setSessions]=useState([]);
   const [session,setSession]=useState(null);
   const [question,setQuestion]=useState('');
+  const [domain,setDomain]=useState('query');
   const [page,setPage]=useState(null);
   const [error,setError]=useState('');
   const [busy,setBusy]=useState(false);
@@ -68,7 +69,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
         }
         context=captureSelected(provided.keys);
       }
-      const result=await api('send_message',{session_id:selected.current,question:question.trim(),context,request_id:crypto.randomUUID()});
+      const result=await api('send_message',{session_id:selected.current,question:question.trim(),context,domain,request_id:crypto.randomUUID()});
       if(ticket!==generation.current)return;
       selected.current=result.id;setSession(result);setQuestion('');
       setSessions(old=>[{id:result.id,title:result.title},...old.filter(s=>s.id!==result.id)]);
@@ -130,6 +131,8 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
         </article>)}
         {session?.proposals?.map(proposal=><OperationProposal key={proposal.id} proposal={proposal} onConfirm={binding=>api('confirm_operation',binding)}/>)}
       </div>
+      <Select aria-label="任务领域" value={domain} onChange={setDomain} disabled={busy||!!session?.active_run} style={{width:'100%',marginBottom:12}}
+        options={[{value:'query',label:'只读查询'},{value:'operation',label:'业务操作'}]}/>
       <Input.TextArea aria-label="业务问题" value={question} onChange={e=>setQuestion(e.target.value)} autoSize={{minRows:3,maxRows:8}} maxLength={8000}/>
       <div style={{display:'flex',gap:8,marginTop:12}}>
         <Button aria-label="发送问题" type="primary" onClick={send} loading={busy} disabled={busy||!!error||!!session?.active_run||!question.trim()}>发送问题</Button>

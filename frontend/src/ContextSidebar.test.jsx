@@ -9,6 +9,12 @@ const snapshot={schema_version:1,route:['Form','Item','I-1'],page_type:'form',do
 const session={id:'S-1',title:'查询物料',messages:[{id:'M-1',question:'旧问题',answer:'历史回答',status:'Succeeded',context:snapshot}],active_run:null};
 const open=()=>fireEvent.click(screen.getByRole('button',{name:'打开 Agent'}));
 const apiDefault=async(method)=>method==='list_sessions'?[{id:'S-1',title:'查询物料'}]:session;
+it('业务操作领域由用户选择并随本条请求发送',async()=>{
+ const api=vi.fn(apiDefault);render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();await screen.findByText('历史回答');
+ fireEvent.mouseDown(screen.getByRole('combobox',{name:'任务领域'}));fireEvent.click(await screen.findByText('业务操作'));
+ fireEvent.change(screen.getByRole('textbox',{name:'业务问题'}),{target:{value:'修改物料名称'}});fireEvent.click(screen.getByRole('button',{name:'发送问题'}));
+ await waitFor(()=>expect(api.mock.calls.find(c=>c[0]==='send_message')[1].domain).toBe('operation'));
+});
 it('会话提案显示冻结差异，切页后确认仍只提交原提案，且不保存或刷新当前表单',async()=>{
  let page=snapshot;
  const proposal={id:'P1',digest:'d1',action:'update',doctype:'Item',name:'I-1',version:'v1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{field:'item_name',label:'物料名称',before:'原物料名',after:'建议物料名'}]};
@@ -52,7 +58,7 @@ it('发送绑定点击时页面，关闭再打开保留输入且不保存原生�
  page={...snapshot,name:'I-2',route:['Form','Item','I-2']};
  fireEvent.click(screen.getByRole('button',{name:'发送问题'}));
  await waitFor(()=>expect(api.mock.calls.some(c=>c[0]==='send_message')).toBe(true));
- expect(api.mock.calls.find(c=>c[0]==='send_message')[1]).toEqual({session_id:'S-1',question:'新问题',context:page,request_id:expect.any(String)});
+ expect(api.mock.calls.find(c=>c[0]==='send_message')[1]).toEqual({session_id:'S-1',question:'新问题',context:page,domain:'query',request_id:expect.any(String)});
 });
 it('新建会话不携带旧对象，迟到结果不能回灌新会话',async()=>{
  let finish;const api=async method=>method==='send_message'?new Promise(resolve=>finish=resolve):apiDefault(method);

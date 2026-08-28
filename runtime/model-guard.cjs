@@ -56,6 +56,7 @@ exports.apply=function(ctx){
   const checkFiles=watchFiles([...files.map(file=>path.join(root,file)),process.env.DSHERP_RUN_CONFIG]);
   const check=()=>{checkFiles();verifyBusinessSkills(root);};
   const config=JSON.parse(readFileSync(process.env.DSHERP_RUN_CONFIG,'utf8'));
+  if(!['query','operation'].includes(config.domain)||config.domain!==process.env.DSHERP_DOMAIN)throw new Error('Business domain mismatch');
   const material=[files.map(file=>[file,createHash('sha256').update(readFileSync(path.join(root,file))).digest('hex')]),
     ['DEEPSEEK_API_KEY','DSH_MODEL','DEEPSEEK_BASE_URL'].map(key=>config[key])];
   const revision=createHash('sha256').update(JSON.stringify(material)).digest('hex');
@@ -65,7 +66,7 @@ exports.apply=function(ctx){
     check();
     const response=await fetch(endpoint,{method:'POST',redirect:'error',signal:AbortSignal.timeout(20000),
       headers:{'Content-Type':'application/json','X-Frappe-Site-Name':config.site},
-      body:JSON.stringify({run_id:config.run_id,capability:config.capability,runtime_revision:revision,...metadata})});
+      body:JSON.stringify({run_id:config.run_id,capability:config.capability,runtime_revision:revision,domain:config.domain,...metadata})});
     if(!response.ok)throw new Error(`Model authorization rejected (HTTP ${response.status})`);
     const body=await response.json();
     if(body.message?.allowed!==true)throw new Error('Invalid model authorization response');

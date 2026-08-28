@@ -59,6 +59,14 @@ try:
     assert changed['native_session_id']!=after['native_session_id']
     assert changed['permission_revision']==after['permission_revision']
     assert changed['runtime_revision']=='b'*64
+    execution.finish_run(run_id=changed['run_id'],capability=changed['capability'],status='Failed',error='End query domain');frappe.db.commit()
+    api.send_message('Operation domain',context,uuid.uuid4().hex,session_id=doc['id'],domain='operation');frappe.db.commit()
+    operation=execution.claim_run('b'*64);frappe.db.commit()
+    assert operation['domain']=='operation'
+    assert operation['native_session_id']!=changed['native_session_id']
+    assert operation['scope_id']!=changed['scope_id']
+    try:execution.reserve_model_call(run_id=operation['run_id'],capability=operation['capability'],input_bytes=100,max_output_tokens=2048,provider='deepseek-official',model='deepseek-v4-flash',purpose='compaction',runtime_revision='b'*64,domain='query');raise AssertionError('wrong domain model request accepted')
+    except frappe.PermissionError:pass
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     user=frappe.get_doc('User',actor)

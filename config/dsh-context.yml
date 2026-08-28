@@ -14,7 +14,7 @@
         providerName: dsherp-business
         includeDefaultRoots: false
         watch: false
-        customSkillDirs: !!js "process.env.DSHERP_PROJECT ? [process.env.DSHERP_PROJECT + '/business-skills'] : []"
+        customSkillDirs: !!js "process.env.DSHERP_PROJECT ? [process.env.DSHERP_PROJECT + '/business-skills/erp-' + process.env.DSHERP_DOMAIN] : []"
     toolBash: false
     toolJobs: false
 - id: llm-deepseek

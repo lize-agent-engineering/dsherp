@@ -2,6 +2,45 @@
 import subprocess
 
 
+def test_run_domain_only_exposes_proposals_after_real_target_read():
+    script=r'''
+import os,uuid,json,hashlib,frappe
+from frappe.utils import now_datetime,add_to_date
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge.context_execution import run_tool
+from dsherp_bridge.context_permissions import revision
+try:
+    frappe.set_user('Administrator')
+    actor='tool-'+uuid.uuid4().hex+'@example.invalid'
+    frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic proposal tool','enabled':1,'send_welcome_email':0,'roles':[{'role':'Item Manager'}]}).insert()
+    frappe.set_user(actor)
+    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Tool proposals'}).insert(ignore_permissions=True)
+    capability=uuid.uuid4().hex
+    run=frappe.get_doc({'doctype':'DS Model Run','conversation':conversation.name,'domain':'query','status':'Running','page_context':json.dumps({'schema_version':1,'page_type':'unknown','route':[]}), 'permission_revision':revision(actor),'capability_hash':hashlib.sha256(capability.encode()).hexdigest(),'expires_at':add_to_date(now_datetime(),minutes=3),'sources':'[]'}).insert(ignore_permissions=True)
+    item=frappe.get_doc('Item','DSHERP-TEST-ITEM')
+    args={'doctype':'Item','name':item.name,'values':{'item_name':'Proposed by tool'},'version':str(item.modified)}
+    cap={'run_id':run.name,'capability':capability}
+    frappe.set_user('Guest')
+    try:run_tool(**cap,tool='erp_propose_update',arguments=args);raise AssertionError('query domain proposed')
+    except frappe.PermissionError:pass
+    frappe.db.set_value('DS Model Run',run.name,'domain','operation')
+    try:run_tool(**cap,tool='erp_propose_update',arguments=args);raise AssertionError('unread target proposed')
+    except frappe.ValidationError:pass
+    run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':item.name})
+    proposal=run_tool(**cap,tool='erp_propose_update',arguments=args)
+    assert proposal['status']=='Pending' and proposal['actor']==actor
+    assert frappe.db.get_value('Item',item.name,'item_name')==item.item_name
+    assert 'confirm' not in proposal
+    try:run_tool(**cap,tool='confirm',arguments={});raise AssertionError('model confirmed write')
+    except frappe.ValidationError:pass
+finally:
+    frappe.db.rollback();frappe.destroy()
+'''
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)
+    assert result.returncode==0,result.stderr
+
+
 def test_customer_native_field_permission_rejects_silently_ignored_write():
     script=r'''
 import os,uuid,frappe
@@ -42,8 +81,12 @@ try:
     item.item_code=item_name;item.item_name='Before confirmation';item.insert()
     frappe.set_user(actor)
     conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Synthetic execution'}).insert(ignore_permissions=True).name
-    proposal=propose_update(conversation,'Item',item.name,{'item_name':'Confirmed native save'},str(item.modified))
+    origin=frappe.get_doc({'doctype':'DS Model Run','conversation':conversation,'status':'Running','page_context':'{"schema_version":1,"page_type":"unknown","route":[]}','sources':'[]'}).insert(ignore_permissions=True)
+    proposal=propose_update(conversation,'Item',item.name,{'item_name':'Confirmed native save'},str(item.modified),model_run=origin.name)
     frappe.db.commit()
+    try:confirm(proposal['id'],proposal['digest'],tag);raise AssertionError('confirmed before model run ended')
+    except frappe.ValidationError as error:assert '运行' in str(error)
+    frappe.db.set_value('DS Model Run',origin.name,'status','Succeeded');frappe.db.commit()
     assert frappe.db.get_value('Item',item.name,'item_name')=='Before confirmation'
     try:confirm(proposal['id'],'forged',tag);raise AssertionError('wrong digest accepted')
     except frappe.ValidationError:frappe.db.rollback()
@@ -112,6 +155,8 @@ finally:
             for execution_id in frappe.get_all('DS Execution Record',filters={'proposal':proposal_id},pluck='name'):
                 frappe.delete_doc('DS Execution Record',execution_id,ignore_permissions=True)
             frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
+        for run_id in frappe.get_all('DS Model Run',filters={'conversation':conversation},pluck='name'):
+            frappe.delete_doc('DS Model Run',run_id,ignore_permissions=True)
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     if frappe.db.exists('Item',item_name):frappe.delete_doc('Item',item_name,ignore_permissions=True)
     if frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)

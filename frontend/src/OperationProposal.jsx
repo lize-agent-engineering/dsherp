@@ -15,7 +15,7 @@ function Proposal({proposal, onConfirm}) {
   const state = localState || proposal.execution;
   const expired = !Number.isFinite(Date.parse(proposal.expires_at)) || Date.parse(proposal.expires_at) <= Date.now();
   async function confirm() {
-    if (claimed.current || expired || Date.parse(proposal.expires_at) <= Date.now() || proposal.status !== 'Pending') return;
+    if (claimed.current || proposal.execution_ready===false || expired || Date.parse(proposal.expires_at) <= Date.now() || proposal.status !== 'Pending') return;
     claimed.current = true;
     setState({status: 'Running'});
     try {
@@ -33,6 +33,7 @@ function Proposal({proposal, onConfirm}) {
     {expired && <Alert type="warning" message="确认已过期，请重新提出操作"/>}
     {state?.status === 'Succeeded' && <Alert type="success" message="执行成功，已读取业务结果"/>}
     {state?.error && <Alert type="error" message={state.error}/>}
-    <Button aria-label="确认执行" type="primary" loading={state?.status === 'Running'} disabled={expired || proposal.status !== 'Pending' || Boolean(state)} onClick={confirm}>确认执行</Button>
+    {proposal.execution_ready===false&&<Typography.Text type="secondary">提案生成运行尚未成功结束，请核实运行记录。</Typography.Text>}
+    <Button aria-label="确认执行" type="primary" loading={state?.status === 'Running'} disabled={proposal.execution_ready===false || expired || proposal.status !== 'Pending' || Boolean(state)} onClick={confirm}>确认执行</Button>
   </Space>;
 }

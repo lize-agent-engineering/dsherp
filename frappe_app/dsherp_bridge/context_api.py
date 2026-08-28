@@ -122,7 +122,7 @@ def _public(doc):
         from dsherp_bridge.context_execution import authorize_sources
         authorize_sources(json.loads(run.sources or '[]'))
         messages.append({'id':run.name,'question':run.question,'answer':run.answer or '',
-                         'error':run.error or '', 'status':run.status,'context':context})
+                         'error':run.error or '', 'status':run.status,'context':context,'domain':run.domain})
         if run.status in ('Queued','Running','Cancelling'):active=run.name
     from dsherp_bridge.operations import get_proposal
     proposals=[get_proposal(name) for name in frappe.get_all('DS Operation Proposal',
@@ -150,8 +150,9 @@ def list_sessions():
 
 
 @frappe.whitelist(methods=['POST'])
-def send_message(question, context, request_id, session_id=None):
+def send_message(question, context, request_id, session_id=None, domain='query'):
     user=_user()
+    if domain not in ('query','operation'):frappe.throw('未知业务领域')
     grant=frappe.session.data.get('dsherp_platform_grant')
     if grant:
         from dsherp_bridge.sso import validate_grant
@@ -161,7 +162,7 @@ def send_message(question, context, request_id, session_id=None):
     if not isinstance(request_id,str) or not 1<=len(request_id)<=128:
         frappe.throw('请求标识无效')
     raw_context=json.loads(context) if isinstance(context,str) else context
-    digest=hashlib.sha256(_json([session_id,question.strip(),raw_context]).encode()).hexdigest()
+    digest=hashlib.sha256(_json([session_id,question.strip(),raw_context,domain]).encode()).hexdigest()
     run_id=hashlib.sha256((user+'\0'+request_id).encode()).hexdigest()
     # The existing native User row serializes submissions without another lock service.
     frappe.db.rollback()
@@ -181,7 +182,7 @@ def send_message(question, context, request_id, session_id=None):
         doc=frappe.get_doc({'doctype':'DS Conversation','title':question.strip()[:100],
                             'runtime_session':uuid.uuid4().hex}).insert(ignore_permissions=True)
     frappe.get_doc({'doctype':'DS Model Run','name':run_id,'conversation':doc.name,
-        'platform_grant':grant,
+        'platform_grant':grant,'domain':domain,
         'request_id':request_id,'request_digest':digest,'question':question.strip(),
         'page_context':_json(snapshot),'status':'Queued','sources':'[]'}).insert(ignore_permissions=True,set_name=run_id)
     return _public(doc)

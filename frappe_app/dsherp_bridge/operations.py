@@ -36,6 +36,8 @@ def confirm(proposal_id, digest, request_id):
     existing = frappe.db.get_value('DS Execution Record', {'proposal': proposal_id}, 'name', for_update=True)
     if existing:
         return _execution_result(frappe.get_doc('DS Execution Record', existing, for_update=True))
+    if proposal.model_run and frappe.db.get_value('DS Model Run',proposal.model_run,'status',for_update=True)!='Succeeded':
+        frappe.throw('提案生成运行尚未成功结束，请核实运行记录')
     if proposal.status != 'Pending':
         frappe.throw('提案已结束，请核对执行记录')
     execution = frappe.get_doc({'doctype': 'DS Execution Record', 'proposal': proposal_id,
@@ -99,9 +101,13 @@ def _execution_result(execution):
     return {**result, 'execution_id': execution.name}
 
 
-def propose_update(session_id, doctype, name, values, version, grant=None):
+def propose_update(session_id, doctype, name, values, version, grant=None, model_run=None):
     user = _user()
     conversation = _conversation(session_id)
+    if model_run:
+        origin=frappe.get_doc('DS Model Run',model_run)
+        if origin.owner!=user or origin.conversation!=conversation.name or origin.status!='Running':
+            raise frappe.PermissionError('提案运行归属或状态不匹配')
     doc = frappe.get_doc(doctype, name)
     changes = update_diff(doc, values)
     if str(doc.modified) != version:
@@ -111,7 +117,7 @@ def propose_update(session_id, doctype, name, values, version, grant=None):
     payload = _json({'site': frappe.local.site, 'actor': user, 'action': 'update', 'authorization_revision': authorization,
         'doctype': doctype, 'name': name, 'version': version, 'changes': changes})
     digest = hashlib.sha256(_json([conversation.name, payload, str(expires)]).encode()).hexdigest()
-    proposal = frappe.get_doc({'doctype': 'DS Operation Proposal', 'conversation': conversation.name,
+    proposal = frappe.get_doc({'doctype': 'DS Operation Proposal', 'conversation': conversation.name,'model_run':model_run,
         'payload': payload, 'digest': digest, 'expires_at': expires, 'status': 'Pending'}).insert(ignore_permissions=True)
     return get_proposal(proposal.name)
 
@@ -134,6 +140,7 @@ def get_proposal(proposal_id):
         raise frappe.PermissionError('无权读取提案字段')
     result = {**payload, 'id': proposal.name, 'digest': proposal.digest,
         'expires_at': proposal.expires_at.replace(tzinfo=ZoneInfo(get_system_timezone())).isoformat(), 'status': proposal.status}
+    result['execution_ready']=not proposal.model_run or frappe.db.get_value('DS Model Run',proposal.model_run,'status')=='Succeeded'
     execution = frappe.db.get_value('DS Execution Record', {'proposal': proposal_id}, 'name')
     if execution:
         result['execution'] = _execution_result(frappe.get_doc('DS Execution Record', execution))

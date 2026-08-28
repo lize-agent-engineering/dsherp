@@ -6,6 +6,7 @@
   "engine": "InnoDB",
   "autoname": "hash",
   "field_order": [
+    "domain",
     "platform_grant",
     "conversation",
     "request_id",
@@ -26,6 +27,7 @@
     "model_output_tokens_reserved"
   ],
   "fields": [
+    {"fieldname":"domain","label":"Domain","fieldtype":"Select","options":"query\noperation","default":"query","reqd":1},
     {"fieldname":"platform_grant","label":"Encrypted platform authorization","fieldtype":"Long Text","hidden":1},
     {"fieldname":"runtime_revision","label":"Runtime revision","fieldtype":"Data"},
     {"fieldname":"permission_revision","label":"Permission revision","fieldtype":"Data"},

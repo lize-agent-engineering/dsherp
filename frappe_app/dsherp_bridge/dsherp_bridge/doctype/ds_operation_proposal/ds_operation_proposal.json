@@ -6,6 +6,7 @@
   "engine": "InnoDB",
   "autoname": "hash",
   "field_order": [
+    "model_run",
     "conversation",
     "payload",
     "digest",
@@ -13,6 +14,7 @@
     "status"
   ],
   "fields": [
+    {"fieldname":"model_run","label":"Model run","fieldtype":"Link","options":"DS Model Run"},
     {
       "fieldname": "conversation",
       "label": "conversation",
