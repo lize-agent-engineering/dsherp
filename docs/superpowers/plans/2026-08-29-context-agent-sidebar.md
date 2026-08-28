@@ -99,6 +99,8 @@
 
 最新更新：原生自动压缩、拒绝摘要后禁止后续调用、压缩 checkpoint 跨进程显式恢复已验证（模型替身）；真实 ERP 读取的记录/列表/schema 版本进入来源账本，相关23项及Node5项通过。下一步普通用户真实模型侧栏多轮和SSO；真实模型摘要语义保全尚未验收，阶段二至四全部仍需实施。
 
+真实 UI 更新：普通只读用户通过原生受审计身份切换，在 Item 表单和列表同一侧栏连续两轮真实 deepseek-v4-flash 查询成功；独立两容器恢复，数据库2条Succeeded，刷新后历史展示恢复。原管理员标签保留，无业务写入或常驻付费消费者。接续先处理必要侧栏体验/未保存与子表上下文及SSO，再业务HITL、配置预览发布和日常Site；完整验收缺口见最新证据节。
+
 再接续：已实现 OS 单写者与 open_runtime，9 项实际 Runtime/锁测试通过；业务 Site claim/tool/finish 与来源再授权已实现，7 项会话/执行回归通过。专用服务身份、HTTP/MCP容器消费及 Desk 接入仍未完成；无新增付费调用。不可将当前能力单测等同真实业务链。
 
 DSH 固定 ref 下：packages/sdk/server/src/index.ts、packages/core/agent/src/runtime-types.ts、docs/subsystems/session.md、packages/session/session-persistence-jsonl/README.md、packages/session/session-checkpoint-policy/README.md、packages/compaction/compaction-basic/README.md、docs/subsystems/skills.md。
