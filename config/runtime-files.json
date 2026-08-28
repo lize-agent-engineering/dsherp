@@ -3,6 +3,7 @@
   "config/business-skills.json",
   "business-skills/erp-query/SKILL.md",
   "business-skills/erp-operation/SKILL.md",
+  "business-skills/erp-configuration/SKILL.md",
   "config/dsh-business.yml",
   "config/dsh-context.yml",
   "runtime/context-plugin.cjs",

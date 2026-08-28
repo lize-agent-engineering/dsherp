@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 from typing import Literal
 from mcp.types import ToolAnnotations
+from mcp.server.fastmcp import FastMCP
 
 import httpx
 from dsherp.read_tools import create_read_server
@@ -27,9 +28,20 @@ def post(client,method,**data):
 
 
 def create_server(client,run_id,capability,domain='query'):
-    if domain not in ('query','operation'):raise ValueError('Unknown business domain')
+    if domain not in ('query','operation','configuration'):raise ValueError('Unknown business domain')
     def invoke(tool,**arguments):
         return post(client,'run_tool',run_id=run_id,capability=capability,tool=tool,arguments=arguments)
+    if domain=='configuration':
+        server=FastMCP('dsherp-context-configuration')
+        @server.tool(annotations=ToolAnnotations(readOnlyHint=True,destructiveHint=False,idempotentHint=True))
+        def erp_read_configuration(doctype: str) -> dict:
+            """Read current-user native configuration for an exact existing or proposed DocType, with available modules and roles. No business records."""
+            return invoke('erp_read_configuration',doctype=doctype)
+        @server.tool(annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=False,idempotentHint=False))
+        def erp_propose_configuration(package: dict) -> dict:
+            """Store an immutable data-only native configuration proposal after reading its targets. Does not apply, publish, or create business records. Human preview and target confirmations are separate."""
+            return invoke('erp_propose_configuration',package=package)
+        return server
     server=create_read_server(invoke,'dsherp-context-'+domain)
     if domain=='operation':
         @server.tool(annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=False,idempotentHint=False))

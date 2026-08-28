@@ -44,8 +44,9 @@ def model_server(port=0):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
-            if state.get("tool_call") and len(requests) == 1:
-                deltas = [({"role": "assistant", "tool_calls": [{"index": 0, "id": "call-erp-1", "type": "function", "function": state["tool_call"]}]}, None), ({}, "tool_calls")]
+            sequence=state.get('tool_calls',[state['tool_call']] if state.get('tool_call') else [])
+            if not compact and len(requests)<=len(sequence):
+                deltas = [({"role": "assistant", "tool_calls": [{"index": 0, "id": "call-erp-"+str(len(requests)), "type": "function", "function": sequence[len(requests)-1]}]}, None), ({}, "tool_calls")]
             else:
                 content=state.get('summary_content',state['content']) if compact else state['content']
                 deltas = [({"role": "assistant", "content": content}, None), ({}, state["finish_reason"])]

@@ -56,7 +56,7 @@ exports.apply=function(ctx){
   const checkFiles=watchFiles([...files.map(file=>path.join(root,file)),process.env.DSHERP_RUN_CONFIG]);
   const check=()=>{checkFiles();verifyBusinessSkills(root);};
   const config=JSON.parse(readFileSync(process.env.DSHERP_RUN_CONFIG,'utf8'));
-  if(!['query','operation'].includes(config.domain)||config.domain!==process.env.DSHERP_DOMAIN)throw new Error('Business domain mismatch');
+  if(!['query','operation','configuration'].includes(config.domain)||config.domain!==process.env.DSHERP_DOMAIN)throw new Error('Business domain mismatch');
   const material=[files.map(file=>[file,createHash('sha256').update(readFileSync(path.join(root,file))).digest('hex')]),
     ['DEEPSEEK_API_KEY','DSH_MODEL','DEEPSEEK_BASE_URL'].map(key=>config[key])];
   const revision=createHash('sha256').update(JSON.stringify(material)).digest('hex');

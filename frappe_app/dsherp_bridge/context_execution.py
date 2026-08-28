@@ -35,6 +35,10 @@ def _actor(run):
 
 def authorize_sources(sources):
     for source in sources:
+        if source['tool']=='erp_read_configuration':
+            from dsherp_bridge.configuration_tools import authorize_source
+            authorize_source(source)
+            continue
         args=source['arguments'];doctype=args['doctype']
         schema={f['fieldname']:f for f in erp.read_schema(doctype)['fields']}
         visible=set(schema)
@@ -77,13 +81,13 @@ def claim_run(runtime_revision):
         with _actor(run) as identity:
             conversation=conversations._conversation(run.conversation)
             conversations._public(conversation)
-            permission_revision=context_permissions.revision(run.owner)
+            permission_revision=context_permissions.run_revision(run.owner,run.domain)
     except (frappe.PermissionError,frappe.DoesNotExistError):
         frappe.db.set_value('DS Model Run',run.name,{'status':'Failed','error':'当前用户已无法读取会话来源','capability_hash':''})
         return None
     capability=secrets.token_urlsafe(32)
     domain=run.domain
-    if domain not in ('query','operation'):frappe.throw('未知业务领域')
+    if domain not in ('query','operation','configuration'):frappe.throw('未知业务领域')
     combined_revision=hashlib.sha256((permission_revision+runtime_revision+domain).encode()).hexdigest()
     if identity:
         combined_revision=hashlib.sha256((combined_revision+conversations._json(identity)).encode()).hexdigest()
@@ -118,7 +122,7 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
     if (provider!='deepseek-official' or model!='deepseek-v4-flash'
         or purpose not in ('conversation','compaction','session-title')
         or type(input_bytes) is not int or not 0<input_bytes<=131072
-        or type(max_output_tokens) is not int or not 0<max_output_tokens<=(3072 if run.domain=='operation' else 2048)):
+        or type(max_output_tokens) is not int or not 0<max_output_tokens<=(3072 if run.domain in ('operation','configuration') else 2048)):
         frappe.throw('模型请求配置或输入预算不符')
     with _actor(run):
         context_permissions.require_revision(run)
@@ -138,6 +142,34 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
 def run_tool(run_id,capability,tool,arguments):
     run=_run(run_id,capability)
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')
+    if run.domain=='configuration':
+        from dsherp_bridge.configuration_tools import read_configuration
+        from dsherp_bridge.configuration import propose_bundle
+        from dsherp_bridge.configuration_bundle import freeze_bundle
+        if isinstance(arguments,str):arguments=json.loads(arguments)
+        if tool not in ('erp_read_configuration','erp_propose_configuration'):
+            raise frappe.PermissionError('配置领域不允许此工具')
+        key='doctype' if tool=='erp_read_configuration' else 'package'
+        if not isinstance(arguments,dict) or set(arguments)!={key}:frappe.throw('配置工具参数无效')
+        with _actor(run):
+            context_permissions.require_revision(run)
+            sources=json.loads(run.sources or '[]');authorize_sources(sources)
+            if tool=='erp_read_configuration':
+                result=read_configuration(**arguments)
+                sources.append({'tool':tool,'arguments':arguments,'modules':result['modules'],'roles':result['roles'],
+                    'exists':result['exists'],'version':result.get('modified'),'configuration_revision':result['configuration_revision']})
+                frappe.db.set_value('DS Model Run',run.name,'sources',conversations._json(sources))
+                return result
+            try:package=freeze_bundle(arguments['package'])['package']
+            except ValueError as error:frappe.throw(str(error))
+            targets={row['name'] for row in package['doctypes']}|{row['doctype'] for row in package['extensions']}
+            if not targets.issubset({source['arguments']['doctype'] for source in sources if source['tool']=='erp_read_configuration'}):
+                frappe.throw('请先读取确切配置目标，再提出配置')
+            latest={source['arguments']['doctype']:source for source in sources if source['tool']=='erp_read_configuration'}
+            for target in targets:
+                if latest[target]['configuration_revision']!=read_configuration(target)['configuration_revision']:
+                    frappe.throw('配置来源版本已变化，请重新读取后提出配置')
+            return propose_bundle(run.conversation,package,model_run=run.name)
     if tool in ('erp_propose_update','erp_propose_create','erp_propose_action','erp_propose_fill'):
         if run.domain!='operation':raise frappe.PermissionError('当前领域不能提出业务操作')
         if isinstance(arguments,str):arguments=json.loads(arguments)

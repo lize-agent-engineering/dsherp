@@ -21,6 +21,15 @@ def test_only_pinned_business_skills_are_accepted(tmp_path):
     with pytest.raises(ValueError,match='digest'):verify_business_skills(root)
 
 
+def test_configuration_skill_is_pinned_and_in_runtime_identity():
+    from dsherp.runtime_revision import FILES
+    manifest=json.loads((ROOT/'config/business-skills.json').read_text())
+    row=next(row for row in manifest['skills'] if row['name']=='erp-configuration')
+    assert row['version']=='1.0.0'
+    assert 'business-skills/erp-configuration/SKILL.md' in FILES
+    verify_business_skills()
+
+
 def test_extra_skill_or_symlink_is_rejected(tmp_path):
     root=bundle(tmp_path);extra=root/'business-skills/personal';extra.mkdir()
     with pytest.raises(ValueError,match='catalog'):verify_business_skills(root)

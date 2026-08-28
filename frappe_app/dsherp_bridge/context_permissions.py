@@ -4,6 +4,7 @@ import json
 import frappe
 
 DOCTYPES=['Item','Customer','Sales Order']
+CONFIGURATION_DOCTYPES=['DocType','Custom Field','Workflow','Workflow State','Workflow Action Master','Module Def','Role']
 
 
 def revision(user,doctypes=None):
@@ -32,6 +33,11 @@ def revision(user,doctypes=None):
     return hashlib.sha256(json.dumps(state,sort_keys=True,separators=(',',':'),default=str).encode()).hexdigest()
 
 
+def run_revision(user,domain):
+    if domain not in ('query','operation','configuration'):frappe.throw('未知业务领域')
+    return revision(user,doctypes=CONFIGURATION_DOCTYPES if domain=='configuration' else None)
+
+
 def require_revision(run):
-    if not run.permission_revision or run.permission_revision!=revision(run.owner):
+    if not run.permission_revision or run.permission_revision!=run_revision(run.owner,run.domain):
         raise frappe.PermissionError('业务权限已改变，需要新的运行上下文')

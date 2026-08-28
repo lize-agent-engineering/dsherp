@@ -160,7 +160,7 @@ def list_sessions():
 @frappe.whitelist(methods=['POST'])
 def send_message(question, context, request_id, session_id=None, domain='query'):
     user=_user()
-    if domain not in ('query','operation'):frappe.throw('未知业务领域')
+    if domain not in ('query','operation','configuration'):frappe.throw('未知业务领域')
     grant=frappe.session.data.get('dsherp_platform_grant')
     if grant:
         from dsherp_bridge.sso import validate_grant

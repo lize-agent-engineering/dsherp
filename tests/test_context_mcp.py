@@ -7,6 +7,22 @@ import pytest
 from dsherp import context_mcp
 
 
+def test_configuration_domain_has_only_native_configuration_read_and_proposal_tools():
+    calls=[]
+    def handler(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(200,json={'message':{'id':'B1'}})
+    with httpx.Client(base_url='http://synthetic',transport=httpx.MockTransport(handler)) as client:
+        server=context_mcp.create_server(client,'R','C',domain='configuration')
+        catalog=asyncio.run(server.list_tools())
+        assert {tool.name for tool in catalog}=={'erp_read_configuration','erp_propose_configuration'}
+        assert all(not {'site','user','url','grant','session_id','model_run'}&set(tool.inputSchema['properties']) for tool in catalog)
+        asyncio.run(server.call_tool('erp_read_configuration',{'doctype':'New Inspection'}))
+        asyncio.run(server.call_tool('erp_propose_configuration',{'package':{'version':1}}))
+    assert calls==[{'run_id':'R','capability':'C','tool':'erp_read_configuration','arguments':{'doctype':'New Inspection'}},
+                   {'run_id':'R','capability':'C','tool':'erp_propose_configuration','arguments':{'package':{'version':1}}}]
+
+
 def test_operation_domain_can_propose_but_cannot_confirm_business_writes():
     calls=[]
     def handler(request):

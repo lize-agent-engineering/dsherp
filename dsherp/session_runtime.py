@@ -54,12 +54,12 @@ def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bo
     domain=None
     if run_config:
         domain=json.loads(run_config.read_text()).get('domain')
-        if domain not in ('query','operation'):raise ValueError('Unknown business domain')
+        if domain not in ('query','operation','configuration'):raise ValueError('Unknown business domain')
     with session_writer(directory):
         runtime=DeepSeekHarness(provider='deepseek-official',model=settings['DSH_MODEL'],
             api_key=settings['DEEPSEEK_API_KEY'],base_url=settings['DEEPSEEK_BASE_URL'],
             cordis=str(ROOT/'config'/('dsh-business.yml' if run_config else 'dsh-context.yml')),cwd=str(directory),runtime_cwd=str(directory),
-            session_root=str(directory/'sessions'),max_tokens=3072 if domain=='operation' else 2048,
+            session_root=str(directory/'sessions'),max_tokens=3072 if domain in ('operation','configuration') else 2048,
             request_timeout_seconds=90,shutdown_timeout_seconds=5,
             env={} if run_config is None else {'DSHERP_RUN_CONFIG':str(run_config.absolute()),
                 'DSHERP_PYTHON':sys.executable,'DSHERP_PROJECT':str(ROOT),'DSHERP_DOMAIN':domain})

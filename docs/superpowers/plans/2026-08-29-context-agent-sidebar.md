@@ -175,3 +175,7 @@ workflow临时拒绝已移除，冻结状态/动作/显式状态字段与原生W
 # 当前接续：配置来源运行约束已接入
 
 配置包不可变 payload 绑定当前用户/会话/configuration 领域的来源运行；未成功时展示但不执行，成功后可确认，已有执行不重放。75 项前端及构建、4 项配置组合通过；来源测试移除 rollback 替身后真实事务重跑通过。alpha/beta DS Model Run 新领域 schema 已加载，backend 重启。下一步实际配置读取/提案 MCP、固定业务 skill、领域权限摘要/来源再授权与 UI 选择；这些仍未接通，不将来源约束当成模型链完成。随后跨站预览/独立发布和阶段四，完整目标 active。
+
+# 最新接续：配置 MCP 与固定 Runtime 链已验证
+
+configuration 领域的两个工具、固定 erp-configuration 1.0.0 skill、领域权限摘要、来源字段/历史权限及配置版本重查已实现。真实 Runtime→MCP→HTTP→beta 读取/提案/成功退出通过（模型为本地替身，三次请求，零 DDL）；新旧真实链 4 项通过，最终版本后配置 Runtime/来源/确认 3 项通过。测试临时状态已清理，alpha/beta backend 重启。下一步侧栏显示不可变配置包、开放配置领域与受控跨站预览流转、独立目标发布、真实模型/UI验收；Custom Field、并发/过期/未知结果核实及阶段四仍待完成。整体目标 active。
