@@ -206,3 +206,11 @@
 - 新增 desk_identity 作为后续原生 OAuth user-info：从已认证平台用户读取现有 Membership/Enterprise，使用绑定的普通业务凭据核实实际业务用户，再结束读快照重查绑定版本。返回明确的业务用户、平台subject、目标Site/企业及绑定版本；不输出API凭据，不授予业务角色。
 - 与旧只读接口共用已核实的业务连接上下文，保留仍有效回归；没有改变旧Demo功能范围。新测试先因缺少方法失败；实现后验证alpha/beta不同业务用户、非成员拒绝、撤销成员/错绑用户拒绝。
 - 首次组合测试因平台backend重启未就绪出现11项502失败；确认ping就绪后完整重跑 **13 passed / 35.11s**。这只是实际身份映射与权限验证，尚未配置OAuth客户端、业务回调/登录态成员撤销检查，也未验收浏览器SSO。无付费模型调用或业务写入。
+
+## 接续：业务 OAuth 回调与会话授权检查
+
+- 新增 sso 适配，使用安装版公开 get_oauth2_flow/get_oauth2_authorize_url/consume_oauth_state 与 LoginManager.login_as，不使用自动注册/更新用户的通用 social-login helper。明确校验平台subject、目标企业/Site、版本及已存在启用的普通 System User；拒绝 Guest/Administrator、跨企业与未开通用户，不新增角色。
+- 授权码交换复用原生 rauth flow，核对 get_auth_session/get_raw_access_token 实际参数；平台信息请求使用 Bearer header、固定配置端点/企业、15秒超时和禁止重定向。回调只接受原生state中固定/app目标，先消费state再交换授权码。访问令牌使用原生站点加密后存入原生会话，不返回浏览器或模型。
+- auth_hooks 在最终身份验证后重查平台信息及绑定版本，撤权/版本变化拒绝当前SSO请求。只豁免重新登录回调/发起和退出入口以便恢复登录；本地原生登录无SSO grant，不改变其权限流程。尚未配置实际OAuth客户端，故没有建立新的真实SSO会话。
+- TDD 两项先分别因模块/回调缺失失败；真实Frappe身份数据、Redis原生state、原生加密验证通过。授权码交换和登录动作在回调测试中为替身，不能等同真实OAuth浏览器链路。alpha重启、clear-cache加载hook后重跑会话/读取/SSO相关20项；无业务写入和付费模型调用。
+- 下一步必须把SSO授权绑定到已提交模型运行，确保离开浏览器后仍重查成员，再配置原生OAuth Client/Social Login Key、正式平台入口和真实跨站登录验证。当前HTTP hook不等于后台运行已完成成员撤销检查，阶段一及后续三个阶段仍未完成。

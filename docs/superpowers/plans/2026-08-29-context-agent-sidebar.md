@@ -105,6 +105,8 @@
 
 SSO接续：已核对安装版原生OAuth能力并实现平台desk_identity显式映射端点，13项真实身份回归通过。下一步配置原生OAuth客户端/业务回调、会话成员撤销检查及正式Desk入口；尚未宣称浏览器SSO完成，四阶段目标保持完整。
 
+SSO回调更新：原生state/授权码flow/登录适配与加密会话grant、auth_hooks已实现，身份/回调测试通过但交换与登录为替身。下一步先将grant绑定后台运行，再配置OAuth客户端和真实浏览器验收；不把HTTP会话撤权检查当作后台模型执行已覆盖。
+
 再接续：已实现 OS 单写者与 open_runtime，9 项实际 Runtime/锁测试通过；业务 Site claim/tool/finish 与来源再授权已实现，7 项会话/执行回归通过。专用服务身份、HTTP/MCP容器消费及 Desk 接入仍未完成；无新增付费调用。不可将当前能力单测等同真实业务链。
 
 DSH 固定 ref 下：packages/sdk/server/src/index.ts、packages/core/agent/src/runtime-types.ts、docs/subsystems/session.md、packages/session/session-persistence-jsonl/README.md、packages/session/session-checkpoint-policy/README.md、packages/compaction/compaction-basic/README.md、docs/subsystems/skills.md。
