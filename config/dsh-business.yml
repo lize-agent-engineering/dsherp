@@ -1,0 +1,19 @@
+# Business configuration extends the same single-stdio native context runtime.
+- id: context-base
+  name: 'cordis:include'
+  config:
+    path: './dsh-context.yml'
+- id: business-mcp
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: erp
+    transport: stdio
+    command: !!js process.env.DSHERP_PYTHON
+    args: ['-m', 'dsherp.context_mcp']
+    cwd: !!js process.env.DSHERP_PROJECT
+    env:
+      DSHERP_RUN_CONFIG: !!js process.env.DSHERP_RUN_CONFIG
+    failOnStartupError: true
+    toolCallTimeoutMs: 25000
+    reconnect:
+      enabled: false

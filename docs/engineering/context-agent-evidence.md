@@ -73,3 +73,11 @@
 - 更新 alpha DS Model Run 原生 schema，并重启本项目 backend 加载新代码。首次紧接 restart 的 HTTP 回归遇到连接断开（服务未就绪）；随后 ping=pong，再完整复跑会话/执行/拒绝队列三文件：**7 passed / 5.59s**。未伪装第一次为通过。旧付费 worker 检查仍不存在。
 
 仍需接续：开通专用运行服务账号、受限 HTTP/MCP、新容器执行器及 stable session 目录挂载；明确原生恢复判定、失败和取消状态轮询、跨进程权限/运行配置/skills 版本轮换；领取与取消的数据库并发再检查；覆盖所有 LLM/压缩调用的授权预算。当前无消费新队列的进程，侧栏未挂 Desk。未到阶段一验收，更未到整体完成。
+
+## 接续：业务运行 MCP 与真实 ERP 链路
+
+- 新增 run-bound `context_mcp`，调用方仅配置当前业务 Site、run_id 与短期 capability；模型工具参数没有身份、Site、URL 或凭据入口。三项只读工具目录与旧 task MCP 共用，未扩展旧 Demo。
+- MCP 契约测试先失败，最小实现后与旧链路回归 16 项通过。拒绝响应不自动重试、不展示原始服务端异常正文。
+- 新增 `dsh-business.yml`，包含原单 stdio 上下文 Runtime 并加载官方 MCP 客户端。真实启动曾因 include 使用错误的 url 键失败；按本仓库已验证固定版 path 格式修正，未升级上游。
+- 真实 DSH 0.1.1rc1 → stdio MCP → HTTP capability → Frappe 当前业务用户权限 → 合成 Item 读取通过，工具结果进入下一次模型请求。模型仍是本地 SSE 替身，不算真实模型验收。临时 cap 文件在 finally 删除，合成会话/运行按确切 ID 清理。
+- 组合复跑 MCP、旧 Agent、原生恢复/锁、业务会话/执行/拒绝队列及新链路：**33 passed / 33.39s**。无生产写入、无旧 worker 重启。

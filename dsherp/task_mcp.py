@@ -3,11 +3,9 @@ import json
 import os
 from pathlib import Path
 import sys
-from typing import Literal
 
 import httpx
-from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+from dsherp.read_tools import create_read_server
 
 API = '/api/method/dsherp_platform.agent_api.'
 
@@ -29,26 +27,9 @@ def post(client, method, **data):
 
 
 def create_server(client, task_id, capability):
-    server = FastMCP('dsherp-task-read')
-    annotations = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
     def invoke(tool, **arguments):
         return post(client, 'task_tool', task_id=task_id, capability=capability, tool=tool, arguments=arguments)
-
-    @server.tool(annotations=annotations)
-    def erp_read_schema(doctype: Literal['Customer', 'Item']) -> dict:
-        """Read allowed fields in this task's enterprise."""
-        return invoke('erp_read_schema', doctype=doctype)
-
-    @server.tool(annotations=annotations)
-    def erp_read_record(doctype: Literal['Customer', 'Item'], name: str) -> dict:
-        """Read one record allowed for this task's user and enterprise."""
-        return invoke('erp_read_record', doctype=doctype, name=name)
-
-    @server.tool(annotations=annotations)
-    def erp_search_records(doctype: Literal['Customer', 'Item'], query: str = '') -> list:
-        """Find up to 20 permitted record names; read records for details."""
-        return invoke('erp_search_records', doctype=doctype, query=query)
-    return server
+    return create_read_server(invoke,'dsherp-task-read')
 
 
 def main():

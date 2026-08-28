@@ -4,6 +4,7 @@ import fcntl
 import os
 from pathlib import Path
 import re
+import sys
 
 from deepseek_harness import DeepSeekHarness
 from pydantic import BaseModel
@@ -30,7 +31,7 @@ def session_writer(directory: Path):
 
 
 @contextmanager
-def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bool):
+def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bool, run_config: Path | None = None):
     """Internal runtime entry: the isolated worker supplies its authorized directory.
 
     This does not establish tenant authorization or sanitize a host environment;
@@ -46,9 +47,11 @@ def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bo
     with session_writer(directory):
         runtime=DeepSeekHarness(provider='deepseek-official',model=settings['DSH_MODEL'],
             api_key=settings['DEEPSEEK_API_KEY'],base_url=settings['DEEPSEEK_BASE_URL'],
-            cordis=str(ROOT/'config/dsh-context.yml'),cwd=str(directory),runtime_cwd=str(directory),
+            cordis=str(ROOT/'config'/('dsh-business.yml' if run_config else 'dsh-context.yml')),cwd=str(directory),runtime_cwd=str(directory),
             session_root=str(directory/'sessions'),max_tokens=2048,
-            request_timeout_seconds=90,shutdown_timeout_seconds=5)
+            request_timeout_seconds=90,shutdown_timeout_seconds=5,
+            env={} if run_config is None else {'DSHERP_RUN_CONFIG':str(run_config.absolute()),
+                'DSHERP_PYTHON':sys.executable,'DSHERP_PROJECT':str(ROOT)})
         try:
             runtime.start()
             opened=runtime.client.request('dsherp/session/open',{'sessionId':session_id,'resume':resume},response_model=OpenedSession)
