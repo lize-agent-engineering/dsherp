@@ -13,11 +13,20 @@ export default function OperationProposal(props) {
   return <Proposal key={`${props.proposal.id}:${props.proposal.digest}`} {...props}/>;
 }
 
-function Proposal({proposal, onConfirm,onApply=applyFormProposal}) {
+function Proposal({proposal, onConfirm,onApply=applyFormProposal,onVerify}) {
   const claimed = useRef(false);
   const [localState, setState] = useState(null);
+  const [verification,setVerification]=useState(null);
+  const [verifying,setVerifying]=useState(false);
   const state = localState || proposal.execution;
   const expired = !Number.isFinite(Date.parse(proposal.expires_at)) || Date.parse(proposal.expires_at) <= Date.now();
+  async function verify(){
+    if(verifying)return;
+    setVerifying(true);
+    try{setVerification(await onVerify({proposal_id:proposal.id}));}
+    catch(error){setVerification({note:error.message});}
+    finally{setVerifying(false);}
+  }
   async function confirm() {
     if (claimed.current || proposal.execution_ready===false || expired || Date.parse(proposal.expires_at) <= Date.now() || proposal.status !== 'Pending') return;
     claimed.current = true;
@@ -47,6 +56,13 @@ function Proposal({proposal, onConfirm,onApply=applyFormProposal}) {
     {state?.status==='Authorized'&&<Typography.Text>本次填入已获授权；请核实当前草稿，不会自动重新填入。</Typography.Text>}
     {state?.status === 'Succeeded' && state.name && <Typography.Text>已保存记录：{state.doctype} / {state.name}</Typography.Text>}
     {state?.error && <Alert type="error" message={state.error}/>}
+    {onVerify&&['Unknown','Failed'].includes(state?.status)&&<Button onClick={verify} loading={verifying}>核实业务结果</Button>}
+    {verification&&<Typography.Text>{verification.note}</Typography.Text>}
+    {verification?.observed&&<>
+      <Typography.Text>当前已保存版本：{verification.observed.version}</Typography.Text>
+      <Table size="small" pagination={false} rowKey="field" dataSource={Object.entries(verification.observed.values).map(([field,value])=>({field,value}))}
+        columns={[{title:'字段',dataIndex:'field'},{title:'当前已保存值',dataIndex:'value',render:display}]}/>
+    </>}
     {proposal.execution_ready===false&&<Typography.Text type="secondary">提案生成运行尚未成功结束，请核实运行记录。</Typography.Text>}
     <Button aria-label={proposal.action==='fill'?'确认填入':'确认执行'} type="primary" loading={state?.status === 'Running'} disabled={proposal.execution_ready===false || expired || proposal.status !== 'Pending' || Boolean(state)} onClick={confirm}>{proposal.action==='fill'?'确认填入':'确认执行'}</Button>
   </Space>;

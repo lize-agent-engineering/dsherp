@@ -123,6 +123,38 @@ def _execution_result(execution):
     return {**result, 'execution_id': execution.name}
 
 
+@frappe.whitelist(methods=['GET'])
+def verify_execution(proposal_id):
+    proposal=get_proposal(proposal_id)
+    execution=proposal.get('execution')
+    name=proposal['name']
+    if proposal['action']=='create':name=execution.get('name') if execution else None
+    result={'execution':execution,'observed':None,'matches_proposal':None,
+            'note':'当前字段一致也不能单独证明本次执行成功；不会重试操作或改写执行记录。'}
+    if not name:
+        result['note']='未记录确定的业务记录名称，不能据列表猜测创建成功；不会自动重试。'
+        return result
+    doc=frappe.get_doc(proposal['doctype'],name)
+    doc.check_permission('read')
+    values={};matches=True
+    for change in proposal['changes']:
+        field=change['field'];expected=change['after']
+        if isinstance(expected,list):
+            rows=doc.get(field) or []
+            columns={'name'}|{key for row in expected for key in row}
+            values[field]=[{key:row.get(key) for key in sorted(columns)} for row in rows]
+            matches=matches and len(rows)==len(expected) and all(
+                json.loads(_json({key:row.get(key) for key in requested}))==requested
+                for row,requested in zip(rows,expected))
+        else:
+            values[field]=doc.get(field)
+            matches=matches and json.loads(_json(values[field]))==expected
+    result['observed']={'doctype':doc.doctype,'name':doc.name,'version':str(doc.modified),'values':json.loads(_json(values))}
+    result['matches_proposal']=matches
+    if proposal['action']=='fill':result['note']='这里只核实服务器已保存内容，不能证明浏览器草稿是否已填入；不会重新填入。'
+    return result
+
+
 def propose_update(session_id, doctype, name, values, version, grant=None, model_run=None):
     doc = frappe.get_doc(doctype, name)
     changes = update_diff(doc, values)

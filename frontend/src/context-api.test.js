@@ -1,6 +1,12 @@
 import {afterEach,expect,it,vi} from 'vitest';
 import * as api from './context-api.js';
 afterEach(()=>vi.unstubAllGlobals());
+it('结果核实使用同源只读GET，不发送确认或重放请求',async()=>{
+ const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{observed:null}})}));vi.stubGlobal('fetch',fetch);
+ await api.contextApi('verify_operation',{proposal_id:'P1'});
+ expect(fetch.mock.calls[0][0]).toBe('/api/method/dsherp_bridge.operations.verify_execution?proposal_id=P1');
+ expect(fetch.mock.calls[0][1].method).toBeUndefined();
+});
 it('操作确认仅向同源原生执行端点发送提案绑定和 CSRF',async()=>{
  const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{status:'Succeeded'}})}));vi.stubGlobal('fetch',fetch);
  vi.stubGlobal('frappe',{csrf_token:'test-csrf'});

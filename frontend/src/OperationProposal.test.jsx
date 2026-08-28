@@ -6,6 +6,13 @@ import OperationProposal from './OperationProposal.jsx';
 beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
 afterEach(cleanup);
 const proposal={id:'P1',digest:'d1',action:'update',doctype:'Item',name:'I-1',version:'v1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{field:'item_name',label:'物料名称',before:'旧名称',after:'新名称'}]};
+it('结果不明时只核实当前业务事实，不重发执行或改成成功',async()=>{
+ const confirm=vi.fn();const verify=vi.fn(async()=>({note:'一致不等于执行成功',matches_proposal:true,observed:{version:'v2',values:{item_name:'新名称'}}}));
+ render(<OperationProposal proposal={{...proposal,status:'Unknown',execution:{status:'Unknown',error:'响应丢失'}}} onConfirm={confirm} onVerify={verify}/>);
+ fireEvent.click(screen.getByRole('button',{name:'核实业务结果'}));await screen.findByText('一致不等于执行成功');
+ expect(verify).toHaveBeenCalledExactlyOnceWith({proposal_id:'P1'});expect(confirm).not.toHaveBeenCalled();
+ expect(screen.queryByText('执行成功，已读取业务结果')).toBeNull();
+});
 it('填表先获得服务端确认再应用草稿，刷新不会自动重放',async()=>{
  const fill={...proposal,action:'fill'};
  const result={status:'Authorized',target:'browser-draft',doctype:'Item',name:'I-1',version:'v1',values:{item_name:'新名称'}};
