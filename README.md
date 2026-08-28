@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-首次技术验证进行中：已固定 DSH SDK/Runtime `0.1.1rc1`，完成项目依赖安装和最小零工具验证器。17 项测试通过，其中使用真实 SDK/Runtime 及本地模型替身验证事件与进程关闭。已使用 DeepSeek 官方 `deepseek-v4-flash` 完成一次真实最小调用，响应与退出均成功；真实 ERPNext 隔离站点仍等待资源授权。尚无 SaaS 业务系统、UI 或部署。
+首次技术验证完成：固定 DSH SDK/Runtime `0.1.1rc1`；DeepSeek 官方最小调用已通过。独立 ERPNext `15.119.3` / Frappe `15.118.0` 站点已运行，普通用户读取、权限拒绝和 DSH→MCP→ERP 真实工具链已验证（工具链测试的模型侧为本地替身）。36 项测试通过。尚无 SaaS 身份系统、制造业务链、工作台或生产部署。
 
 ## 产品方向
 
@@ -21,7 +21,8 @@
 - [项目开发约定](AGENTS.md)
 - [准确版本与运行契约](docs/engineering/runtime-baseline.md)
 - [DSH 分层验证证据](docs/engineering/dsh-validation-evidence.md)
-- [ERPNext 验证状态与阻塞](docs/engineering/erpnext-integration-evidence.md)
+- [ERPNext 真实验证证据](docs/engineering/erpnext-integration-evidence.md)
+- [下一阶段身份绑定计划](docs/superpowers/plans/2026-08-28-identity-bound-read-execution.md)
 
 ## 最小验证
 
@@ -30,10 +31,23 @@
 ```sh
 uv venv --python 3.12.11 .venv
 uv pip sync --python .venv/bin/python --require-hashes requirements.lock
-.venv/bin/python -m pytest tests -q
+.venv/bin/python -m pytest tests/test_dsh_probe.py tests/test_erp_mcp_config.py -q
 ```
 
 真实模型调用需事先授权费用，并通过进程环境提供 `DEEPSEEK_API_KEY`、`DSH_MODEL`、`DEEPSEEK_BASE_URL`，随后运行 `.venv/bin/python -m dsherp.dsh_probe`。脚本不自动加载 `.env`，不读取其他项目凭证；只执行固定合成提示，不访问 ERP。会话临时目录执行后清理，只输出脱敏摘要。
+
+## 隔离 ERP 验证
+
+已初始化环境的 API 仅监听 `127.0.0.1:18081`，Site 为 `dsherp-validation.localhost`。
+
+```sh
+docker compose -f infra/compose.validation.yml up -d
+.venv/bin/python -m pytest tests/integration -q
+```
+
+集成测试需本地 `.runtime/` 普通测试用户配置；缺失会明确失败，不自动跳过。此命令不自动建站或生成资料，首次开通记录和资源边界见 ERP 证据。
+
+开发参考 skills 位于 `.agents/skills/dsh-sdk-development/` 和 `.agents/skills/erpnext-integration/`；不作为业务运行时 skills。
 
 ## 技术方向
 

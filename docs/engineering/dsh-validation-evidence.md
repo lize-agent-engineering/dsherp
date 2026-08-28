@@ -7,12 +7,12 @@
 | 层次 | 实际结果 |
 | --- | --- |
 | 文档/源码 | 固定版本接口已核对，安装后的三个主要 Python 源文件与 tag 提交哈希一致 |
-| 依赖 | 项目 `.venv` 安装成功；`uv pip sync --python .venv/bin/python --require-hashes requirements.lock` 成功，12 包 |
+| 依赖 | 项目 `.venv` 安装成功；`uv pip sync --python .venv/bin/python --require-hashes requirements.lock` 成功，初始 DSH 环境 12 包；加入 MCP 后为 36 包 |
 | TDD | 初始 13 项失败；实现后 12 通过，1 项错误的未知模型初始化假设被真实运行纠正；改用缺失配置测试启动失败。CLI 新增 2 项先失败再实现；错误响应测试先失败再修正。最终 17 项通过 |
 | SDK/Runtime 本机进程 | 真实二进制启动、initialize、会话事件、关闭成功；启动失败/回调异常/token 截断后实际 Popen 子进程均已退出 |
 | 工具限制 | 捕获真实 Runtime 发往本地模型替身的 HTTP 请求，`tools` 为空；不是 grep YAML 或 dump-config 的结论 |
 | 真实 DSH 模型调用 | **通过：用户授权后连接 DeepSeek 官方，deepseek-v4-flash 返回预期标记，Runtime 退出 0** |
-| ERP / UI / 部署 | 未执行，本脚本不含 ERP 工具、前后端或部署 |
+| ERP / UI / 部署 | 后续已完成隔离 ERP 与只读工具链，见 ERP 证据；UI 和生产部署仍未执行 |
 
 测试命令：
 
@@ -50,3 +50,7 @@
 `.env` 保留在本地且被 Git 忽略；未打印、提交密钥。临时会话与脱敏中间 JSON 已清理。验证器仍只读取环境变量，不自动加载 `.env`；本次由调用方临时解析配置传给 Python API，没有改动程序逻辑。
 
 直接 CLI 的入口仍为 `.venv/bin/python -m dsherp.dsh_probe`，需要该 CLI 所在进程环境已含 `DEEPSEEK_API_KEY`、`DSH_MODEL`、`DEEPSEEK_BASE_URL`。普通终端的 export 不会传回已经运行的 Codex 进程。
+
+## ERP 工具链补充
+
+已在 [ERP 证据](erpnext-integration-evidence.md) 单独记录真实 Runtime→MCP→ERP 链；该链的模型侧为本地替身，未扩大本次官方付费模型调用范围。当前全部测试 36 项通过，不替换本文件此前真实官方调用的历史证据。

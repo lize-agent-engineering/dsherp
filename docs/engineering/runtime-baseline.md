@@ -7,7 +7,7 @@
 - macOS arm64，32 GiB RAM；盘点时 swap 使用约 3.83 GiB，压缩页约 9 GiB，可用磁盘 112 GiB。
 - 系统 Python 3.12.9；项目 uv 创建的 `.venv` 使用 Python 3.12.11。Node v26.7.0，npm 11.19.0，pnpm 9.12.2，uv 0.9.27。
 - Docker 23 个运行容器；8080、8001、18080、6379 等已被占用。未进入、修改或停止现有容器，未访问 AgenERP 的站点、数据库或凭证。
-- 仅安装项目 Python 环境；Runtime wheel 约 52.6 MiB。不拉取 ERP 镜像、不启动常驻服务。
+- 首次 DSH 阶段仅安装项目 Python 环境，Runtime wheel 约 52.6 MiB；后续用户授权后启动了独立 ERP 测试栈，未拉取 ERP 镜像。
 
 ## DSH 固定选择
 
@@ -37,20 +37,24 @@
 
 ## 工具与扩展
 
-固定版 [agent-spine](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/examples/agent-spine-demo/src/index.ts) 默认加载 Bash、jobs 和 skills。使用完整独立 Cordis 组合，显式 `toolBash: false`、`toolJobs: false`、`skills.enabled: false`、`workspaceContext: false`，不挂载 Shell、FS、HTTP、数据库、代码执行或子 Agent 插件。零工具是最小模型调用阶段的预期；实际发往模型适配器的工具列表需测试，配置文本本身不是证明。
+固定版 [agent-spine](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/examples/agent-spine-demo/src/index.ts) 默认加载 Bash、jobs 和 skills。使用完整独立 Cordis 组合，显式 `toolBash: false`、`toolJobs: false`、`skills.enabled: false`、`workspaceContext: false`，不挂载 Shell、FS、HTTP、数据库、代码执行或子 Agent 插件。零工具是最小模型调用阶段的预期，已通过真实 Runtime 请求验证；ERP 组合通过测试确认只有两个只读 MCP 工具，配置文本本身不是证明。
 
 固定版 [MCP bridge](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/mcp/mcp-client/README.md) 已包含在 [Runtime wheel](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/python/sdk-runtime/README.md)。可用 stdio 或 Streamable HTTP 连接仅发布必要 ERP 工具的 Python MCP server；不是 SDK Python 回调注册。模型工具名为 `mcp__<serverName>__<rawName>`。须设置 `failOnStartupError: true`，本阶段关闭自动 reconnect；MCP Resources/Prompts 不支持。服务端绑定身份、企业、固定站点并校验参数及权限，不把任意 URL、方法或身份交给模型。
 
-## ERP 候选基线（未运行）
+## ERP 基线（已运行）
 
-- ERPNext `v15.119.3`；Frappe 候选 `v15.119.1`。ERPNext [pyproject](https://github.com/frappe/erpnext/blob/v15.119.3/pyproject.toml) 声明 Frappe `>=15.111.0,<16.0.0`；候选满足声明，不代表实测兼容。
-- 本机已有官方镜像 `frappe/erpnext:v15.119.3`，arm64，约 2.55 GB，RepoDigest `frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341`。只读取镜像元数据；尚未核实镜像内 Frappe 版本，不能宣称它正是候选组合。
-- 未来部署必须使用该 digest 或经核验的新 digest、独立 compose project/网络/卷；不能挂载现有站点。当前资源压力下启动需授权。
+- ERPNext `v15.119.3`；实际镜像 Frappe `v15.118.0`（替代原候选 v15.119.1）。ERPNext [pyproject](https://github.com/frappe/erpnext/blob/v15.119.3/pyproject.toml) 声明 Frappe `>=15.111.0,<16.0.0`；该组合已完成独立站点只读接口验证；不代表制造业务链已验证。
+- 本机已有官方镜像 `frappe/erpnext:v15.119.3`，arm64，约 2.55 GB，RepoDigest `frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341`。已在独立容器核实内部 Frappe 15.118.0、Python 3.11.6；镜像没有 Git 元数据，不虚构其内部源码提交。
+- 未来部署必须使用该 digest 或经核验的新 digest、独立 compose project/网络/卷；不能挂载现有站点。用户已授权并启动独立测试栈；具体资源边界见 ERP 证据。
 - [Work Order 源码](https://github.com/frappe/erpnext/blob/v15.119.3/erpnext/manufacturing/doctype/work_order/work_order.py)：`make_stock_entry(work_order_id, purpose, qty=None, target_warehouse=None, source_stock_entry=None)` 生成 Stock Entry 字典，不等于保存或提交。
 - [Purchase Order 源码](https://github.com/frappe/erpnext/blob/v15.119.3/erpnext/buying/doctype/purchase_order/purchase_order.py)：`make_subcontracting_order(source_name, target_doc=None, save=False, submit=False, notify=False)`；此方法内部捕获部分提交错误，不可凭返回文档报告提交成功。
-- [Subcontracting Order 源码](https://github.com/frappe/erpnext/blob/v15.119.3/erpnext/subcontracting/doctype/subcontracting_order/subcontracting_order.py)：`make_subcontracting_receipt(source_name, target_doc=None)`。供料加工、供应商供料和直接采购不能直接合并为一种动作；现场 schema/BOM 与真实单据验证仍缺失。
-- [Frappe v2](https://github.com/frappe/frappe/blob/v15.119.1/frappe/api/v2.py) 提供 `/api/v2/doctype/<doctype>/meta`，仅 `only_for("All")`；自定义接口须另行检查业务 DocType read 权限。客户/物料 v1 路径为 `/api/resource/Customer`、`/api/resource/Item`，调用 [frappe.client.get_list](https://github.com/frappe/frappe/blob/v15.119.1/frappe/client.py) 受权限约束。这里只确认路由，不预填字段。
+- [Subcontracting Order 源码](https://github.com/frappe/erpnext/blob/v15.119.3/erpnext/subcontracting/doctype/subcontracting_order/subcontracting_order.py)：`make_subcontracting_receipt(source_name, target_doc=None)`。供料加工、供应商供料和直接采购不能直接合并为一种动作；基础资料 schema 已验证；BOM 与制造单据业务运行尚未验证。
+- [Frappe v2](https://github.com/frappe/frappe/blob/v15.118.0/frappe/api/v2.py) 提供 `/api/v2/doctype/<doctype>/meta`，仅 `only_for("All")`；自定义接口须另行检查业务 DocType read 权限。客户/物料 v1 路径为 `/api/resource/Customer`、`/api/resource/Item`，调用 [frappe.client.get_list](https://github.com/frappe/frappe/blob/v15.118.0/frappe/client.py) 受权限约束。本项目通过普通用户验证原生记录读取，并新增带业务权限检查的薄 schema API，字段均从实际 Site 发现。
 
 ## 当前限制
 
-已在用户授权下使用项目密钥完成一次 DeepSeek 官方真实最小调用。隔离 ERP Site 仍未建立，普通用户读取/拒绝验证未完成；不能据此开始多租户业务实现。后续状态见 [DSH 证据](dsh-validation-evidence.md) 和 [ERP 证据](erpnext-integration-evidence.md)。
+已在用户授权下使用项目密钥完成一次 DeepSeek 官方真实最小调用。独立 ERP Site 的普通用户读取/拒绝、字段/单据权限和 DSH→MCP→ERP 工具链已验证（模型为本地替身）；多租户业务尚未实施。后续状态见 [DSH 证据](dsh-validation-evidence.md) 和 [ERP 证据](erpnext-integration-evidence.md)。
+
+## 本轮依赖与环境补充
+
+官方 MCP Python SDK 固定 `1.26.0`，httpx `0.28.1`；`pydantic-settings` 从自动解析的 2.15.0 固定到该 MCP tag 上游锁文件中的 2.10.1，解决 lifespan 前向引用警告；未修改第三方源码。重新锁定并验证共 36 个 Python 包。Docker 测试栈固定 MariaDB 10.6.28、Redis 6.2.24；Compose 5.0.2。
