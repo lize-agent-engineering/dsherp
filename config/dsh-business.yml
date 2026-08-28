@@ -1,4 +1,14 @@
 # Business configuration extends the same single-stdio native context runtime.
+- id: context-token-meter
+  name: '@deepseek-ai/dsh-token-meter'
+- id: context-compaction
+  name: '@deepseek-ai/dsh-compaction-basic'
+  config:
+    thresholdRatio: 0.005
+    retainTokens: 2048
+    maxTokens: 2048
+    compactionRetries: 0
+    auto: true
 - id: model-authorization
   name: '../runtime/model-guard.cjs'
 - id: context-base

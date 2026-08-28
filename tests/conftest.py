@@ -34,6 +34,8 @@ def model_server(port=0):
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            compact=self.headers.get('x-deepseek-harness-compact')=='1'
+            state.setdefault('compaction_calls',[]).append(compact)
             if state.get('received'):
                 state['received'].set()
             if state.get('release'):
@@ -45,7 +47,8 @@ def model_server(port=0):
             if state.get("tool_call") and len(requests) == 1:
                 deltas = [({"role": "assistant", "tool_calls": [{"index": 0, "id": "call-erp-1", "type": "function", "function": state["tool_call"]}]}, None), ({}, "tool_calls")]
             else:
-                deltas = [({"role": "assistant", "content": state["content"]}, None), ({}, state["finish_reason"])]
+                content=state.get('summary_content',state['content']) if compact else state['content']
+                deltas = [({"role": "assistant", "content": content}, None), ({}, state["finish_reason"])]
             for delta, reason in deltas:
                 chunk = {"id": "synthetic", "object": "chat.completion.chunk", "created": 0,
                          "model": "deepseek-v4-flash", "choices": [{"index": 0, "delta": delta, "finish_reason": reason}]}

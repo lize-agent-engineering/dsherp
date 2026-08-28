@@ -1,0 +1,48 @@
+"""Native automatic compaction through the real llm/stream authorization seam."""
+import json
+import threading
+from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+import pytest
+from dsherp.session_runtime import open_runtime
+from dsherp.runtime_revision import configuration_revision
+
+
+@pytest.mark.parametrize('deny_summary',[False,True])
+def test_native_auto_compaction_cannot_bypass_authorization(model_server,tmp_path,deny_summary):
+    observed=[]
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])));observed.append(payload)
+            self.send_response(403 if deny_summary and payload['purpose']=='compaction' else 200)
+            self.end_headers();self.wfile.write(b'{"message":{"allowed":true}}')
+        def log_message(self,*args):pass
+    server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    settings,requests,state=model_server
+    state.update(content='Business context. '*350,summary_content='Item I-44; source version v2; continue read-only inquiry.')
+    config=tmp_path/'run.json';config.write_text(json.dumps({**settings,
+        'runtime_revision':configuration_revision(settings),'run_id':'test','capability':'test','site':'synthetic',
+        'business_url':f'http://127.0.0.1:{server.server_port}'}));config.chmod(0o600)
+    try:
+        with open_runtime(settings,tmp_path/'native','compression',resume=False,run_config=config) as runtime:
+            for index in range(4):
+                result=runtime.run(f'Round {index}: Item I-44 modified v2. '+'Business question. '*330,session_id='compression')
+                if result.finish_reason!='completed':break
+        summaries=[item for item in observed if item['purpose']=='compaction']
+        assert summaries,'Native pressure never invoked compaction'
+        assert all(item['max_output_tokens']==2048 for item in summaries)
+        if deny_summary:
+            assert result.finish_reason!='completed'
+            assert not any(state['compaction_calls'])
+            assert observed[-1]['purpose']=='compaction'
+        else:
+            assert result.finish_reason=='completed'
+            assert any(state['compaction_calls'])
+            assert 'compacted-summary' in str(requests[-1]['messages'])
+            with open_runtime(settings,tmp_path/'native','compression',resume=True,run_config=config) as restored:
+                continued=restored.run('Continue from the saved Item source.',session_id='compression')
+            assert continued.finish_reason=='completed'
+            assert 'compacted-summary' in str(requests[-1]['messages'])
+            assert 'source version v2' in str(requests[-1]['messages'])
+    finally:
+        config.unlink();server.shutdown();server.server_close();thread.join()
