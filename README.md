@@ -10,6 +10,7 @@
 
 - 多家企业注册使用；每个客户企业对应独立 ERPNext Site。
 - 服务从零建立 ERP 数据的制造企业，支持自制、委外和混合生产。
+- Agent 生成包含数据、页面、规则、权限和测试的业务应用，经隔离预览与管理员确认发布。
 - Agent 引导建立基础资料，并推进销售、采购、生产、委外、入库和交付。
 - 查询按权限执行；基础资料和草稿按授权创建；正式提交、取消和影响库存或账务的操作需要有权限的人确认。
 - 首版不做外部 ERP 接入、历史迁移、自动排产优化和银行支付接入。
@@ -22,7 +23,8 @@
 - [准确版本与运行契约](docs/engineering/runtime-baseline.md)
 - [DSH 分层验证证据](docs/engineering/dsh-validation-evidence.md)
 - [ERPNext 真实验证证据](docs/engineering/erpnext-integration-evidence.md)
-- [下一阶段身份绑定计划](docs/superpowers/plans/2026-08-28-identity-bound-read-execution.md)
+- [当前前端优先与应用生成计划](docs/superpowers/plans/2026-08-28-frontend-agent-app-generation.md)
+- [阶段 3 身份绑定参考](docs/superpowers/plans/2026-08-28-identity-bound-read-execution.md)
 
 ## 最小验证
 
@@ -51,4 +53,4 @@ docker compose -f infra/compose.validation.yml up -d
 
 ## 技术方向
 
-React + Ant Design 工作台；Python 应用服务通过 DSH SDK 驱动独立 Runtime；Frappe 自定义 App 封装业务操作；ERPNext 承载业务规则和单据。版本需经过首次验证后固定，不把上游 master 当作稳定依赖。
+原生 Frappe Desk 承载业务页面与基础管理；自定义 App 通过扩展入口加载 React + Ant Design 的 Agent、构建及发布页面；Python 应用服务通过 DSH SDK 驱动独立 Runtime；Frappe 自定义 App 封装业务操作；ERPNext 承载业务规则和单据。版本需经过首次验证后固定，不把上游 master 当作稳定依赖。
