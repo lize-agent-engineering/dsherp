@@ -37,7 +37,11 @@ def model_server():
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
-            for delta, reason in [({"role": "assistant", "content": state["content"]}, None), ({}, state["finish_reason"])]:
+            if state.get("tool_call") and len(requests) == 1:
+                deltas = [({"role": "assistant", "tool_calls": [{"index": 0, "id": "call-erp-1", "type": "function", "function": state["tool_call"]}]}, None), ({}, "tool_calls")]
+            else:
+                deltas = [({"role": "assistant", "content": state["content"]}, None), ({}, state["finish_reason"])]
+            for delta, reason in deltas:
                 chunk = {"id": "synthetic", "object": "chat.completion.chunk", "created": 0,
                          "model": "deepseek-v4-flash", "choices": [{"index": 0, "delta": delta, "finish_reason": reason}]}
                 self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())

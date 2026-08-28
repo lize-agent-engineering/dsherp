@@ -1,2 +1,6 @@
 deepseek-harness-sdk==0.1.1rc1
 pytest==8.4.2
+mcp==1.26.0
+httpx==0.28.1
+# MCP v1.26.0 upstream lock baseline; newer 2.15 emits unresolved lifespan warnings.
+pydantic-settings==2.10.1

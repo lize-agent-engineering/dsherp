@@ -1,0 +1,19 @@
+# Reuse the verified zero-tool composition; only the ERP MCP tools are added.
+- id: base
+  name: cordis:include
+  config:
+    path: ./dsh-no-tools.yml
+- id: erp-mcp
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: erp
+    transport: stdio
+    command: !!js process.env.DSHERP_PYTHON
+    args: ['-m', 'dsherp.erp_mcp']
+    cwd: !!js process.env.DSHERP_PROJECT
+    env:
+      DSHERP_ERP_CONFIG: !!js process.env.DSHERP_ERP_CONFIG
+    failOnStartupError: true
+    toolCallTimeoutMs: 20000
+    reconnect:
+      enabled: false
