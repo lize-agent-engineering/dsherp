@@ -22,7 +22,7 @@ def test_preview_native_configuration_rejects_external_effects():
     script=r'''
 import os,frappe,socket
 os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-beta.localhost');frappe.connect()
-from dsherp_bridge.preview import boot
+import frappe.sessions
 try:
     assert frappe.conf.dsherp_preview==1
     assert frappe.conf.mute_emails==1 and frappe.conf.disable_scheduler==1 and frappe.conf.pause_scheduler==1
@@ -30,7 +30,9 @@ try:
         connection=socket.create_connection(('1.1.1.1',443),timeout=2)
     except OSError:pass
     else:connection.close();raise AssertionError('preview has external route')
-    info=frappe._dict();boot(info);assert info.disable_async is True
+    frappe.set_user('dsherp-preview@example.invalid')
+    frappe.local.request=None
+    assert frappe.sessions.get()['disable_async']==1
     frappe.set_user('Administrator')
     try:
         frappe.get_doc({'doctype':'Webhook','name':'DS Synthetic Preview Webhook','webhook_doctype':'Item','webhook_docevent':'on_update','request_url':'https://example.invalid/','request_method':'POST'}).insert()

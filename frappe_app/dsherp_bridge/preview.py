@@ -7,13 +7,9 @@ def configure():
     if frappe.db.count('Webhook') or frappe.db.count('Email Account'):
         frappe.throw('预览站点已有外部连接，须先核实并移除')
     from frappe.installer import update_site_config
-    for key in ('dsherp_preview','mute_emails','disable_scheduler','pause_scheduler'):
+    for key in ('dsherp_preview','mute_emails','disable_scheduler','pause_scheduler','disable_async'):
         update_site_config(key,1)
     frappe.clear_cache()
-
-
-def boot(bootinfo):
-    if frappe.conf.get('dsherp_preview'):bootinfo.disable_async=True
 
 
 def prevent_external_configuration(doc,method=None):

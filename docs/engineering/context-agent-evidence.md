@@ -383,3 +383,12 @@
 - 红测先证实beta仍连外网及缺少预览模块；实现后真实独立入口、资产、错误Host、外部Origin拒绝、native Webhook拒绝和连接1.1.1.1:443失败通过。首次重建后nginx先于Gunicorn就绪出现一次502，待实际启动后重跑；未添加自动重试伪造成功。
 - 组合预览/alpha原入口/配置锁/配置包5项通过（17.92s），diff检查通过。真实浏览器新标签访问http://preview.localhost:18085/login显示原生中英文登录表单，未注销已有会话。alpha原生socketio及Origin回归通过。
 - beta现状：Company=0、setup_complete=0、仅既有beta-reader测试身份。尚无配置发布、预览应用或工作流验收；下一步创建独立合成配置操作身份、完成原生初始化向导（不直接设置setup_complete），再接30分钟确认、逐项执行/回读及UI验证。完整目标继续active。
+# 阶段三：原生预览初始化与运行配置修正（2026-08-29）
+
+- 独立合成身份dsherp-preview@example.invalid仅在beta创建，原生System Manager角色；本地0600 profile，不复用生产凭证。先验证用户不存在的红测，创建后DocType/Custom Field/Workflow原生create权限通过。
+- 真实浏览器使用该身份登录原生向导，选择简体中文、China、Asia/Shanghai、CNY；提交合成公司“DSHERP 隔离预览合成公司”/DPR、标准科目表、2026财年，不勾选演示数据。只提交一次，之后只读核实。原生流程完成并进入Desk，setup_complete=1、Company属性正确、Sales Order=0。
+- 原生向导自动选取首个既有用户beta-reader，账户页保持原姓名、密码留空。源码确认既有用户不会追加角色；完成后原生流程将本次新预览登录切换到beta-reader。独立回读其角色仍仅DSHERP Beta Reader；未退出alpha或用户已有其他站点会话。后续配置UI需重新使用合成配置身份，不假定当前预览标签仍是System Manager。
+- 真实浏览器发现extend_bootinfo设置disable_async无效：固定版frappe.sessions.get在扩展钩子之后用frappe.conf覆盖该值。原直接调用helper的测试不足以证明实际启动行为，已替换成完整原生sessions.get红测；改用原生Site配置disable_async=1并删除无效钩子，重启相关后端后通过。
+- 冷启动曾跑满beta原0.15CPU并触发入口超时。停掉本地合成验收不需要的scheduler（Compose profile scheduled），把其128MiB/.1CPU配额转给beta：448MiB/.25CPU。运行中项目仍10容器、3712MiB/1.9CPU，保留Agent384MiB/.1CPU；未扩大总预算。日常Site阶段需要重新核对scheduler资源安排，不能默认同时启用scheduled profile而超预算。
+- beta重建换IP后nginx刚发reload的过渡请求曾502；reload就绪后4项真实身份/原生启动信息/预览隔离/alpha入口通过（15.54s），预览login复测200/0.458741s。不是声称所有冷启动延迟已消除。无新模型调用、应用发布或生产部署。
+- 后续重点：30分钟不可变预览/发布确认、逐项执行与原生保存/工作流。已核对Workflow.on_update会自动创建状态字段并对空状态记录UPDATE；发布计划必须显式包含字段并保证新应用在工作流应用前无业务记录，防止隐式回填及并发窗口，不能将原生DDL视为整体事务。

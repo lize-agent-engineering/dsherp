@@ -155,3 +155,6 @@ Frappe 15.118.0 / ERPNext 15.119.3；实现时读安装源码核验，auth_hooks
 # 当前接续：beta隔离预览入口已运行，应用确认执行待接通
 
 复用既有独立beta合成Site，beta后端已移除外网网络；现有nginx新增preview.localhost:18085，无新增容器/资源限额。预览邮件/调度/实时广播关闭，原生外部连接配置拒绝。5项真实预览/alpha入口/配置回归通过，浏览器登录页已验证。beta Company=0、setup_complete=0；下一步合成配置身份、原生初始化向导，然后独立30分钟预览/发布确认、逐项执行、原生表单保存与工作流。不能将入口可访问当成配置应用成功。其它阶段剩余项与整体目标保持active。
+# 最新接续：预览已完成原生初始化
+
+beta合成公司DPR/China/CNY已通过真实原生向导初始化，setup_complete=1、Sales Order=0。合成配置用户dsherp-preview@example.invalid已创建（私有profile），旧beta-reader角色未变；当前新预览浏览器标签由原生向导自动切到了beta-reader。disable_async改为原生Site配置并删除无效扩展钩子，4项真实回归通过。scheduler已停并移入scheduled profile，原配额转beta448MiB/.25CPU，实际总量仍3712MiB/1.9CPU。下一步直接实现30分钟预览/发布确认、逐项执行、原生DocType/字段/工作流应用与回读。Workflow原生保存会补写状态，须防止对已有/并发新记录隐式回填；日常Site阶段重新核对调度资源。完整目标仍active。

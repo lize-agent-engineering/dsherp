@@ -117,6 +117,8 @@ services:
     logging: *logging
 
   scheduler:
+    # Not needed for synthetic acceptance; reserve its budget for preview Desk.
+    profiles: [scheduled]
     image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
     pull_policy: never
     mem_limit: 128m
@@ -155,9 +157,9 @@ services:
   beta-backend:
     image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
     pull_policy: never
-    mem_limit: 320m
-    memswap_limit: 320m
-    cpus: 0.15
+    mem_limit: 448m
+    memswap_limit: 448m
+    cpus: 0.25
     restart: "no"
     command: ["start.sh"]
     ports: ["127.0.0.1:18084:8000"]
