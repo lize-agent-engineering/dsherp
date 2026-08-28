@@ -3,7 +3,7 @@ import hashlib
 import json
 import frappe
 
-DOCTYPES=['Item','Customer']
+DOCTYPES=['Item','Customer','Sales Order']
 
 
 def revision(user):

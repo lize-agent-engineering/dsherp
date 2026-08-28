@@ -295,3 +295,11 @@
 - MCP仅增加提案工具erp_propose_create，必须先实际读取schema，确认工具不对模型开放；固定操作skill升级1.1.0并校验摘要。前端显示创建后的原生记录名。57项前端、7项真实业务测试、13项Runtime/技能/MCP通过。
 - 真实deepseek-v4-flash（5次调用）→Customer创建提案→浏览器一次确认→原生列表/表单回读通过，确认前客户0/执行0，确认后客户1/执行1，无关联联系人/地址。详细ID与字段证据见[HITL验收](context-agent-hitl-acceptance.md)。没有生产数据、上游修改或新增常驻消费者。
 - 下一步Sales Order草稿创建/修改/提交/取消和填表；不能将当前Item/Customer链表述为全部阶段二完成。其余阶段一缺口、Unknown核实、配置预览发布和日常Site仍保留。
+
+## 阶段二：Sales Order 原生确定性执行
+
+- 先以真实Frappe测试复现缺少状态提案入口，随后实现分别确认的原生submit/cancel；新增草稿create、items数量修改、新增/移除明细测试。普通Sales User全链通过，未改已有SAL-ORD-2026-00001；测试订单及临时身份/提案/执行记录清理。
+- 明细名单冻结结果行及顺序，已有行仅补丁指定字段，新行由原生方法生成；拒绝其他订单行、重复行、只读amount/conversion_factor。根Table按原生permlevel检查，历史提案读取也复查子表字段权限。没有给用户增加角色或确认步骤。
+- 红测发现Frappe构造子文档会修改传入字典，以及ERPNext混合既有date对象/新增JSON日期字符串时TypeError；采用独立JSON值和原生表单一致的日期表示解决，不忽略原生错误。补全后增删行和状态链 **1 passed / 3.31s**。
+- 组合回归首次因旧HTTP进程权限摘要未加载Sales Order及新增行日期问题失败；修复日期并只重启本项目alpha backend后，ping正常，串行Item/Customer/Sales Order业务回归 **8 passed / 16.17s**。均真实Frappe、合成数据；本次没有真实模型或Sales Order浏览器验收。
+- 下一步将Sales Order及可读子表结构接入读API、页面上下文、操作MCP和固定skill，再做模型/UI链。当前提交只是服务端确定性执行能力，不代表销售订单已在侧栏可用；填表、Unknown核实、阶段三/四仍待完成。
