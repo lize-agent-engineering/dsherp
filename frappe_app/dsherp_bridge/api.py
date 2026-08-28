@@ -36,3 +36,21 @@ def read_record(doctype: str, name: str):
         "name": doc.name,
         "fields": {key: value for key, value in doc.as_dict().items() if key in permitted},
     }
+
+
+@frappe.whitelist(methods=["GET"])
+def search_records(doctype: str, query: str = ""):
+    _authorize(doctype)
+    if not isinstance(query, str) or len(query) > 140:
+        frappe.throw("Search query must be at most 140 characters")
+    meta = frappe.get_meta(doctype)
+    title = meta.title_field
+    if not title or not meta.get_field(title):
+        frappe.throw("Business object has no valid title field")
+    permitted = set(meta.get_permitted_fieldnames(user=frappe.session.user, permission_type="read"))
+    filters = {"name": ["like", "%" + query + "%"]}
+    # Filtering unreadable fields would disclose their contents through matches.
+    if title in permitted:
+        filters[title] = ["like", "%" + query + "%"]
+    return frappe.get_list(doctype, or_filters=filters,
+                           fields=["name"], order_by="name asc", page_length=20)

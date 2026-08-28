@@ -41,7 +41,7 @@ def _binding(enterprise):
     return member,target
 
 
-def _read(enterprise,doctype,method,name=None):
+def _read(enterprise,doctype,method,name=None,query=None):
     if doctype not in ('Item','Customer'):
         raise frappe.PermissionError('Unsupported business object')
     member,target=_binding(enterprise)
@@ -68,6 +68,7 @@ def _read(enterprise,doctype,method,name=None):
             raise frappe.PermissionError('Enterprise binding changed; start a new request')
         params={'doctype':doctype}
         if name is not None:params['name']=name
+        if query is not None:params['query']=query
         return get('/api/method/dsherp_bridge.api.'+method,params)
 
 

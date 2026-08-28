@@ -1,0 +1,82 @@
+{
+  "doctype": "DocType",
+  "name": "DS Agent Task",
+  "module": "Platform",
+  "custom": 0,
+  "engine": "InnoDB",
+  "autoname": "hash",
+  "field_order": [
+    "enterprise",
+    "question",
+    "request_id",
+    "status",
+    "answer",
+    "error",
+    "events",
+    "capability_hash",
+    "expires_at",
+    "binding_fingerprint"
+  ],
+  "fields": [
+    {
+      "fieldname": "enterprise",
+      "label": "enterprise",
+      "fieldtype": "Link",
+      "options": "DS Enterprise"
+    },
+    {
+      "fieldname": "question",
+      "label": "question",
+      "fieldtype": "Long Text"
+    },
+    {
+      "fieldname": "request_id",
+      "label": "request_id",
+      "fieldtype": "Data"
+    },
+    {
+      "fieldname": "status",
+      "label": "status",
+      "fieldtype": "Select",
+      "options": "Queued\nRunning\nSucceeded\nFailed"
+    },
+    {
+      "fieldname": "answer",
+      "label": "answer",
+      "fieldtype": "Long Text"
+    },
+    {
+      "fieldname": "error",
+      "label": "error",
+      "fieldtype": "Long Text"
+    },
+    {
+      "fieldname": "events",
+      "label": "events",
+      "fieldtype": "Long Text"
+    },
+    {
+      "fieldname": "capability_hash",
+      "label": "capability_hash",
+      "fieldtype": "Data"
+    },
+    {
+      "fieldname": "expires_at",
+      "label": "expires_at",
+      "fieldtype": "Datetime"
+    },
+    {
+      "fieldname": "binding_fingerprint",
+      "label": "Binding fingerprint",
+      "fieldtype": "Data"
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "delete": 1
+    }
+  ]
+}
