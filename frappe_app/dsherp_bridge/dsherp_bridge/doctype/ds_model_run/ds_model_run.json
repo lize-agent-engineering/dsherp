@@ -18,11 +18,13 @@
     "cancel_request_id",
     "capability_hash",
     "expires_at",
+    "permission_revision",
     "model_calls",
     "model_input_bytes",
     "model_output_tokens_reserved"
   ],
   "fields": [
+    {"fieldname":"permission_revision","label":"Permission revision","fieldtype":"Data"},
     {"fieldname":"model_calls","label":"Model calls","fieldtype":"Int","default":"0"},
     {"fieldname":"model_input_bytes","label":"Model input bytes","fieldtype":"Int","default":"0"},
     {"fieldname":"model_output_tokens_reserved","label":"Reserved output tokens","fieldtype":"Int","default":"0"},

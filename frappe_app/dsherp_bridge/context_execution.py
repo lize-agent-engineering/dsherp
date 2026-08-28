@@ -4,11 +4,13 @@ import hashlib
 import hmac
 import json
 import secrets
+import uuid
 
 import frappe
 from frappe.utils import now_datetime,add_to_date,get_datetime
 from dsherp_bridge import api as erp
 from dsherp_bridge import context_api as conversations
+from dsherp_bridge import context_permissions
 
 TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
        'erp_read_record':(erp.read_record,{'doctype','name'}),
@@ -63,13 +65,18 @@ def claim_run():
         with _actor(run):
             conversation=conversations._conversation(run.conversation)
             conversations._public(conversation)
+            permission_revision=context_permissions.revision(run.owner)
     except (frappe.PermissionError,frappe.DoesNotExistError):
         frappe.db.set_value('DS Model Run',run.name,{'status':'Failed','error':'当前用户已无法读取会话来源','capability_hash':''})
         return None
     capability=secrets.token_urlsafe(32)
+    if conversation.runtime_revision!=permission_revision:
+        conversation.runtime_session=uuid.uuid4().hex
+        frappe.db.set_value('DS Conversation',conversation.name,{'runtime_session':conversation.runtime_session,'runtime_revision':permission_revision})
     frappe.db.set_value('DS Model Run',run.name,{'status':'Running','capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
-        'expires_at':add_to_date(now_datetime(),seconds=180)})
+        'expires_at':add_to_date(now_datetime(),seconds=180),'permission_revision':permission_revision})
     return {'run_id':run.name,'session_id':run.conversation,'native_session_id':conversation.runtime_session,
+            'permission_revision':permission_revision,
             'scope_id':hashlib.sha256(json.dumps([frappe.local.site,run.owner,run.conversation,'query',conversation.runtime_session],separators=(',',':')).encode()).hexdigest(),
             'question':run.question,'context':json.loads(run.page_context),'capability':capability}
 
@@ -79,6 +86,7 @@ def run_status(run_id,capability):
     run=_run(run_id,capability)
     if run.status=='Running':
         with _actor(run):
+            context_permissions.require_revision(run)
             conversations._public(conversations._conversation(run.conversation))
     return {'run_id':run.name,'status':run.status}
 
@@ -93,6 +101,7 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
         or type(max_output_tokens) is not int or not 0<max_output_tokens<=2048):
         frappe.throw('模型请求配置或输入预算不符')
     with _actor(run):
+        context_permissions.require_revision(run)
         conversations._public(conversations._conversation(run.conversation))
     calls=run.model_calls or 0
     total_input=(run.model_input_bytes or 0)+input_bytes
@@ -116,6 +125,7 @@ def run_tool(run_id,capability,tool,arguments):
     if not isinstance(arguments,dict) or set(arguments)!=keys or not all(isinstance(v,str) for v in arguments.values()):
         frappe.throw('工具参数无效')
     with _actor(run):
+        context_permissions.require_revision(run)
         conversations._context(run.page_context,check_version=False)
         result=function(**arguments)
         fields=[];records=[]
@@ -144,6 +154,7 @@ def finish_run(run_id,capability,status,answer='',error=''):
         if not isinstance(answer,str) or not answer.strip() or not json.loads(run.sources or '[]'):
             frappe.throw('成功结果必须包含实际读取及回答')
         with _actor(run):
+            context_permissions.require_revision(run)
             conversations._public(conversations._conversation(run.conversation))
     if status=='Cancelled' and run.status!='Cancelling':frappe.throw('运行未请求取消')
     frappe.db.set_value('DS Model Run',run.name,{'status':status,'answer':answer if status=='Succeeded' else '',
