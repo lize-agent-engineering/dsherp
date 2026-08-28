@@ -28,7 +28,9 @@ try:
     frappe.set_user('Guest')
     cap={'run_id':claim['run_id'],'capability':claim['capability']}
     assert execution.run_status(**cap)=={'run_id':claim['run_id'],'status':'Running'}
-    model_call={'input_bytes':100,'max_output_tokens':2048,'provider':'deepseek-official','model':'deepseek-v4-flash','purpose':'conversation'}
+    model_call={'input_bytes':100,'max_output_tokens':2048,'provider':'deepseek-official','model':'deepseek-v4-flash','purpose':'conversation','runtime_revision':'a'*64}
+    try:execution.reserve_model_call(**cap,**{**model_call,'runtime_revision':'b'*64});raise AssertionError('unbound model config allowed')
+    except frappe.PermissionError:pass
     for invalid in ({'input_bytes':-1},{'input_bytes':99999999},{'model':'unauthorized'},{'max_output_tokens':None}):
         try:execution.reserve_model_call(**cap,**{**model_call,**invalid});raise AssertionError('invalid model call allowed')
         except frappe.ValidationError:pass

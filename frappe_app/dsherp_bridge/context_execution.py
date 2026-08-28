@@ -97,9 +97,10 @@ def run_status(run_id,capability):
 
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
-def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,model,purpose):
+def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,model,purpose,runtime_revision):
     run=_run(run_id,capability)
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')
+    if runtime_revision!=run.runtime_revision:raise frappe.PermissionError('模型配置与领取的运行不一致')
     if (provider!='deepseek-official' or model!='deepseek-v4-flash'
         or purpose not in ('conversation','compaction','session-title')
         or type(input_bytes) is not int or not 0<input_bytes<=131072

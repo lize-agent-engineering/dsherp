@@ -24,7 +24,7 @@ try:
     except frappe.PermissionError:pass
     try:execution.run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'});raise AssertionError('old tool context allowed')
     except frappe.PermissionError:pass
-    try:execution.reserve_model_call(**cap,input_bytes=100,max_output_tokens=2048,provider='deepseek-official',model='deepseek-v4-flash',purpose='compaction');raise AssertionError('old summary context allowed')
+    try:execution.reserve_model_call(**cap,input_bytes=100,max_output_tokens=2048,provider='deepseek-official',model='deepseek-v4-flash',purpose='compaction',runtime_revision='a'*64);raise AssertionError('old summary context allowed')
     except frappe.PermissionError:pass
     assert frappe.db.get_value('DS Model Run',before['run_id'],'model_calls')==0
     execution.finish_run(**cap,status='Failed',error='Permission changed');frappe.db.commit()

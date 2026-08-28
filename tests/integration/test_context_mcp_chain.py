@@ -5,6 +5,7 @@ import httpx
 import pytest
 from pathlib import Path
 from dsherp.context_container import docker_command
+from dsherp.runtime_revision import configuration_revision
 
 from dsherp.context_runner import run_business
 from dsherp.context_mcp import post
@@ -15,7 +16,7 @@ CONTAINER_TEST=r'''
 import json,runpy
 from pathlib import Path
 from dsherp.context_runner import run_business
-fixture=runpy.run_path('/run/model_fixture.py')['model_server'].__wrapped__()
+fixture=runpy.run_path('/run/model_fixture.py')['model_server'].__wrapped__(38127)
 settings,requests,state=next(fixture)
 state['tool_call']={'name':'mcp__erp__erp_read_record','arguments':json.dumps({'doctype':'Item','name':'DSHERP-TEST-ITEM'})}
 try:
@@ -35,6 +36,8 @@ finally:
 
 @pytest.mark.parametrize('isolated',[False,True])
 def test_native_context_runtime_reads_actual_erp_through_run_capability(model_server,tmp_path,created,isolated):
+    settings,requests,state=model_server
+    if isolated:settings={**settings,'DEEPSEEK_BASE_URL':'http://127.0.0.1:38127/v1'}
     script=r'''
 import os,uuid,json,frappe
 os.chdir('/home/frappe/frappe-bench/sites')
@@ -43,14 +46,13 @@ from dsherp_bridge import context_api,context_execution
 actor='dsherp-reader@example.invalid';frappe.set_user(actor)
 doc=context_api.send_message('Read test item',{'schema_version':1,'page_type':'unknown','route':['Workspaces','Home']},uuid.uuid4().hex)
 frappe.db.commit();frappe.conf.dsherp_runtime_user=actor
-claim=context_execution.claim_run('a'*64);frappe.db.commit()
+claim=context_execution.claim_run(REVISION);frappe.db.commit()
 print(json.dumps(claim));frappe.destroy()
-'''
+'''.replace('REVISION',repr(configuration_revision(settings)))
     provision=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)
     assert provision.returncode==0,provision.stderr
     claim=json.loads(provision.stdout);created.append(claim['session_id'])
     secret=tmp_path/'run.json'
-    settings,requests,state=model_server
     secret.write_text(json.dumps({**claim,**settings,'resume':False,
         'business_url':'http://dsherp-validation-backend-1:8000' if isolated else 'http://127.0.0.1:18081','site':'dsherp-validation.localhost'}))
     secret.chmod(0o600)

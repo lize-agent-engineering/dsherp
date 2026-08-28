@@ -1,0 +1,13 @@
+[
+  "config/runtime-files.json",
+  "config/dsh-business.yml",
+  "config/dsh-context.yml",
+  "runtime/context-plugin.cjs",
+  "runtime/model-guard.cjs",
+  "dsherp/context_runner.py",
+  "dsherp/context_mcp.py",
+  "dsherp/read_tools.py",
+  "dsherp/session_runtime.py",
+  "dsherp/runtime_revision.py",
+  "requirements.lock"
+]

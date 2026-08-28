@@ -26,7 +26,7 @@ def runtime_processes(monkeypatch):
 
 
 @pytest.fixture
-def model_server():
+def model_server(port=0):
     """Only the paid provider is simulated; inspect the actual wire request."""
     requests = []
     state = {"finish_reason": "stop", "content": "DSHERP_OK"}
@@ -56,7 +56,7 @@ def model_server():
         def log_message(self, *_args):
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     settings = {"DEEPSEEK_API_KEY": "synthetic-not-a-credential", "DSH_MODEL": "deepseek-v4-flash",

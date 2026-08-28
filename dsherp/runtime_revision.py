@@ -4,11 +4,7 @@ import json
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
-FILES=('config/dsh-business.yml','config/dsh-context.yml',
-       'runtime/context-plugin.cjs','runtime/model-guard.cjs',
-       'dsherp/context_runner.py','dsherp/context_mcp.py',
-       'dsherp/read_tools.py','dsherp/session_runtime.py',
-       'dsherp/runtime_revision.py','requirements.lock')
+FILES=tuple(json.loads((ROOT/'config/runtime-files.json').read_text()))
 KEYS=('DEEPSEEK_API_KEY','DSH_MODEL','DEEPSEEK_BASE_URL')
 
 

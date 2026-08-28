@@ -8,6 +8,7 @@ import sys
 import httpx
 from dsherp.context_mcp import post
 from dsherp.session_runtime import open_runtime,ROOT
+from dsherp.runtime_revision import configuration_revision
 
 
 class Cancelled(BaseModel):
@@ -56,6 +57,8 @@ def run_business(config_path,directory):
             raise ValueError('Missing business runtime setting: '+key)
     if type(config.get('resume')) is not bool and config.get('resume')!='inspect':raise ValueError('Explicit native resume decision required')
     if not isinstance(config.get('context'),dict):raise ValueError('Missing page snapshot')
+    if config.get('runtime_revision')!=configuration_revision(config):
+        raise ValueError('Runtime revision does not match the claimed configuration')
     original=dict(os.environ)
     clean={key:original[key] for key in ('PATH','LANG','SSL_CERT_FILE') if key in original}
     clean.update({'HOME':str(directory),'TMPDIR':'/tmp','PYTHONPATH':str(ROOT),'PYTHONDONTWRITEBYTECODE':'1'})

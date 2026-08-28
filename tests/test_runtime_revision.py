@@ -1,4 +1,6 @@
 import pytest
+import json
+from dsherp.context_runner import run_business
 from dsherp.runtime_revision import configuration_revision,FILES
 
 
@@ -18,3 +20,11 @@ def test_missing_runtime_file_or_model_setting_fails(tmp_path):
     with pytest.raises(ValueError):configuration_revision({},tmp_path)
     with pytest.raises(FileNotFoundError):
         configuration_revision({'DEEPSEEK_API_KEY':'key','DSH_MODEL':'model','DEEPSEEK_BASE_URL':'url'},tmp_path)
+
+
+def test_business_entry_rejects_unbound_runtime_before_network(tmp_path):
+    config={'run_id':'r','capability':'c','native_session_id':'n','question':'q','context':{},'resume':False,
+        'business_url':'http://127.0.0.1:1','site':'synthetic','runtime_revision':'0'*64,
+        'DEEPSEEK_API_KEY':'synthetic','DSH_MODEL':'deepseek-v4-flash','DEEPSEEK_BASE_URL':'http://127.0.0.1:1'}
+    path=tmp_path/'run.json';path.write_text(json.dumps(config))
+    with pytest.raises(ValueError,match='revision'):run_business(path,tmp_path/'native')
