@@ -124,7 +124,10 @@ def _public(doc):
         messages.append({'id':run.name,'question':run.question,'answer':run.answer or '',
                          'error':run.error or '', 'status':run.status,'context':context})
         if run.status in ('Queued','Running','Cancelling'):active=run.name
-    return {'id':doc.name,'title':doc.title,'messages':messages,'active_run':active}
+    from dsherp_bridge.operations import get_proposal
+    proposals=[get_proposal(name) for name in frappe.get_all('DS Operation Proposal',
+        filters={'conversation':doc.name},pluck='name',order_by='creation asc')]
+    return {'id':doc.name,'title':doc.title,'messages':messages,'active_run':active,'proposals':proposals}
 
 
 @frappe.whitelist(methods=['GET'])

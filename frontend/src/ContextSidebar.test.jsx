@@ -9,6 +9,17 @@ const snapshot={schema_version:1,route:['Form','Item','I-1'],page_type:'form',do
 const session={id:'S-1',title:'查询物料',messages:[{id:'M-1',question:'旧问题',answer:'历史回答',status:'Succeeded',context:snapshot}],active_run:null};
 const open=()=>fireEvent.click(screen.getByRole('button',{name:'打开 Agent'}));
 const apiDefault=async(method)=>method==='list_sessions'?[{id:'S-1',title:'查询物料'}]:session;
+it('会话提案显示冻结差异，切页后确认仍只提交原提案，且不保存或刷新当前表单',async()=>{
+ let page=snapshot;
+ const proposal={id:'P1',digest:'d1',action:'update',doctype:'Item',name:'I-1',version:'v1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{field:'item_name',label:'物料名称',before:'原物料名',after:'建议物料名'}]};
+ const api=vi.fn(async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:method==='confirm_operation'?{status:'Succeeded',doctype:'Item',name:'I-1'}:{...session,proposals:[proposal]});
+ render(<ContextSidebar api={api} capture={()=>page}/>);open();await screen.findByText('建议物料名');
+ expect(api.mock.calls.some(c=>c[0]==='confirm_operation')).toBe(false);
+ page={...snapshot,name:'I-2',route:['Form','Item','I-2']};
+ fireEvent.click(screen.getByRole('button',{name:'确认执行'}));
+ await screen.findByText('执行成功，已读取业务结果');
+ expect(api.mock.calls.find(c=>c[0]==='confirm_operation')[1]).toEqual({proposal_id:'P1',digest:'d1',request_id:expect.any(String)});
+});
 it('未保存字段显式选择后才发送，切换对象不能沿用选择',async()=>{
  let page=snapshot;const api=vi.fn(apiDefault);const captureSelected=vi.fn(()=>({...page,unsaved:{item_name:'建议名称'}}));
  render(<ContextSidebar api={api} capture={()=>page} options={()=>[{value:'item_name',label:'物料名称'}]} captureSelected={captureSelected}/>);open();await screen.findByText('历史回答');

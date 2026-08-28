@@ -6,6 +6,11 @@ import OperationProposal from './OperationProposal.jsx';
 beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
 afterEach(cleanup);
 const proposal={id:'P1',digest:'d1',action:'update',doctype:'Item',name:'I-1',version:'v1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{field:'item_name',label:'物料名称',before:'旧名称',after:'新名称'}]};
+it('刷新从服务端执行记录恢复结果，不重发确认',()=>{
+ const confirm=vi.fn();render(<OperationProposal proposal={{...proposal,status:'Succeeded',execution:{status:'Succeeded',execution_id:'E1',version:'v2',values:{item_name:'新名称'}}}} onConfirm={confirm}/>);
+ expect(screen.getByText('执行成功，已读取业务结果')).toBeTruthy();
+ expect(screen.getByRole('button',{name:'确认执行'}).disabled).toBe(true);expect(confirm).not.toHaveBeenCalled();
+});
 it('展示冻结目标和具体差异，确认前零调用；确认只传提案绑定而非可改写内容',async()=>{
  let finish;const confirm=vi.fn(()=>new Promise(resolve=>finish=resolve));render(<OperationProposal proposal={proposal} onConfirm={confirm}/>);
  expect(screen.getByText('Item / I-1')).toBeTruthy();expect(screen.getByText('旧名称')).toBeTruthy();expect(screen.getByText('新名称')).toBeTruthy();expect(confirm).not.toHaveBeenCalled();

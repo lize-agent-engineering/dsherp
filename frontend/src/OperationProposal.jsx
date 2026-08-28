@@ -11,7 +11,8 @@ export default function OperationProposal(props) {
 
 function Proposal({proposal, onConfirm}) {
   const claimed = useRef(false);
-  const [state, setState] = useState(null);
+  const [localState, setState] = useState(null);
+  const state = localState || proposal.execution;
   const expired = !Number.isFinite(Date.parse(proposal.expires_at)) || Date.parse(proposal.expires_at) <= Date.now();
   async function confirm() {
     if (claimed.current || expired || Date.parse(proposal.expires_at) <= Date.now() || proposal.status !== 'Pending') return;
@@ -19,7 +20,7 @@ function Proposal({proposal, onConfirm}) {
     setState({status: 'Running'});
     try {
       const result = await onConfirm({proposal_id: proposal.id, digest: proposal.digest, request_id: crypto.randomUUID()});
-      setState(result.status === 'Succeeded' ? result : {status: 'Unknown', error: '执行结果尚未核实，请查看执行记录'});
+      setState(result.status === 'Succeeded' ? result : {...result, error: result.error || '执行结果尚未核实，请查看执行记录'});
     } catch (error) {
       setState({status: 'Unknown', error: error.message});
     }

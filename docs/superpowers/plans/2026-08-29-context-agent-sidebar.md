@@ -121,3 +121,5 @@ DSH 固定 ref 下：packages/sdk/server/src/index.ts、packages/core/agent/src/
 Frappe 15.118.0 / ERPNext 15.119.3；实现时读安装源码核验，auth_hooks 才用于最终 token 身份检查，不误用 before_request。首版已认证 HTTP 轮询，不通过 websocket 广播业务正文。
 
 阶段二接续：已落地独立不可变十分钟操作提案与前端逐字段差异/一次确认组件，真实Frappe权限/零业务写入/版本/跨用户2项通过。组件尚未接侧栏，确认执行API和执行记录仍待实现。继续先完成Item/Customer原生save回读去重，再Sales Order及填表；阶段一剩余验收、阶段三/四不缩减。
+
+阶段二最新：确认API、独立执行记录、原生save回读、并发HTTP去重与侧栏提案显示已实现。54项前端、4项真实Frappe通过；真实Item保存验证完成，Customer只验证字段权限，尚未保存。下一步接模型操作领域/固定技能/提案工具，完成真实模型与浏览器HITL，随后Customer创建修改、Sales Order、填表；Unknown主动核实、阶段一缺口、配置预览发布和日常Site仍未完成。

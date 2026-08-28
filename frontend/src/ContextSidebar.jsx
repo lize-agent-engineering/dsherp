@@ -1,6 +1,7 @@
 import React, {useEffect,useRef,useState} from 'react';
 import {Alert,Button,Drawer,Input,Select} from 'antd';
 import {capturePageContext,contextOptions,selectedContext} from './page-context.js';
+import OperationProposal from './OperationProposal.jsx';
 
 const label = context => context?.page_type === 'unknown' ? context.reason : [context?.doctype,context?.name].filter(Boolean).join(' / ');
 export default function ContextSidebar({api,capture=capturePageContext,options=contextOptions,captureSelected=selectedContext,pollInterval=5000}) {
@@ -127,6 +128,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
           {m.error&&<Alert type="error" message={m.error}/>}
           {m.status==='Cancelled'&&<p>已取消后续工作；已发生的操作不会自动撤销。</p>}
         </article>)}
+        {session?.proposals?.map(proposal=><OperationProposal key={proposal.id} proposal={proposal} onConfirm={binding=>api('confirm_operation',binding)}/>)}
       </div>
       <Input.TextArea aria-label="业务问题" value={question} onChange={e=>setQuestion(e.target.value)} autoSize={{minRows:3,maxRows:8}} maxLength={8000}/>
       <div style={{display:'flex',gap:8,marginTop:12}}>

@@ -1,6 +1,15 @@
 import {afterEach,expect,it,vi} from 'vitest';
 import * as api from './context-api.js';
 afterEach(()=>vi.unstubAllGlobals());
+it('操作确认仅向同源原生执行端点发送提案绑定和 CSRF',async()=>{
+ const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{status:'Succeeded'}})}));vi.stubGlobal('fetch',fetch);
+ vi.stubGlobal('frappe',{csrf_token:'test-csrf'});
+ const params={proposal_id:'P1',digest:'d1',request_id:'r1'};
+ await api.contextApi('confirm_operation',params);
+ expect(fetch.mock.calls[0][0]).toBe('/api/method/dsherp_bridge.operations.confirm');
+ expect(fetch.mock.calls[0][1]).toMatchObject({method:'POST',body:JSON.stringify(params),headers:{'X-Frappe-CSRF-Token':'test-csrf'}});
+ await expect(api.contextApi('confirm_operation',{...params,values:{item_name:'forged'}})).rejects.toThrow(/参数/);
+});
 it('只展示明确列举的登录失效原因，不泄漏服务器回溯',async()=>{
  vi.stubGlobal('fetch',async()=>({ok:false,status:403,headers:new Headers({'Content-Type':'application/json'}),json:async()=>({exception:'frappe.exceptions.PermissionError: 企业成员绑定已变化，请重新登录',exc:'PRIVATE TRACE'})}));
  await expect(api.contextApi('list_sessions')).rejects.toThrow('企业成员绑定已变化，请重新登录');

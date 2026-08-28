@@ -1,0 +1,44 @@
+{
+  "doctype": "DocType",
+  "name": "DS Execution Record",
+  "module": "DSHERP Bridge",
+  "custom": 0,
+  "engine": "InnoDB",
+  "autoname": "hash",
+  "field_order": [
+    "proposal",
+    "request_id",
+    "status",
+    "result"
+  ],
+  "fields": [
+    {
+      "fieldname": "proposal",
+      "label": "proposal",
+      "fieldtype": "Link",
+      "options": "DS Operation Proposal",
+      "reqd": 1,
+      "unique": 1
+    },
+    {
+      "fieldname": "request_id",
+      "label": "request_id",
+      "fieldtype": "Data",
+      "reqd": 1
+    },
+    {
+      "fieldname": "status",
+      "label": "status",
+      "fieldtype": "Select",
+      "options": "Running\nSucceeded\nFailed\nUnknown",
+      "reqd": 1
+    },
+    {
+      "fieldname": "result",
+      "label": "result",
+      "fieldtype": "Long Text",
+      "reqd": 0
+    }
+  ],
+  "permissions": []
+}
