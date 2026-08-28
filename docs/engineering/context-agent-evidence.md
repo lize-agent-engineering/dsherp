@@ -199,3 +199,10 @@
 - 真实 Frappe 新测试先因 uoms 不在普通标量字段集合而失败。读取安装版 Meta.get_permitted_fieldnames 与 Document.apply_fieldlevel_read_permissions 后，按原生父表 permlevel 和子表字段权限处理；已保存行必须属于当前单据，新行只作为 new- 前缀的未保存上下文，拒绝重复/外来行、系统归属字段和嵌套对象。没有保存业务内容。
 - 子表 DocType/字段/自定义字段/Property Setter 纳入权限版本摘要，避免子表配置变化后继续使用旧上下文。新增真实检查先失败于摘要只有 Item/Customer，补入原生子表后通过。
 - 全前端 **54 passed / 4.61s**，构建成功；真实会话/权限版本 **8 passed / 8.27s**。alpha backend 重启加载修改。此批尚未验收真实可编辑用户的未保存子表 UI，不声称 Sales Order 已接入；后端查询领域仍仅 Item/Customer。无付费模型调用，整体四阶段目标继续。
+
+## 接续：平台 OAuth 身份映射端点
+
+- 现场确认现有平台只有成员凭据代理，不是浏览器SSO。读取安装版 frappe/utils/oauth.py 与 integrations/oauth2_logins.py：原生提供 Social Login Key、授权码交换、一次性 state 和 LoginManager；原生通用登录还会更新/创建用户，因此后续业务回调必须限制到已明确绑定且已存在的业务身份，不按邮箱相同推断或自动开通用户。
+- 新增 desk_identity 作为后续原生 OAuth user-info：从已认证平台用户读取现有 Membership/Enterprise，使用绑定的普通业务凭据核实实际业务用户，再结束读快照重查绑定版本。返回明确的业务用户、平台subject、目标Site/企业及绑定版本；不输出API凭据，不授予业务角色。
+- 与旧只读接口共用已核实的业务连接上下文，保留仍有效回归；没有改变旧Demo功能范围。新测试先因缺少方法失败；实现后验证alpha/beta不同业务用户、非成员拒绝、撤销成员/错绑用户拒绝。
+- 首次组合测试因平台backend重启未就绪出现11项502失败；确认ping就绪后完整重跑 **13 passed / 35.11s**。这只是实际身份映射与权限验证，尚未配置OAuth客户端、业务回调/登录态成员撤销检查，也未验收浏览器SSO。无付费模型调用或业务写入。

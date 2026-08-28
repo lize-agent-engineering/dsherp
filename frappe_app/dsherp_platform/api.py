@@ -1,6 +1,7 @@
 """Platform session identity and explicit per-member ERP read delegation."""
 import frappe
 import requests
+from contextlib import contextmanager
 
 
 def _user():
@@ -41,9 +42,8 @@ def _binding(enterprise):
     return member,target
 
 
-def _read(enterprise,doctype,method,name=None,query=None):
-    if doctype not in ('Item','Customer'):
-        raise frappe.PermissionError('Unsupported business object')
+@contextmanager
+def _business(enterprise):
     member,target=_binding(enterprise)
     with requests.Session() as client:
         client.trust_env=False
@@ -66,6 +66,22 @@ def _read(enterprise,doctype,method,name=None,query=None):
         current,current_target=_binding(enterprise)
         if (current.modified != member.modified or current_target.modified != target.modified):
             raise frappe.PermissionError('Enterprise binding changed; start a new request')
+        yield member,target,get
+
+
+@frappe.whitelist(methods=['GET'])
+def desk_identity(enterprise: str):
+    """OAuth user info for an explicit enterprise binding, not email inference."""
+    with _business(enterprise) as (member,target,_):
+        frappe.response.update({'sub':frappe.session.user,'email':member.erp_user,
+            'enterprise':target.name,'site':target.site,'binding_version':str(member.modified),
+            'enterprise_version':str(target.modified)})
+
+
+def _read(enterprise,doctype,method,name=None,query=None):
+    if doctype not in ('Item','Customer'):
+        raise frappe.PermissionError('Unsupported business object')
+    with _business(enterprise) as (_,__,get):
         params={'doctype':doctype}
         if name is not None:params['name']=name
         if query is not None:params['query']=query

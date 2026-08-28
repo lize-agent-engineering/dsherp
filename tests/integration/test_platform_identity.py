@@ -36,6 +36,20 @@ def test_native_session_lists_only_enabled_memberships_and_no_credentials():
     with platform_client('outsider') as client:
         assert client.get('/api/method/dsherp_platform.api.context').json()['message']['enterprises']==[]
 
+def test_desk_oauth_identity_uses_explicit_verified_business_mapping():
+    endpoint='/api/method/dsherp_platform.api.desk_identity'
+    with platform_client() as client:
+        for enterprise,user,site in [('alpha','dsherp-reader@example.invalid','dsherp-validation.localhost'),('beta','beta-reader@example.invalid','dsherp-beta.localhost')]:
+            response=client.get(endpoint,params={'enterprise':enterprise})
+            assert response.status_code==200,response.text
+            data=response.json()
+            assert data['email']==user and data['site']==site
+            assert data['sub']=='member@example.invalid'
+            assert data['enterprise']==enterprise and data['binding_version']
+            assert 'api_key' not in response.text and 'api_secret' not in response.text
+    with platform_client('outsider') as client:
+        assert client.get(endpoint,params={'enterprise':'alpha','user':'member@example.invalid'}).status_code==403
+
 
 def test_membership_read_uses_distinct_business_users_and_sites():
     with platform_client() as client:
@@ -77,9 +91,11 @@ def test_member_revocation_applies_to_existing_session_and_binding_changes_fail_
         try:
             assert operator.put(path,json={'enabled':0}).status_code==200
             assert member.get('/api/method/dsherp_platform.api.read_record',params=params).status_code==403
+            assert member.get('/api/method/dsherp_platform.api.desk_identity',params={'enterprise':'alpha'}).status_code==403
             assert 'alpha' not in {x['id'] for x in member.get('/api/method/dsherp_platform.api.context').json()['message']['enterprises']}
             assert operator.put(path,json={'enabled':1,'erp_user':'wrong-user@example.invalid'}).status_code==200
             assert member.get('/api/method/dsherp_platform.api.read_record',params=params).status_code==403
+            assert member.get('/api/method/dsherp_platform.api.desk_identity',params={'enterprise':'alpha'}).status_code==403
         finally:
             assert operator.put(path,json={'enabled':original['enabled'],'erp_user':original['erp_user']}).status_code==200
 
