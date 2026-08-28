@@ -32,6 +32,7 @@ function Proposal({proposal, onConfirm}) {
       columns={[{title: '字段', dataIndex: 'label'}, {title: '原值', dataIndex: 'before', render: display}, {title: '修改后', dataIndex: 'after', render: display}]}/>
     {expired && <Alert type="warning" message="确认已过期，请重新提出操作"/>}
     {state?.status === 'Succeeded' && <Alert type="success" message="执行成功，已读取业务结果"/>}
+    {state?.status === 'Succeeded' && state.name && <Typography.Text>已保存记录：{state.doctype} / {state.name}</Typography.Text>}
     {state?.error && <Alert type="error" message={state.error}/>}
     {proposal.execution_ready===false&&<Typography.Text type="secondary">提案生成运行尚未成功结束，请核实运行记录。</Typography.Text>}
     <Button aria-label="确认执行" type="primary" loading={state?.status === 'Running'} disabled={proposal.execution_ready===false || expired || proposal.status !== 'Pending' || Boolean(state)} onClick={confirm}>确认执行</Button>

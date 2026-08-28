@@ -32,6 +32,14 @@ try:
     assert proposal['status']=='Pending' and proposal['actor']==actor
     assert frappe.db.get_value('Item',item.name,'item_name')==item.item_name
     assert 'confirm' not in proposal
+    create={'doctype':'Item','values':{'item_code':'DS-PROPOSE-'+uuid.uuid4().hex,'item_name':'New proposed item','item_group':item.item_group,'stock_uom':item.stock_uom},'version':str(frappe.get_meta('Item').modified)}
+    before=frappe.db.count('Item')
+    try:run_tool(**cap,tool='erp_propose_create',arguments=create);raise AssertionError('unread schema accepted')
+    except frappe.ValidationError:pass
+    run_tool(**cap,tool='erp_read_schema',arguments={'doctype':'Item'})
+    created=run_tool(**cap,tool='erp_propose_create',arguments=create)
+    assert created['action']=='create' and created['status']=='Pending'
+    assert frappe.db.count('Item')==before
     try:run_tool(**cap,tool='confirm',arguments={});raise AssertionError('model confirmed write')
     except frappe.ValidationError:pass
 finally:

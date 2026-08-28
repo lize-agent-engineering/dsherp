@@ -55,19 +55,27 @@ def confirm(proposal_id, digest, request_id):
         payload = json.loads(proposal.payload)
         if payload['authorization_revision'] != _authorization_revision(user, grant):
             frappe.throw('权限或企业成员关系已变化，请重新提出操作')
-        if payload['action'] != 'update':
-            frappe.throw('不支持的业务动作')
-        doc = frappe.get_doc(payload['doctype'], payload['name'], for_update=True)
-        if str(doc.modified) != payload['version']:
-            frappe.throw('记录版本已变化，请重新提出操作')
         values = {change['field']: change['after'] for change in payload['changes']}
-        if update_diff(doc, values) != payload['changes']:
-            frappe.throw('字段或权限已变化，请重新提出操作')
-        doc.update(values)
-        doc.save()  # Native validation, permissions, versioning and hooks.
+        if payload['action']=='update':
+            doc = frappe.get_doc(payload['doctype'], payload['name'], for_update=True)
+            if str(doc.modified) != payload['version']:
+                frappe.throw('记录版本已变化，请重新提出操作')
+            if update_diff(doc, values) != payload['changes']:
+                frappe.throw('字段或权限已变化，请重新提出操作')
+            doc.update(values)
+            doc.save()
+        elif payload['action']=='create':
+            if str(frappe.get_meta(payload['doctype']).modified)!=payload['version']:
+                frappe.throw('业务结构已变化，请重新提出操作')
+            if create_diff(payload['doctype'],values)!=payload['changes']:
+                frappe.throw('字段或权限已变化，请重新提出操作')
+            doc=frappe.get_doc({'doctype':payload['doctype'],**values})
+            doc.insert()  # Native naming, defaults, validation and permissions.
+        else:
+            frappe.throw('不支持的业务动作')
         saved = frappe.get_doc(doc.doctype, doc.name)
         saved.check_permission('read')
-        actual = {field: saved.get(field) for field in values}
+        actual = json.loads(_json({field: saved.get(field) for field in values}))
         if actual != values:
             frappe.throw('保存后字段与确认内容不一致，已停止执行')
         result = {'status': 'Succeeded', 'doctype': doc.doctype, 'name': doc.name,
@@ -102,19 +110,31 @@ def _execution_result(execution):
 
 
 def propose_update(session_id, doctype, name, values, version, grant=None, model_run=None):
+    doc = frappe.get_doc(doctype, name)
+    changes = update_diff(doc, values)
+    if str(doc.modified) != version:
+        frappe.throw('记录版本已变化，请重新提出操作')
+    return _propose(session_id,doctype,name,'update',changes,version,grant,model_run)
+
+
+def propose_create(session_id, doctype, values, version, grant=None, model_run=None):
+    _user()
+    changes=create_diff(doctype,values)
+    if str(frappe.get_meta(doctype).modified)!=version:
+        frappe.throw('业务结构已变化，请重新读取后提出操作')
+    return _propose(session_id,doctype,None,'create',changes,version,grant,model_run)
+
+
+def _propose(session_id,doctype,name,action,changes,version,grant,model_run):
     user = _user()
     conversation = _conversation(session_id)
     if model_run:
         origin=frappe.get_doc('DS Model Run',model_run)
         if origin.owner!=user or origin.conversation!=conversation.name or origin.status!='Running':
             raise frappe.PermissionError('提案运行归属或状态不匹配')
-    doc = frappe.get_doc(doctype, name)
-    changes = update_diff(doc, values)
-    if str(doc.modified) != version:
-        frappe.throw('记录版本已变化，请重新提出操作')
     expires = add_to_date(now_datetime(), minutes=10)
     authorization = _authorization_revision(user, grant or frappe.session.data.get('dsherp_platform_grant'))
-    payload = _json({'site': frappe.local.site, 'actor': user, 'action': 'update', 'authorization_revision': authorization,
+    payload = _json({'site': frappe.local.site, 'actor': user, 'action': action, 'authorization_revision': authorization,
         'doctype': doctype, 'name': name, 'version': version, 'changes': changes})
     digest = hashlib.sha256(_json([conversation.name, payload, str(expires)]).encode()).hexdigest()
     proposal = frappe.get_doc({'doctype': 'DS Operation Proposal', 'conversation': conversation.name,'model_run':model_run,
@@ -132,7 +152,12 @@ def get_proposal(proposal_id):
     payload = json.loads(proposal.payload)
     if payload['site'] != frappe.local.site or payload['actor'] != user:
         raise frappe.PermissionError('操作提案身份不匹配')
-    doc = frappe.get_doc(payload['doctype'], payload['name'])
+    execution = frappe.db.get_value('DS Execution Record', {'proposal': proposal_id}, 'name')
+    outcome=_execution_result(frappe.get_doc('DS Execution Record',execution)) if execution else None
+    if payload['action']=='create' and not (outcome and outcome['status']=='Succeeded'):
+        doc=frappe.get_doc({'doctype':payload['doctype'],**{change['field']:change['after'] for change in payload['changes']}})
+    else:
+        doc = frappe.get_doc(payload['doctype'], outcome['name'] if payload['action']=='create' else payload['name'])
     doc.check_permission('read')
     # Recheck access before exposing saved before/after values, even after success.
     readable = set(doc.meta.get_permitted_fieldnames(user=user, permission_type='read'))
@@ -141,9 +166,8 @@ def get_proposal(proposal_id):
     result = {**payload, 'id': proposal.name, 'digest': proposal.digest,
         'expires_at': proposal.expires_at.replace(tzinfo=ZoneInfo(get_system_timezone())).isoformat(), 'status': proposal.status}
     result['execution_ready']=not proposal.model_run or frappe.db.get_value('DS Model Run',proposal.model_run,'status')=='Succeeded'
-    execution = frappe.db.get_value('DS Execution Record', {'proposal': proposal_id}, 'name')
-    if execution:
-        result['execution'] = _execution_result(frappe.get_doc('DS Execution Record', execution))
+    if outcome:
+        result['execution'] = outcome
     return result
 
 
@@ -155,6 +179,22 @@ def update_diff(doc, values):
     doc.check_permission('write')
     if doc.docstatus != 0:
         frappe.throw('当前操作只支持草稿记录')
+    return _field_changes(doc,values)
+
+
+def create_diff(doctype,values):
+    if doctype not in ('Item','Customer'):
+        raise frappe.PermissionError('当前操作领域不支持该业务对象')
+    doc=frappe.get_doc({'doctype':doctype})
+    doc.check_permission('create')
+    doc.check_permission('read')
+    changes=_field_changes(doc,values,creating=True)
+    doc.update(values)
+    doc.check_permission('create')
+    return changes
+
+
+def _field_changes(doc,values,creating=False):
     if not isinstance(values, dict) or not values:
         frappe.throw('必须提供明确的修改字段')
     permitted = set(doc.meta.get_permitted_fieldnames(user=frappe.session.user, permission_type='write'))
@@ -164,7 +204,7 @@ def update_diff(doc, values):
         definition = doc.meta.get_field(field)
         if not definition or field in ('name', 'docstatus', 'owner', 'creation', 'modified', 'modified_by'):
             frappe.throw('不能修改系统字段或不存在的字段：' + field)
-        if field not in permitted or (definition.permlevel and definition.permlevel not in levels):
+        if (field not in permitted and not (creating and not definition.permlevel)) or (definition.permlevel and definition.permlevel not in levels):
             raise frappe.PermissionError('无权修改该字段：' + field)
         if definition.read_only or definition.fieldtype not in (
             'Data', 'Small Text', 'Text', 'Long Text', 'Text Editor', 'Select',
@@ -174,8 +214,9 @@ def update_diff(doc, values):
             frappe.throw('该字段不支持直接修改：' + field)
         if isinstance(value, (dict, list)):
             frappe.throw('修改值必须是标量')
-        if doc.get(field) != value:
-            changes.append({'field': field, 'label': definition.label, 'before': doc.get(field), 'after': value})
+        before=json.loads(_json(doc.get(field)))
+        if creating or before != value:
+            changes.append({'field': field, 'label': definition.label, 'before': None if creating else before, 'after': value})
     if not changes:
         frappe.throw('没有实际修改')
-    return changes
+    return json.loads(_json(changes))

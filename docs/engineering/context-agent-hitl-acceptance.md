@@ -27,3 +27,13 @@
 ## 当前后续
 
 已完成alpha普通用户的真实模型→提案→浏览器确认→原生保存→连续实际查询及历史恢复闭环，范围仅为Item标量修改。Customer实际保存/创建、Item创建、Sales Order、填表、Unknown核实、配置预览发布和日常Site仍待完成，不能将本次验收表述为完整阶段二或生产上线。
+
+## 后续补齐：Item/Customer 原生创建与 Customer 真实 UI
+
+- 创建提案与修改共用确认、执行记录和权限/有效期检查；创建绑定读取的schema版本及明确字段，确认前不调用原生命名或insert。确认后原生insert负责命名、默认值和业务校验，并逐字段回读；不能拿“提案已保存”冒充“业务已创建”。
+- 真实Frappe参数化测试分别覆盖Item/Customer：提案前后业务数量不变、确认只创建一条、不同请求ID重复确认仍只一条、继续修改新记录并核对普通用户modified_by。日期字段测试先因原生Date对象与JSON字符串比较失败，改为同一规范日期表示后通过，未取消回读一致性检查。
+- erp-operation升级固定1.1.0并更新内容摘要。operation新增erp_propose_create，服务端要求本轮实际读过同一schema版本；query不获得创建能力，模型仍无确认/insert/save工具。字段值和命名不能由任意代码执行补足。
+- 浏览器普通writer在Customer列表请求创建DSHERP-HITL-CUSTOMER，只填写customer_name、customer_type、customer_group、territory；分组与区域从明确参考客户实际读取。真实deepseek-v4-flash运行1eddbffb8768c99c3034a45aac7a032d67647c4a42bcc433d668e6ed84f7bedb，5次模型调用，Succeeded并释放容器。
+- 提案r4ms2dmtuu待确认时，独立数据库计数客户0、执行0。浏览器确认后客户1、执行1；执行rf5pnlvij7，原生结果名DSHERP-HITL-CUSTOMER，版本2026-08-29 03:42:14.981676。owner/modified_by均为普通writer；关联Contact/Address数量0。原生列表与表单均显示四个正确字段。
+- 测试证据：57项前端通过、构建成功；创建/操作真实Frappe7项（11.78s）；Runtime技能/MCP13项（6.83s）。真实模型调用单独如上，不与SSE替身合并表述。合成真实UI客户保留给后续Sales Order验收，临时自动化创建记录/账号已清理。
+- 当前新增证明Item与Customer创建/修改的原生方法，以及Customer创建的真实模型/UI链；Item创建和Customer修改尚未各自单独重跑真实模型UI组合。接续Sales Order和填表，之后Unknown核实、剩余阶段一验收及阶段三/四。

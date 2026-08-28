@@ -6,6 +6,12 @@ import OperationProposal from './OperationProposal.jsx';
 beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
 afterEach(cleanup);
 const proposal={id:'P1',digest:'d1',action:'update',doctype:'Item',name:'I-1',version:'v1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{field:'item_name',label:'物料名称',before:'旧名称',after:'新名称'}]};
+it('新建提案先展示新记录，成功后显示原生命名结果',async()=>{
+ const confirm=vi.fn(async()=>({status:'Succeeded',doctype:'Customer',name:'C-NEW',version:'v2',values:{customer_name:'新客户'}}));
+ render(<OperationProposal proposal={{...proposal,action:'create',doctype:'Customer',name:null,changes:[{field:'customer_name',label:'客户名称',before:null,after:'新客户'}]}} onConfirm={confirm}/>);
+ expect(screen.getByText('Customer / 新记录')).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'确认执行'}));
+ expect(await screen.findByText('已保存记录：Customer / C-NEW')).toBeTruthy();
+});
 it('刷新从服务端执行记录恢复结果，不重发确认',()=>{
  const confirm=vi.fn();render(<OperationProposal proposal={{...proposal,status:'Succeeded',execution:{status:'Succeeded',execution_id:'E1',version:'v2',values:{item_name:'新名称'}}}} onConfirm={confirm}/>);
  expect(screen.getByText('执行成功，已读取业务结果')).toBeTruthy();

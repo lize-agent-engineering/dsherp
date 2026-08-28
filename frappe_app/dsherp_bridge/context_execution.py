@@ -133,22 +133,29 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
 def run_tool(run_id,capability,tool,arguments):
     run=_run(run_id,capability)
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')
-    if tool=='erp_propose_update':
+    if tool in ('erp_propose_update','erp_propose_create'):
         if run.domain!='operation':raise frappe.PermissionError('当前领域不能提出业务操作')
         if isinstance(arguments,str):arguments=json.loads(arguments)
-        if (not isinstance(arguments,dict) or set(arguments)!={'doctype','name','values','version'}
-            or not all(isinstance(arguments[key],str) for key in ('doctype','name','version'))
+        keys={'doctype','values','version'}|({'name'} if tool=='erp_propose_update' else set())
+        if (not isinstance(arguments,dict) or set(arguments)!=keys
+            or not all(isinstance(arguments[key],str) for key in keys-{'values'})
             or not isinstance(arguments['values'],dict)):
             frappe.throw('操作提案参数无效')
         with _actor(run):
             context_permissions.require_revision(run)
             sources=json.loads(run.sources or '[]')
-            if not any(source['tool']=='erp_read_record' and source['arguments']=={'doctype':arguments['doctype'],'name':arguments['name']}
-                       and source.get('record_versions',{}).get(arguments['name'])==arguments['version'] for source in sources):
-                frappe.throw('请先读取确切目标及当前版本，再提出操作')
             authorize_sources(sources)
-            from dsherp_bridge.operations import propose_update
-            return propose_update(run.conversation,**arguments,grant=run.platform_grant,model_run=run.name)
+            if tool=='erp_propose_update':
+                if not any(source['tool']=='erp_read_record' and source['arguments']=={'doctype':arguments['doctype'],'name':arguments['name']}
+                           and source.get('record_versions',{}).get(arguments['name'])==arguments['version'] for source in sources):
+                    frappe.throw('请先读取确切目标及当前版本，再提出操作')
+                from dsherp_bridge.operations import propose_update as propose
+            else:
+                if not any(source['tool']=='erp_read_schema' and source['arguments']=={'doctype':arguments['doctype']}
+                           and source.get('schema_version')==arguments['version'] for source in sources):
+                    frappe.throw('请先读取当前业务结构，再提出创建操作')
+                from dsherp_bridge.operations import propose_create as propose
+            return propose(run.conversation,**arguments,grant=run.platform_grant,model_run=run.name)
     if tool not in TOOLS:frappe.throw('未知工具')
     if isinstance(arguments,str):arguments=json.loads(arguments)
     if tool=='erp_search_records' and isinstance(arguments,dict):arguments={'query':'',**arguments}

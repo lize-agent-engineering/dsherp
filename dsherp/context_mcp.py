@@ -36,6 +36,10 @@ def create_server(client,run_id,capability,domain='query'):
         def erp_propose_update(doctype: Literal['Item','Customer'],name: str,values: dict,version: str) -> dict:
             """Propose explicit changes to a previously read record/version. Does not save business data. The user must confirm the frozen proposal in Desk; no confirmation tool exists here."""
             return invoke('erp_propose_update',doctype=doctype,name=name,values=values,version=version)
+        @server.tool(annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=False,idempotentHint=False))
+        def erp_propose_create(doctype: Literal['Item','Customer'],values: dict,version: str) -> dict:
+            """Propose creation using explicit field values and the modified version returned by erp_read_schema. Native defaults/naming apply only after the user confirms in Desk. Does not create a business record."""
+            return invoke('erp_propose_create',doctype=doctype,values=values,version=version)
     return server
 
 

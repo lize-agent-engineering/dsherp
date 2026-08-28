@@ -15,11 +15,13 @@ def test_operation_domain_can_propose_but_cannot_confirm_business_writes():
     with httpx.Client(base_url='http://synthetic',transport=httpx.MockTransport(handler)) as client:
         server=context_mcp.create_server(client,'RUN-1','CAP-1',domain='operation')
         catalog=asyncio.run(server.list_tools())
-        assert {tool.name for tool in catalog}=={'erp_read_schema','erp_read_record','erp_search_records','erp_propose_update'}
+        assert {tool.name for tool in catalog}=={'erp_read_schema','erp_read_record','erp_search_records','erp_propose_update','erp_propose_create'}
         proposal=next(tool for tool in catalog if tool.name=='erp_propose_update')
         assert not {'session_id','user','site','grant','capability'} & set(proposal.inputSchema['properties'])
         asyncio.run(server.call_tool('erp_propose_update',{'doctype':'Item','name':'I1','values':{'item_name':'New'},'version':'v1'}))
-    assert calls==[{'run_id':'RUN-1','capability':'CAP-1','tool':'erp_propose_update','arguments':{'doctype':'Item','name':'I1','values':{'item_name':'New'},'version':'v1'}}]
+        asyncio.run(server.call_tool('erp_propose_create',{'doctype':'Item','values':{'item_name':'New'},'version':'schema-v1'}))
+    assert calls==[{'run_id':'RUN-1','capability':'CAP-1','tool':'erp_propose_update','arguments':{'doctype':'Item','name':'I1','values':{'item_name':'New'},'version':'v1'}},
+                   {'run_id':'RUN-1','capability':'CAP-1','tool':'erp_propose_create','arguments':{'doctype':'Item','values':{'item_name':'New'},'version':'schema-v1'}}]
     with pytest.raises(ValueError,match='domain'):context_mcp.create_server(None,'R','C',domain='admin')
 
 
