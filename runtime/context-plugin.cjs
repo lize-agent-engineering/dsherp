@@ -12,9 +12,12 @@ exports.apply = async function (ctx) {
   let options;
   let closing = false;
   let teardown;
+  let opening;
   async function dispose() {
     if (!teardown) teardown = (async()=>{
       closing = true;
+      // Failed opens report to their own caller; cleanup still drains the reservation.
+      if(opening) await Promise.allSettled([opening]);
       for(const handle of handles.values()) await handle.dispose();
       handles.clear();
       await server.shutdown();
@@ -50,7 +53,7 @@ exports.apply = async function (ctx) {
       if(handles.size)throw new Error('One session writer per runtime');
       // Reserve before awaiting the native factory: concurrent open must fail.
       handles.set(id,null);
-      try{
+      opening=(async()=>{try{
         if(!params.resume && (await ctx.sessionPersistence.list()).some(meta=>String(meta.id)===id)) {
           throw new Error('Persisted session requires explicit resume');
         }
@@ -60,7 +63,8 @@ exports.apply = async function (ctx) {
           : await ctx.agents.create({sessionId:id,meta:{cwd:options.cwd},agentOptions});
         handles.set(id,handle);
         return {sessionId:id,source:params.resume?'resume':'startup'};
-      }catch(e){handles.delete(id);throw e;}
+      }catch(e){handles.delete(id);throw e;}})();
+      return opening;
     }
     if(method==='session/prompt'){
       const handle=handleFor(params.sessionId);
