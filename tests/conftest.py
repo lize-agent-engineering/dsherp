@@ -34,6 +34,11 @@ def model_server():
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            if state.get('received'):
+                state['received'].set()
+            if state.get('release'):
+                state['release'].wait(timeout=10)
+                return  # Deliberately stalled synthetic request was cancelled.
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()

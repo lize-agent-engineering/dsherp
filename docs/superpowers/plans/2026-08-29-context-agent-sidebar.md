@@ -83,6 +83,8 @@
 
 当前没有已确认外部阻塞。页面快照和侧栏交互首批 13 项 TDD 通过，全前端 48 项通过；尚未挂载 Desk/接新后端或真实恢复。不沿用旧链路证据声称完成。用户要求减少门禁和停止旧服务后，已核对无排队/运行任务并停止旧付费 worker PID 39450；未停原生 ERP/身份基础服务。证据持续记录在 docs/engineering/context-agent-evidence.md。
 
+接续更新：同源客户端 3 项测试通过；固定 Runtime 插件 5 项真实进程协议测试通过（模型替身），包括显式跨进程 resume 和真实在途取消。全前端现 51 项、Python 根目录测试 35 项通过。用户已授权按计划继续使用项目原模型，无需重复询问。下一步与并发清理缺口见证据文件末尾；仍未完成业务会话后端、Desk 挂载、领域工具/skills、权限预算保护和真实模型/ERP/UI验收。
+
 ## 固定资料定位
 
 DSH 固定 ref 下：packages/sdk/server/src/index.ts、packages/core/agent/src/runtime-types.ts、docs/subsystems/session.md、packages/session/session-persistence-jsonl/README.md、packages/session/session-checkpoint-policy/README.md、packages/compaction/compaction-basic/README.md、docs/subsystems/skills.md。
