@@ -50,3 +50,14 @@
 - 旧 Demo 独立入口保留，正式导航移除尚需实施；旧平台历史只读兼容尚需实现。
 
 整体持续目标 active，阶段一仍进行中。以上不是生产部署或完整阶段交付。
+
+## 2026-08-29 接续：创建/关闭竞态与业务 Site 会话
+
+- 插件创建期间关闭的两项确定性交错测试先失败（对 null 预留执行 dispose），改为等待在途原生创建收敛，再释放实际 handle；创建失败仍回报原请求，但不破坏清理。`node --test runtime/context-plugin.test.cjs` 两项通过，真实 Runtime 五项复跑通过。尚不能据此宣称跨进程单写者已实现。
+- 新增业务 Site `DS Conversation` 与 `DS Model Run` 两个原生 DocType，平台旧任务不搬迁。经原生 `bench --site dsherp-validation.localhost migrate` 仅同步 alpha 隔离测试站点。没有修改其他项目或生产数据。
+- `dsherp_bridge.context_api` 的 send/get/list/cancel 接口使用当前 Site 身份，普通用户不能通用 REST 读取内部运行表。原生 User 行锁串行化该用户提交，request_id 与内容摘要校验防重复。会话消息绑定服务端校验过的页面快照及真实 modified，当前支持 Item/Customer 标量上下文及列表读取权限；Sales Order、新未保存单据与子表服务端能力仍待接入。
+- 入队前检查真实 DocType、记录和字段权限，历史展示重新检查快照来源权限；后续工具结果/摘要来源授权和权限指纹尚未实现，当前没有任何模型回答或工具结果写入接口。
+- 新队列尚无消费执行器：send 返回真实 Queued，排队取消返回 Cancelled；不伪造模型回答，不把排队当作服务已可使用。暂未挂入 Desk，用户现有页面不变。
+- `tests/integration/test_context_sessions.py` 首次因接口缺失返回 417 而失败；实现和原生迁移后 **5 passed / 4.90s**。覆盖归属、真实 DB 持久化/重复请求、刷新不执行、越权记录/字段、取消后继续、活动运行冲突、伪造上下文及旧版本拒绝。测试创建的会话和运行由 fixture 按确切 ID 删除，没有保留合成任务进入后续真实执行。
+
+下一步：业务 Site 运行领取/短期凭据/当前用户工具回读，隔离容器执行器与稳定目录单写者锁；然后将侧栏 bundle 挂到 Desk。新会话后端还需并发事务、撤权、来源摘要、断线和模型预算的真实验收。旧 worker 保持停止，不自动恢复旧聊天入口。

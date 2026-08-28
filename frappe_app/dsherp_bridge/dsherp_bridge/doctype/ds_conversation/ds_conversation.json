@@ -1,0 +1,31 @@
+{
+  "doctype": "DocType",
+  "name": "DS Conversation",
+  "module": "DSHERP Bridge",
+  "custom": 0,
+  "engine": "InnoDB",
+  "autoname": "hash",
+  "field_order": [
+    "title",
+    "runtime_session",
+    "runtime_revision"
+  ],
+  "fields": [
+    {
+      "fieldname": "title",
+      "label": "title",
+      "fieldtype": "Data"
+    },
+    {
+      "fieldname": "runtime_session",
+      "label": "runtime_session",
+      "fieldtype": "Data"
+    },
+    {
+      "fieldname": "runtime_revision",
+      "label": "runtime_revision",
+      "fieldtype": "Data"
+    }
+  ],
+  "permissions": []
+}

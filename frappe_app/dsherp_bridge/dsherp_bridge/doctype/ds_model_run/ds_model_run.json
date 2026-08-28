@@ -1,0 +1,75 @@
+{
+  "doctype": "DocType",
+  "name": "DS Model Run",
+  "module": "DSHERP Bridge",
+  "custom": 0,
+  "engine": "InnoDB",
+  "autoname": "hash",
+  "field_order": [
+    "conversation",
+    "request_id",
+    "request_digest",
+    "question",
+    "page_context",
+    "status",
+    "answer",
+    "error",
+    "sources",
+    "cancel_request_id"
+  ],
+  "fields": [
+    {
+      "fieldname": "conversation",
+      "label": "conversation",
+      "fieldtype": "Link",
+      "options": "DS Conversation"
+    },
+    {
+      "fieldname": "request_id",
+      "label": "request_id",
+      "fieldtype": "Data"
+    },
+    {
+      "fieldname": "request_digest",
+      "label": "request_digest",
+      "fieldtype": "Data"
+    },
+    {
+      "fieldname": "question",
+      "label": "question",
+      "fieldtype": "Long Text"
+    },
+    {
+      "fieldname": "page_context",
+      "label": "page_context",
+      "fieldtype": "Long Text"
+    },
+    {
+      "fieldname": "status",
+      "label": "status",
+      "fieldtype": "Select",
+      "options": "Queued\nRunning\nCancelling\nCancelled\nSucceeded\nFailed"
+    },
+    {
+      "fieldname": "answer",
+      "label": "answer",
+      "fieldtype": "Long Text"
+    },
+    {
+      "fieldname": "error",
+      "label": "error",
+      "fieldtype": "Long Text"
+    },
+    {
+      "fieldname": "sources",
+      "label": "sources",
+      "fieldtype": "Long Text"
+    },
+    {
+      "fieldname": "cancel_request_id",
+      "label": "cancel_request_id",
+      "fieldtype": "Data"
+    }
+  ],
+  "permissions": []
+}
