@@ -149,6 +149,10 @@ def list_sessions():
 @frappe.whitelist(methods=['POST'])
 def send_message(question, context, request_id, session_id=None):
     user=_user()
+    grant=frappe.session.data.get('dsherp_platform_grant')
+    if grant:
+        from dsherp_bridge.sso import validate_grant
+        validate_grant(grant,user)
     if not isinstance(question,str) or not question.strip() or len(question)>8000:
         frappe.throw('问题必须包含 1–8000 个字符')
     if not isinstance(request_id,str) or not 1<=len(request_id)<=128:
@@ -174,6 +178,7 @@ def send_message(question, context, request_id, session_id=None):
         doc=frappe.get_doc({'doctype':'DS Conversation','title':question.strip()[:100],
                             'runtime_session':uuid.uuid4().hex}).insert(ignore_permissions=True)
     frappe.get_doc({'doctype':'DS Model Run','name':run_id,'conversation':doc.name,
+        'platform_grant':grant,
         'request_id':request_id,'request_digest':digest,'question':question.strip(),
         'page_context':_json(snapshot),'status':'Queued','sources':'[]'}).insert(ignore_permissions=True,set_name=run_id)
     return _public(doc)

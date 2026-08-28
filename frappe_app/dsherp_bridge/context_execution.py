@@ -24,7 +24,11 @@ def _actor(run):
     try:
         frappe.set_user(run.owner)
         conversations._user()
-        yield
+        identity=None
+        if run.get('platform_grant'):
+            from dsherp_bridge.sso import validate_grant
+            identity=validate_grant(run.platform_grant,run.owner)
+        yield identity
     finally:
         frappe.set_user(original)
 
@@ -65,7 +69,7 @@ def claim_run(runtime_revision):
     run=frappe.get_doc('DS Model Run',names[0],for_update=True)
     if run.status!='Queued':return None
     try:
-        with _actor(run):
+        with _actor(run) as identity:
             conversation=conversations._conversation(run.conversation)
             conversations._public(conversation)
             permission_revision=context_permissions.revision(run.owner)
@@ -74,6 +78,8 @@ def claim_run(runtime_revision):
         return None
     capability=secrets.token_urlsafe(32)
     combined_revision=hashlib.sha256((permission_revision+runtime_revision).encode()).hexdigest()
+    if identity:
+        combined_revision=hashlib.sha256((combined_revision+conversations._json(identity)).encode()).hexdigest()
     if conversation.runtime_revision!=combined_revision:
         conversation.runtime_session=uuid.uuid4().hex
         frappe.db.set_value('DS Conversation',conversation.name,{'runtime_session':conversation.runtime_session,'runtime_revision':combined_revision})

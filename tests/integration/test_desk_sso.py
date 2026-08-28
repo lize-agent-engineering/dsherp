@@ -2,6 +2,56 @@
 import subprocess
 
 
+def test_background_run_keeps_sso_revocation_without_browser_session():
+    script=r'''
+import os,uuid,json,frappe
+from frappe.utils.password import encrypt
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import sso,context_api as api,context_execution as execution
+actor='dsherp-reader@example.invalid';frappe.set_user(actor)
+frappe.conf.dsherp_platform_oauth={'provider':'dsherp','enterprise':'alpha'}
+info={'sub':'member@example.invalid','email':actor,'site':frappe.local.site,'enterprise':'alpha','binding_version':'v1','enterprise_version':'v1'}
+sso.identity_for_token=lambda token:info
+grant=encrypt(json.dumps({'identity':info,'token':'synthetic-token'}))
+frappe.session.data.dsherp_platform_grant=grant
+doc=api.send_message('Background SSO revocation',{'schema_version':1,'page_type':'unknown','route':[]},uuid.uuid4().hex)
+frappe.db.commit()
+try:
+    run=frappe.get_doc('DS Model Run',doc['active_run'])
+    assert run.get('platform_grant')==grant
+    assert grant not in json.dumps(doc)
+    frappe.session.data.pop('dsherp_platform_grant',None)
+    frappe.conf.dsherp_runtime_user=actor
+    claim=execution.claim_run('a'*64);frappe.db.commit()
+    assert claim and grant not in json.dumps(claim) and 'synthetic-token' not in json.dumps(claim)
+    cap={'run_id':claim['run_id'],'capability':claim['capability']}
+    frappe.set_user('Guest')
+    sso.identity_for_token=lambda token:{**info,'binding_version':'v2'}
+    for operation in (lambda:execution.run_status(**cap),lambda:execution.run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'}),lambda:execution.reserve_model_call(**cap,input_bytes=100,max_output_tokens=2048,provider='deepseek-official',model='deepseek-v4-flash',purpose='compaction',runtime_revision='a'*64)):
+        try:operation();raise AssertionError('revoked background grant accepted')
+        except frappe.PermissionError:pass
+    assert frappe.db.get_value('DS Model Run',run.name,'model_calls')==0
+    execution.finish_run(**cap,status='Failed',error='Synthetic revocation');frappe.db.commit()
+    frappe.set_user(actor)
+    new_info={**info,'binding_version':'v2'}
+    frappe.session.data.dsherp_platform_grant=encrypt(json.dumps({'identity':new_info,'token':'new-synthetic-token'}))
+    api.send_message('Renewed membership',{'schema_version':1,'page_type':'unknown','route':[]},uuid.uuid4().hex,session_id=doc['id']);frappe.db.commit()
+    frappe.session.data.pop('dsherp_platform_grant',None)
+    next_claim=execution.claim_run('a'*64);frappe.db.commit()
+    assert next_claim['native_session_id']!=claim['native_session_id']
+    assert next_claim['permission_revision']==claim['permission_revision']
+    execution.finish_run(run_id=next_claim['run_id'],capability=next_claim['capability'],status='Failed',error='End synthetic run');frappe.db.commit()
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    for name in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
+    frappe.delete_doc('DS Conversation',doc['id'],ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)
+    assert result.returncode==0,result.stderr
+
+
 def test_business_sso_rejects_cross_site_unbound_and_privileged_users():
     script=r'''
 import os,frappe
