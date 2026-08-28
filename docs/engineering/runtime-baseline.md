@@ -53,4 +53,4 @@
 
 ## 当前限制
 
-没有项目模型密钥、费用授权范围或隔离 ERP Site 凭证。真实 DSH 模型调用和 ERP 普通用户读取/拒绝验证未完成；不能据此开始多租户业务实现。后续状态见 [DSH 证据](dsh-validation-evidence.md) 和 [ERP 证据](erpnext-integration-evidence.md)。
+已在用户授权下使用项目密钥完成一次 DeepSeek 官方真实最小调用。隔离 ERP Site 仍未建立，普通用户读取/拒绝验证未完成；不能据此开始多租户业务实现。后续状态见 [DSH 证据](dsh-validation-evidence.md) 和 [ERP 证据](erpnext-integration-evidence.md)。
