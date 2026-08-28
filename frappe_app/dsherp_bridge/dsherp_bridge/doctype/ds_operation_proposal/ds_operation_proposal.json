@@ -1,0 +1,50 @@
+{
+  "doctype": "DocType",
+  "name": "DS Operation Proposal",
+  "module": "DSHERP Bridge",
+  "custom": 0,
+  "engine": "InnoDB",
+  "autoname": "hash",
+  "field_order": [
+    "conversation",
+    "payload",
+    "digest",
+    "expires_at",
+    "status"
+  ],
+  "fields": [
+    {
+      "fieldname": "conversation",
+      "label": "conversation",
+      "fieldtype": "Link",
+      "options": "DS Conversation",
+      "reqd": 1
+    },
+    {
+      "fieldname": "payload",
+      "label": "payload",
+      "fieldtype": "Long Text",
+      "reqd": 1
+    },
+    {
+      "fieldname": "digest",
+      "label": "digest",
+      "fieldtype": "Data",
+      "reqd": 1
+    },
+    {
+      "fieldname": "expires_at",
+      "label": "expires_at",
+      "fieldtype": "Datetime",
+      "reqd": 1
+    },
+    {
+      "fieldname": "status",
+      "label": "status",
+      "fieldtype": "Select",
+      "options": "Pending\nSucceeded\nFailed\nUnknown",
+      "reqd": 1
+    }
+  ],
+  "permissions": []
+}
