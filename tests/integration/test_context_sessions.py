@@ -105,8 +105,16 @@ def test_active_run_prevents_duplicate_parallel_work(clients,created):
     response=reader.post(API+'send_message',json={**params(),'session_id':data['id']})
     assert response.status_code==409,response.text
 
-def test_forged_context_identity_and_stale_version_fail(clients):
+def test_forged_context_identity_fails_but_stale_page_can_query_without_refresh(clients,created):
     reader,_=clients;args=params();args['context']['user']='Administrator'
     assert reader.post(API+'send_message',json=args).status_code==417
     del args['context']['user'];args['context']['version']='2000-01-01 00:00:00'
-    assert reader.post(API+'send_message',json=args).status_code==409
+    args['context']['server_version']='forged-server-version'
+    data=send(reader,created,args)
+    snapshot=data['messages'][0]['context']
+    assert snapshot['version']=='2000-01-01 00:00:00'
+    assert snapshot['server_version'] not in ('forged-server-version',snapshot['version'])
+    invalid=params();invalid['context']={'schema_version':1,'page_type':'list','route':['List','Item'],'doctype':'Item','server_version':'forged'}
+    response=reader.post(API+'send_message',json=invalid)
+    if response.status_code==200:created.append(response.json()['message']['id'])
+    assert response.status_code==417

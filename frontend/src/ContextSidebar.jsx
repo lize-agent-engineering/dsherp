@@ -125,6 +125,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
       <div aria-live="polite">
         {session?.messages.map(m=><article key={m.id} style={{borderTop:'1px solid #eee',padding:'12px 0'}}>
           <small>使用页面：{label(m.context)}</small><p>{m.question}</p>
+          {m.context?.server_version&&m.context.server_version!==m.context.version&&<p>页面版本与服务器已保存版本不同；查询以实际读取为准，未保存内容不会被覆盖。</p>}
           <div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{m.answer}</div>
           {m.error&&<Alert type="error" message={m.error}/>}
           {m.status==='Cancelled'&&<p>已取消后续工作；已发生的操作不会自动撤销。</p>}

@@ -28,7 +28,7 @@ def _conflict(message):
 def _context(value, check_version=True):
     if isinstance(value, str):
         value = json.loads(value)
-    allowed = {'schema_version','route','page_type','reason','doctype','name','version','dirty','filters','selected','unsaved'}
+    allowed = {'schema_version','route','page_type','reason','doctype','name','version','server_version','dirty','filters','selected','unsaved'}
     if not isinstance(value, dict) or set(value)-allowed or value.get('schema_version') != 1:
         frappe.throw('页面上下文参数无效')
     if len(_json(value).encode()) > 32768:
@@ -54,10 +54,12 @@ def _context(value, check_version=True):
             frappe.throw('表单路由与目标不一致')
         doc = frappe.get_doc(doctype,name)
         doc.check_permission('read')
-        if check_version and value.get('version') and str(doc.modified) != value['version']:
-            _conflict('记录版本已变化，请核对页面后重新发送')
         if check_version:
-            value['version'] = str(doc.modified)
+            # A stale page is useful context, not authorization for a write.
+            # Keep its version and independently stamp current saved facts.
+            # This overwrites any client-supplied server_version.
+            value['server_version'] = str(doc.modified)
+            if not value.get('version'):value['version'] = str(doc.modified)
         unsaved = value.get('unsaved',{})
         if not isinstance(unsaved,dict):
             frappe.throw('未保存字段无效')
@@ -88,6 +90,7 @@ def _context(value, check_version=True):
             if not meta.get_field(field) or isinstance(content,(dict,list)):
                 frappe.throw('当前未保存字段须为明确选择的标量字段')
     elif kind == 'list':
+        if 'server_version' in value:frappe.throw('列表上下文不包含单据服务器版本')
         if len(route)<2 or route[:2] != ['List',doctype]:
             frappe.throw('列表路由无效')
         filters = value.get('filters',[])

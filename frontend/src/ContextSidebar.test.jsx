@@ -9,6 +9,11 @@ const snapshot={schema_version:1,route:['Form','Item','I-1'],page_type:'form',do
 const session={id:'S-1',title:'查询物料',messages:[{id:'M-1',question:'旧问题',answer:'历史回答',status:'Succeeded',context:snapshot}],active_run:null};
 const open=()=>fireEvent.click(screen.getByRole('button',{name:'打开 Agent'}));
 const apiDefault=async(method)=>method==='list_sessions'?[{id:'S-1',title:'查询物料'}]:session;
+it('页面版本落后时明确说明，不要求刷新覆盖未保存内容',async()=>{
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{...session,messages:[{...session.messages[0],context:{...snapshot,server_version:'v2'}}]};
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ expect(await screen.findByText('页面版本与服务器已保存版本不同；查询以实际读取为准，未保存内容不会被覆盖。')).toBeTruthy();
+});
 it('业务操作领域由用户选择并随本条请求发送',async()=>{
  const api=vi.fn(apiDefault);render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();await screen.findByText('历史回答');
  fireEvent.mouseDown(screen.getByRole('combobox',{name:'任务领域'}));fireEvent.click(await screen.findByText('业务操作'));
