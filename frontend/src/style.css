@@ -124,3 +124,12 @@
     padding: 18px;
   }
 }
+.dsh-agent-grid { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 20px; }
+.dsh-agent-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 16px; }
+.dsh-agent-answer { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.85; margin-top: 16px; }
+.dsh-agent-json { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow-y: auto; margin: 8px 0 16px; }
+.dsh-agent-history { align-self: start; padding: 18px; }
+.dsh-history-item { height: auto; padding: 10px 12px; margin-bottom: 10px; text-align: left; display: flex; flex-direction: column; align-items: flex-start; }
+.dsh-history-item span { white-space: normal; overflow-wrap: anywhere; }
+.dsh-history-item small { opacity: .75; font-size: 11px; }
+@media (max-width: 850px) { .dsh-agent-grid { grid-template-columns: minmax(0, 1fr); } .dsh-heading { flex-wrap: wrap; } }
