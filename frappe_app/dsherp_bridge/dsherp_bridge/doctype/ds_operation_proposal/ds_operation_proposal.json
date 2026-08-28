@@ -44,7 +44,7 @@
       "fieldname": "status",
       "label": "status",
       "fieldtype": "Select",
-      "options": "Pending\nSucceeded\nFailed\nUnknown",
+      "options": "Pending\nAuthorized\nSucceeded\nFailed\nUnknown",
       "reqd": 1
     }
   ],

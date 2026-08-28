@@ -37,7 +37,7 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
             assert result.finish_reason==second.finish_reason=='completed'
             assert len(requests)==len(observed)==(3 if mode in ('skill','operation') else 2)
             expected={'skill','mcp__erp__erp_read_schema','mcp__erp__erp_read_record','mcp__erp__erp_search_records'}
-            if mode=='operation':expected.update({'mcp__erp__erp_propose_update','mcp__erp__erp_propose_create','mcp__erp__erp_propose_action'})
+            if mode=='operation':expected.update({'mcp__erp__erp_propose_update','mcp__erp__erp_propose_create','mcp__erp__erp_propose_action','mcp__erp__erp_propose_fill'})
             assert {tool['function']['name'] for tool in requests[0]['tools']}==expected
             assert 'PERSONAL_SKILL_FORBIDDEN' not in json.dumps(requests)
             if mode=='skill':assert '业务只读查询' in str(requests[1]['messages'])

@@ -15,7 +15,7 @@ def test_operation_domain_can_propose_but_cannot_confirm_business_writes():
     with httpx.Client(base_url='http://synthetic',transport=httpx.MockTransport(handler)) as client:
         server=context_mcp.create_server(client,'RUN-1','CAP-1',domain='operation')
         catalog=asyncio.run(server.list_tools())
-        assert {tool.name for tool in catalog}=={'erp_read_schema','erp_read_record','erp_search_records','erp_propose_update','erp_propose_create','erp_propose_action'}
+        assert {tool.name for tool in catalog}=={'erp_read_schema','erp_read_record','erp_search_records','erp_propose_update','erp_propose_create','erp_propose_action','erp_propose_fill'}
         assert all('Sales Order' in tool.inputSchema['properties']['doctype']['enum'] for tool in catalog if tool.name!='erp_propose_action')
         proposal=next(tool for tool in catalog if tool.name=='erp_propose_update')
         assert not {'session_id','user','site','grant','capability'} & set(proposal.inputSchema['properties'])

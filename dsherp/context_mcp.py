@@ -44,6 +44,10 @@ def create_server(client,run_id,capability,domain='query'):
         def erp_propose_action(doctype: Literal['Sales Order'],name: str,action: Literal['submit','cancel'],version: str) -> dict:
             """Propose native submit or cancel of the exact previously read Sales Order version. This only stores a proposal; the user must separately confirm it in Desk."""
             return invoke('erp_propose_action',doctype=doctype,name=name,action=action,version=version)
+        @server.tool(annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=False,idempotentHint=False))
+        def erp_propose_fill(doctype: Literal['Item','Customer','Sales Order'],name: str,values: dict,version: str) -> dict:
+            """Propose scalar values for the current native form only. Requires a previously read record/version. Confirmation authorizes browser draft fill, never saves or submits the ERP record."""
+            return invoke('erp_propose_fill',doctype=doctype,name=name,values=values,version=version)
     return server
 
 

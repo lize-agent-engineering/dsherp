@@ -56,14 +56,17 @@ def confirm(proposal_id, digest, request_id):
         if payload['authorization_revision'] != _authorization_revision(user, grant):
             frappe.throw('权限或企业成员关系已变化，请重新提出操作')
         values = {change['field']: change['after'] for change in payload['changes']}
-        if payload['action']=='update':
+        if payload['action'] in ('update','fill'):
             doc = frappe.get_doc(payload['doctype'], payload['name'], for_update=True)
             if str(doc.modified) != payload['version']:
                 frappe.throw('记录版本已变化，请重新提出操作')
             if update_diff(doc, values) != payload['changes']:
                 frappe.throw('字段或权限已变化，请重新提出操作')
-            _apply_values(doc,values)
-            doc.save()
+            if payload['action']=='fill':
+                result={'status':'Authorized','target':'browser-draft','doctype':doc.doctype,'name':doc.name,'version':str(doc.modified),'values':values}
+            else:
+                _apply_values(doc,values)
+                doc.save()
         elif payload['action']=='create':
             if str(frappe.get_meta(payload['doctype']).modified)!=payload['version']:
                 frappe.throw('业务结构已变化，请重新提出操作')
@@ -82,13 +85,14 @@ def confirm(proposal_id, digest, request_id):
             else:doc.cancel()
         else:
             frappe.throw('不支持的业务动作')
-        saved = frappe.get_doc(doc.doctype, doc.name)
-        saved.check_permission('read')
-        actual = _actual_values(saved,values)
-        if actual != values:
-            frappe.throw('保存后字段与确认内容不一致，已停止执行')
-        result = {'status': 'Succeeded', 'doctype': doc.doctype, 'name': doc.name,
-            'version': str(saved.modified), 'values': actual}
+        if payload['action']!='fill':
+            saved = frappe.get_doc(doc.doctype, doc.name)
+            saved.check_permission('read')
+            actual = _actual_values(saved,values)
+            if actual != values:
+                frappe.throw('保存后字段与确认内容不一致，已停止执行')
+            result = {'status': 'Succeeded', 'doctype': doc.doctype, 'name': doc.name,
+                'version': str(saved.modified), 'values': actual}
     except Exception as error:
         # Native business validation failures are recorded, not HTTP-success
         # claims. Unexpected failures remain unknown; no blind replay.
@@ -132,6 +136,19 @@ def propose_create(session_id, doctype, values, version, grant=None, model_run=N
     if str(frappe.get_meta(doctype).modified)!=version:
         frappe.throw('业务结构已变化，请重新读取后提出操作')
     return _propose(session_id,doctype,None,'create',changes,version,grant,model_run)
+
+
+def propose_fill(session_id,doctype,name,values,version,grant=None,model_run=None):
+    doc=frappe.get_doc(doctype,name)
+    changes=update_diff(doc,values)
+    if any(isinstance(change['after'],(list,dict)) for change in changes):
+        frappe.throw('当前填入仅支持明确的标量字段')
+    if str(doc.modified)!=version:frappe.throw('记录版本已变化，请重新提出建议')
+    if model_run:
+        context=json.loads(frappe.get_doc('DS Model Run',model_run).page_context)
+        if context.get('page_type')!='form' or context.get('doctype')!=doctype or context.get('name')!=name:
+            frappe.throw('填入目标必须是本次消息的当前表单')
+    return _propose(session_id,doctype,name,'fill',changes,version,grant,model_run)
 
 
 def propose_action(session_id,doctype,name,action,version,grant=None,model_run=None):

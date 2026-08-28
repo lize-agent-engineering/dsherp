@@ -32,6 +32,11 @@ try:
     assert proposal['status']=='Pending' and proposal['actor']==actor
     assert frappe.db.get_value('Item',item.name,'item_name')==item.item_name
     assert 'confirm' not in proposal
+    try:run_tool(**cap,tool='erp_propose_fill',arguments=args);raise AssertionError('non-form fill accepted')
+    except frappe.ValidationError:pass
+    frappe.db.set_value('DS Model Run',run.name,'page_context',json.dumps({'schema_version':1,'page_type':'form','route':['Form','Item',item.name],'doctype':'Item','name':item.name,'version':str(item.modified)}))
+    fill=run_tool(**cap,tool='erp_propose_fill',arguments=args)
+    assert fill['action']=='fill' and fill['status']=='Pending'
     create={'doctype':'Item','values':{'item_code':'DS-PROPOSE-'+uuid.uuid4().hex,'item_name':'New proposed item','item_group':item.item_group,'stock_uom':item.stock_uom},'version':str(frappe.get_meta('Item').modified)}
     before=frappe.db.count('Item')
     try:run_tool(**cap,tool='erp_propose_create',arguments=create);raise AssertionError('unread schema accepted')

@@ -6,6 +6,17 @@ import OperationProposal from './OperationProposal.jsx';
 beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
 afterEach(cleanup);
 const proposal={id:'P1',digest:'d1',action:'update',doctype:'Item',name:'I-1',version:'v1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{field:'item_name',label:'物料名称',before:'旧名称',after:'新名称'}]};
+it('填表先获得服务端确认再应用草稿，刷新不会自动重放',async()=>{
+ const fill={...proposal,action:'fill'};
+ const result={status:'Authorized',target:'browser-draft',doctype:'Item',name:'I-1',version:'v1',values:{item_name:'新名称'}};
+ const apply=vi.fn(async()=>({status:'Applied'}));const confirm=vi.fn(async()=>result);
+ const view=render(<OperationProposal proposal={fill} onConfirm={confirm} onApply={apply}/>);
+ expect(apply).not.toHaveBeenCalled();fireEvent.click(screen.getByRole('button',{name:'确认填入'}));
+ await screen.findByText('已填入当前草稿，尚未保存或提交');expect(apply).toHaveBeenCalledOnce();
+ view.unmount();render(<OperationProposal proposal={{...fill,status:'Authorized',execution:result}} onConfirm={confirm} onApply={apply}/>);
+ expect(screen.getByText('本次填入已获授权；请核实当前草稿，不会自动重新填入。')).toBeTruthy();
+ expect(apply).toHaveBeenCalledOnce();
+});
 it('销售订单状态操作显示业务含义和影响，不能只显示数字状态',()=>{
  render(<OperationProposal proposal={{...proposal,doctype:'Sales Order',action:'cancel',changes:[{field:'docstatus',label:'单据状态',before:1,after:2}]}} onConfirm={vi.fn()}/>);
  expect(screen.getByText('已提交')).toBeTruthy();expect(screen.getByText('已取消')).toBeTruthy();

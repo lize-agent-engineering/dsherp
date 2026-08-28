@@ -30,7 +30,7 @@
       "fieldname": "status",
       "label": "status",
       "fieldtype": "Select",
-      "options": "Running\nSucceeded\nFailed\nUnknown",
+      "options": "Running\nAuthorized\nSucceeded\nFailed\nUnknown",
       "reqd": 1
     },
     {
