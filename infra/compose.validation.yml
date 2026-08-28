@@ -33,9 +33,10 @@ services:
   backend:
     image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
     pull_policy: never
-    mem_limit: 1024m
-    memswap_limit: 1024m
-    cpus: 0.6
+    # Reserve 384 MiB / 0.1 CPU for the single on-demand Agent container.
+    mem_limit: 640m
+    memswap_limit: 640m
+    cpus: 0.5
     restart: "no"
     command: ["start.sh"]
     ports: ["127.0.0.1:18081:8000"]
