@@ -7,8 +7,8 @@ from dsherp.session_runtime import open_runtime
 from dsherp.runtime_revision import configuration_revision
 
 
-@pytest.mark.parametrize('deny_summary',[False,True])
-def test_native_auto_compaction_cannot_bypass_authorization(model_server,tmp_path,deny_summary):
+@pytest.mark.parametrize('deny_summary,pressure',[(False,True),(True,True),(False,False)])
+def test_native_auto_compaction_cannot_bypass_authorization(model_server,tmp_path,deny_summary,pressure):
     observed=[]
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -19,16 +19,21 @@ def test_native_auto_compaction_cannot_bypass_authorization(model_server,tmp_pat
     server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     settings,requests,state=model_server
-    state.update(content='Business context. '*350,summary_content='Item I-44; source version v2; continue read-only inquiry.')
+    multiplier=4 if pressure else 1
+    state.update(content='Business context. '*(350*multiplier),summary_content='Item I-44; source version v2; continue read-only inquiry.')
     config=tmp_path/'run.json';config.write_text(json.dumps({**settings,
         'domain':'query','runtime_revision':configuration_revision(settings),'run_id':'test','capability':'test','site':'synthetic',
         'business_url':f'http://127.0.0.1:{server.server_port}'}));config.chmod(0o600)
     try:
         with open_runtime(settings,tmp_path/'native','compression',resume=False,run_config=config) as runtime:
             for index in range(4):
-                result=runtime.run(f'Round {index}: Item I-44 modified v2. '+'Business question. '*330,session_id='compression')
+                result=runtime.run(f'Round {index}: Item I-44 modified v2. '+'Business question. '*(330*multiplier),session_id='compression')
                 if result.finish_reason!='completed':break
         summaries=[item for item in observed if item['purpose']=='compaction']
+        if not pressure:
+            assert not summaries,'Ordinary multi-turn context should not repeatedly summarize'
+            assert result.finish_reason=='completed'
+            return
         assert summaries,'Native pressure never invoked compaction'
         assert all(item['max_output_tokens']==2048 for item in summaries)
         if deny_summary:

@@ -4,7 +4,7 @@
 - id: context-compaction
   name: '@deepseek-ai/dsh-compaction-basic'
   config:
-    thresholdRatio: 0.005
+    thresholdRatio: 0.02
     retainTokens: 2048
     maxTokens: 2048
     compactionRetries: 0

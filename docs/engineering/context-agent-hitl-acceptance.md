@@ -46,3 +46,12 @@
 - operation运行c73a3a3b2ee89763e336bccff5442bfee8b8947c3cadfb912b55239182a6f68b（1次）失败，新安全诊断定位Python业务HTTP RemoteProtocolError；没有新提案。后端日志未见相应worker超时/重启。状态轮询取消连接复用（不自动重试），真实HTTP连接红绿测试验证每次新连接；不能据此宣称已穷尽原始网络故障根因。
 - 修复后同会话运行ec669173b6bcc51304a0459b76d3b3f7fa5445ed9c591802cfe4c50555227579，operation真实模型6次Succeeded。提案dturkuf9tp冻结行b4jk0v3hkp的qty2→3；确认前数据库仍2，浏览器确认后唯一执行e8cq7vqn5s Succeeded。qty3、rate1234.56、合计3703.68、docstatus0，版本2026-08-29 04:14:18.971349，modified_bywriter。
 - 接续真实模型提交/取消分别确认、明细差异易读展示、填表；当前创建/修改真实链不代表所有销售订单验收通过。合成订单保留继续验证，无常驻消费者，无生产写入。
+
+## Sales Order 真实提交与取消
+
+- 首次提交运行b56d6df5cc85ebe7707069edb1e9ad8f98dc37b52e3c3bff03303f36d10ca9c3生成Pending提案fi3af9hog4后，原生自动压缩再次申请额度被HTTP417拒绝，guard停止后续模型调用。运行Failed，6次调用/15360输出预留；提案不可确认，docstatus仍0。原生日志确认是摘要预算不足，不再把该失败泛称网络问题。
+- thresholdRatio原为0.005，在实际订单schema/多轮下频繁摘要。以普通多轮“不应连续摘要”的新行为先复现两次摘要后，调整为0.02；压力用例增大输入，仍验证原生自动摘要、摘要403拒绝后停止、checkpoint恢复保留来源。每次输入/每轮总预算、摘要输出2048、operation输出3072及容器预算不变。
+- 重提运行1ce8930bc52adbdd9ad3a2b857039fb626f8e0d6afa6ce890c423a64ca757ae4真实模型4次Succeeded，新提交提案h1qjte5ufe。确认前docstatus0；浏览器确认后docstatus1、status To Deliver and Bill、版本2026-08-29 04:19:32.464234，执行habpoalf3m Succeeded，modified_bywriter。
+- 另行发出取消请求，运行a267266ad55e34ad95e63c168002a6ec392773d8415588bfaca096528cc5bc85真实模型3次Succeeded，提案hpvgd78iqv绑定上述新版本。侧栏明确显示“已提交→已取消”和取消影响；确认前docstatus1，确认后docstatus2/status Cancelled、版本2026-08-29 04:20:46.770552，执行i1i1kksga5 Succeeded，modified_bywriter。
+- 新标签页原生订单显示“取消”、原生“修订”按钮、只读明细qty3/rate1234.56/amount3703.68。参考订单00001未修改；失败提案保留审计但未执行。当前无付费消费者，所有操作仅alpha合成Site。
+- 压缩/模型授权/运行器组合14项通过（14.75s）。Sales Order创建、明细数量修改、提交、取消均已有真实模型→侧栏确认→原生回读证据；仍需完成明细差异易读展示、填表、Unknown核实、权限/并发补充验收及阶段三/四，不能据此宣称整体完成。
