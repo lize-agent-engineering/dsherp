@@ -37,3 +37,12 @@
 - 提案r4ms2dmtuu待确认时，独立数据库计数客户0、执行0。浏览器确认后客户1、执行1；执行rf5pnlvij7，原生结果名DSHERP-HITL-CUSTOMER，版本2026-08-29 03:42:14.981676。owner/modified_by均为普通writer；关联Contact/Address数量0。原生列表与表单均显示四个正确字段。
 - 测试证据：57项前端通过、构建成功；创建/操作真实Frappe7项（11.78s）；Runtime技能/MCP13项（6.83s）。真实模型调用单独如上，不与SSE替身合并表述。合成真实UI客户保留给后续Sales Order验收，临时自动化创建记录/账号已清理。
 - 当前新增证明Item与Customer创建/修改的原生方法，以及Customer创建的真实模型/UI链；Item创建和Customer修改尚未各自单独重跑真实模型UI组合。接续Sales Order和填表，之后Unknown核实、剩余阶段一验收及阶段三/四。
+
+## Sales Order 真实创建与明细修改
+
+- alpha普通writer在原生销售订单列表请求创建草稿，新会话9rf91o7b4k、运行3cc287e0626d0f2af3490df8103a91c8dddc3f5b9a0567f09141d194e65046f4真实模型Succeeded，6次模型调用/16384预留输出（含压缩），容器退出。提案aiuvfqojko确认前订单总数1、执行0；浏览器确认后生成SAL-ORD-2026-00002，执行b4iep0huik Succeeded。
+- 原生新订单表单显示客户DSHERP-HITL-CUSTOMER、日期2026-08-29、交货2026-08-31、唯一物料DSHERP-UI-ITEM/验收中文维修服务、qty2、rate1234.56、合计2469.12、草稿。独立数据库owner/modified_by均writer，版本2026-08-29 04:08:59.555355。没有复制原订单其他子表或修改原订单。
+- 新标签页默认query；第一次修改请求实际记录为query运行e761eb2469d0acadcd02781cc3d2f6e02f832e24a3aad503a14d8e3863d5842f（2次），模型只给口头“提案”，未生成确认卡，不能算真实操作通过。后续明确观察领域已为operation再发送。UI仍需改进普通回答与真正提案的区分，不能凭回答措辞认定业务成功。
+- operation运行c73a3a3b2ee89763e336bccff5442bfee8b8947c3cadfb912b55239182a6f68b（1次）失败，新安全诊断定位Python业务HTTP RemoteProtocolError；没有新提案。后端日志未见相应worker超时/重启。状态轮询取消连接复用（不自动重试），真实HTTP连接红绿测试验证每次新连接；不能据此宣称已穷尽原始网络故障根因。
+- 修复后同会话运行ec669173b6bcc51304a0459b76d3b3f7fa5445ed9c591802cfe4c50555227579，operation真实模型6次Succeeded。提案dturkuf9tp冻结行b4jk0v3hkp的qty2→3；确认前数据库仍2，浏览器确认后唯一执行e8cq7vqn5s Succeeded。qty3、rate1234.56、合计3703.68、docstatus0，版本2026-08-29 04:14:18.971349，modified_bywriter。
+- 接续真实模型提交/取消分别确认、明细差异易读展示、填表；当前创建/修改真实链不代表所有销售订单验收通过。合成订单保留继续验证，无常驻消费者，无生产写入。

@@ -9,6 +9,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 import time
 import uuid
+import sys
 import httpx
 from dsherp.agent_worker import ROOT,IMAGE,load_settings
 from dsherp.context_container import docker_command
@@ -28,7 +29,14 @@ def run_container(task,settings,directory):
         name='dsherp-context-'+uuid.uuid4().hex
         try:
             result=subprocess.run(docker_command(ROOT,secret,directory,name),capture_output=True,text=True,timeout=140)
-            if result.returncode:raise RuntimeError('Isolated business runtime failed')
+            if result.returncode:
+                # Only the runner's value-free stack diagnostic, never raw SDK
+                # stderr, provider exceptions, request bodies or credentials.
+                for line in result.stderr.splitlines():
+                    if line.startswith('DSHERP_DIAGNOSTIC '):
+                        diagnostic=json.loads(line.removeprefix('DSHERP_DIAGNOSTIC '))
+                        print(json.dumps(diagnostic),file=sys.stderr)
+                raise RuntimeError('Isolated business runtime failed')
             output=json.loads(result.stdout)
             if set(output)!={'status','answer'} or output['status'] not in ('Succeeded','Cancelled'):
                 raise RuntimeError('Invalid business runtime result')
