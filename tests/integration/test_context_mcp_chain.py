@@ -23,7 +23,7 @@ try:
     path=Path('/tmp/business.json');path.write_text(json.dumps(config));path.chmod(0o600)
     result=run_business(path,Path('/session'))
     assert len(requests)==2
-    if config['resume']:
+    if config['resume'] is True:
         assert any(m['role']=='assistant' and m.get('content')=='DSHERP_OK' for m in requests[0]['messages'])
     assert len(requests[0]['tools'])==3
     assert 'DSHERP-TEST-ITEM' in str([m for m in requests[1]['messages'] if m['role']=='tool'])

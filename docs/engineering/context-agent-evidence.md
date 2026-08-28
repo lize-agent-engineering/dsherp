@@ -116,3 +116,12 @@
 - 新增项目协议 dsherp/session/exists，复用固定版公开 sessionPersistence.list，只允许在 open 前查询。内部执行入口 resume='inspect' 在 OS 单写者锁内查询原生持久化，然后向 open 发送明确布尔值，最终仍调用原生 create/resume；不靠宿主目录名或重复 session ID 伪称恢复。
 - 新测试先因不支持 inspect 失败，实现后真实 Runtime/恢复/取消 **14 passed / 9.08s**，插件确定性清理两项通过。新进程发出的模型请求实际包含首进程标记。既有显式 true/false 调用保持不变，缺失或未知决策不静默降级。
 - 此批没有真实付费调用；领取修复还需下次加载 backend。队列消费者和权限/配置/skills 轮换仍待完成，目标保持原四阶段，不以本批通过代替整体交付。
+
+## 接续：服务身份与业务队列消费者
+
+- claim_run 新返回 scope_id，由服务端 Site、owner、会话、query 领域及原生会话标识生成 SHA-256；测试先因缺字段失败。消费者只接受固定十六进制标识，不允许模型或请求拼目录，挂载单个 scope 目录。权限/配置变化导致原生会话轮换仍待实现，不把当前哈希当成权限版本证明。
+- 新增 context_worker：领取→单容器→结果提交，不自建 Agent 循环。与旧 worker 共用同一个 OS 锁，维持一个付费 Runtime 的现有预算；结果提交响应不明直接报错，不重跑模型、不覆写成失败。队列单元测试先红后绿，相关执行/取消共 **5 passed / 2.49s**。
+- 一次性脚本 infra/provision_context_worker.py 在 alpha 创建 dsherp-context-runtime@example.invalid，未授 ERP 业务角色，真实确认 Item/Customer read 均无权限；固定版原生 generate_keys 创建凭据，0600 保存本项目 .runtime/context-worker.json，不输出/提交密钥。不旋转已存在账号/配置，避免覆盖其他身份。
+- 通过原生 update_site_config 保存本地服务绑定，重启 alpha backend 加载领取修复，ping=pong。确认活动运行 0 后实际执行 context_worker --once，空队列正常返回、零模型调用；未启动常驻进程。
+- tests/integration/test_context_worker_chain.py 使用真实普通用户 HTTP 入队、真实专用服务账号领取、真实两个受限容器执行不同业务运行、真实 HTTP 完成及会话回读。服务账号直读 Item 返回403，业务工具仍按会话 owner 读取。两轮结果 Succeeded/DSHERP_OK，一个 scope 目录、一份原生压缩日志，第三次空队列返回 False；**1 passed / 71.52s**。仅模型端为容器内 SSE 替身；合成会话/运行按 ID 清理。
+- 当前消费者具备手动单轮与循环入口，但尚不启动常驻：下一步补权限/运行配置/skills 版本轮换、全模型调用及压缩预算与来源授权，再完成普通用户侧栏真实模型多轮。阶段二 HITL、阶段三隔离预览发布、阶段四日常站点与恢复验证仍未完成。

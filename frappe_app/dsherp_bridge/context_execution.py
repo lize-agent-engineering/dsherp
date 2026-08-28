@@ -70,6 +70,7 @@ def claim_run():
     frappe.db.set_value('DS Model Run',run.name,{'status':'Running','capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
         'expires_at':add_to_date(now_datetime(),seconds=180)})
     return {'run_id':run.name,'session_id':run.conversation,'native_session_id':conversation.runtime_session,
+            'scope_id':hashlib.sha256(json.dumps([frappe.local.site,run.owner,run.conversation,'query',conversation.runtime_session],separators=(',',':')).encode()).hexdigest(),
             'question':run.question,'context':json.loads(run.page_context),'capability':capability}
 
 

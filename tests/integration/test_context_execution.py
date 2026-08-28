@@ -4,7 +4,7 @@ import subprocess
 
 def test_capability_reads_as_owner_and_cannot_finish_without_actual_read():
     script=r'''
-import os,uuid,frappe
+import os,uuid,frappe,hashlib,json
 os.chdir('/home/frappe/frappe-bench/sites')
 frappe.init(site='dsherp-validation.localhost');frappe.connect()
 from dsherp_bridge import context_api as api
@@ -22,6 +22,8 @@ try:
     claim=execution.claim_run();frappe.db.commit()
     assert claim['run_id']==doc['active_run']
     assert claim['session_id']==doc['id']
+    expected_scope=hashlib.sha256(json.dumps([frappe.local.site,actor,doc['id'],'query',claim['native_session_id']],separators=(',',':')).encode()).hexdigest()
+    assert claim['scope_id']==expected_scope
     assert execution.claim_run() is None
     frappe.set_user('Guest')
     cap={'run_id':claim['run_id'],'capability':claim['capability']}

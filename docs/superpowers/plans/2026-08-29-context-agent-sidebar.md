@@ -91,6 +91,8 @@
 
 后续进展：已接入运行状态/取消联动，完成单次受限容器入口及两个独立容器显式原生恢复；项目真实 deepseek-v4-flash 在受限容器中读取合成 Item 并经服务端记录 Succeeded。常驻消费者、运行服务身份、权限与配置版本轮换及完整侧栏多轮仍未完成，继续按原阶段一推进，不缩减阶段二至四。
 
+最新进展：已开通 alpha 专用无业务读权限的运行账号，消费者使用服务端 scope 目录、原生持久化查询后显式恢复，并与旧 worker 共用单并发锁。真实 HTTP 队列→两个独立业务运行/容器→结果落库回读通过（模型替身）。常驻进程尚未启动，下一步权限/配置/skills 轮换与全模型调用预算，之后普通用户真实模型 UI 和 SSO；原四阶段目标不变。
+
 再接续：已实现 OS 单写者与 open_runtime，9 项实际 Runtime/锁测试通过；业务 Site claim/tool/finish 与来源再授权已实现，7 项会话/执行回归通过。专用服务身份、HTTP/MCP容器消费及 Desk 接入仍未完成；无新增付费调用。不可将当前能力单测等同真实业务链。
 
 DSH 固定 ref 下：packages/sdk/server/src/index.ts、packages/core/agent/src/runtime-types.ts、docs/subsystems/session.md、packages/session/session-persistence-jsonl/README.md、packages/session/session-checkpoint-policy/README.md、packages/compaction/compaction-basic/README.md、docs/subsystems/skills.md。
