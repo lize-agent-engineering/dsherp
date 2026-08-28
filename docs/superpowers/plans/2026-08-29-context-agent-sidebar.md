@@ -89,5 +89,7 @@
 
 最新接续：已修复插件 open/dispose 竞态（2 项确定性交错测试 + 5 项真实 Runtime 回归）；已在 alpha 隔离站点迁移 DS Conversation/DS Model Run，5 项真实会话 HTTP 测试通过。执行器尚未消费新队列，Desk 尚未挂载，阶段一仍在进行。详情以 context-agent-evidence.md 最后一节为准。
 
+再接续：已实现 OS 单写者与 open_runtime，9 项实际 Runtime/锁测试通过；业务 Site claim/tool/finish 与来源再授权已实现，7 项会话/执行回归通过。专用服务身份、HTTP/MCP容器消费及 Desk 接入仍未完成；无新增付费调用。不可将当前能力单测等同真实业务链。
+
 DSH 固定 ref 下：packages/sdk/server/src/index.ts、packages/core/agent/src/runtime-types.ts、docs/subsystems/session.md、packages/session/session-persistence-jsonl/README.md、packages/session/session-checkpoint-policy/README.md、packages/compaction/compaction-basic/README.md、docs/subsystems/skills.md。
 Frappe 15.118.0 / ERPNext 15.119.3；实现时读安装源码核验，auth_hooks 才用于最终 token 身份检查，不误用 before_request。首版已认证 HTTP 轮询，不通过 websocket 广播业务正文。

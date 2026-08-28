@@ -98,6 +98,8 @@ def _public(doc):
     active=None
     for run in runs:
         context=_context(run.page_context,check_version=False)
+        from dsherp_bridge.context_execution import authorize_sources
+        authorize_sources(json.loads(run.sources or '[]'))
         messages.append({'id':run.name,'question':run.question,'answer':run.answer or '',
                          'error':run.error or '', 'status':run.status,'context':context})
         if run.status in ('Queued','Running','Cancelling'):active=run.name

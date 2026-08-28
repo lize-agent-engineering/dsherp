@@ -15,9 +15,13 @@
     "answer",
     "error",
     "sources",
-    "cancel_request_id"
+    "cancel_request_id",
+    "capability_hash",
+    "expires_at"
   ],
   "fields": [
+    {"fieldname":"capability_hash","label":"Capability hash","fieldtype":"Data"},
+    {"fieldname":"expires_at","label":"Expires at","fieldtype":"Datetime"},
     {
       "fieldname": "conversation",
       "label": "conversation",
