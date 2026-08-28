@@ -1,18 +1,12 @@
-const reads = new Set(['context', 'list_tasks', 'get_task']);
+const reads = new Set(['context', 'desk_entry', 'list_tasks', 'get_task']);
 export async function platformApi(method, params = {}, signal) {
-  const module = method === 'context' ? 'api' : 'agent_api';
+  if (!reads.has(method)) throw new Error('平台入口仅支持只读请求');
+  const module = ['context','desk_entry'].includes(method) ? 'api' : 'agent_api';
   const url = '/api/method/dsherp_platform.' + module + '.' + method;
   const options = {credentials:'same-origin', signal};
   let target = url;
-  if (reads.has(method)) {
-    const query = new URLSearchParams(params).toString();
-    if (query) target += '?' + query;
-  } else {
-    if (!globalThis.frappe?.csrf_token) throw new Error('会话尚未就绪，请刷新页面后再提交。');
-    options.method = 'POST';
-    options.headers = {'Content-Type':'application/json', 'X-Frappe-CSRF-Token':globalThis.frappe.csrf_token};
-    options.body = JSON.stringify(params);
-  }
+  const query = new URLSearchParams(params).toString();
+  if (query) target += '?' + query;
   const response = await fetch(target, options);
   if (!response.ok) {
     if ([401,403].includes(response.status)) throw new Error('当前身份或企业成员权限不足，请重新登录或联系企业管理员。');

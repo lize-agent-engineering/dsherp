@@ -70,6 +70,15 @@ def _business(enterprise):
 
 
 @frappe.whitelist(methods=['GET'])
+def desk_entry(enterprise: str):
+    with _business(enterprise) as (_,target,__):
+        endpoints=frappe.conf.get('dsherp_desk_sites')
+        if not isinstance(endpoints,dict) or not isinstance(endpoints.get(target.site),str):
+            frappe.throw('该企业 Desk 登录尚未配置')
+        return {'url':endpoints[target.site]}
+
+
+@frappe.whitelist(methods=['GET'])
 def desk_identity(enterprise: str):
     """OAuth user info for an explicit enterprise binding, not email inference."""
     with _business(enterprise) as (member,target,_):

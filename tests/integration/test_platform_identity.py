@@ -4,6 +4,14 @@ from contextlib import contextmanager
 
 PLATFORM = 'http://127.0.0.1:18083'
 
+def test_desk_entry_requires_membership_and_configured_target():
+    with platform_client() as client:
+        response=client.get('/api/method/dsherp_platform.api.desk_entry',params={'enterprise':'alpha'})
+        assert response.status_code==200,response.text
+        assert response.json()['message']=={'url':'http://localhost:18082/api/method/dsherp_bridge.sso.start'}
+    with platform_client('outsider') as client:
+        assert client.get('/api/method/dsherp_platform.api.desk_entry',params={'enterprise':'alpha'}).status_code==403
+
 
 def test_platform_login_is_native_and_guest_context_is_denied():
     with httpx.Client(base_url=PLATFORM,headers={'Host':'platform.localhost'},trust_env=False,timeout=15) as client:

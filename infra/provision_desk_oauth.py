@@ -20,6 +20,10 @@ def main():
     credentials=json.loads(execute(platform,'dsherp-platform.localhost',f"""
 import secrets
 doc=frappe.get_doc({{'doctype':'OAuth Client','app_name':'DSHERP alpha Desk','client_secret':secrets.token_urlsafe(32),'scopes':'openid','redirect_uris':{CALLBACK!r},'default_redirect_uri':{CALLBACK!r},'grant_type':'Authorization Code','response_type':'Code','skip_authorization':0}}).insert()
+from frappe.installer import update_site_config
+endpoints=frappe.conf.get('dsherp_desk_sites') or {{}}
+endpoints['dsherp-validation.localhost']='http://localhost:18082/api/method/dsherp_bridge.sso.start'
+update_site_config('dsherp_desk_sites',endpoints)
 frappe.db.commit()
 print(json.dumps({{'client_id':doc.client_id,'client_secret':doc.client_secret}}))
 frappe.destroy()

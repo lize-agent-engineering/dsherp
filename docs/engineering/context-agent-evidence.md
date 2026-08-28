@@ -230,3 +230,11 @@
 - start测试先403未配置，配置后302到平台原生authorize，回调固定 http://localhost:18082/api/method/dsherp_bridge.sso.callback。真实交换最初因内部Host被当Site而404；诊断对比明确Site头后，平台token与userinfo两处补固定平台Site头，无权限降级。
 - 完整HTTP测试使用真实平台普通账号登录、原生授权表单/CSRF、原生授权码及token交换和业务Cookie。登录身份精确为dsherp-reader，业务会话列表200；重复callback403。随后通过原生成员DocType实际停用成员，已有业务SSO的身份/会话接口403，finally恢复成员；测试独立会话正常退出，不操作用户浏览器Cookie。
 - **5 passed / 7.00s**，包含前述身份、后台grant和真实OAuth测试。没有模型调用或业务单据写入。已完成的是HTTP协议与原生登录状态，不冒称浏览器点击体验已验收；正式平台Desk入口、beta接入、前端历史只读兼容和后续业务HITL/预览发布/日常Site仍待完成。
+
+## 接续：平台首页切换为企业 Desk 入口
+
+- Portal 删除提问框、提交、运行轮询及相关旧交互状态，首页只承担企业选择/管理入口和旧平台历史查阅。新的问题从业务Desk侧栏发起，不建立普通/Agent双模式。旧合成Studio独立入口及实现未改动。
+- 旧历史仍按原企业和当前成员重新读取，保留回答、状态、错误及原始工具记录；不复制到业务Site或新企业。切换企业和拒权清除旧显示，迟到历史不会串回当前企业。
+- 新增 desk_entry 服务端接口，复用成员/业务用户实际核实链路，返回站点配置的明确Desk OAuth入口。平台客户端限制为context/desk_entry/list_tasks/get_task四个只读请求，删除提交代码。当前仅配置alpha，beta明确未配置；旧后端submit_task及消费者代码尚未整体退役，旧付费进程仍停止，不能将前端移除当成后端端点已删除。
+- TDD 先复现首页仍有提问框、客户端路由错误/仍可写、后端入口方法缺失；替换后全前端 **47 passed / 4.55s**，构建及固定Antd5.27.6检查通过。删除旧提交测试，保留身份、企业隔离和历史再授权回归。真实Desk入口与OAuth身份映射 **2 passed / 4.39s**。
+- 本次无付费模型调用或业务数据写入，平台backend已重启并ping就绪。下一步浏览器实际平台入口→OAuth→业务Desk验收及beta接入，然后业务HITL/应用预览发布/日常Site；全部目标仍active。
