@@ -96,7 +96,7 @@ export default function ContextSidebar({api,capture=capturePageContext,pollInter
   },[open,error,api,capture,pollInterval]);
   return <>
     <Button aria-label="打开 Agent" onClick={show} style={{position:'fixed',right:20,bottom:20,zIndex:1040}}>Agent</Button>
-    <Drawer title="业务 Agent" open={open} onClose={close} mask={false} autoFocus={false} keyboard={false} width={440}
+    <Drawer title="业务 Agent" open={open} onClose={close} mask={false} autoFocus={false} keyboard={false} width={440} rootStyle={{top:'var(--navbar-height)'}}
       closable={false} extra={<Button aria-label="关闭 Agent" onClick={close}>关闭</Button>}>
       <div style={{display:'flex',gap:8,marginBottom:16}}>
         <Button onClick={fresh}>新建会话</Button>

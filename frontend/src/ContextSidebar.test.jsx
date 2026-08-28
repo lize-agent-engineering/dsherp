@@ -14,6 +14,7 @@ it('打开只恢复服务端历史，不运行模型；无蒙层，不占用原�
  expect(await screen.findByText('历史回答')).toBeTruthy();
  expect(api.mock.calls.map(x=>x[0])).toEqual(['list_sessions','get_session']);
  expect(document.querySelector('.ant-drawer-mask')).toBeNull();
+ expect(document.querySelector('.ant-drawer').style.top).toBe('var(--navbar-height)');
 });
 it('发送绑定点击时页面，关闭再打开保留输入且不保存原生表单',async()=>{
  let page=snapshot;const api=vi.fn(apiDefault);

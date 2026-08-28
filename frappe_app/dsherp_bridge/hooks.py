@@ -4,3 +4,4 @@ app_publisher = "dsherp"
 app_description = "Restricted ERPNext read validation"
 app_email = "development@example.invalid"
 required_apps = ["erpnext"]
+app_include_js = ["/assets/dsherp_bridge/dist/context-agent.js"]

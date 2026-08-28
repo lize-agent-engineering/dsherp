@@ -10,3 +10,13 @@ await build({
   target: ["chrome120"],
   legalComments: "eof",
 });
+await build({
+  entryPoints: ["src/desk-entry.js"],
+  bundle: true,
+  minify: true,
+  format: "iife",
+  outfile: "../frappe_app/dsherp_bridge/public/dist/context-agent.js",
+  define: { "process.env.NODE_ENV": '"production"' },
+  target: ["chrome120"],
+  legalComments: "eof",
+});

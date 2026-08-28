@@ -87,7 +87,7 @@
 
 ## 固定资料定位
 
-最新接续：已修复插件 open/dispose 竞态（2 项确定性交错测试 + 5 项真实 Runtime 回归）；已在 alpha 隔离站点迁移 DS Conversation/DS Model Run，5 项真实会话 HTTP 测试通过。执行器尚未消费新队列，Desk 尚未挂载，阶段一仍在进行。详情以 context-agent-evidence.md 最后一节为准。
+最新接续：业务会话/运行、显式原生恢复/取消及跨进程单写者已建立；业务 run capability 经真实 Runtime→MCP→HTTP→ERP 读取通过（模型替身），相关组合 33 项通过。独立侧栏已通过 app_include_js 挂到 alpha 原生 Desk，前端 52 项通过；真实 UI 检查修复 navbar 遮挡并验证打开/关闭。现有 Administrator 登录未改变，普通用户真实模型 UI 尚未验收，新隔离执行器尚未消费队列。下一步运行账号、执行器、授权/版本/skills/预算，再真实多轮与 SSO；阶段一仍进行。详情以 context-agent-evidence.md 最后一节为准。
 
 再接续：已实现 OS 单写者与 open_runtime，9 项实际 Runtime/锁测试通过；业务 Site claim/tool/finish 与来源再授权已实现，7 项会话/执行回归通过。专用服务身份、HTTP/MCP容器消费及 Desk 接入仍未完成；无新增付费调用。不可将当前能力单测等同真实业务链。
 

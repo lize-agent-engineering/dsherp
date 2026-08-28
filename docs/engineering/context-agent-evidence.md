@@ -81,3 +81,13 @@
 - 新增 `dsh-business.yml`，包含原单 stdio 上下文 Runtime 并加载官方 MCP 客户端。真实启动曾因 include 使用错误的 url 键失败；按本仓库已验证固定版 path 格式修正，未升级上游。
 - 真实 DSH 0.1.1rc1 → stdio MCP → HTTP capability → Frappe 当前业务用户权限 → 合成 Item 读取通过，工具结果进入下一次模型请求。模型仍是本地 SSE 替身，不算真实模型验收。临时 cap 文件在 finally 删除，合成会话/运行按确切 ID 清理。
 - 组合复跑 MCP、旧 Agent、原生恢复/锁、业务会话/执行/拒绝队列及新链路：**33 passed / 33.39s**。无生产写入、无旧 worker 重启。
+
+## 接续：原生 Desk 挂载及首次 UI 检查
+
+- 使用安装版 Frappe `www/app.py` 已读取的 app_include_js 公共钩子，新增独立 context-agent.js bundle。全局 root 挂 body，仅创建一次，不替换原生页面，页面路由切换不主动卸载会话。
+- 挂载测试先因模块不存在失败，再实现；前端全量 **52 passed / 4.41s**，两个 bundle 构建成功。真实资源 HTTP 200，alpha clear-cache 后原生 Desk 出现 Agent 按钮。
+- 浏览器实际访问应为 `http://127.0.0.1:18082/app`（compose 仅允许 127.0.0.1/localhost；最初使用 Site 域名收到 421，未更改 Host 限制）。复用现有 Administrator 登录，不注销、不切换身份；会话接口沿用已有禁止管理员规则，显示拒绝，未运行模型。
+- 首次真实截图发现原生 navbar 遮住抽屉标题/关闭按钮。新增失败断言后使用 Drawer 原生 rootStyle 和 Frappe `--navbar-height`，不提高层级覆盖导航。重建并刷新自建测试 tab 后，截图确认标题/关闭按钮位于顶栏下；实际关闭后抽屉消失、原生首页完整保留。
+- 浏览器验证仅覆盖全局入口、打开/关闭、未知上下文提示和拒权；普通用户多轮查询、切页/未保存表单/列表选中项/子表尚未真实 UI 验收。新执行器仍未启动，不能把侧栏出现当成可用 Agent 交付。
+
+下一步：专用普通运行账号、新隔离执行器、取消轮询和原生恢复判定、权限/配置/skills 版本隔离与全模型调用预算，再接真实模型与普通用户 UI。阶段一未完成，阶段二至四仍待实施。
