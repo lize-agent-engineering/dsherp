@@ -1,6 +1,15 @@
 import {afterEach,expect,it,vi} from 'vitest';
 import * as api from './context-api.js';
 afterEach(()=>vi.unstubAllGlobals());
+it('配置确认只发送同源冻结绑定与CSRF，不接受目标或配置正文',async()=>{
+ const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{status:'Succeeded'}})}));vi.stubGlobal('fetch',fetch);
+ vi.stubGlobal('frappe',{csrf_token:'test-csrf'});
+ const params={proposal_id:'C1',digest:'d1',request_id:'r1'};
+ await api.contextApi('confirm_configuration',params);
+ expect(fetch.mock.calls[0][0]).toBe('/api/method/dsherp_bridge.configuration_execution.confirm_preview');
+ expect(fetch.mock.calls[0][1]).toMatchObject({method:'POST',body:JSON.stringify(params),headers:{'X-Frappe-CSRF-Token':'test-csrf'}});
+ await expect(api.contextApi('confirm_configuration',{...params,target:'other-site'})).rejects.toThrow(/参数/);
+});
 it('结果核实使用同源只读GET，不发送确认或重放请求',async()=>{
  const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{observed:null}})}));vi.stubGlobal('fetch',fetch);
  await api.contextApi('verify_operation',{proposal_id:'P1'});

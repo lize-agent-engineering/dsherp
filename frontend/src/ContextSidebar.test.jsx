@@ -9,6 +9,26 @@ const snapshot={schema_version:1,route:['Form','Item','I-1'],page_type:'form',do
 const session={id:'S-1',title:'查询物料',messages:[{id:'M-1',question:'旧问题',answer:'历史回答',status:'Succeeded',context:snapshot}],active_run:null};
 const open=()=>fireEvent.click(screen.getByRole('button',{name:'打开 Agent'}));
 const apiDefault=async(method)=>method==='list_sessions'?[{id:'S-1',title:'查询物料'}]:session;
+it('配置确认卡来自会话历史，明确确认后执行，重新打开不重放',async()=>{
+ let configuration={id:'C1',digest:'d1',purpose:'preview',target:'preview.localhost',baseline:'b1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{object:'Inspection',action:'新增 DocType',detail:'检查结果字段'}]};
+ const api=vi.fn(async method=>{
+  if(method==='list_sessions')return [{id:session.id,title:session.title}];
+  if(method==='confirm_configuration'){
+   const execution={status:'Succeeded',steps:[{object:'Inspection',status:'Succeeded'}]};
+   configuration={...configuration,status:'Succeeded',execution};return execution;
+  }
+  return {...session,configuration_confirmations:[configuration]};
+ });
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ await screen.findByText('检查结果字段');expect(api.mock.calls.some(c=>c[0]==='confirm_configuration')).toBe(false);
+ fireEvent.click(screen.getByRole('button',{name:'确认应用到隔离预览'}));
+ await screen.findByText('隔离预览配置已应用；目标站点尚未发布');
+ expect(api.mock.calls.find(c=>c[0]==='confirm_configuration')[1]).toEqual({proposal_id:'C1',digest:'d1',request_id:expect.any(String)});
+ fireEvent.click(screen.getByRole('button',{name:'关闭 Agent'}));open();
+ await screen.findByText('隔离预览配置已应用；目标站点尚未发布');
+ expect(screen.getByRole('button',{name:'确认应用到隔离预览'}).disabled).toBe(true);
+ expect(api.mock.calls.filter(c=>c[0]==='confirm_configuration')).toHaveLength(1);
+});
 it('页面版本落后时明确说明，不要求刷新覆盖未保存内容',async()=>{
  const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{...session,messages:[{...session.messages[0],context:{...snapshot,server_version:'v2'}}]};
  render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();

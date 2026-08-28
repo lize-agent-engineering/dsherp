@@ -1,5 +1,13 @@
 # 原生上下文 Agent 实施证据
 
+## 最新接续：配置确认侧栏与真实原生应用 UI
+
+- 会话读取返回经当前用户权限检查的 configuration_confirmations；侧栏复用 ConfigurationProposal，同源 POST 仅发送确认 ID、digest、request_id。前端缺入口/卡片和真实会话缺字段的红测后实现，74 项前端 / 5.54s、构建通过；8 项真实确认及会话测试 / 13.86s。alpha 已加载两个新审计 DocType，alpha/beta backend 已重启。
+- beta 合成配置操作员通过原生登录，在会话 `04g1dviui3` 中查看冻结字段/权限/工作流影响并点击一次确认。配置包 `04l2f96rcv`、确认 `04ntb13sph`、执行 `27u5aot33c`：3 个状态、2 个动作、新 DocType、Workflow 共 7 步 Succeeded。独立数据库回读执行数为 1。
+- 原生 Desk 刷新元数据后可搜索并打开 DS Preview UI Inspection 列表、新表单。首次保存因标题未进入表单被原生必填校验拒绝；重新填写并核实可见输入后保存成功。记录 `31lbccbdik` 经原生操作菜单批准、取消，数据库 docstatus=2、workflow_state=DS UI 已取消，modified=`2026-08-29 05:44:48.976314`；仅 1 条合成记录。没有绕过原生保存或状态方法。
+- 刷新记录、重新打开侧栏后仍显示 7 步成功，确认按钮禁用，无配置重放。仅切换本次创建的 preview.localhost 测试 Cookie，保留用户其他来源会话。合成新应用与记录保留供后续验收，不是临时测试表。
+- 本次配置由确定性合成 fixture 提出，不是模型生成；无新增模型调用，未跨站传递或发布到目标企业。下一步配置领域/MCP/固定 skill 与运行来源绑定、受控跨站预览及独立目标发布；Custom Field、过期/并发/未知核实仍待验。阶段四及其他验收缺口保留，整体目标 active。
+
 ## 2026-08-29：入口与第一批前端 TDD
 
 持续目标 active，main 本地实施，不推送。完整范围见 [计划](../superpowers/plans/2026-08-29-context-agent-sidebar.md)。

@@ -7,6 +7,7 @@ import os,json,frappe
 os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-beta.localhost');frappe.connect()
 from dsherp_bridge.configuration import propose_bundle
 from dsherp_bridge.configuration_execution import prepare_preview,get_confirmation
+from dsherp_bridge.context_api import get_session
 try:
     frappe.set_user('dsherp-preview@example.invalid')
     conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Preview confirmation test'}).insert(ignore_permissions=True)
@@ -15,6 +16,7 @@ try:
     confirmation=prepare_preview(bundle['id'],bundle['digest'])
     assert confirmation['purpose']=='preview' and confirmation['target']=='dsherp-beta.localhost'
     assert confirmation['status']=='Pending'
+    assert get_session(conversation.name)['configuration_confirmations'][0]['id']==confirmation['id']
     assert not frappe.db.exists('DocType','DS Preview Confirmation Test')
     record=frappe.get_doc('DS Configuration Confirmation',confirmation['id'])
     frozen=json.loads(record.payload)['documents'][0]
