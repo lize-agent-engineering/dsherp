@@ -64,7 +64,7 @@ services:
     # Assets are linked by backend; avoid mutating the read-only sites mount.
     entrypoint: []
     command: ["sh", "/opt/nginx-validation.sh"]
-    ports: ["127.0.0.1:18082:8080"]
+    ports: ["127.0.0.1:18082:8080", "127.0.0.1:18085:8081"]
     environment:
       BACKEND: dsherp-validation.localhost:8000
       SOCKETIO: websocket:9000
@@ -75,10 +75,12 @@ services:
       DSHERP_ALLOWED_HOSTS: "127[.]0[.]0[.]1|localhost|dsherp-validation[.]localhost"
     volumes:
       - sites:/home/frappe/frappe-bench/sites:ro
+      - beta-sites:/home/frappe/frappe-bench/beta-sites:ro
+      - ./preview.conf:/opt/dsherp-preview.conf:ro
       - ./frappe.conf.template:/opt/dsherp-frappe.conf.template:ro
       - ./nginx-validation.sh:/opt/nginx-validation.sh:ro
       - ../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
-    depends_on: [backend, websocket]
+    depends_on: [backend, websocket, beta-backend]
     networks: [validation, api]
     logging: *logging
 
@@ -164,7 +166,8 @@ services:
       - beta-sites:/home/frappe/frappe-bench/sites
       - beta-logs:/home/frappe/frappe-bench/logs
       - ../frappe_app:/opt/dsherp-frappe:ro
-    networks: [validation, api]
+    # Synthetic preview has no external route; ingress goes through nginx.
+    networks: [validation]
     logging: *logging
 
   platform-websocket:

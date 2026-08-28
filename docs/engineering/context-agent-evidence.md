@@ -376,3 +376,10 @@
 - 自定义App doc_events对DocType/Custom Field/Property Setter/Workflow的保存、删除、重命名使用按Site/目标隔离的MariaDB连接锁；after_request释放，CLI使用finally或连接关闭。安装版Frappe updatedb内部会commit，因此没有用事务回调提前释放。真实独立第二连接持锁时原生Property Setter保存被明确拒绝，commit后锁仍有效，释放后可获取；不是新的审批/发布角色。
 - 包单测与真实配置/锁/业务回归13项通过（6.34s）；原有权限摘要、会话、执行10项通过（12.75s）；diff检查通过。本项目alpha backend已重启加载扩展。未新增真实模型调用、预览站点、应用DDL或生产发布。
 - 下一步建立隔离合成预览（原Compose validation网络internal可复用，仅按需使用共享384MiB/.1CPU槽，不与Agent并发），接独立30分钟确认、逐项执行记录、原生保存/工作流与目标发布。当前check_bundle仅复查，调用方仍须持锁；不能将本切片称为发布闭环。阶段一二剩余验收与阶段四未完成。
+# 阶段三：真实隔离预览入口（2026-08-29）
+
+- 现场发现已保留的beta合成Site可复用，无需新建常驻容器。beta-backend从validation+api改为仅internal validation网络；既有nginx进程新增18085/preview.localhost虚拟入口，使用独立beta文件卷和固定Site头，原alpha入口不变。没有增加容器或内存/CPU配额，不需要占用Agent按需槽；这替代此前准备新临时预览容器的设想。
+- beta设置dsherp_preview、mute_emails、disable_scheduler、pause_scheduler=1。配置前确认Webhook/Email Account均0。自定义App在预览Site拒绝Webhook/Email Account/Notification原生保存，boot使用Frappe原生disable_async关闭实时通信。仅预览禁用，不改变alpha原生按钮或权限。
+- 红测先证实beta仍连外网及缺少预览模块；实现后真实独立入口、资产、错误Host、外部Origin拒绝、native Webhook拒绝和连接1.1.1.1:443失败通过。首次重建后nginx先于Gunicorn就绪出现一次502，待实际启动后重跑；未添加自动重试伪造成功。
+- 组合预览/alpha原入口/配置锁/配置包5项通过（17.92s），diff检查通过。真实浏览器新标签访问http://preview.localhost:18085/login显示原生中英文登录表单，未注销已有会话。alpha原生socketio及Origin回归通过。
+- beta现状：Company=0、setup_complete=0、仅既有beta-reader测试身份。尚无配置发布、预览应用或工作流验收；下一步创建独立合成配置操作身份、完成原生初始化向导（不直接设置setup_complete），再接30分钟确认、逐项执行/回读及UI验证。完整目标继续active。
