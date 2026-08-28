@@ -62,3 +62,12 @@ def test_failed_native_open_releases_process_and_writer(model_server,tmp_path,ru
     assert runtime_processes and all(p.poll()==0 for p in runtime_processes)
     with session_runtime.session_writer(tmp_path):pass
     assert not requests
+
+
+def test_native_discovery_selects_explicit_create_then_resume(model_server,tmp_path):
+    settings,requests,_=model_server
+    with session_runtime.open_runtime(settings,tmp_path,'discovered',resume='inspect') as runtime:
+        runtime.run('Remember DISCOVERY-732',session_id='discovered')
+    with session_runtime.open_runtime(settings,tmp_path,'discovered',resume='inspect') as runtime:
+        runtime.run('Recall',session_id='discovered')
+    assert 'DISCOVERY-732' in str(requests[-1]['messages'])

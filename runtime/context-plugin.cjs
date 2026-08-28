@@ -47,6 +47,12 @@ exports.apply = async function (ctx) {
       return {};
     }
     if(!options)throw new Error('Initialize required');
+    if(method==='dsherp/session/exists'){
+      const id=params.sessionId;
+      if(typeof id!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(id))throw new Error('Invalid session identity');
+      if(handles.size)throw new Error('Inspect persistence before opening the writer');
+      return {sessionId:id,exists:(await ctx.sessionPersistence.list()).some(meta=>String(meta.id)===id)};
+    }
     if(method==='dsherp/session/open'){
       const id=params.sessionId;
       if(typeof id!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(id)||typeof params.resume!=='boolean')throw new Error('Invalid session open request');

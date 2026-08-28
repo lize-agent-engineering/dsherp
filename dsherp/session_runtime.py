@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import sys
+from typing import Literal
 
 from deepseek_harness import DeepSeekHarness
 from pydantic import BaseModel
@@ -15,6 +16,11 @@ ROOT=Path(__file__).resolve().parents[1]
 class OpenedSession(BaseModel):
     sessionId: str
     source: str
+
+
+class PersistedSession(BaseModel):
+    sessionId: str
+    exists: bool
 
 
 @contextmanager
@@ -31,7 +37,7 @@ def session_writer(directory: Path):
 
 
 @contextmanager
-def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bool, run_config: Path | None = None):
+def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bool | Literal['inspect'], run_config: Path | None = None):
     """Internal runtime entry: the isolated worker supplies its authorized directory.
 
     This does not establish tenant authorization or sanitize a host environment;
@@ -39,7 +45,7 @@ def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bo
     """
     if not isinstance(session_id,str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,128}',session_id):
         raise ValueError('Invalid native session identity')
-    if type(resume) is not bool:raise ValueError('Explicit resume decision required')
+    if type(resume) is not bool and resume!='inspect':raise ValueError('Explicit resume decision required')
     for key in ('DEEPSEEK_API_KEY','DSH_MODEL','DEEPSEEK_BASE_URL'):
         if not isinstance(settings.get(key),str) or not settings[key].strip():
             raise ValueError('Missing runtime setting: '+key)
@@ -54,6 +60,10 @@ def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bo
                 'DSHERP_PYTHON':sys.executable,'DSHERP_PROJECT':str(ROOT)})
         try:
             runtime.start()
+            if resume=='inspect':
+                persisted=runtime.client.request('dsherp/session/exists',{'sessionId':session_id},response_model=PersistedSession)
+                if persisted.sessionId!=session_id:raise RuntimeError('Native persistence identity mismatch')
+                resume=persisted.exists
             opened=runtime.client.request('dsherp/session/open',{'sessionId':session_id,'resume':resume},response_model=OpenedSession)
             if opened.sessionId!=session_id or opened.source!=('resume' if resume else 'startup'):
                 raise RuntimeError('Native session open response did not match request')

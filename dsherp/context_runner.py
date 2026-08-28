@@ -54,7 +54,7 @@ def run_business(config_path,directory):
     for key in ('run_id','capability','native_session_id','question','business_url','site'):
         if not isinstance(config.get(key),str) or not config[key].strip():
             raise ValueError('Missing business runtime setting: '+key)
-    if type(config.get('resume')) is not bool:raise ValueError('Explicit native resume decision required')
+    if type(config.get('resume')) is not bool and config.get('resume')!='inspect':raise ValueError('Explicit native resume decision required')
     if not isinstance(config.get('context'),dict):raise ValueError('Missing page snapshot')
     original=dict(os.environ)
     clean={key:original[key] for key in ('PATH','LANG','SSL_CERT_FILE') if key in original}
