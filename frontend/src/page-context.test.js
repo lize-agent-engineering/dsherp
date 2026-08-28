@@ -3,6 +3,9 @@ import * as context from './page-context.js';
 
 const form = () => ({doctype:'Sales Order', doc:{doctype:'Sales Order', name:'SO-1', modified:'v1', customer:'C-1', secret:'never', items:[{name:'ROW-1',qty:2,rate:900}], __unsaved:1}, is_dirty:()=>true});
 const desk = (route, extra={}) => ({frappe:{get_route:()=>route}, ...extra});
+it('原生页面路由尚未就绪时明确说明上下文有限，不读取残留表单',()=>{
+ expect(context.capturePageContext(desk(undefined,{cur_frm:form()}))).toEqual({schema_version:1,route:[],page_type:'unknown',reason:'页面尚未就绪，当前上下文能力有限。'});
+});
 it('选择目录仅包含当前表单业务字段和明确的子表列，不携带字段值',()=>{
  const frm=form();frm.meta={fields:[{fieldname:'customer',fieldtype:'Link',label:'客户'},{fieldname:'secret',fieldtype:'Password'},{fieldname:'items',fieldtype:'Table',label:'明细',options:'Sales Order Item'}]};
  const env=desk(['Form','Sales Order','SO-1'],{cur_frm:frm});

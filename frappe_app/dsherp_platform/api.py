@@ -82,9 +82,22 @@ def desk_entry(enterprise: str):
 def desk_identity(enterprise: str):
     """OAuth user info for an explicit enterprise binding, not email inference."""
     with _business(enterprise) as (member,target,_):
-        frappe.response.update({'sub':frappe.session.user,'email':member.erp_user,
-            'enterprise':target.name,'site':target.site,'binding_version':str(member.modified),
-            'enterprise_version':str(target.modified)})
+        _identity_response(member,target)
+
+
+def _identity_response(member,target):
+    frappe.response.update({'sub':frappe.session.user,'email':member.erp_user,
+        'enterprise':target.name,'site':target.site,'binding_version':str(member.modified),
+        'enterprise_version':str(target.modified)})
+
+
+@frappe.whitelist(methods=['GET'])
+def desk_membership(enterprise: str):
+    # An established business grant already verified the credential binding.
+    # Reauthorization checks its immutable versions without calling back into
+    # the waiting business request and exhausting that Site's worker pool.
+    member,target=_binding(enterprise)
+    _identity_response(member,target)
 
 
 def _read(enterprise,doctype,method,name=None,query=None):

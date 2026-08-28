@@ -53,6 +53,10 @@ def test_real_native_oauth_code_exchange_logs_into_bound_business_user():
         identity=business.get('/api/method/frappe.auth.get_logged_user')
         assert identity.status_code==200,identity.text
         assert identity.json()['message']=='dsherp-reader@example.invalid'
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            responses=list(pool.map(lambda _:business.get('/api/method/dsherp_bridge.context_api.list_sessions'),range(4)))
+        assert all(response.status_code==200 for response in responses),[response.status_code for response in responses]
         assert business.get('/api/method/dsherp_bridge.context_api.list_sessions').status_code==200
         assert business.get(callback.path+'?'+callback.query).status_code==403
         with platform_operator() as operator:

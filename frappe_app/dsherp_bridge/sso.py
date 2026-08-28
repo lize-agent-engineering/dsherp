@@ -4,6 +4,7 @@ import json
 import requests
 from frappe.utils.password import encrypt,decrypt
 from frappe.utils.oauth import get_oauth2_flow,get_oauth2_providers,get_redirect_uri,get_oauth2_authorize_url,consume_oauth_state
+from urllib.parse import urlsplit,urlunsplit
 
 
 def configuration():
@@ -29,12 +30,16 @@ def validate_identity(info):
     return user
 
 
-def identity_for_token(token):
+def identity_for_token(token,verify_business=False):
     config=configuration()
     provider=get_oauth2_providers()[config['provider']]
+    endpoint=provider['api_endpoint']
+    if not verify_business:
+        parts=urlsplit(endpoint)
+        endpoint=urlunsplit((parts.scheme,parts.netloc,'/api/method/dsherp_platform.api.desk_membership','',''))
     with requests.Session() as client:
         client.trust_env=False
-        response=client.get(provider['api_endpoint'],params={'enterprise':config['enterprise']},
+        response=client.get(endpoint,params={'enterprise':config['enterprise']},
             headers={'Authorization':'Bearer '+token,'X-Frappe-Site-Name':config['platform_site']},timeout=15,allow_redirects=False)
         if response.status_code!=200:raise frappe.PermissionError('平台登录授权已失效')
         info=response.json()
@@ -59,7 +64,7 @@ def _exchange(code):
             decoder=lambda body:json.loads(body.decode()),timeout=15,allow_redirects=False) as session:
         token=session.access_token
         if not isinstance(token,str) or not token:raise frappe.PermissionError('平台授权码交换失败')
-        return identity_for_token(token),token
+        return identity_for_token(token,verify_business=True),token
 
 
 @frappe.whitelist(allow_guest=True,methods=['GET'])

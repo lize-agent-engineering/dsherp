@@ -45,6 +45,7 @@ function scalar(doc, name) {
 }
 export function capturePageContext(env = globalThis, selection = {}) {
   const route = env.frappe.get_route();
+  if(route===undefined)return freeze({schema_version:1,route:[],page_type:'unknown',reason:'页面尚未就绪，当前上下文能力有限。'});
   let snapshot = {schema_version:1, route:[...route], page_type:'unknown', reason:'当前页面上下文能力有限；请明确说明业务对象。'};
   const frm = env.cur_frm;
   const list = env.cur_list;

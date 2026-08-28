@@ -113,6 +113,8 @@ SSO回调更新：原生state/授权码flow/登录适配与加密会话grant、a
 
 平台入口更新：Portal已替换为企业Desk入口与旧历史只读页面，删除旧前端提交/轮询；47项前端及2项真实入口/映射测试通过。alpha入口已配置，beta与浏览器完整点击仍待验证。旧后端任务提交端点尚未整体退役，阶段二至四继续保持完整范围。
 
+浏览器SSO最新：真实并发测试定位并修复认证的业务→平台→业务循环等待；后续grant检查仅核对平台成员版本，首次登录仍核实绑定。6项SSO及49项前端通过，alpha浏览器平台入口→OAuth→Desk→真实模型/ERP查询→自动展示成功。下一步业务HITL，同时保留beta、并发首次登录、可编辑子表UI与旧后端退役缺口；阶段三/四仍未完成。
+
 再接续：已实现 OS 单写者与 open_runtime，9 项实际 Runtime/锁测试通过；业务 Site claim/tool/finish 与来源再授权已实现，7 项会话/执行回归通过。专用服务身份、HTTP/MCP容器消费及 Desk 接入仍未完成；无新增付费调用。不可将当前能力单测等同真实业务链。
 
 DSH 固定 ref 下：packages/sdk/server/src/index.ts、packages/core/agent/src/runtime-types.ts、docs/subsystems/session.md、packages/session/session-persistence-jsonl/README.md、packages/session/session-checkpoint-policy/README.md、packages/compaction/compaction-basic/README.md、docs/subsystems/skills.md。

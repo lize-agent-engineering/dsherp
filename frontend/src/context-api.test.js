@@ -1,6 +1,12 @@
 import {afterEach,expect,it,vi} from 'vitest';
 import * as api from './context-api.js';
 afterEach(()=>vi.unstubAllGlobals());
+it('只展示明确列举的登录失效原因，不泄漏服务器回溯',async()=>{
+ vi.stubGlobal('fetch',async()=>({ok:false,status:403,headers:new Headers({'Content-Type':'application/json'}),json:async()=>({exception:'frappe.exceptions.PermissionError: 企业成员绑定已变化，请重新登录',exc:'PRIVATE TRACE'})}));
+ await expect(api.contextApi('list_sessions')).rejects.toThrow('企业成员绑定已变化，请重新登录');
+ vi.stubGlobal('fetch',async()=>({ok:false,status:403,headers:new Headers({'Content-Type':'application/json'}),json:async()=>({exception:'private-detail',exc:'PRIVATE TRACE'})}));
+ await expect(api.contextApi('list_sessions')).rejects.toThrow('当前身份或业务权限已失效');
+});
 it('业务会话走当前 Site 同源 GET，不接受模型指定 URL 或身份',async()=>{
  const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:[]})}));vi.stubGlobal('fetch',fetch);
  expect(await api.contextApi('list_sessions')).toEqual([]);
