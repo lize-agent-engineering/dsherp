@@ -55,7 +55,7 @@ def get_confirmation(proposal_id):
     bundle=get_bundle(doc.bundle);payload=json.loads(doc.payload)
     if payload['target']!=frappe.local.site:raise frappe.PermissionError('配置确认目标不匹配')
     result={'id':doc.name,'digest':doc.digest,'purpose':payload['purpose'],'target':payload['target'],
-        'baseline':payload['baseline'],'status':doc.status,
+        'baseline':payload['baseline'],'status':doc.status,'execution_ready':bundle['execution_ready'],
         'expires_at':doc.expires_at.replace(tzinfo=ZoneInfo(get_system_timezone())).isoformat(),
         'changes':_changes(bundle['package'])}
     execution=frappe.db.get_value('DS Configuration Execution',{'confirmation':doc.name},'name')
@@ -105,10 +105,11 @@ def confirm_preview(proposal_id,digest,request_id):
     if not isinstance(request_id,str) or not 1<=len(request_id)<=128:frappe.throw('请求标识无效')
     frappe.db.rollback()
     confirmation=frappe.get_doc('DS Configuration Confirmation',proposal_id,for_update=True)
-    get_confirmation(proposal_id)
+    public=get_confirmation(proposal_id)
     if digest!=confirmation.digest:frappe.throw('配置确认摘要不匹配')
     existing=frappe.db.get_value('DS Configuration Execution',{'confirmation':proposal_id},'name',for_update=True)
     if existing:return _result(frappe.get_doc('DS Configuration Execution',existing,for_update=True))
+    if not public['execution_ready']:frappe.throw('来源运行尚未成功完成，不能应用此配置')
     if confirmation.status!='Pending' or confirmation.expires_at<=now_datetime():frappe.throw('配置确认已结束或过期')
     if not all(frappe.conf.get(key) for key in ('dsherp_preview','mute_emails','disable_scheduler','pause_scheduler')):
         frappe.throw('隔离预览设置不完整，停止应用')

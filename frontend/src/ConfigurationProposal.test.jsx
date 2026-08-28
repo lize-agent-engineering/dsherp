@@ -5,6 +5,14 @@ import {render,screen,fireEvent,cleanup} from '@testing-library/react';
 import ConfigurationProposal from './ConfigurationProposal.jsx';
 beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
 afterEach(cleanup);
+it('来源运行未成功时展示提案但不能执行，成功后恢复确认',()=>{
+ const confirm=vi.fn();const view=render(<ConfigurationProposal proposal={{...proposal,execution_ready:false}} onConfirm={confirm}/>);
+ expect(screen.getByRole('button',{name:'确认应用到隔离预览'}).disabled).toBe(true);
+ expect(screen.getByText('来源运行尚未成功完成，不能应用此配置')).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'确认应用到隔离预览'}));expect(confirm).not.toHaveBeenCalled();
+ view.rerender(<ConfigurationProposal proposal={{...proposal,execution_ready:true}} onConfirm={confirm}/>);
+ expect(screen.getByRole('button',{name:'确认应用到隔离预览'}).disabled).toBe(false);
+});
 const proposal={id:'C1',digest:'immutable-1',purpose:'preview',target:'preview.localhost',baseline:'baseline-1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{object:'Quality Check',action:'新增 DocType',detail:'检查结果 / Select / 合格、不合格'}]};
 it('展示配置目标与具体内容，预览只确认本次冻结提案，不自动发布',async()=>{
  const confirm=vi.fn(async()=>({status:'Succeeded',steps:[{object:'Quality Check',status:'Succeeded'}]}));

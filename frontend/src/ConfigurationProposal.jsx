@@ -10,7 +10,7 @@ function Confirmation({proposal,onConfirm}){
  const result=local||proposal.execution;
  const preview=proposal.purpose==='preview';
  const expired=()=>!Number.isFinite(Date.parse(proposal.expires_at))||Date.parse(proposal.expires_at)<=Date.now();
- const disabled=Boolean(result)||proposal.status!=='Pending'||expired();
+ const disabled=Boolean(result)||proposal.status!=='Pending'||proposal.execution_ready===false||expired();
  async function confirm(){
   if(claimed.current||disabled||expired())return;
   claimed.current=true;setLocal({status:'Running'});
@@ -25,6 +25,7 @@ function Confirmation({proposal,onConfirm}){
   <Table size="small" pagination={false} rowKey={(row,index)=>`${index}:${row.object}`} dataSource={proposal.changes}
    columns={[{title:'配置对象',dataIndex:'object'},{title:'动作',dataIndex:'action'},{title:'具体内容',dataIndex:'detail'}]}/>
   {expired()&&!result&&<Alert type="warning" message="确认已过期，请重新生成确认"/>}
+  {proposal.execution_ready===false&&!result&&<Alert type="info" message="来源运行尚未成功完成，不能应用此配置"/>}
   {result?.status==='Succeeded'&&<Alert type="success" message={preview?'隔离预览配置已应用；目标站点尚未发布':'目标配置已发布并读取结果'}/>}
   {incomplete&&<Alert type="warning" message={`${preview?'预览应用':'发布'}未全部完成，请核实逐项结果；已发生的配置变更不保证回滚`}/>}
   {result?.error&&<Typography.Text type="danger">{result.error}</Typography.Text>}

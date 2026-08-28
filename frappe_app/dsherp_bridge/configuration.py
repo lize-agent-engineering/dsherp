@@ -75,20 +75,32 @@ def inspect_baseline(package):
 
 
 @frappe.whitelist(methods=['POST'])
-def propose_bundle(session_id,package):
+def propose_bundle(session_id,package,model_run=None):
     user=_user();_conversation(session_id)
+    origin=None
+    if model_run:
+        origin=_origin(model_run,session_id,user)
+        if origin.status!='Running':raise frappe.PermissionError('配置提案来源运行尚未运行或已结束')
     if isinstance(package,str):package=json.loads(package)
     try:frozen=freeze_bundle(package)
     except ValueError as error:frappe.throw(str(error))
     package=frozen['package'];authorize(package)
     baseline=inspect_baseline(package)
-    grant=frappe.session.data.get('dsherp_platform_grant')
+    grant=origin.platform_grant if origin else frappe.session.data.get('dsherp_platform_grant')
     payload={'site':frappe.local.site,'actor':user,'package':package,
         'authorization_revision':_authorization_revision(user,grant),'baseline':baseline}
+    if model_run:payload['model_run']=model_run
     digest=hashlib.sha256(_json(payload).encode()).hexdigest()
     doc=frappe.get_doc({'doctype':'DS Configuration Bundle','conversation':session_id,
         'payload':_json(payload),'digest':digest,'baseline':baseline}).insert(ignore_permissions=True)
     return get_bundle(doc.name)
+
+
+def _origin(model_run,conversation,user):
+    run=frappe.get_doc('DS Model Run',model_run)
+    if run.owner!=user or run.conversation!=conversation or run.domain!='configuration':
+        raise frappe.PermissionError('配置提案来源运行归属或领域不匹配')
+    return run
 
 
 @frappe.whitelist(methods=['GET'])
@@ -99,7 +111,9 @@ def get_bundle(bundle_id):
     payload=json.loads(doc.payload)
     if payload['site']!=frappe.local.site or payload['actor']!=user:raise frappe.PermissionError('配置包身份不匹配')
     authorize(payload['package'])
-    return {'id':doc.name,'digest':doc.digest,'baseline':doc.baseline,'site':payload['site'],'package':payload['package']}
+    origin=_origin(payload['model_run'],doc.conversation,user) if payload.get('model_run') else None
+    return {'id':doc.name,'digest':doc.digest,'baseline':doc.baseline,'site':payload['site'],'package':payload['package'],
+        'execution_ready':not origin or origin.status=='Succeeded'}
 
 
 def check_authorization(bundle_id):

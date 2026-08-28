@@ -1,5 +1,11 @@
 # 原生上下文 Agent 实施证据
 
+## 最新接续：配置提案绑定来源运行
+
+- 配置包不可变 payload 绑定 model_run；只接受当前用户、同一会话、configuration 领域的 Running 来源。读取确认返回 execution_ready，运行中/取消中/取消/失败不能创建配置执行记录或执行 DDL，成功才开放确认；已有执行记录仍按原规则只读返回，不重放。前端保留提案内容并显示等待原因，无新增审批角色。
+- 前端红测复现未成功来源仍能点击；真实 beta 红测首先确认缺少 configuration 领域定义。实现后 75 项前端 / 5.55s、构建通过；配置来源/确认/原生应用组合 4 项 / 26.50s。来源测试随后改为真实事务提交和真实 confirm rollback（不再拦截数据库 rollback），独立重跑 1 项 / 6.15s，通过且清理了本测试会话/运行/配置审计。
+- alpha/beta 原生 DS Model Run schema 已加载，backend 重启。未开放前端 configuration 领域选择，MCP、固定 skill、权限摘要和配置来源读取工具还未接通，不能称配置模型链已实现。下一步完成这些接线，再受控跨站预览/独立发布及真实模型验收；整体四阶段目标保持 active。
+
 ## 最新接续：配置确认侧栏与真实原生应用 UI
 
 - 会话读取返回经当前用户权限检查的 configuration_confirmations；侧栏复用 ConfigurationProposal，同源 POST 仅发送确认 ID、digest、request_id。前端缺入口/卡片和真实会话缺字段的红测后实现，74 项前端 / 5.54s、构建通过；8 项真实确认及会话测试 / 13.86s。alpha 已加载两个新审计 DocType，alpha/beta backend 已重启。
