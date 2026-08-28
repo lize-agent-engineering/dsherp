@@ -14,7 +14,7 @@ doc=api.send_message('Permission version test',context,uuid.uuid4().hex);frappe.
 role='DSHERP-REV-'+uuid.uuid4().hex[:12]
 try:
     frappe.conf.dsherp_runtime_user=actor
-    before=execution.claim_run();frappe.db.commit()
+    before=execution.claim_run('a'*64);frappe.db.commit()
     cap={'run_id':before['run_id'],'capability':before['capability']}
     frappe.set_user('Administrator')
     frappe.get_doc({'doctype':'Role','role_name':role}).insert()
@@ -30,10 +30,16 @@ try:
     execution.finish_run(**cap,status='Failed',error='Permission changed');frappe.db.commit()
     frappe.set_user(actor)
     api.send_message('New authorized context',context,uuid.uuid4().hex,session_id=doc['id']);frappe.db.commit()
-    after=execution.claim_run();frappe.db.commit()
+    after=execution.claim_run('a'*64);frappe.db.commit()
     assert after['native_session_id']!=before['native_session_id']
     assert after['scope_id']!=before['scope_id']
     assert after['permission_revision']!=before['permission_revision']
+    execution.finish_run(run_id=after['run_id'],capability=after['capability'],status='Failed',error='End synthetic run');frappe.db.commit()
+    api.send_message('Changed runtime config',context,uuid.uuid4().hex,session_id=doc['id']);frappe.db.commit()
+    changed=execution.claim_run('b'*64);frappe.db.commit()
+    assert changed['native_session_id']!=after['native_session_id']
+    assert changed['permission_revision']==after['permission_revision']
+    assert changed['runtime_revision']=='b'*64
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     user=frappe.get_doc('User',actor)

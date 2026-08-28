@@ -5,6 +5,7 @@ import hmac
 import json
 import secrets
 import uuid
+import re
 
 import frappe
 from frappe.utils import now_datetime,add_to_date,get_datetime
@@ -48,10 +49,12 @@ def _run(run_id,capability):
 
 
 @frappe.whitelist(methods=['POST'])
-def claim_run():
+def claim_run(runtime_revision):
     user=conversations._user()
     if user!=frappe.conf.get('dsherp_runtime_user'):
         raise frappe.PermissionError('需要站点指定的运行服务身份')
+    if not isinstance(runtime_revision,str) or not re.fullmatch('[a-f0-9]{64}',runtime_revision):
+        frappe.throw('运行配置摘要无效')
     frappe.db.rollback()
     frappe.db.sql('SELECT name FROM `tabUser` WHERE name=%s FOR UPDATE',(user,))
     for name in frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']], 'expires_at':['<=',now_datetime()]},pluck='name'):
@@ -70,13 +73,15 @@ def claim_run():
         frappe.db.set_value('DS Model Run',run.name,{'status':'Failed','error':'当前用户已无法读取会话来源','capability_hash':''})
         return None
     capability=secrets.token_urlsafe(32)
-    if conversation.runtime_revision!=permission_revision:
+    combined_revision=hashlib.sha256((permission_revision+runtime_revision).encode()).hexdigest()
+    if conversation.runtime_revision!=combined_revision:
         conversation.runtime_session=uuid.uuid4().hex
-        frappe.db.set_value('DS Conversation',conversation.name,{'runtime_session':conversation.runtime_session,'runtime_revision':permission_revision})
+        frappe.db.set_value('DS Conversation',conversation.name,{'runtime_session':conversation.runtime_session,'runtime_revision':combined_revision})
     frappe.db.set_value('DS Model Run',run.name,{'status':'Running','capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
-        'expires_at':add_to_date(now_datetime(),seconds=180),'permission_revision':permission_revision})
+        'expires_at':add_to_date(now_datetime(),seconds=180),'permission_revision':permission_revision,'runtime_revision':runtime_revision})
     return {'run_id':run.name,'session_id':run.conversation,'native_session_id':conversation.runtime_session,
             'permission_revision':permission_revision,
+            'runtime_revision':runtime_revision,
             'scope_id':hashlib.sha256(json.dumps([frappe.local.site,run.owner,run.conversation,'query',conversation.runtime_session],separators=(',',':')).encode()).hexdigest(),
             'question':run.question,'context':json.loads(run.page_context),'capability':capability}
 

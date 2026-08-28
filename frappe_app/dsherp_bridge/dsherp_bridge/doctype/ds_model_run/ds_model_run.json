@@ -19,11 +19,13 @@
     "capability_hash",
     "expires_at",
     "permission_revision",
+    "runtime_revision",
     "model_calls",
     "model_input_bytes",
     "model_output_tokens_reserved"
   ],
   "fields": [
+    {"fieldname":"runtime_revision","label":"Runtime revision","fieldtype":"Data"},
     {"fieldname":"permission_revision","label":"Permission revision","fieldtype":"Data"},
     {"fieldname":"model_calls","label":"Model calls","fieldtype":"Int","default":"0"},
     {"fieldname":"model_input_bytes","label":"Model input bytes","fieldtype":"Int","default":"0"},

@@ -16,7 +16,7 @@ try:
     restricted={'schema_version':1,'page_type':'form','doctype':'Customer','name':'DSHERP-TEST-OTHER-CUSTOMER','route':['Form','Customer','DSHERP-TEST-OTHER-CUSTOMER']}
     frappe.db.set_value('DS Model Run',run,'page_context',json.dumps(restricted));frappe.db.commit()
     frappe.conf.dsherp_runtime_user=actor
-    assert execution.claim_run() is None
+    assert execution.claim_run('a'*64) is None
     assert frappe.db.get_value('DS Model Run',run,'status')=='Failed'
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')

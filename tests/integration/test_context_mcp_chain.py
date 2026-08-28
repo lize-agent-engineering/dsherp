@@ -43,7 +43,7 @@ from dsherp_bridge import context_api,context_execution
 actor='dsherp-reader@example.invalid';frappe.set_user(actor)
 doc=context_api.send_message('Read test item',{'schema_version':1,'page_type':'unknown','route':['Workspaces','Home']},uuid.uuid4().hex)
 frappe.db.commit();frappe.conf.dsherp_runtime_user=actor
-claim=context_execution.claim_run();frappe.db.commit()
+claim=context_execution.claim_run('a'*64);frappe.db.commit()
 print(json.dumps(claim));frappe.destroy()
 '''
     provision=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)

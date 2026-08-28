@@ -21,7 +21,7 @@ def selected(*args,**kwargs):
 try:
     frappe.conf.dsherp_runtime_user=actor
     frappe.get_all=selected
-    assert execution.claim_run() is None
+    assert execution.claim_run('a'*64) is None
     assert frappe.db.get_value('DS Model Run',run,'status')=='Cancelled'
     assert not frappe.db.get_value('DS Model Run',run,'capability_hash')
 finally:

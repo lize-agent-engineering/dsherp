@@ -13,6 +13,7 @@ import httpx
 from dsherp.agent_worker import ROOT,IMAGE,load_settings
 from dsherp.context_container import docker_command
 from dsherp.context_mcp import post
+from dsherp.runtime_revision import configuration_revision
 
 
 def run_container(task,settings,directory):
@@ -39,7 +40,7 @@ def run_container(task,settings,directory):
 
 
 def run_once(client,settings,state_root,*,execute=run_container):
-    task=post(client,'claim_run')
+    task=post(client,'claim_run',runtime_revision=configuration_revision(settings))
     if task is None:return False
     cap={key:task[key] for key in ('run_id','capability')}
     try:
@@ -61,7 +62,7 @@ def main():
     parser.add_argument('--provider-env',type=Path,required=True)
     parser.add_argument('--once',action='store_true')
     args=parser.parse_args()
-    settings=load_settings(args.provider_env)
+    load_settings(args.provider_env)
     profile=json.loads(args.profile.read_text())
     if profile.get('base_url')!='http://127.0.0.1:18081' or profile.get('site')!='dsherp-validation.localhost':
         raise ValueError('Expected local alpha business Site profile')
@@ -76,7 +77,7 @@ def main():
         with httpx.Client(base_url=profile['base_url'],headers={'X-Frappe-Site-Name':profile['site'],
             'Authorization':'token '+profile['api_key']+':'+profile['api_secret']},timeout=25,trust_env=False,follow_redirects=False) as client:
             while True:
-                run_once(client,settings,state_root)
+                run_once(client,load_settings(args.provider_env),state_root)
                 if args.once:return 0
                 time.sleep(3)
 

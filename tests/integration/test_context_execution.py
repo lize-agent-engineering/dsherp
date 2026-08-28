@@ -15,16 +15,16 @@ payload={'schema_version':1,'page_type':'form','route':['Form','Item','DSHERP-TE
 doc=api.send_message('Read synthetic item',payload,uuid.uuid4().hex)
 frappe.db.commit()
 try:
-    try:execution.claim_run();raise AssertionError('ordinary user claimed')
+    try:execution.claim_run('a'*64);raise AssertionError('ordinary user claimed')
     except frappe.PermissionError:pass
     # In-process synthetic control-plane binding, never a stored role or real key.
     frappe.conf.dsherp_runtime_user=actor
-    claim=execution.claim_run();frappe.db.commit()
+    claim=execution.claim_run('a'*64);frappe.db.commit()
     assert claim['run_id']==doc['active_run']
     assert claim['session_id']==doc['id']
     expected_scope=hashlib.sha256(json.dumps([frappe.local.site,actor,doc['id'],'query',claim['native_session_id']],separators=(',',':')).encode()).hexdigest()
     assert claim['scope_id']==expected_scope
-    assert execution.claim_run() is None
+    assert execution.claim_run('a'*64) is None
     frappe.set_user('Guest')
     cap={'run_id':claim['run_id'],'capability':claim['capability']}
     assert execution.run_status(**cap)=={'run_id':claim['run_id'],'status':'Running'}
@@ -58,7 +58,7 @@ try:
     assert saved['active_run'] is None
     queued=api.send_message('Cancel synthetic run',payload,uuid.uuid4().hex,session_id=doc['id'])
     frappe.db.commit()
-    claim2=execution.claim_run();frappe.db.commit()
+    claim2=execution.claim_run('a'*64);frappe.db.commit()
     cap2={'run_id':claim2['run_id'],'capability':claim2['capability']}
     api.cancel_run(doc['id'],claim2['run_id'],uuid.uuid4().hex);frappe.db.commit()
     frappe.set_user('Guest')
