@@ -1,0 +1,10 @@
+{
+ "doctype": "Page",
+ "name": "dsherp-studio",
+ "page_name": "dsherp-studio",
+ "title": "dsherp 业务应用原型",
+ "module": "DSHERP Bridge",
+ "standard": "Yes",
+ "roles": [{"role": "Desk User"}],
+ "modified": "2026-08-28 21:00:00.000000"
+}

@@ -71,6 +71,7 @@ services:
     volumes:
       - sites:/home/frappe/frappe-bench/sites:ro
       - ./frappe.conf.template:/templates/nginx/frappe.conf.template:ro
+      - ../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
     depends_on: [backend, websocket]
     networks: [validation, api]
     logging: *logging
