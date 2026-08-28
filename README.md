@@ -4,9 +4,11 @@
 
 ## 当前状态
 
-首次技术验证完成：固定 DSH SDK/Runtime `0.1.1rc1`；DeepSeek 官方最小调用及真实模型→DSH→MCP→ERPNext 只读闭环均已通过。独立 ERPNext `15.119.3` / Frappe `15.118.0` 站点已运行，普通用户读取、权限拒绝已验证。43 项 Python 自动化测试与 21 项前端测试通过（其中工具链测试使用本地模型替身，付费真实闭环单独验证）。已完成本地原生初始化，验证中文 Workspace、物料录入搜索和管理员角色页；合成销售订单明细已保存回读、普通角色 UI 拒绝已验证（自动化数字输入使用标准 change 事件补充），亦无 SaaS 身份系统、制造业务链或生产部署。
+首次技术验证完成：固定 DSH SDK/Runtime `0.1.1rc1`；DeepSeek 官方最小调用及真实模型→DSH→MCP→ERPNext 只读闭环均已通过。独立 ERPNext `15.119.3` / Frappe `15.118.0` 站点已运行，普通用户读取、权限拒绝已验证。55 项 Python 回归与 25 项前端测试通过（其中工具链测试使用本地模型替身，付费真实闭环单独验证）。已完成本地原生初始化，验证中文 Workspace、物料录入搜索和管理员角色页；合成销售订单明细已保存回读、普通角色 UI 拒绝已验证（自动化数字输入使用标准 change 事件补充），当前平台身份与只读入口正在验收，尚无制造业务链或生产部署。
 
-阶段 1 样板与阶段 2 主流程原型已完成，阶段 3 真实身份拓扑待确认；[原生 Desk 证据与剩余事项](docs/engineering/native-desk-evidence.md)。本地入口：[原生登录页](http://127.0.0.1:18082/login)、[应用构建原型](http://127.0.0.1:18082/app/dsherp-studio)。原型全部为合成数据，不代表真实生成、发布或迁移。
+阶段 1 样板与阶段 2 主流程原型已完成，阶段 3 已接入独立平台登录、成员绑定与真实只读查询（尚未完成 Agent 接入）；[原生 Desk 证据与剩余事项](docs/engineering/native-desk-evidence.md)。本地入口：[原生登录页](http://127.0.0.1:18082/login)、[应用构建原型](http://127.0.0.1:18082/app/dsherp-studio)。原型全部为合成数据，不代表真实生成、发布或迁移。
+
+真实平台入口：[业务工作台](http://platform.localhost:18083/app/dsherp-home)，边界与验证见 [平台身份证据](docs/engineering/platform-identity-evidence.md)。
 
 前端构建、原生入口同步和浏览器验收见 [阶段 2 原型证据](docs/engineering/frontend-prototype-evidence.md)。
 
@@ -28,6 +30,7 @@
 - [DSH 分层验证证据](docs/engineering/dsh-validation-evidence.md)
 - [ERPNext 真实验证证据](docs/engineering/erpnext-integration-evidence.md)
 - [当前前端优先与应用生成计划](docs/superpowers/plans/2026-08-28-frontend-agent-app-generation.md)
+- [已确认的平台身份实施计划](docs/superpowers/plans/2026-08-28-platform-identity.md)
 - [阶段 3 身份绑定参考](docs/superpowers/plans/2026-08-28-identity-bound-read-execution.md)
 
 ## 最小验证
