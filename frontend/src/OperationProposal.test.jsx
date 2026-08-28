@@ -38,6 +38,11 @@ it('已成功的历史提案不会再提示过期或要求重新提出',()=>{
  expect(screen.queryByText('确认已过期，请重新提出操作')).toBeNull();
  expect(screen.getByText('执行成功，已读取业务结果')).toBeTruthy();
 });
+it('填入差异展示用户已提供的草稿原值，而不是伪装成数据库原值',()=>{
+ render(<OperationProposal proposal={{...proposal,action:'fill',changes:[{...proposal.changes[0],form_before:'已提供的草稿'}]}} onConfirm={vi.fn()}/>);
+ expect(screen.getByText('填入前（表单）')).toBeTruthy();expect(screen.getByText('已提供的草稿')).toBeTruthy();
+ expect(screen.queryByText('旧名称')).toBeNull();
+});
 it('展示冻结目标和具体差异，确认前零调用；确认只传提案绑定而非可改写内容',async()=>{
  let finish;const confirm=vi.fn(()=>new Promise(resolve=>finish=resolve));render(<OperationProposal proposal={proposal} onConfirm={confirm}/>);
  expect(screen.getByText('Item / I-1')).toBeTruthy();expect(screen.getByText('旧名称')).toBeTruthy();expect(screen.getByText('新名称')).toBeTruthy();expect(confirm).not.toHaveBeenCalled();

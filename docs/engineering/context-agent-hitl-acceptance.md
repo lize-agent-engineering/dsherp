@@ -55,3 +55,11 @@
 - 另行发出取消请求，运行a267266ad55e34ad95e63c168002a6ec392773d8415588bfaca096528cc5bc85真实模型3次Succeeded，提案hpvgd78iqv绑定上述新版本。侧栏明确显示“已提交→已取消”和取消影响；确认前docstatus1，确认后docstatus2/status Cancelled、版本2026-08-29 04:20:46.770552，执行i1i1kksga5 Succeeded，modified_bywriter。
 - 新标签页原生订单显示“取消”、原生“修订”按钮、只读明细qty3/rate1234.56/amount3703.68。参考订单00001未修改；失败提案保留审计但未执行。当前无付费消费者，所有操作仅alpha合成Site。
 - 压缩/模型授权/运行器组合14项通过（14.75s）。Sales Order创建、明细数量修改、提交、取消均已有真实模型→侧栏确认→原生回读证据；仍需完成明细差异易读展示、填表、Unknown核实、权限/并发补充验收及阶段三/四，不能据此宣称整体完成。
+
+## 当前表单填入与独立原生保存
+
+- 原生Item/DSHERP-HITL-ITEM表单新会话m6k47jhjhl，真实模型运行60bb856ea771cdc6ddeafd499788d500d98222e2d38e259daf533c3b7c3c6a93，operation4次Succeeded；fill提案ml25lnkbcv要求item_name从“HITL 真实模型确认物料”填为“HITL 仅填入草稿名称”。
+- 侧栏“确认填入”后可见原生input变为建议值，原生页面显示“尚未保存”，侧栏显示“已填入当前草稿，尚未保存或提交”。独立数据库名称仍为原值、modified仍2026-08-29 03:28:59.056088；唯一授权记录mtmqohlfbl状态Authorized、target browser-draft，不声称ERP已保存。
+- 关闭侧栏后单独点击原生“保存”，未叠加Agent确认。数据库此时才变为建议值，版本2026-08-29 04:29:24.661284，modified_by普通writer；fill授权记录仍只有1份。原生手动保存与Agent填入保持分离。
+- 模型回答曾把十分钟有效期误说“约一小时后”；实际expires_at和确认检查未变化。固定operation skill1.4.0增加不自行推算相对期限的规则；后续不能依赖模型文字判断授权是否有效。
+- 随后TDD补用户显式提供的标量草稿form_before：数据库before/版本仍绑定确认，前端用form_before匹配当前草稿和展示差异；后来再编辑仍停止。65项前端/构建、7项真实Frappe和8项Runtime/技能通过。此扩展尚未单独重跑真实模型UI，子表填入/易读明细等仍待推进。

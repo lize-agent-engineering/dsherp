@@ -60,7 +60,8 @@ def confirm(proposal_id, digest, request_id):
             doc = frappe.get_doc(payload['doctype'], payload['name'], for_update=True)
             if str(doc.modified) != payload['version']:
                 frappe.throw('记录版本已变化，请重新提出操作')
-            if update_diff(doc, values) != payload['changes']:
+            frozen=[{key:value for key,value in change.items() if key!='form_before'} for change in payload['changes']]
+            if update_diff(doc, values,include_unchanged=payload['action']=='fill') != frozen:
                 frappe.throw('字段或权限已变化，请重新提出操作')
             if payload['action']=='fill':
                 result={'status':'Authorized','target':'browser-draft','doctype':doc.doctype,'name':doc.name,'version':str(doc.modified),'values':values}
@@ -140,7 +141,7 @@ def propose_create(session_id, doctype, values, version, grant=None, model_run=N
 
 def propose_fill(session_id,doctype,name,values,version,grant=None,model_run=None):
     doc=frappe.get_doc(doctype,name)
-    changes=update_diff(doc,values)
+    changes=update_diff(doc,values,include_unchanged=True)
     if any(isinstance(change['after'],(list,dict)) for change in changes):
         frappe.throw('当前填入仅支持明确的标量字段')
     if str(doc.modified)!=version:frappe.throw('记录版本已变化，请重新提出建议')
@@ -148,6 +149,9 @@ def propose_fill(session_id,doctype,name,values,version,grant=None,model_run=Non
         context=json.loads(frappe.get_doc('DS Model Run',model_run).page_context)
         if context.get('page_type')!='form' or context.get('doctype')!=doctype or context.get('name')!=name:
             frappe.throw('填入目标必须是本次消息的当前表单')
+        for change in changes:
+            if change['field'] in context.get('unsaved',{}):
+                change['form_before']=context['unsaved'][change['field']]
     return _propose(session_id,doctype,name,'fill',changes,version,grant,model_run)
 
 
@@ -224,7 +228,7 @@ def get_proposal(proposal_id):
     return result
 
 
-def update_diff(doc, values):
+def update_diff(doc, values,include_unchanged=False):
     """Validate explicit scalar edits without mutating the document or database."""
     if doc.doctype not in ('Item', 'Customer', 'Sales Order'):
         raise frappe.PermissionError('当前操作领域不支持该业务对象')
@@ -232,7 +236,7 @@ def update_diff(doc, values):
     doc.check_permission('write')
     if doc.docstatus != 0:
         frappe.throw('当前操作只支持草稿记录')
-    return _field_changes(doc,values)
+    return _field_changes(doc,values,include_unchanged=include_unchanged)
 
 
 def create_diff(doctype,values):
@@ -247,7 +251,7 @@ def create_diff(doctype,values):
     return changes
 
 
-def _field_changes(doc,values,creating=False):
+def _field_changes(doc,values,creating=False,include_unchanged=False):
     if not isinstance(values, dict) or not values:
         frappe.throw('必须提供明确的修改字段')
     permitted = set(doc.meta.get_permitted_fieldnames(user=frappe.session.user, permission_type='write'))
@@ -272,7 +276,7 @@ def _field_changes(doc,values,creating=False):
         if isinstance(value, (dict, list)):
             frappe.throw('修改值必须是标量')
         before=json.loads(_json(doc.get(field)))
-        if creating or before != value:
+        if creating or include_unchanged or before != value:
             changes.append({'field': field, 'label': definition.label, 'before': None if creating else before, 'after': value})
     if not changes:
         frappe.throw('没有实际修改')

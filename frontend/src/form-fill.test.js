@@ -24,3 +24,9 @@ it('先校验全部字段，不让后面的无效字段造成前半段填入',as
  await expect(applyFormProposal(s.proposal,s.env)).rejects.toThrow(/字段/);
  expect(s.frm.set_value).not.toHaveBeenCalled();
 });
+it('已明确提供的草稿值是填入基线，后来再变化仍拒绝覆盖',async()=>{
+ const s=setup();s.frm.doc.item_name='Provided draft';s.proposal.changes[0].form_before='Provided draft';
+ await applyFormProposal(s.proposal,s.env);expect(s.frm.doc.item_name).toBe('Suggested');
+ s.frm.set_value.mockClear();s.frm.doc.item_name='Later edit';
+ await expect(applyFormProposal(s.proposal,s.env)).rejects.toThrow(/变化/);expect(s.frm.set_value).not.toHaveBeenCalled();
+});

@@ -39,7 +39,7 @@ function Proposal({proposal, onConfirm,onApply=applyFormProposal}) {
     {proposal.action==='submit'&&<Typography.Text>提交后订单进入已提交状态，后续修改受原生业务规则限制。</Typography.Text>}
     {proposal.action==='cancel'&&<Typography.Text>取消将使此已提交订单失效，不会撤销已发生的其他业务。</Typography.Text>}
     <Table size="small" pagination={false} rowKey="field" dataSource={proposal.changes}
-      columns={[{title: '字段', dataIndex: 'label'}, {title: '原值', dataIndex: 'before', render: displayChange}, {title: '修改后', dataIndex: 'after', render: displayChange}]}/>
+      columns={[{title: '字段', dataIndex: 'label'}, {title: proposal.action==='fill'?'填入前（表单）':'原值', dataIndex: 'before', render: (value,change)=>displayChange(Object.hasOwn(change,'form_before')?change.form_before:value,change)}, {title: '修改后', dataIndex: 'after', render: displayChange}]}/>
     {expired && proposal.status==='Pending' && !state && <Alert type="warning" message="确认已过期，请重新提出操作"/>}
     {state?.status === 'Succeeded' && <Alert type="success" message="执行成功，已读取业务结果"/>}
     {state?.status==='Applied'&&<Alert type="success" message="已填入当前草稿，尚未保存或提交"/>}

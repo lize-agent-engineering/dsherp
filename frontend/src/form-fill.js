@@ -11,7 +11,8 @@ export async function applyFormProposal(proposal,env=globalThis){
  for(const change of proposal.changes){
   const field=frm.meta.fields.find(field=>field.fieldname===change.field);
   if(!field||field.read_only||field.fieldtype==='Table'||Object.hasOwn(values,change.field))throw new Error('填入字段无效：'+change.field);
-  if(JSON.stringify(frm.doc[change.field]??null)!==JSON.stringify(change.before??null))throw new Error('目标字段已变化，请重新核对：'+change.field);
+  const before=Object.hasOwn(change,'form_before')?change.form_before:change.before;
+  if(JSON.stringify(frm.doc[change.field]??null)!==JSON.stringify(before??null))throw new Error('目标字段已变化，请重新核对：'+change.field);
   values[change.field]=change.after;
  }
  if(!Object.keys(values).length)throw new Error('没有需要填入的字段');

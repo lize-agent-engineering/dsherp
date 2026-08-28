@@ -11,7 +11,11 @@ try:
     frappe.set_user('dsherp-writer@example.invalid')
     doc=frappe.get_doc('Item','DSHERP-HITL-ITEM');before=doc.item_name;version=str(doc.modified)
     conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Synthetic draft fill'}).insert(ignore_permissions=True).name
-    proposal=propose_fill(conversation,'Item',doc.name,{'item_name':'Suggested draft only'},version);frappe.db.commit()
+    origin=frappe.get_doc({'doctype':'DS Model Run','conversation':conversation,'status':'Running','page_context':json.dumps({'schema_version':1,'page_type':'form','route':['Form','Item',doc.name],'doctype':'Item','name':doc.name,'version':version,'unsaved':{'item_name':'Provided draft'}})}).insert(ignore_permissions=True)
+    proposal=propose_fill(conversation,'Item',doc.name,{'item_name':'Suggested draft only'},version,model_run=origin.name)
+    assert proposal['changes'][0]['before']==before
+    assert proposal['changes'][0]['form_before']=='Provided draft'
+    frappe.db.set_value('DS Model Run',origin.name,'status','Succeeded');frappe.db.commit()
     result=confirm(proposal['id'],proposal['digest'],uuid.uuid4().hex)
     assert result['status']=='Authorized',result
     assert result['target']=='browser-draft'
@@ -24,6 +28,7 @@ finally:
         for proposal in frappe.get_all('DS Operation Proposal',filters={'conversation':conversation},pluck='name'):
             for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal},pluck='name'):frappe.delete_doc('DS Execution Record',execution,ignore_permissions=True)
             frappe.delete_doc('DS Operation Proposal',proposal,ignore_permissions=True)
+        for run in frappe.get_all('DS Model Run',filters={'conversation':conversation},pluck='name'):frappe.delete_doc('DS Model Run',run,ignore_permissions=True)
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
 '''
