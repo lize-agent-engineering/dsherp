@@ -1,0 +1,11 @@
+{
+  "doctype":"DocType","name":"DS Configuration Bundle","module":"DSHERP Bridge",
+  "custom":0,"engine":"InnoDB","autoname":"hash",
+  "field_order":["conversation","payload","digest","baseline"],
+  "fields":[
+    {"fieldname":"conversation","label":"Conversation","fieldtype":"Link","options":"DS Conversation","reqd":1},
+    {"fieldname":"payload","label":"Immutable package","fieldtype":"Long Text","reqd":1},
+    {"fieldname":"digest","label":"Digest","fieldtype":"Data","reqd":1},
+    {"fieldname":"baseline","label":"Baseline","fieldtype":"Data","reqd":1}
+  ],"permissions":[]
+}

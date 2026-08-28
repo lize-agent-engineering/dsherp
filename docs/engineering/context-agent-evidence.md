@@ -368,3 +368,11 @@
 - 新增无Frappe副作用的configuration_bundle解析器：新DocType、字段布局、非必填非破坏性扩展、新应用自己的工作流；拒绝未知属性、表达式、默认值、fetch_from、字段改名、既有工作流覆盖、重复字段。稳定JSON摘要并复制输入；这是数据契约，不替代服务端身份、权限、Link存在性、基线或发布并发检查。
 - 先确认模块缺失红测，再8项包单测通过（0.01s）；全前端72项通过（4.98s），构建与diff检查通过。本切片没有新真实模型调用、配置DDL、预览站点创建或生产发布。
 - 本项目无agent_worker/context_worker消费者；未停止其他项目服务，未新增常驻服务。下一步在业务Site持久化不可变配置包/独立确认与逐项执行，复用现有预算建立隔离合成预览；仍需原生权限/并发钩子、真实保存及工作流验证。阶段一二剩余验收及阶段四保持未完成。
+# 阶段三：业务Site配置包与原生配置并发（2026-08-29）
+
+- 新增 DS Configuration Bundle 与当前用户 propose/get，内部持久化绑定Site、操作者、会话、完整数据包、权限摘要和配置基线；不可修改，不执行DDL。alpha安装了内部审计DocType，未创建待发布业务DocType。
+- 真实Frappe先红测缺少模块/复查入口，再验证原生System Manager测试用户提案、无业务DocType/表、不可变、普通writer拒绝、跨用户读取拒绝。测试用户、会话、包与临时Property Setter均事务回滚，Item元数据缓存清理。
+- 基线包含既有DocType、Custom Field、Property Setter，以及关联结构；原生配置变更后拒绝旧包。最初测试细化后发现复用了业务权限摘要，Item标签变更先触发业务权限版本；已把配置授权摘要限定到原生DocType/Custom Field/Workflow及其子表元数据和权限，保留SSO成员复核，业务领域默认摘要不变。
+- 自定义App doc_events对DocType/Custom Field/Property Setter/Workflow的保存、删除、重命名使用按Site/目标隔离的MariaDB连接锁；after_request释放，CLI使用finally或连接关闭。安装版Frappe updatedb内部会commit，因此没有用事务回调提前释放。真实独立第二连接持锁时原生Property Setter保存被明确拒绝，commit后锁仍有效，释放后可获取；不是新的审批/发布角色。
+- 包单测与真实配置/锁/业务回归13项通过（6.34s）；原有权限摘要、会话、执行10项通过（12.75s）；diff检查通过。本项目alpha backend已重启加载扩展。未新增真实模型调用、预览站点、应用DDL或生产发布。
+- 下一步建立隔离合成预览（原Compose validation网络internal可复用，仅按需使用共享384MiB/.1CPU槽，不与Agent并发），接独立30分钟确认、逐项执行记录、原生保存/工作流与目标发布。当前check_bundle仅复查，调用方仍须持锁；不能将本切片称为发布闭环。阶段一二剩余验收与阶段四未完成。

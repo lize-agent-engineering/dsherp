@@ -6,8 +6,9 @@ import frappe
 DOCTYPES=['Item','Customer','Sales Order']
 
 
-def revision(user):
-    schema_doctypes=sorted(set(DOCTYPES)|{field.options for name in DOCTYPES for field in frappe.get_meta(name).get_table_fields()})
+def revision(user,doctypes=None):
+    doctypes=DOCTYPES if doctypes is None else list(doctypes)
+    schema_doctypes=sorted(set(doctypes)|{field.options for name in doctypes for field in frappe.get_meta(name).get_table_fields()})
     def rows(doctype,filters):
         return frappe.get_all(doctype,filters=filters,fields=['*'],order_by='name asc')
     state={
@@ -18,13 +19,13 @@ def revision(user):
         'role_definitions':rows('Role',{'name':['in',frappe.get_roles(user)]}),
         'roles':frappe.get_all('Has Role',filters={'parent':user,'parenttype':'User'},pluck='role',order_by='role asc'),
         'user_permissions':rows('User Permission',{'user':user}),
-        'doctype_permissions':rows('DocPerm',{'parent':['in',DOCTYPES]}),
-        'custom_permissions':rows('Custom DocPerm',{'parent':['in',DOCTYPES]}),
+        'doctype_permissions':rows('DocPerm',{'parent':['in',doctypes]}),
+        'custom_permissions':rows('Custom DocPerm',{'parent':['in',doctypes]}),
         'doctypes':rows('DocType',{'name':['in',schema_doctypes]}),
         'fields':rows('DocField',{'parent':['in',schema_doctypes]}),
         'custom_fields':rows('Custom Field',{'dt':['in',schema_doctypes]}),
         'properties':rows('Property Setter',{'doc_type':['in',schema_doctypes]}),
-        'shares':frappe.get_all('DocShare',filters={'share_doctype':['in',DOCTYPES]},
+        'shares':frappe.get_all('DocShare',filters={'share_doctype':['in',doctypes]},
             or_filters={'user':user,'everyone':1},fields=['*'],order_by='name asc'),
         'strict_user_permissions':frappe.db.get_single_value('System Settings','apply_strict_user_permissions'),
     }
