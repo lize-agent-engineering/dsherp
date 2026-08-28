@@ -97,6 +97,8 @@
 
 当前更新：运行配置绑定/挂载文件漂移、erp-query 1.0.0 固定摘要与官方 skill loader 已接入，默认个人目录和 watcher 均关闭，真实原生 skill 正文加载及两轮容器队列回归通过（模型替身）。下一步原生压缩与来源保全、普通用户真实模型侧栏多轮/SSO，然后完成其余三阶段。
 
+最新更新：原生自动压缩、拒绝摘要后禁止后续调用、压缩 checkpoint 跨进程显式恢复已验证（模型替身）；真实 ERP 读取的记录/列表/schema 版本进入来源账本，相关23项及Node5项通过。下一步普通用户真实模型侧栏多轮和SSO；真实模型摘要语义保全尚未验收，阶段二至四全部仍需实施。
+
 再接续：已实现 OS 单写者与 open_runtime，9 项实际 Runtime/锁测试通过；业务 Site claim/tool/finish 与来源再授权已实现，7 项会话/执行回归通过。专用服务身份、HTTP/MCP容器消费及 Desk 接入仍未完成；无新增付费调用。不可将当前能力单测等同真实业务链。
 
 DSH 固定 ref 下：packages/sdk/server/src/index.ts、packages/core/agent/src/runtime-types.ts、docs/subsystems/session.md、packages/session/session-persistence-jsonl/README.md、packages/session/session-checkpoint-policy/README.md、packages/compaction/compaction-basic/README.md、docs/subsystems/skills.md。

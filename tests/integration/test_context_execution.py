@@ -45,6 +45,14 @@ try:
     except frappe.ValidationError:pass
     result=execution.run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'})
     assert result['name']=='DSHERP-TEST-ITEM'
+    sources=json.loads(frappe.db.get_value('DS Model Run',claim['run_id'],'sources'))
+    assert sources[-1]['record_versions']=={'DSHERP-TEST-ITEM':str(result['modified'])}
+    schema=execution.run_tool(**cap,tool='erp_read_schema',arguments={'doctype':'Item'})
+    sources=json.loads(frappe.db.get_value('DS Model Run',claim['run_id'],'sources'))
+    assert sources[-1]['schema_version']==str(schema['modified'])
+    records=execution.run_tool(**cap,tool='erp_search_records',arguments={'doctype':'Item','query':'DSHERP-TEST'})
+    sources=json.loads(frappe.db.get_value('DS Model Run',claim['run_id'],'sources'))
+    assert sources[-1]['record_versions']=={r['name']:str(r['modified']) for r in records}
     assert frappe.session.user=='Guest'
     try:execution.run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Customer','name':'DSHERP-TEST-OTHER-CUSTOMER'});raise AssertionError('owner permission bypass')
     except frappe.PermissionError:pass

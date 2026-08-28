@@ -145,6 +145,12 @@ def run_tool(run_id,capability,tool,arguments):
             visible={f['fieldname'] for f in erp.read_schema(arguments['doctype'])['fields']}
             if title in visible:fields=[title]
         source={'tool':tool,'arguments':arguments,'fields':fields,'records':records}
+        if tool=='erp_read_schema':
+            source['schema_version']=str(result['modified'])
+        elif tool=='erp_read_record':
+            source['record_versions']={result['name']:str(result['modified'])}
+        else:
+            source['record_versions']={r['name']:str(r['modified']) for r in result}
         authorize_sources([source])
     sources=json.loads(run.sources or '[]');sources.append(source)
     frappe.db.set_value('DS Model Run',run.name,'sources',conversations._json(sources))

@@ -16,6 +16,7 @@ def read_schema(doctype: str):
     permitted = set(meta.get_permitted_fieldnames(user=frappe.session.user, permission_type="read"))
     return {
         "doctype": doctype,
+        "modified": meta.modified,
         "fields": [
             {"fieldname": field.fieldname, "fieldtype": field.fieldtype,
              "label": field.label, "options": field.options, "reqd": field.reqd}
@@ -34,6 +35,7 @@ def read_record(doctype: str, name: str):
     return {
         "doctype": doctype,
         "name": doc.name,
+        "modified": doc.modified,
         "fields": {key: value for key, value in doc.as_dict().items() if key in permitted},
     }
 
@@ -53,4 +55,4 @@ def search_records(doctype: str, query: str = ""):
     if title in permitted:
         filters[title] = ["like", "%" + query + "%"]
     return frappe.get_list(doctype, or_filters=filters,
-                           fields=["name"], order_by="name asc", page_length=20)
+                           fields=["name", "modified"], order_by="name asc", page_length=20)
