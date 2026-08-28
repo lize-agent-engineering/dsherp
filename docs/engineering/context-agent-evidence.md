@@ -222,3 +222,11 @@
 - 成员身份/企业/版本信息参与原生会话版本组合；重新授权后绑定版本变化即分配新原生会话，即使本地业务权限和Runtime版本未变，也不继续读取旧模型上下文。
 - 新行为测试先因运行未保存grant失败。补字段并原生reload_doc后，测试移除浏览器grant，模拟平台成员版本变化：状态/工具/摘要预占均拒绝，模型计数0；新授权下一轮原生ID变化，本地权限摘要不变。数据库/权限/加密真实，平台userinfo为替身，尚不等于真实OAuth撤权链验收。
 - 相关初轮6项通过，扩展重新授权轮换后SSO3项通过；alpha重启并ping就绪后会话/SSO/执行组合10项通过。未调用付费模型或新增常驻服务。下一步原生OAuth配置和真实登录/撤权链，再继续业务HITL与后续阶段。
+
+## 接续：真实原生 OAuth HTTP 链路
+
+- 从安装版实际metadata核对 OAuth Client / Social Login Key 字段与validate，配置合成alpha专用原生Client及Social Login Key。仅授权码模式、确切localhost回调、原生consent，不启用自动注册，也不启用通用social-login按钮；自定义start进入已限定身份的回调。客户端密钥只在配置脚本进程内传递，平台原生Client和业务Password字段保存，不落Git/输出。
+- infra/provision_desk_oauth.py 为现有独立容器的本地配置脚本，不新增常驻服务。预检已有配置时拒绝覆盖，分阶段提示而不自动重跑已创建Client。原生OAuth scope与用户权限沿用Frappe，未宣称scope名称构成额外API隔离。
+- start测试先403未配置，配置后302到平台原生authorize，回调固定 http://localhost:18082/api/method/dsherp_bridge.sso.callback。真实交换最初因内部Host被当Site而404；诊断对比明确Site头后，平台token与userinfo两处补固定平台Site头，无权限降级。
+- 完整HTTP测试使用真实平台普通账号登录、原生授权表单/CSRF、原生授权码及token交换和业务Cookie。登录身份精确为dsherp-reader，业务会话列表200；重复callback403。随后通过原生成员DocType实际停用成员，已有业务SSO的身份/会话接口403，finally恢复成员；测试独立会话正常退出，不操作用户浏览器Cookie。
+- **5 passed / 7.00s**，包含前述身份、后台grant和真实OAuth测试。没有模型调用或业务单据写入。已完成的是HTTP协议与原生登录状态，不冒称浏览器点击体验已验收；正式平台Desk入口、beta接入、前端历史只读兼容和后续业务HITL/预览发布/日常Site仍待完成。

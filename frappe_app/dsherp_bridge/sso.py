@@ -35,7 +35,7 @@ def identity_for_token(token):
     with requests.Session() as client:
         client.trust_env=False
         response=client.get(provider['api_endpoint'],params={'enterprise':config['enterprise']},
-            headers={'Authorization':'Bearer '+token},timeout=15,allow_redirects=False)
+            headers={'Authorization':'Bearer '+token,'X-Frappe-Site-Name':config['platform_site']},timeout=15,allow_redirects=False)
         if response.status_code!=200:raise frappe.PermissionError('平台登录授权已失效')
         info=response.json()
     validate_identity(info)
@@ -46,6 +46,7 @@ def exchange(code):
     provider=configuration()['provider']
     flow=get_oauth2_flow(provider)
     with flow.get_auth_session(data={'code':code,'redirect_uri':get_redirect_uri(provider),'grant_type':'authorization_code'},
+            headers={'X-Frappe-Site-Name':configuration()['platform_site']},
             decoder=lambda body:json.loads(body.decode()),timeout=15,allow_redirects=False) as session:
         token=session.access_token
         if not isinstance(token,str) or not token:raise frappe.PermissionError('平台授权码交换失败')

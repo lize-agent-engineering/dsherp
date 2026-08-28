@@ -1,5 +1,62 @@
 """Native business identity validation before OAuth may establish a session."""
 import subprocess
+import httpx
+from urllib.parse import urlparse,parse_qs
+from html.parser import HTMLParser
+from test_platform_identity import platform_client,platform_operator
+import json
+
+
+class ConsentForm(HTMLParser):
+    def __init__(self):super().__init__();self.action=None;self.csrf=None
+    def handle_starttag(self,tag,attrs):
+        attrs=dict(attrs)
+        if tag=='form' and 'frappe.integrations.oauth2.approve' in attrs.get('action',''):self.action=attrs['action']
+        if tag=='input' and attrs.get('name')=='csrf_token':self.csrf=attrs.get('value')
+
+
+def test_real_native_oauth_code_exchange_logs_into_bound_business_user():
+    with httpx.Client(base_url='http://localhost:18082',trust_env=False,timeout=30) as business,platform_client() as platform:
+        start=business.get('/api/method/dsherp_bridge.sso.start')
+        assert start.status_code==302
+        target=urlparse(start.headers['location'])
+        authorization=platform.get(target.path+'?'+target.query)
+        if authorization.status_code==200:
+            form=ConsentForm();form.feed(authorization.text)
+            assert form.action and form.csrf,'Native OAuth consent form missing'
+            authorization=platform.post(form.action,data={'csrf_token':form.csrf})
+        assert authorization.status_code==302,authorization.text
+        callback=urlparse(authorization.headers['location'])
+        assert callback.netloc=='localhost:18082'
+        result=business.get(callback.path+'?'+callback.query)
+        assert result.status_code==302,result.text
+        assert result.headers['location']=='/app'
+        identity=business.get('/api/method/frappe.auth.get_logged_user')
+        assert identity.status_code==200,identity.text
+        assert identity.json()['message']=='dsherp-reader@example.invalid'
+        assert business.get('/api/method/dsherp_bridge.context_api.list_sessions').status_code==200
+        assert business.get(callback.path+'?'+callback.query).status_code==403
+        with platform_operator() as operator:
+            records=operator.get('/api/resource/DS Membership',params={'filters':json.dumps({'enterprise':'alpha','platform_user':'member@example.invalid'})}).json()['data']
+            path='/api/resource/DS Membership/'+records[0]['name']
+            try:
+                assert operator.put(path,json={'enabled':0}).status_code==200
+                assert business.get('/api/method/frappe.auth.get_logged_user').status_code==403
+                assert business.get('/api/method/dsherp_bridge.context_api.list_sessions').status_code==403
+            finally:
+                assert operator.put(path,json={'enabled':1}).status_code==200
+        assert business.get('/api/method/logout').status_code==200
+
+
+def test_configured_native_oauth_start_uses_exact_business_callback():
+    with httpx.Client(base_url='http://127.0.0.1:18082',trust_env=False,timeout=15) as client:
+        response=client.get('/api/method/dsherp_bridge.sso.start')
+        assert response.status_code==302,response.text
+        location=urlparse(response.headers['location'])
+        assert location.netloc=='platform.localhost:18083'
+        args=parse_qs(location.query)
+        assert args['redirect_uri']==['http://localhost:18082/api/method/dsherp_bridge.sso.callback']
+        assert args['state'] and args['client_id']
 
 
 def test_background_run_keeps_sso_revocation_without_browser_session():
