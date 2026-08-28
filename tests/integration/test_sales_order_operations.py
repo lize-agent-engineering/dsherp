@@ -30,6 +30,8 @@ try:
         except (frappe.ValidationError,frappe.PermissionError):pass
     changes={'items':[{'name':draft.items[0].name,'qty':3}]}
     proposal=propose_update(conversation,'Sales Order',order_name,changes,str(draft.modified));frappe.db.commit()
+    assert proposal['changes'][0]['before'][0]['item_code']==source.items[0].item_code
+    assert proposal['changes'][0]['columns']['qty']==frappe.get_meta('Sales Order Item').get_field('qty').label
     assert frappe.get_doc('Sales Order',order_name).items[0].qty==2
     result=confirm(proposal['id'],proposal['digest'],uuid.uuid4().hex)
     assert result['status']=='Succeeded',result

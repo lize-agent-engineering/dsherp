@@ -46,7 +46,7 @@ def create_server(client,run_id,capability,domain='query'):
             return invoke('erp_propose_action',doctype=doctype,name=name,action=action,version=version)
         @server.tool(annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=False,idempotentHint=False))
         def erp_propose_fill(doctype: Literal['Item','Customer','Sales Order'],name: str,values: dict,version: str) -> dict:
-            """Propose scalar values for the current native form only. Requires a previously read record/version. Confirmation authorizes browser draft fill, never saves or submits the ERP record."""
+            """Propose values for the current native form only. Sales Order items must retain all existing row names and order; change only explicit editable columns. Requires a previously read record/version. Confirmation authorizes browser draft fill, never saves or submits ERP."""
             return invoke('erp_propose_fill',doctype=doctype,name=name,values=values,version=version)
     return server
 

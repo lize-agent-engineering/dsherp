@@ -30,3 +30,13 @@ it('已明确提供的草稿值是填入基线，后来再变化仍拒绝覆盖'
  s.frm.set_value.mockClear();s.frm.doc.item_name='Later edit';
  await expect(applyFormProposal(s.proposal,s.env)).rejects.toThrow(/变化/);expect(s.frm.set_value).not.toHaveBeenCalled();
 });
+it('子表通过原生行字段更新，保留行名及未涉及的草稿字段',async()=>{
+ const s=setup();s.frm.doc.items=[{name:'r1',doctype:'Sales Order Item',item_code:'I1',qty:2,rate:99}];
+ s.frm.meta.fields.push({fieldname:'items',fieldtype:'Table',options:'Sales Order Item'});
+ s.env.frappe.get_meta=()=>({fields:[{fieldname:'qty',fieldtype:'Float'}]});
+ s.env.frappe.model={set_value:vi.fn(async(doctype,name,values)=>Object.assign(s.frm.doc.items[0],values))};
+ s.proposal.changes=[{field:'items',before:[{name:'r1',item_code:'I1',qty:2}],after:[{name:'r1',qty:3}]}];
+ await applyFormProposal(s.proposal,s.env);
+ expect(s.env.frappe.model.set_value).toHaveBeenCalledExactlyOnceWith('Sales Order Item','r1',{qty:3});
+ expect(s.frm.doc.items[0]).toMatchObject({name:'r1',qty:3,rate:99});expect(s.frm.set_value).not.toHaveBeenCalled();
+});

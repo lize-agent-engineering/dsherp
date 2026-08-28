@@ -346,3 +346,11 @@
 - 真实模型4次→fill提案→侧栏确认→原生输入变更，数据库字段/modified不变；再单独点击原生保存才更新数据库。授权记录保持Authorized/browser-draft，不以客户端填入冒充业务执行。ID与字段详见[HITL验收](context-agent-hitl-acceptance.md)。
 - form_before扩展先红测：原生提案缺字段、前端拒绝已提供草稿；实现后保存数据库before并另绑定用户明确提供的表单值，确认复查数据库基线，前端验证草稿基线。填入允许建议值等于数据库值（例如恢复草稿），不把它误判为没有业务改动。
 - 65项前端/4.94s与构建通过，7项真实Frappe/14.97s、8项固定Runtime/技能7.10s。alpha backend已更新；无常驻付费消费者。下一步子表填入、可读明细差异、Unknown核实以及剩余阶段一、配置预览发布和日常Site，不收缩整体范围。
+
+## 子表填入及可读明细差异
+
+- 明细提案不再整块显示JSON：按物料/字段展开变更、新增、删除及行位置；确认仍绑定原始完整提案，不以展示行重新拼装操作。服务端从原生metadata附带可读列标签和item_code/item_name/qty行标识，删除影响不只显示opaque行名。真实订单提案红测缺item_code后补齐，确认回归通过。
+- 现场固定Frappe form.js证明frm.set_value(Table)会clear_table/add_child重建行，故现有行填入使用原生frappe.model.set_value(childtype,rowname,values)，保留行名和未修改草稿。服务端只允许相同行名单/顺序的fill；增删/重排已有业务修改提案支持，不伪装成原生整表填入。
+- 前端先校验所有目标行/列及原值（合并用户明确提供的form_before），再原生更新并回读；不调用save或reload。服务端授权真实测试确认后Sales Order原modified及qty2未变，并拒绝以无name新行替换现有行。历史提案读取再检查form_before子表列权限。
+- operation技能1.5.0及摘要/MCP说明已同步；68项前端/4.75s、13项Runtime技能MCP/7.60s、8项真实ERP组合/17.54s通过，构建与alpha更新完成。本次无付费调用。
+- 下一步真实模型/浏览器验证现有子表列填入和可读差异；注意00002已经取消，不再修改它；00001参考订单不得保存业务变更。之后继续Unknown结果核实、其余阶段一验收、配置隔离预览发布及日常Site，不将这些测试等同全部完成。

@@ -1,6 +1,35 @@
 import subprocess
 
 
+def test_child_fill_freezes_existing_rows_without_saving_order():
+    script=r'''
+import os,uuid,frappe,json
+os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge.operations import propose_fill,confirm
+conversation=None
+try:
+    frappe.set_user('dsherp-writer@example.invalid');doc=frappe.get_doc('Sales Order','SAL-ORD-2026-00001');version=str(doc.modified)
+    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Synthetic child fill'}).insert(ignore_permissions=True).name
+    values={'items':[{'name':row.name,'qty':5} for row in doc.items]}
+    proposal=propose_fill(conversation,doc.doctype,doc.name,values,version);frappe.db.commit()
+    result=confirm(proposal['id'],proposal['digest'],uuid.uuid4().hex)
+    assert result['status']=='Authorized',result
+    saved=frappe.get_doc(doc.doctype,doc.name);assert str(saved.modified)==version and saved.items[0].qty==2
+    try:propose_fill(conversation,doc.doctype,doc.name,{'items':[{'item_code':doc.items[0].item_code,'qty':1}]},version);raise AssertionError('fill replaced row set')
+    except frappe.ValidationError:pass
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if conversation:
+        for proposal in frappe.get_all('DS Operation Proposal',filters={'conversation':conversation},pluck='name'):
+            for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal},pluck='name'):frappe.delete_doc('DS Execution Record',execution,ignore_permissions=True)
+            frappe.delete_doc('DS Operation Proposal',proposal,ignore_permissions=True)
+        frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)
+    assert result.returncode==0,result.stderr
+
+
 def test_confirm_fill_authorizes_draft_only_and_never_saves_business_record():
     script=r'''
 import os,json,uuid,frappe

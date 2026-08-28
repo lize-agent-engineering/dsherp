@@ -1,6 +1,7 @@
 import React, {useRef, useState} from 'react';
 import {Alert, Button, Space, Table, Typography} from 'antd';
 import {applyFormProposal} from './form-fill.js';
+import {proposalRows} from './proposal-rows.js';
 
 const display = value => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value);
 const actions={create:'创建',update:'修改',submit:'提交',cancel:'取消',fill:'填入当前草稿'};
@@ -38,7 +39,7 @@ function Proposal({proposal, onConfirm,onApply=applyFormProposal}) {
     <Typography.Text type="secondary">操作：{actions[proposal.action]} · 基线版本：{proposal.version || '新建'}</Typography.Text>
     {proposal.action==='submit'&&<Typography.Text>提交后订单进入已提交状态，后续修改受原生业务规则限制。</Typography.Text>}
     {proposal.action==='cancel'&&<Typography.Text>取消将使此已提交订单失效，不会撤销已发生的其他业务。</Typography.Text>}
-    <Table size="small" pagination={false} rowKey="field" dataSource={proposal.changes}
+    <Table size="small" pagination={false} rowKey="field" dataSource={proposalRows(proposal.changes)}
       columns={[{title: '字段', dataIndex: 'label'}, {title: proposal.action==='fill'?'填入前（表单）':'原值', dataIndex: 'before', render: (value,change)=>displayChange(Object.hasOwn(change,'form_before')?change.form_before:value,change)}, {title: '修改后', dataIndex: 'after', render: displayChange}]}/>
     {expired && proposal.status==='Pending' && !state && <Alert type="warning" message="确认已过期，请重新提出操作"/>}
     {state?.status === 'Succeeded' && <Alert type="success" message="执行成功，已读取业务结果"/>}

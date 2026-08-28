@@ -142,8 +142,10 @@ def propose_create(session_id, doctype, values, version, grant=None, model_run=N
 def propose_fill(session_id,doctype,name,values,version,grant=None,model_run=None):
     doc=frappe.get_doc(doctype,name)
     changes=update_diff(doc,values,include_unchanged=True)
-    if any(isinstance(change['after'],(list,dict)) for change in changes):
-        frappe.throw('当前填入仅支持明确的标量字段')
+    for change in changes:
+        if isinstance(change['after'],list):
+            if [row.get('name') for row in change['after']]!=[row['name'] for row in change['before']]:
+                frappe.throw('填入保留现有子表行及顺序；增删行请另提业务修改')
     if str(doc.modified)!=version:frappe.throw('记录版本已变化，请重新提出建议')
     if model_run:
         context=json.loads(frappe.get_doc('DS Model Run',model_run).page_context)
@@ -218,7 +220,7 @@ def get_proposal(proposal_id):
         definition=doc.meta.get_field(change['field'])
         if definition and definition.fieldtype=='Table':
             child_readable=set(frappe.get_meta(definition.options).get_permitted_fieldnames(parenttype=doc.doctype,user=user,permission_type='read'))|{'name'}
-            if any(key not in child_readable for rows in (change['before'],change['after']) if rows for row in rows for key in row):
+            if any(key not in child_readable for rows in (change['before'],change['after'],change.get('form_before')) if rows for row in rows for key in row):
                 raise frappe.PermissionError('无权读取提案明细字段')
     result = {**payload, 'id': proposal.name, 'digest': proposal.digest,
         'expires_at': proposal.expires_at.replace(tzinfo=ZoneInfo(get_system_timezone())).isoformat(), 'status': proposal.status}
@@ -310,8 +312,10 @@ def _table_change(doc,definition,rows,creating):
                 or isinstance(value,(dict,list))):
                 raise frappe.PermissionError('无权直接修改该明细字段：'+key)
             columns.add(key)
+    columns.update({'item_code','item_name','qty'}&readable)
     before=[] if creating else [{'name':row.name,**{key:row.get(key) for key in sorted(columns)}} for row in saved.values()]
-    return {'field':definition.fieldname,'label':definition.label,'before':None if creating else before,'after':rows}
+    return {'field':definition.fieldname,'label':definition.label,'before':None if creating else before,'after':rows,
+            'columns':{key:child.get_field(key).label for key in sorted(columns)}}
 
 
 def _apply_values(doc,values):
