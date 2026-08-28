@@ -12,7 +12,13 @@ def _authorization_revision(user,grant):
     if grant:
         from dsherp_bridge.sso import validate_grant
         identity=validate_grant(grant,user)
-    return hashlib.sha256(_json([revision(user,doctypes=('DocType','Custom Field','Workflow')),identity]).encode()).hexdigest()
+    return hashlib.sha256(_json([revision(user,doctypes=('DocType','Custom Field','Workflow','Workflow State','Workflow Action Master')),identity]).encode()).hexdigest()
+
+
+def workflow_masters(package):
+    states=sorted({row['state'] for workflow in package['workflows'] for row in workflow['states']})
+    actions=sorted({row['action'] for workflow in package['workflows'] for row in workflow['transitions']})
+    return [('Workflow State','workflow_state_name',name) for name in states]+[('Workflow Action Master','workflow_action_name',name) for name in actions]
 
 
 def authorize(package):
@@ -20,6 +26,9 @@ def authorize(package):
     if package['doctypes']:frappe.has_permission('DocType','create',throw=True)
     if package['extensions']:frappe.has_permission('Custom Field','create',throw=True)
     if package['workflows']:frappe.has_permission('Workflow','create',throw=True)
+    for doctype,field,name in workflow_masters(package):
+        if frappe.db.exists(doctype,name):frappe.get_doc(doctype,name).check_permission('read')
+        else:frappe.has_permission(doctype,'create',throw=True)
     for extension in package['extensions']:
         frappe.get_doc('DocType',extension['doctype']).check_permission('read')
 
@@ -60,6 +69,8 @@ def inspect_baseline(package):
         for role in [state['allow_edit'] for state in workflow['states']]+[transition['allowed'] for transition in workflow['transitions']]:
             if not frappe.db.exists('Role',role):frappe.throw('原生工作流角色不存在')
         facts['workflow:'+workflow['workflow_name']]=None
+    for doctype,field,name in workflow_masters(package):
+        facts[doctype+':'+name]=frappe.get_doc(doctype,name).as_dict() if frappe.db.exists(doctype,name) else None
     return hashlib.sha256(_json(facts).encode()).hexdigest()
 
 

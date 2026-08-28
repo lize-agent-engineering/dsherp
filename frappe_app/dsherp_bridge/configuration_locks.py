@@ -37,7 +37,17 @@ def lock_native(doc,method=None,*args,**kwargs):
     if doc.doctype=='DocType':
         targets.append(doc.name)
         if method=='before_rename':targets.extend(value for value in args[:2] if isinstance(value,str))
+    elif doc.doctype in ('Workflow State','Workflow Action Master'):
+        targets.append(doc.doctype)
     elif target_field:
         targets.append(doc.get(target_field))
         if not doc.is_new():targets.append(frappe.db.get_value(doc.doctype,doc.name,target_field))
     acquire([target for target in targets if target])
+
+
+def check_new_custom_record(doc,method=None):
+    # New app tables become visible after native DDL commits, before the next
+    # workflow step. Do not let another request create rows in that window.
+    if not frappe.get_meta(doc.doctype).custom:return
+    owner,current=frappe.db.sql('SELECT IS_USED_LOCK(%s), CONNECTION_ID()',lock_key(doc.doctype))[0]
+    if owner is not None and owner!=current:frappe.throw('新应用配置正在应用，请完成后再创建记录')
