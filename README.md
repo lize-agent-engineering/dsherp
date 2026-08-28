@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-项目初始化阶段：已记录产品范围、架构与验证计划。尚无业务代码、依赖安装、ERPNext 站点、DSH 运行实例或线上服务。文档中的能力是设计目标，不是已实现功能。
+首次技术验证进行中：已固定 DSH SDK/Runtime `0.1.1rc1`，完成项目依赖安装和最小零工具验证器。17 项测试通过，其中使用真实 SDK/Runtime 及本地模型替身验证事件与进程关闭。真实模型调用等待项目凭证及费用授权；真实 ERPNext 隔离站点等待资源授权。尚无 SaaS 业务系统、UI 或部署。
 
 ## 产品方向
 
@@ -19,6 +19,21 @@
 - [首版设计](docs/superpowers/specs/2026-08-28-dsherp-design.md)
 - [首次技术验证计划](docs/superpowers/plans/2026-08-28-foundation-validation.md)
 - [项目开发约定](AGENTS.md)
+- [准确版本与运行契约](docs/engineering/runtime-baseline.md)
+- [DSH 分层验证证据](docs/engineering/dsh-validation-evidence.md)
+- [ERPNext 验证状态与阻塞](docs/engineering/erpnext-integration-evidence.md)
+
+## 最小验证
+
+已在 macOS arm64、Python 3.12.11 验证以下命令；未声明其他平台兼容：
+
+```sh
+uv venv --python 3.12.11 .venv
+uv pip sync --python .venv/bin/python --require-hashes requirements.lock
+.venv/bin/python -m pytest tests -q
+```
+
+真实模型调用需事先授权费用，并通过进程环境提供 `DEEPSEEK_API_KEY`、`DSH_MODEL`、`DEEPSEEK_BASE_URL`，随后运行 `.venv/bin/python -m dsherp.dsh_probe`。脚本不自动加载 `.env`，不读取其他项目凭证；只执行固定合成提示，不访问 ERP。会话临时目录执行后清理，只输出脱敏摘要。
 
 ## 技术方向
 
