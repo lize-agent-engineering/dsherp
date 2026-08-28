@@ -1,4 +1,6 @@
 # Business configuration extends the same single-stdio native context runtime.
+- id: model-authorization
+  name: '../runtime/model-guard.cjs'
 - id: context-base
   name: 'cordis:include'
   config:

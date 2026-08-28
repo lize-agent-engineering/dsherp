@@ -17,9 +17,15 @@
     "sources",
     "cancel_request_id",
     "capability_hash",
-    "expires_at"
+    "expires_at",
+    "model_calls",
+    "model_input_bytes",
+    "model_output_tokens_reserved"
   ],
   "fields": [
+    {"fieldname":"model_calls","label":"Model calls","fieldtype":"Int","default":"0"},
+    {"fieldname":"model_input_bytes","label":"Model input bytes","fieldtype":"Int","default":"0"},
+    {"fieldname":"model_output_tokens_reserved","label":"Reserved output tokens","fieldtype":"Int","default":"0"},
     {"fieldname":"capability_hash","label":"Capability hash","fieldtype":"Data"},
     {"fieldname":"expires_at","label":"Expires at","fieldtype":"Datetime"},
     {

@@ -84,6 +84,28 @@ def run_status(run_id,capability):
 
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
+def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,model,purpose):
+    run=_run(run_id,capability)
+    if run.status!='Running':raise frappe.PermissionError('运行正在取消')
+    if (provider!='deepseek-official' or model!='deepseek-v4-flash'
+        or purpose not in ('conversation','compaction','session-title')
+        or type(input_bytes) is not int or not 0<input_bytes<=131072
+        or type(max_output_tokens) is not int or not 0<max_output_tokens<=2048):
+        frappe.throw('模型请求配置或输入预算不符')
+    with _actor(run):
+        conversations._public(conversations._conversation(run.conversation))
+    calls=run.model_calls or 0
+    total_input=(run.model_input_bytes or 0)+input_bytes
+    total_output=(run.model_output_tokens_reserved or 0)+max_output_tokens
+    if calls>=8 or total_input>524288 or total_output>16384:
+        frappe.throw('本轮模型调用预算已用尽')
+    # Reserve before provider dispatch; uncertain/failed calls are not refunded.
+    frappe.db.set_value('DS Model Run',run.name,{'model_calls':calls+1,
+        'model_input_bytes':total_input,'model_output_tokens_reserved':total_output})
+    return {'allowed':True}
+
+
+@frappe.whitelist(allow_guest=True,methods=['POST'])
 def run_tool(run_id,capability,tool,arguments):
     run=_run(run_id,capability)
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')

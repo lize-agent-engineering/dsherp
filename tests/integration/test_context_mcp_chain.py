@@ -83,6 +83,15 @@ print(json.dumps(claim));frappe.destroy()
                 result=run_business(secret,tmp_path/'native')
             saved=post(client,'finish_run',**cap,**result)
             assert saved['status']=='Succeeded'
+            audit_script="""
+import os,frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+print(frappe.db.get_value('DS Model Run',RUN,'model_calls'));frappe.destroy()
+""".replace('RUN',repr(claim['run_id']))
+            audit=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=audit_script,text=True,capture_output=True,timeout=20)
+            assert audit.returncode==0,audit.stderr
+            assert int(audit.stdout)==(4 if isolated else 2)
     finally:
         secret.unlink()
     assert result=={'status':'Succeeded','answer':'DSHERP_OK'}

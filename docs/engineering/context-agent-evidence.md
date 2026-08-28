@@ -125,3 +125,12 @@
 - 通过原生 update_site_config 保存本地服务绑定，重启 alpha backend 加载领取修复，ping=pong。确认活动运行 0 后实际执行 context_worker --once，空队列正常返回、零模型调用；未启动常驻进程。
 - tests/integration/test_context_worker_chain.py 使用真实普通用户 HTTP 入队、真实专用服务账号领取、真实两个受限容器执行不同业务运行、真实 HTTP 完成及会话回读。服务账号直读 Item 返回403，业务工具仍按会话 owner 读取。两轮结果 Succeeded/DSHERP_OK，一个 scope 目录、一份原生压缩日志，第三次空队列返回 False；**1 passed / 71.52s**。仅模型端为容器内 SSE 替身；合成会话/运行按 ID 清理。
 - 当前消费者具备手动单轮与循环入口，但尚不启动常驻：下一步补权限/运行配置/skills 版本轮换、全模型调用及压缩预算与来源授权，再完成普通用户侧栏真实模型多轮。阶段二 HITL、阶段三隔离预览发布、阶段四日常站点与恢复验证仍未完成。
+
+## 接续：LLM 请求授权与预算预占
+
+- 现场读取固定提交 [LLM service](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/llm/llm/src/index.ts) 的公开 llm/stream waterfall 与 [GenerateOptions](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/llm/llm/src/types.ts)。该事件位于普通 stream 和 prepared stream 的共同适配器前，不只 agent/request。最初尝试错误的 core/llm 路径收到404，随后用固定提交 tree 定位正确包路径，没有采用 master。
+- 项目 model-guard 插件通过公开事件接入，发送调用元数据而非业务正文；服务端 reserve_model_call 以运行 capability 加行锁，复查 owner 与所有会话来源权限，预占后才允许模型调用。alpha schema 已通过原生 reload_doc 更新，backend 重启、ping 就绪后测试。
+- 当前查询组合固定 deepseek-official/deepseek-v4-flash；每运行最多8次调用、单次输入131072 UTF-8字节、累计524288字节、单次输出最多2048 token、累计预留16384输出 token。输入量是字节预算，不宣称精确 token 或货币核算；失败/响应不明不退还预占，不自动重试。
+- 任意授权/预算请求失败后，本轮插件锁定后续模型访问。普通与 purpose=compaction 均经过相同逻辑；单元测试模拟压缩调用拒绝被上层捕获，后续普通调用仍拒绝且 adapter 零调用。未启用/验收官方自动压缩策略本身，不能把这个测试表述为完整真实压缩验收。
+- 插件与 API 均先红后绿。真实固定版 Runtime 授权HTTP403后没有模型HTTP请求；元数据未包含问题正文。真实普通/跨容器两条链分别产生2/4条模型预算计数，与实际模型请求数一致，**2 passed / 102.16s**（模型替身）。相关回归 **11 passed / 9.54s**，Node插件 **4 passed**。
+- 尚需权限指纹和运行配置/skills 版本轮换、业务 skills 固定摘要、原生压缩触发和来源保全，以及普通用户侧栏真实多轮。当前检查逐次复查已有来源权限，但不声称已覆盖所有权限变化后的旧运行上下文废弃。整体仍为阶段一进行中，未启动常驻消费者、无本批付费模型调用。
