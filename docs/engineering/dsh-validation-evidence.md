@@ -54,3 +54,21 @@
 ## ERP 工具链补充
 
 已在 [ERP 证据](erpnext-integration-evidence.md) 单独记录真实 Runtime→MCP→ERP 链；该链的模型侧为本地替身，未扩大本次官方付费模型调用范围。当前全部测试 36 项通过，不替换本文件此前真实官方调用的历史证据。
+
+## 后续：真实官方模型与 ERP 只读闭环
+
+2026-08-28，用户明确要求“先跑第一项”后，单独执行一次官方模型与真实 ERP 的完整闭环。复用现有 SDK、`config/dsh-erp.yml` 和 MCP 实现，没有新增产品代码或付费自动化测试。
+
+- provider/model：`deepseek-official` / `deepseek-v4-flash`，endpoint `https://api.deepseek.com`。
+- ERP：固定本地隔离 Site，普通用户 `dsherp-reader@example.invalid`；不读取控制面凭证。
+- 提示：要求实际调用只读工具读取 `Item / DSHERP-TEST-ITEM`，返回 `item_code`、`item_name`、`stock_uom`、`is_stock_item` 的原值；提示未包含预期返回值。
+- 运行前通过同一普通用户直接 GET 回读 ERP 作为比对基准。首次准备命令将接口外层误当字段字典，在启动模型前断言失败；按现有接口的 `message.fields` 修正验证命令后执行。未修改业务接口，也未因此重试付费调用。
+- 真实 `tool/call` 恰好 1 次：`mcp__erp__erp_read_record`，参数 `{"doctype":"Item","name":"DSHERP-TEST-ITEM"}`。
+- 匹配同一 callId 的 `tool/result` 恰好 1 次，`isError=false`。工具返回字段、直接 ERP 回读基准、模型最终 JSON 三者一致。
+- 最终返回：`{"item_code":"DSHERP-TEST-ITEM","item_name":"DSHERP-TEST-ITEM","stock_uom":"DSHERP-TEST-UNIT","is_stock_item":0}`。
+- `finish_reason=completed`；耗时 **4.09 秒**；验证命令退出 0。
+- Runtime 退出码 0；关闭前观察到 1 个 MCP 子进程，关闭后不存在存活子进程。
+- 随后执行 `.venv/bin/python -m pytest tests -q`：**36 passed in 24.54s**，退出 0；自动化回归不调用付费模型。
+- 每请求 `max_tokens=512`，SDK timeout 90 秒，外层 deadline 120 秒；这些不是整个任务的计费硬上限。没有采集准确 token 或账单，不声称费用为零。
+
+这是一次真实官方模型端到端验证，不是本地 SSE 替身。只读取合成物料，没有业务写入、库存或财务提交；不代表多租户、UI 或生产部署已完成。临时会话、脱敏事件和结果文件在核验后删除，只保留本节摘要，不提交运行日志或凭证。

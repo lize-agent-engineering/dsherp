@@ -37,6 +37,6 @@ description: Use when developing dsherp ERPNext or Frappe integration, schema di
 
 `.venv/bin/python -m pytest tests/integration -q` 需要已配置独立 Site 和本地测试凭证；缺失就报错，不跳过后称全部通过。
 
-分别报告文档、单元测试、真实 ERP HTTP、真实 DSH 工具链、真实模型和 UI/部署。当前 DSH→ERP 链使用本地模型替身；以前的官方模型最小调用是另一份证据。
+分别报告文档、单元测试、真实 ERP HTTP、真实 DSH 工具链、真实模型和 UI/部署。自动化 DSH→ERP 链使用本地模型替身；官方模型最小调用及后续真实模型→ERP 只读闭环另有证据，见 DSH 验证记录，不混称付费自动化测试。
 
 固定来源：[Frappe v2](https://github.com/frappe/frappe/blob/v15.118.0/frappe/api/v2.py)、[Frappe 字段权限](https://github.com/frappe/frappe/blob/v15.118.0/frappe/model/meta.py)、[ERPNext 工单](https://github.com/frappe/erpnext/blob/v15.119.3/erpnext/manufacturing/doctype/work_order/work_order.py)。
