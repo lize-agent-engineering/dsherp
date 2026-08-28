@@ -47,7 +47,10 @@ services:
       - sites:/home/frappe/frappe-bench/sites
       - logs:/home/frappe/frappe-bench/logs
       - ../frappe_app:/opt/dsherp-frappe:ro
-    networks: [validation, api]
+    networks:
+      validation:
+        aliases: [dsherp-validation.localhost]
+      api:
     logging: *logging
 
   frontend:
@@ -62,10 +65,12 @@ services:
     command: ["nginx-entrypoint.sh"]
     ports: ["127.0.0.1:18082:8080"]
     environment:
-      BACKEND: backend:8000
+      BACKEND: dsherp-validation.localhost:8000
       SOCKETIO: websocket:9000
       FRAPPE_SITE_NAME_HEADER: dsherp-validation.localhost
-    volumes: ["sites:/home/frappe/frappe-bench/sites:ro"]
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites:ro
+      - ./frappe.conf.template:/templates/nginx/frappe.conf.template:ro
     depends_on: [backend, websocket]
     networks: [validation, api]
     logging: *logging
