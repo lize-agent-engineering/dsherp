@@ -43,7 +43,7 @@ def _context(value, check_version=True):
             frappe.throw('未知页面不得夹带业务字段')
         return value
     doctype = value.get('doctype')
-    if doctype not in ('Item','Customer'):
+    if doctype not in ('Item','Customer','Sales Order'):
         raise frappe.PermissionError('当前查询领域不支持该业务对象')
     frappe.has_permission(doctype, 'read', throw=True)
     meta = frappe.get_meta(doctype)

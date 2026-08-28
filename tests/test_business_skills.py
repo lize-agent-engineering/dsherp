@@ -31,9 +31,8 @@ def test_extra_skill_or_symlink_is_rejected(tmp_path):
 
 
 def test_manifest_version_must_match_skill_body(tmp_path):
-    root=bundle(tmp_path);skill=root/'business-skills/erp-query/SKILL.md'
-    skill.write_text(skill.read_text().replace('version: 1.0.0','version: 2.0.0'))
+    root=bundle(tmp_path)
     path=root/'config/business-skills.json';manifest=json.loads(path.read_text())
-    manifest['skills'][0]['sha256']=hashlib.sha256(skill.read_bytes()).hexdigest()
+    manifest['skills'][0]['version']='999.0.0'
     path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError,match='version'):verify_business_skills(root)

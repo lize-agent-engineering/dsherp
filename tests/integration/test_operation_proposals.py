@@ -13,7 +13,7 @@ from dsherp_bridge.context_permissions import revision
 try:
     frappe.set_user('Administrator')
     actor='tool-'+uuid.uuid4().hex+'@example.invalid'
-    frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic proposal tool','enabled':1,'send_welcome_email':0,'roles':[{'role':'Item Manager'}]}).insert()
+    frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic proposal tool','enabled':1,'send_welcome_email':0,'roles':[{'role':'Item Manager'},{'role':'Sales User'}]}).insert()
     frappe.set_user(actor)
     conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Tool proposals'}).insert(ignore_permissions=True)
     capability=uuid.uuid4().hex
@@ -40,6 +40,16 @@ try:
     created=run_tool(**cap,tool='erp_propose_create',arguments=create)
     assert created['action']=='create' and created['status']=='Pending'
     assert frappe.db.count('Item')==before
+    order=frappe.get_doc('Sales Order','SAL-ORD-2026-00001')
+    action={'doctype':'Sales Order','name':order.name,'action':'submit','version':str(order.modified)}
+    try:run_tool(**cap,tool='erp_propose_action',arguments=action);raise AssertionError('unread order accepted')
+    except frappe.ValidationError:pass
+    read=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Sales Order','name':order.name})
+    sources=json.loads(frappe.db.get_value('DS Model Run',run.name,'sources'))
+    assert 'qty' in sources[-1]['child_fields']['items']
+    proposed=run_tool(**cap,tool='erp_propose_action',arguments=action)
+    assert proposed['action']=='submit' and proposed['status']=='Pending'
+    assert frappe.get_doc('Sales Order',order.name).docstatus==0
     try:run_tool(**cap,tool='confirm',arguments={});raise AssertionError('model confirmed write')
     except frappe.ValidationError:pass
 finally:

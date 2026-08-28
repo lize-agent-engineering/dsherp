@@ -6,6 +6,11 @@ import OperationProposal from './OperationProposal.jsx';
 beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
 afterEach(cleanup);
 const proposal={id:'P1',digest:'d1',action:'update',doctype:'Item',name:'I-1',version:'v1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{field:'item_name',label:'物料名称',before:'旧名称',after:'新名称'}]};
+it('销售订单状态操作显示业务含义和影响，不能只显示数字状态',()=>{
+ render(<OperationProposal proposal={{...proposal,doctype:'Sales Order',action:'cancel',changes:[{field:'docstatus',label:'单据状态',before:1,after:2}]}} onConfirm={vi.fn()}/>);
+ expect(screen.getByText('已提交')).toBeTruthy();expect(screen.getByText('已取消')).toBeTruthy();
+ expect(screen.getByText('取消将使此已提交订单失效，不会撤销已发生的其他业务。')).toBeTruthy();
+});
 it('新建提案先展示新记录，成功后显示原生命名结果',async()=>{
  const confirm=vi.fn(async()=>({status:'Succeeded',doctype:'Customer',name:'C-NEW',version:'v2',values:{customer_name:'新客户'}}));
  render(<OperationProposal proposal={{...proposal,action:'create',doctype:'Customer',name:null,changes:[{field:'customer_name',label:'客户名称',before:null,after:'新客户'}]}} onConfirm={confirm}/>);

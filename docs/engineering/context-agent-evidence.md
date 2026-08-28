@@ -303,3 +303,12 @@
 - 红测发现Frappe构造子文档会修改传入字典，以及ERPNext混合既有date对象/新增JSON日期字符串时TypeError；采用独立JSON值和原生表单一致的日期表示解决，不忽略原生错误。补全后增删行和状态链 **1 passed / 3.31s**。
 - 组合回归首次因旧HTTP进程权限摘要未加载Sales Order及新增行日期问题失败；修复日期并只重启本项目alpha backend后，ping正常，串行Item/Customer/Sales Order业务回归 **8 passed / 16.17s**。均真实Frappe、合成数据；本次没有真实模型或Sales Order浏览器验收。
 - 下一步将Sales Order及可读子表结构接入读API、页面上下文、操作MCP和固定skill，再做模型/UI链。当前提交只是服务端确定性执行能力，不代表销售订单已在侧栏可用；填表、Unknown核实、阶段三/四仍待完成。
+
+## 阶段二：Sales Order 上下文与模型工具接入
+
+- Sales Order读schema显式提供items可读列、原生read_only/required/default；read_record提供当前docstatus及可读明细。表单快照支持该对象和用户明确选择的未保存列，不保存数据；真实既有订单数量仍为2，外来明细行被拒绝。
+- 工具来源账本新增child_fields，schema/record两类结果均记录实际列，历史重用复查子表权限；先用不可读历史列复现失败后实现拒绝。不是仅在界面隐藏旧内容。
+- operation MCP新增erp_propose_action，仅Sales Order submit/cancel；业务服务要求本轮已读取精确记录及版本。真实工具测试先因未知工具失败，接入后生成Pending提案且原单据仍为草稿。query工具目录仍只有读取，模型无确认执行入口。
+- erp-query升级1.1.0、erp-operation升级1.2.0并更新固定摘要；操作技能明确明细数组完整名单、删除影响、只读计算字段、保存与提交/取消分开确认。运行配置变化继续轮换原生上下文，没有升级DSH。
+- 状态提案UI先红测数字状态不清楚，随后显示中文状态与提交/取消业务影响。全前端 **58 passed / 4.87s**，构建通过；固定Runtime/技能/MCP **13 passed / 6.74s**（模型SSE替身）；alpha重启后业务读取/上下文/操作/执行 **19 passed / 13.58s**。原版技能测试曾硬编码1.0.0导致失配测试无效，改为直接改变清单版本，仍验证实际正文/清单不匹配会拒绝。
+- 尚未新增真实模型Sales Order调用或浏览器确认。下一步原预算单次worker真实Sales Order链、明细差异可读展示及填表；其它阶段仍进行中。

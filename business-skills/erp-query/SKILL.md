@@ -1,7 +1,7 @@
 ---
 name: erp-query
-description: 在当前业务用户权限下查询 Item、Customer，并给出有来源的业务回答。
-version: 1.0.0
+description: 在当前业务用户权限下查询 Item、Customer、Sales Order，并给出有来源的业务回答。
+version: 1.1.0
 ---
 
 # 业务只读查询

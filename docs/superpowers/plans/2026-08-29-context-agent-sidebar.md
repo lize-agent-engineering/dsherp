@@ -131,3 +131,5 @@ Frappe 15.118.0 / ERPNext 15.119.3；实现时读安装源码核验，auth_hooks
 阶段二创建更新：Item/Customer原生创建、确认去重、继续修改均通过真实ERP；固定操作skill1.1.0及创建提案MCP已接通。Customer创建另外完成真实模型→浏览器HITL→原生表单回读，只有一个客户/执行，无联系人地址。57项前端、7项真实业务、13项Runtime/技能/MCP通过。接续重点转Sales Order草稿及状态动作、填表；Item创建/Customer修改各自真实模型UI组合仍可补验，不忽略Unknown核实和后续阶段。
 
 阶段二Sales Order服务端更新：普通Sales User真实草稿创建、items修改/新增/移除、分别确认原生提交/取消、重复确认去重通过；与Item/Customer组合8项真实Frappe通过。测试临时订单已清理，原有合成订单未修改。下一步Sales Order读API/子表schema/页面快照、MCP状态提案及skill版本，然后真实模型与UI；当前尚未接通销售订单侧栏。全部持续目标保持进行中，不将该服务端切片当作阶段二或整体完成。
+
+阶段二Sales Order接入更新：读API、可读明细schema/来源列再授权、页面快照、只生成状态提案的MCP已接通；固定query1.1.0/operation1.2.0，侧栏显示中文状态及影响。58项前端、13项Runtime/技能/MCP和19项真实Frappe通过。下一步真实模型Sales Order提案→浏览器确认→原生回读，以及明细可读差异/填表；阶段一缺口、Unknown核实、阶段三/四保留，不缩减目标。

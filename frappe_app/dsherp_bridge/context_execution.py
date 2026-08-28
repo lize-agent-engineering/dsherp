@@ -36,9 +36,14 @@ def _actor(run):
 def authorize_sources(sources):
     for source in sources:
         args=source['arguments'];doctype=args['doctype']
-        visible={f['fieldname'] for f in erp.read_schema(doctype)['fields']}
+        schema={f['fieldname']:f for f in erp.read_schema(doctype)['fields']}
+        visible=set(schema)
         if set(source['fields'])-visible:
             raise frappe.PermissionError('历史结果的字段权限已改变')
+        for table,columns in source.get('child_fields',{}).items():
+            readable={field['fieldname'] for field in schema.get(table,{}).get('fields',[])}|{'name','idx'}
+            if table not in visible or set(columns)-readable:
+                raise frappe.PermissionError('历史结果的明细字段权限已改变')
         for name in source['records']:
             frappe.get_doc(doctype,name).check_permission('read')
 
@@ -133,23 +138,27 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
 def run_tool(run_id,capability,tool,arguments):
     run=_run(run_id,capability)
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')
-    if tool in ('erp_propose_update','erp_propose_create'):
+    if tool in ('erp_propose_update','erp_propose_create','erp_propose_action'):
         if run.domain!='operation':raise frappe.PermissionError('当前领域不能提出业务操作')
         if isinstance(arguments,str):arguments=json.loads(arguments)
-        keys={'doctype','values','version'}|({'name'} if tool=='erp_propose_update' else set())
+        keys=({'doctype','name','action','version'} if tool=='erp_propose_action'
+              else {'doctype','values','version'}|({'name'} if tool=='erp_propose_update' else set()))
         if (not isinstance(arguments,dict) or set(arguments)!=keys
             or not all(isinstance(arguments[key],str) for key in keys-{'values'})
-            or not isinstance(arguments['values'],dict)):
+            or ('values' in keys and not isinstance(arguments['values'],dict))):
             frappe.throw('操作提案参数无效')
         with _actor(run):
             context_permissions.require_revision(run)
             sources=json.loads(run.sources or '[]')
             authorize_sources(sources)
-            if tool=='erp_propose_update':
+            if tool in ('erp_propose_update','erp_propose_action'):
                 if not any(source['tool']=='erp_read_record' and source['arguments']=={'doctype':arguments['doctype'],'name':arguments['name']}
                            and source.get('record_versions',{}).get(arguments['name'])==arguments['version'] for source in sources):
                     frappe.throw('请先读取确切目标及当前版本，再提出操作')
-                from dsherp_bridge.operations import propose_update as propose
+                if tool=='erp_propose_action':
+                    from dsherp_bridge.operations import propose_action as propose
+                else:
+                    from dsherp_bridge.operations import propose_update as propose
             else:
                 if not any(source['tool']=='erp_read_schema' and source['arguments']=={'doctype':arguments['doctype']}
                            and source.get('schema_version')==arguments['version'] for source in sources):
@@ -177,6 +186,10 @@ def run_tool(run_id,capability,tool,arguments):
             visible={f['fieldname'] for f in erp.read_schema(arguments['doctype'])['fields']}
             if title in visible:fields=[title]
         source={'tool':tool,'arguments':arguments,'fields':fields,'records':records}
+        if tool=='erp_read_schema':
+            source['child_fields']={field['fieldname']:[child['fieldname'] for child in field['fields']] for field in result['fields'] if 'fields' in field}
+        elif tool=='erp_read_record':
+            source['child_fields']={field:sorted({column for row in rows for column in row}) for field,rows in result['fields'].items() if isinstance(rows,list)}
         if tool=='erp_read_schema':
             source['schema_version']=str(result['modified'])
         elif tool=='erp_read_record':
