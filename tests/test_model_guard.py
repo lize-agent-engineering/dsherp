@@ -51,7 +51,7 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
             assert len(observed)==1
         assert observed[0][0].endswith('.reserve_model_call')
         metadata=observed[0][1]
-        assert metadata['purpose']=='conversation' and metadata['max_output_tokens']==2048
+        assert metadata['purpose']=='conversation' and metadata['max_output_tokens']==(3072 if mode=='operation' else 2048)
         assert metadata['input_bytes']>0
         assert 'Do not transmit' not in json.dumps(metadata)
     finally:

@@ -34,7 +34,7 @@ function Proposal({proposal, onConfirm}) {
     {proposal.action==='cancel'&&<Typography.Text>取消将使此已提交订单失效，不会撤销已发生的其他业务。</Typography.Text>}
     <Table size="small" pagination={false} rowKey="field" dataSource={proposal.changes}
       columns={[{title: '字段', dataIndex: 'label'}, {title: '原值', dataIndex: 'before', render: displayChange}, {title: '修改后', dataIndex: 'after', render: displayChange}]}/>
-    {expired && <Alert type="warning" message="确认已过期，请重新提出操作"/>}
+    {expired && proposal.status==='Pending' && !state && <Alert type="warning" message="确认已过期，请重新提出操作"/>}
     {state?.status === 'Succeeded' && <Alert type="success" message="执行成功，已读取业务结果"/>}
     {state?.status === 'Succeeded' && state.name && <Typography.Text>已保存记录：{state.doctype} / {state.name}</Typography.Text>}
     {state?.error && <Alert type="error" message={state.error}/>}

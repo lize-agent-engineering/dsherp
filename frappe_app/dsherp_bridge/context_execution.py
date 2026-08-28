@@ -118,7 +118,7 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
     if (provider!='deepseek-official' or model!='deepseek-v4-flash'
         or purpose not in ('conversation','compaction','session-title')
         or type(input_bytes) is not int or not 0<input_bytes<=131072
-        or type(max_output_tokens) is not int or not 0<max_output_tokens<=2048):
+        or type(max_output_tokens) is not int or not 0<max_output_tokens<=(3072 if run.domain=='operation' else 2048)):
         frappe.throw('模型请求配置或输入预算不符')
     with _actor(run):
         context_permissions.require_revision(run)

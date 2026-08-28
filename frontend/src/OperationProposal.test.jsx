@@ -22,6 +22,11 @@ it('刷新从服务端执行记录恢复结果，不重发确认',()=>{
  expect(screen.getByText('执行成功，已读取业务结果')).toBeTruthy();
  expect(screen.getByRole('button',{name:'确认执行'}).disabled).toBe(true);expect(confirm).not.toHaveBeenCalled();
 });
+it('已成功的历史提案不会再提示过期或要求重新提出',()=>{
+ render(<OperationProposal proposal={{...proposal,expires_at:'2000-01-01T00:00:00Z',status:'Succeeded',execution:{status:'Succeeded'}}} onConfirm={vi.fn()}/>);
+ expect(screen.queryByText('确认已过期，请重新提出操作')).toBeNull();
+ expect(screen.getByText('执行成功，已读取业务结果')).toBeTruthy();
+});
 it('展示冻结目标和具体差异，确认前零调用；确认只传提案绑定而非可改写内容',async()=>{
  let finish;const confirm=vi.fn(()=>new Promise(resolve=>finish=resolve));render(<OperationProposal proposal={proposal} onConfirm={confirm}/>);
  expect(screen.getByText('Item / I-1')).toBeTruthy();expect(screen.getByText('旧名称')).toBeTruthy();expect(screen.getByText('新名称')).toBeTruthy();expect(confirm).not.toHaveBeenCalled();
