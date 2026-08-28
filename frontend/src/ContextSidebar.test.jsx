@@ -9,6 +9,21 @@ const snapshot={schema_version:1,route:['Form','Item','I-1'],page_type:'form',do
 const session={id:'S-1',title:'查询物料',messages:[{id:'M-1',question:'旧问题',answer:'历史回答',status:'Succeeded',context:snapshot}],active_run:null};
 const open=()=>fireEvent.click(screen.getByRole('button',{name:'打开 Agent'}));
 const apiDefault=async(method)=>method==='list_sessions'?[{id:'S-1',title:'查询物料'}]:session;
+it('未保存字段显式选择后才发送，切换对象不能沿用选择',async()=>{
+ let page=snapshot;const api=vi.fn(apiDefault);const captureSelected=vi.fn(()=>({...page,unsaved:{item_name:'建议名称'}}));
+ render(<ContextSidebar api={api} capture={()=>page} options={()=>[{value:'item_name',label:'物料名称'}]} captureSelected={captureSelected}/>);open();await screen.findByText('历史回答');
+ fireEvent.mouseDown(screen.getByRole('combobox',{name:'提供未保存字段'}));
+ fireEvent.click(await screen.findByText('物料名称'));
+ fireEvent.change(screen.getByRole('textbox',{name:'业务问题'}),{target:{value:'检查未保存建议'}});
+ fireEvent.click(screen.getByRole('button',{name:'发送问题'}));
+ await waitFor(()=>expect(captureSelected).toHaveBeenCalledWith(['item_name']));
+ expect(api.mock.calls.find(c=>c[0]==='send_message')[1].context.unsaved).toEqual({item_name:'建议名称'});
+ page={...snapshot,name:'I-2',route:['Form','Item','I-2']};
+ fireEvent.change(screen.getByRole('textbox',{name:'业务问题'}),{target:{value:'另一物料'}});
+ fireEvent.click(screen.getByRole('button',{name:'发送问题'}));
+ await screen.findByText('页面已变化，请重新选择要提供的未保存字段');
+ expect(api.mock.calls.filter(c=>c[0]==='send_message')).toHaveLength(1);
+});
 it('打开只恢复服务端历史，不运行模型；无蒙层，不占用原生表单焦点',async()=>{
  const api=vi.fn(apiDefault);render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
  expect(await screen.findByText('历史回答')).toBeTruthy();

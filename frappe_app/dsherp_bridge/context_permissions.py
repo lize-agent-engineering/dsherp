@@ -7,6 +7,7 @@ DOCTYPES=['Item','Customer']
 
 
 def revision(user):
+    schema_doctypes=sorted(set(DOCTYPES)|{field.options for name in DOCTYPES for field in frappe.get_meta(name).get_table_fields()})
     def rows(doctype,filters):
         return frappe.get_all(doctype,filters=filters,fields=['*'],order_by='name asc')
     state={
@@ -19,10 +20,10 @@ def revision(user):
         'user_permissions':rows('User Permission',{'user':user}),
         'doctype_permissions':rows('DocPerm',{'parent':['in',DOCTYPES]}),
         'custom_permissions':rows('Custom DocPerm',{'parent':['in',DOCTYPES]}),
-        'doctypes':rows('DocType',{'name':['in',DOCTYPES]}),
-        'fields':rows('DocField',{'parent':['in',DOCTYPES]}),
-        'custom_fields':rows('Custom Field',{'dt':['in',DOCTYPES]}),
-        'properties':rows('Property Setter',{'doc_type':['in',DOCTYPES]}),
+        'doctypes':rows('DocType',{'name':['in',schema_doctypes]}),
+        'fields':rows('DocField',{'parent':['in',schema_doctypes]}),
+        'custom_fields':rows('Custom Field',{'dt':['in',schema_doctypes]}),
+        'properties':rows('Property Setter',{'doc_type':['in',schema_doctypes]}),
         'shares':frappe.get_all('DocShare',filters={'share_doctype':['in',DOCTYPES]},
             or_filters={'user':user,'everyone':1},fields=['*'],order_by='name asc'),
         'strict_user_permissions':frappe.db.get_single_value('System Settings','apply_strict_user_permissions'),

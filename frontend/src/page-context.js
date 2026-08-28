@@ -1,4 +1,28 @@
 // This is untrusted page context, never an identity or permission grant.
+const scalarTypes=new Set(['Data','Link','Dynamic Link','Select','Text','Small Text','Long Text','Text Editor','Int','Float','Currency','Percent','Check','Date','Datetime','Time','Duration']);
+export function contextOptions(env=globalThis) {
+  const route=env.frappe?.get_route();const frm=env.cur_frm;
+  if(route?.[0]!=='Form'||frm?.doctype!==route[1]||frm.doc?.name!==route[2]||!frm.is_dirty())return [];
+  const options=[];
+  for(const field of frm.meta.fields){
+    if(field.hidden)continue;
+    if(scalarTypes.has(field.fieldtype))options.push({value:field.fieldname,label:field.label||field.fieldname});
+    if(field.fieldtype==='Table')for(const column of env.frappe.get_meta(field.options).fields){
+      if(!column.hidden&&scalarTypes.has(column.fieldtype))options.push({value:field.fieldname+'.'+column.fieldname,label:(field.label||field.fieldname)+' / '+(column.label||column.fieldname)});
+    }
+  }
+  return options;
+}
+export function selectedContext(keys,env=globalThis){
+  const allowed=new Set(contextOptions(env).map(option=>option.value));
+  const fields=[];const tables={};
+  for(const key of keys){
+    if(!allowed.has(key))throw new Error('所选字段已不在当前表单中，请重新选择');
+    const [field,column]=key.split('.');
+    if(column)(tables[field]??=[]).push(column);else fields.push(field);
+  }
+  return capturePageContext(env,{fields,tables});
+}
 function freeze(value) {
   if (value && typeof value === 'object') {
     Object.values(value).forEach(freeze);

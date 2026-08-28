@@ -101,6 +101,8 @@
 
 真实 UI 更新：普通只读用户通过原生受审计身份切换，在 Item 表单和列表同一侧栏连续两轮真实 deepseek-v4-flash 查询成功；独立两容器恢复，数据库2条Succeeded，刷新后历史展示恢复。原管理员标签保留，无业务写入或常驻付费消费者。接续先处理必要侧栏体验/未保存与子表上下文及SSO，再业务HITL、配置预览发布和日常Site；完整验收缺口见最新证据节。
 
+本批接续：已实现未保存标量/子表列显式选择、路由绑定及后端父/子表权限和行归属检查；子表配置纳入版本摘要。前端54项和真实会话/权限8项通过，未保存子表可编辑用户UI仍待验证。接下来推进SSO及业务HITL，不以当前查询功能代替剩余阶段。
+
 再接续：已实现 OS 单写者与 open_runtime，9 项实际 Runtime/锁测试通过；业务 Site claim/tool/finish 与来源再授权已实现，7 项会话/执行回归通过。专用服务身份、HTTP/MCP容器消费及 Desk 接入仍未完成；无新增付费调用。不可将当前能力单测等同真实业务链。
 
 DSH 固定 ref 下：packages/sdk/server/src/index.ts、packages/core/agent/src/runtime-types.ts、docs/subsystems/session.md、packages/session/session-persistence-jsonl/README.md、packages/session/session-checkpoint-policy/README.md、packages/compaction/compaction-basic/README.md、docs/subsystems/skills.md。

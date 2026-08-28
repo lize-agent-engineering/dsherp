@@ -62,6 +62,27 @@ def _context(value, check_version=True):
         if not isinstance(unsaved,dict):
             frappe.throw('未保存字段无效')
         for field, content in unsaved.items():
+            definition=meta.get_field(field)
+            if definition and definition.fieldtype=='Table':
+                if definition.permlevel and definition.permlevel not in doc.get_permlevel_access('read'):
+                    raise frappe.PermissionError('无权提供该子表：'+field)
+                if not isinstance(content,list):frappe.throw('子表必须明确选择行和列')
+                child_meta=frappe.get_meta(definition.options)
+                child_fields=set(child_meta.get_permitted_fieldnames(parenttype=doctype,user=frappe.session.user,permission_type='read'))
+                saved_names={row.name for row in doc.get(field)}
+                seen=set()
+                for row in content:
+                    if not isinstance(row,dict) or not isinstance(row.get('name'),str) or len(row)<2:
+                        frappe.throw('子表行与列无效')
+                    row_name=row['name']
+                    if row_name in seen or (row_name not in saved_names and not row_name.startswith('new-')):
+                        frappe.throw('子表行不属于当前记录')
+                    seen.add(row_name)
+                    for column,cell in row.items():
+                        if column=='name':continue
+                        if column not in child_fields:raise frappe.PermissionError('无权提供该子表字段：'+column)
+                        if isinstance(cell,(dict,list)):frappe.throw('子表列必须是标量')
+                continue
             if field not in permitted:
                 raise frappe.PermissionError('无权提供该字段：'+field)
             if not meta.get_field(field) or isinstance(content,(dict,list)):

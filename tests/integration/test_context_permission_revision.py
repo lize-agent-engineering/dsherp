@@ -1,6 +1,25 @@
 """Native synthetic role change invalidates a run and rotates its successor."""
 import subprocess
 
+def test_context_permission_revision_tracks_native_child_schema():
+    script="""
+import os,frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import context_permissions
+original=frappe.get_all
+tracked=[]
+def observe(doctype,*args,**kwargs):
+    if doctype=='DocField':tracked.extend(kwargs['filters']['parent'][1])
+    return original(doctype,*args,**kwargs)
+frappe.get_all=observe
+context_permissions.revision('dsherp-reader@example.invalid')
+assert 'UOM Conversion Detail' in tracked,tracked
+frappe.destroy()
+"""
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)
+    assert result.returncode==0,result.stderr
+
 
 def test_native_permission_change_invalidates_and_rotates_runtime():
     script=r'''

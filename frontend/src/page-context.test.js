@@ -3,6 +3,14 @@ import * as context from './page-context.js';
 
 const form = () => ({doctype:'Sales Order', doc:{doctype:'Sales Order', name:'SO-1', modified:'v1', customer:'C-1', secret:'never', items:[{name:'ROW-1',qty:2,rate:900}], __unsaved:1}, is_dirty:()=>true});
 const desk = (route, extra={}) => ({frappe:{get_route:()=>route}, ...extra});
+it('选择目录仅包含当前表单业务字段和明确的子表列，不携带字段值',()=>{
+ const frm=form();frm.meta={fields:[{fieldname:'customer',fieldtype:'Link',label:'客户'},{fieldname:'secret',fieldtype:'Password'},{fieldname:'items',fieldtype:'Table',label:'明细',options:'Sales Order Item'}]};
+ const env=desk(['Form','Sales Order','SO-1'],{cur_frm:frm});
+ env.frappe.get_meta=()=>({fields:[{fieldname:'qty',fieldtype:'Float',label:'数量'},{fieldname:'hidden',fieldtype:'Data',hidden:1}]});
+ expect(context.contextOptions(env)).toEqual([{value:'customer',label:'客户'},{value:'items.qty',label:'明细 / 数量'}]);
+ expect(context.selectedContext(['customer','items.qty'],env).unsaved).toEqual({customer:'C-1',items:[{name:'ROW-1',qty:2}]});
+ expect(context.contextOptions(desk(['List','Item'],{cur_frm:frm}))).toEqual([]);
+});
 // Removing route matching must not attach a stale form to a different document.
 it('发送时冻结表单身份和版本，默认不上传字段或子表',()=>{
   const frm=form(); const env=desk(['Form','Sales Order','SO-1'],{cur_frm:frm});

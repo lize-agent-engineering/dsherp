@@ -41,6 +41,17 @@ frappe.db.commit();frappe.destroy()
 def params():
     return {'session_id':None,'question':'查询当前物料','request_id':uuid.uuid4().hex,'context':{'schema_version':1,'page_type':'form','route':['Form','Item','DSHERP-TEST-ITEM'],'doctype':'Item','name':'DSHERP-TEST-ITEM','version':None,'dirty':False}}
 
+def test_explicit_child_columns_are_context_only_and_reject_foreign_fields(clients,created):
+    reader,_=clients;args=params()
+    args['context'].update(dirty=True,unsaved={'uoms':[{'name':'new-uom-conversion-detail-1','uom':'DSHERP-TEST-UNIT','conversion_factor':2}]})
+    data=send(reader,created,args)
+    assert data['messages'][0]['context']['unsaved']==args['context']['unsaved']
+    reader.post(API+'cancel_run',json={'session_id':data['id'],'run_id':data['active_run'],'request_id':uuid.uuid4().hex}).raise_for_status()
+    for row in ({'name':'foreign-row','conversion_factor':2},{'name':'new-uom-conversion-detail-1','parent':'other-item'}, {'name':'new-uom-conversion-detail-1','conversion_factor':{'nested':'forged'}}):
+        invalid=params();invalid['context']['unsaved']={'uoms':[row]}
+        response=reader.post(API+'send_message',json=invalid)
+        assert response.status_code in (403,417),response.text
+
 def send(client,created,args=None):
     r=client.post(API+'send_message',json=args or params())
     assert r.status_code==200,r.text
