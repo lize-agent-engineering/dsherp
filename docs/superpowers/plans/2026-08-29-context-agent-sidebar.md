@@ -223,3 +223,7 @@ beta 的签名回执会重新核对来源授权、唯一成功预览执行及当
 确认无 Queued/Running 旧任务后，旧 submit/claim/tool/finish/heartbeat、worker/task runner/MCP 和本地执行凭证已删除或禁用；DS Agent Task 及 list/get 只读历史保留，独立 `dsherp-studio` Demo 页面保留且未扩展。新上下文 Agent 所需的固定容器预算配置已抽离，不依赖旧 worker。平台/历史 14 项、上下文 Runtime 7 项、全前端 88 项及构建通过。
 
 继续收敛阶段一/二无需企业资料的多标签、断线、取消及边界回归；日常真实初始化和普通成员映射仍等待外部真实信息，不能用合成身份冒充完成。
+
+# 最新接续：全仓回归已通过
+
+旧 websocket 关闭后的过时验收已改为明确验证 `/socket.io` 不可用，Sales Order 来源 fixture 补齐实际工具名；没有为了旧测试恢复服务。全仓 170 项在 426.13 秒内全部通过，前端 88 项及构建也通过。代码和本地合成链已收口到等待真实日常企业资料/普通用户映射的边界；不能把这些测试或 alpha/beta 合成证据称作日常企业真实上线。

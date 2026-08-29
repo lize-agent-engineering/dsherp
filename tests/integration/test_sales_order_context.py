@@ -28,7 +28,7 @@ try:
     context['unsaved']['items'][0]['name']='foreign-row'
     try:_context(context);raise AssertionError('foreign child accepted')
     except frappe.ValidationError:pass
-    source={'arguments':{'doctype':'Sales Order'},'fields':['items'],'records':[record['name']],'child_fields':{'items':['qty']}}
+    source={'tool':'erp_read_record','arguments':{'doctype':'Sales Order'},'fields':['items'],'records':[record['name']],'child_fields':{'items':['qty']}}
     authorize_sources([source])
     source['child_fields']['items']=['nonexistent_private_column']
     try:authorize_sources([source]);raise AssertionError('unreadable historical child field accepted')
