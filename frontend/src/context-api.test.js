@@ -31,6 +31,12 @@ it('发布准备和发布确认使用独立端点',async()=>{
  expect(fetch.mock.calls[0][0]).toBe('/api/method/dsherp_bridge.configuration_execution.prepare_publish');
  expect(fetch.mock.calls[1][0]).toBe('/api/method/dsherp_bridge.configuration_execution.confirm_publish');
 });
+it('配置结果核实只使用同源GET且不发送重放请求',async()=>{
+ const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{observations:[]}})}));vi.stubGlobal('fetch',fetch);
+ await api.contextApi('verify_configuration',{proposal_id:'C1'});
+ expect(fetch.mock.calls[0][0]).toBe('/api/method/dsherp_bridge.configuration_execution.verify_execution?proposal_id=C1');
+ expect(fetch.mock.calls[0][1].method).toBeUndefined();
+});
 it('结果核实使用同源只读GET，不发送确认或重放请求',async()=>{
  const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{observed:null}})}));vi.stubGlobal('fetch',fetch);
  await api.contextApi('verify_operation',{proposal_id:'P1'});

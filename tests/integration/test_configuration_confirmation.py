@@ -63,3 +63,30 @@ finally:frappe.db.rollback();frappe.destroy()
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=40)
     assert result.returncode==0,result.stderr
+
+
+def test_expired_configuration_confirmation_has_zero_ddl_and_can_be_reprepared():
+    script=r'''
+import os,frappe
+from datetime import timedelta
+os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-beta.localhost');frappe.connect()
+from dsherp_bridge.configuration import propose_bundle
+from dsherp_bridge import configuration_execution as execution
+try:
+    frappe.set_user('dsherp-preview@example.invalid')
+    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Expired configuration'}).insert(ignore_permissions=True)
+    package={'version':1,'doctypes':[{'name':'DS Expired Configuration Test','module':'DSHERP Bridge','fields':[{'fieldname':'result','label':'Result','fieldtype':'Data'}],'permissions':[{'role':'System Manager','read':1,'write':1,'create':1}]}],'extensions':[],'workflows':[]}
+    bundle=propose_bundle(conversation.name,package)
+    clock=execution.now_datetime;execution.now_datetime=lambda:clock()-timedelta(minutes=31)
+    expired=execution.prepare_preview(bundle['id'],bundle['digest']);execution.now_datetime=clock;frappe.db.commit()
+    try:execution.confirm_preview(expired['id'],expired['digest'],'expired-request');raise AssertionError('expired confirmation executed')
+    except frappe.ValidationError:pass
+    assert not frappe.db.exists('DocType','DS Expired Configuration Test')
+    assert frappe.db.count('DS Configuration Execution',{'confirmation':expired['id']})==0
+    fresh=execution.prepare_preview(bundle['id'],bundle['digest'])
+    assert fresh['id']!=expired['id'] and fresh['status']=='Pending'
+    assert not frappe.db.exists('DocType','DS Expired Configuration Test')
+finally:frappe.db.rollback();frappe.destroy()
+'''
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=40)
+    assert result.returncode==0,result.stderr

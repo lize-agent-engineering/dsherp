@@ -24,7 +24,9 @@ it('展示配置目标与具体内容，预览只确认本次冻结提案，不�
  expect(screen.queryByRole('button',{name:'确认发布到目标站点'})).toBeNull();
 });
 it('部分成功保留逐项结果，不宣称回滚、不提供整包重跑',()=>{
- const confirm=vi.fn();render(<ConfigurationProposal proposal={{...proposal,purpose:'publish',status:'Partial',execution:{status:'Partial',steps:[{object:'Quality Check',status:'Succeeded'},{object:'Workflow',status:'Unknown'}]}}} onConfirm={confirm}/>);
+ const confirm=vi.fn(),verify=vi.fn(async()=>({observations:[{object:'Quality Check',state:'Matches',version:'v2'},{object:'Workflow',state:'Missing'}],note:'只读核实'}));render(<ConfigurationProposal proposal={{...proposal,purpose:'publish',status:'Partial',execution:{status:'Partial',steps:[{object:'Quality Check',status:'Succeeded'},{object:'Workflow',status:'Unknown'}]}}} onConfirm={confirm} onVerify={verify}/>);
  expect(screen.getByText('发布未全部完成，请核实逐项结果；已发生的配置变更不保证回滚')).toBeTruthy();
  expect(screen.getByRole('button',{name:'确认发布到目标站点'}).disabled).toBe(true);expect(confirm).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByRole('button',{name:'核实当前配置'}));
+ return screen.findByText('Matches').then(()=>{expect(screen.getByText('Missing')).toBeTruthy();expect(verify).toHaveBeenCalledWith({proposal_id:'C1'});});
 });

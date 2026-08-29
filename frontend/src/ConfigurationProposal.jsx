@@ -8,9 +8,9 @@ export function ConfigurationChanges({changes}){
  return <Table size="small" pagination={false} rowKey={row=>`${row.action}:${row.object}`} dataSource={changes}
    columns={[{title:'配置对象',dataIndex:'object'},{title:'动作',dataIndex:'action'},{title:'具体内容',dataIndex:'detail'}]}/>;
 }
-function Confirmation({proposal,onConfirm}){
+function Confirmation({proposal,onConfirm,onVerify}){
  if(!['preview','publish'].includes(proposal.purpose))throw new Error('不支持的配置确认类型');
- const [local,setLocal]=useState(null);const claimed=useRef(false);
+ const [local,setLocal]=useState(null),[verification,setVerification]=useState(null),[verifying,setVerifying]=useState(false);const claimed=useRef(false);
  const result=local||proposal.execution;
  const preview=proposal.purpose==='preview';
  const expired=()=>!Number.isFinite(Date.parse(proposal.expires_at))||Date.parse(proposal.expires_at)<=Date.now();
@@ -20,6 +20,12 @@ function Confirmation({proposal,onConfirm}){
   claimed.current=true;setLocal({status:'Running'});
   try{setLocal(await onConfirm({proposal_id:proposal.id,digest:proposal.digest,request_id:crypto.randomUUID()}));}
   catch(error){setLocal({status:'Unknown',error:error.message});}
+ }
+ async function verify(){
+  if(verifying)return;setVerifying(true);
+  try{setVerification(await onVerify({proposal_id:proposal.id}));}
+  catch(error){setVerification({note:error.message,observations:[]});}
+  finally{setVerifying(false);}
  }
  const incomplete=result&&['Partial','Unknown','Failed'].includes(result.status);
  return <Space direction="vertical" style={{width:'100%'}}>
@@ -34,6 +40,10 @@ function Confirmation({proposal,onConfirm}){
   {result?.error&&<Typography.Text type="danger">{result.error}</Typography.Text>}
   {result?.steps&&<Table size="small" pagination={false} rowKey={(row,index)=>`${index}:${row.object}`} dataSource={result.steps}
    columns={[{title:'配置对象',dataIndex:'object'},{title:'执行结果',dataIndex:'status'}]}/>}
+  {incomplete&&onVerify&&<Button onClick={verify} loading={verifying}>核实当前配置</Button>}
+  {verification?.note&&<Typography.Text>{verification.note}</Typography.Text>}
+  {verification?.observations?.length>0&&<Table size="small" pagination={false} rowKey="object" dataSource={verification.observations}
+   columns={[{title:'配置对象',dataIndex:'object'},{title:'当前状态',dataIndex:'state'},{title:'当前版本',dataIndex:'version'}]}/>}
   <Button type="primary" disabled={disabled} loading={result?.status==='Running'} onClick={confirm}>{preview?'确认应用到隔离预览':'确认发布到目标站点'}</Button>
  </Space>;
 }

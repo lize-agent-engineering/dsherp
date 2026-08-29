@@ -1,5 +1,6 @@
 // This is untrusted page context, never an identity or permission grant.
 const scalarTypes=new Set(['Data','Link','Dynamic Link','Select','Text','Small Text','Long Text','Text Editor','Int','Float','Currency','Percent','Check','Date','Datetime','Time','Duration']);
+const businessTypes=new Set(['Item','Customer','Sales Order']);
 export function contextOptions(env=globalThis) {
   const route=env.frappe?.get_route();const frm=env.cur_frm;
   if(route?.[0]!=='Form'||frm?.doctype!==route[1]||frm.doc?.name!==route[2]||!frm.is_dirty())return [];
@@ -49,7 +50,7 @@ export function capturePageContext(env = globalThis, selection = {}) {
   let snapshot = {schema_version:1, route:[...route], page_type:'unknown', reason:'当前页面上下文能力有限；请明确说明业务对象。'};
   const frm = env.cur_frm;
   const list = env.cur_list;
-  if (route[0] === 'Form' && frm?.doctype === route[1] && frm.doc?.name === route[2]) {
+  if (route[0] === 'Form' && businessTypes.has(route[1]) && frm?.doctype === route[1] && frm.doc?.name === route[2]) {
     snapshot = {schema_version:1,route:[...route],page_type:'form',doctype:frm.doctype,name:frm.doc.name,version:frm.doc.modified ?? null,dirty:frm.is_dirty()};
     const unsaved = {};
     for (const name of selection.fields ?? []) unsaved[name] = scalar(frm.doc, name);
@@ -59,7 +60,7 @@ export function capturePageContext(env = globalThis, selection = {}) {
       unsaved[name] = frm.doc[name].map(row => Object.fromEntries(['name', ...columns].map(column=>[column,scalar(row,column)])));
     }
     if (Object.keys(unsaved).length) snapshot.unsaved = unsaved;
-  } else if (route[0] === 'List' && list?.doctype === route[1]) {
+  } else if (route[0] === 'List' && businessTypes.has(route[1]) && list?.doctype === route[1]) {
     snapshot = {schema_version:1,route:[...route],page_type:'list',doctype:list.doctype,filters:list.get_filters_for_args(),selected:list.get_checked_items(true)};
   }
   const encoded = JSON.stringify(snapshot);

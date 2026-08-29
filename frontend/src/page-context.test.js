@@ -50,6 +50,11 @@ it('未知页面明确限制，不读取残留表单或 DOM',()=>{
   expect(snap).toMatchObject({page_type:'unknown',route:['query-report','Revenue']});
   expect(snap.doctype).toBeUndefined();
 });
+it('非业务DocType表单按未知页面发送，不把配置元数据冒充业务上下文',()=>{
+ const frm=form();frm.doctype='Custom Field';frm.doc={doctype:'Custom Field',name:'Item-ds_note',modified:'v1',fieldname:'ds_note'};
+ const snap=context.capturePageContext(desk(['Form','Custom Field','Item-ds_note'],{cur_frm:frm}));
+ expect(snap).toEqual({schema_version:1,route:['Form','Custom Field','Item-ds_note'],page_type:'unknown',reason:'当前页面上下文能力有限；请明确说明业务对象。'});
+});
 it('超过快照预算明确拒绝，不静默截断子表',()=>{
   const frm=form(); frm.doc.customer='x'.repeat(40000);
   expect(()=>context.capturePageContext(desk(['Form','Sales Order','SO-1'],{cur_frm:frm}),{fields:['customer']})).toThrow(/预算/);

@@ -137,7 +137,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
         {session?.configuration_bundles?.filter(bundle=>!session.configuration_confirmations?.some(proposal=>proposal.bundle_id===bundle.id&&blocksBundle(proposal))).map(bundle=><ConfigurationBundle key={`${bundle.id}:${bundle.digest}`} bundle={bundle}
           onPrepare={binding=>api('prepare_configuration_preview',binding)} onTransfer={binding=>api('prepare_configuration_transfer',binding)}
           onPublish={binding=>api('prepare_configuration_publish',binding)} onConfirm={binding=>api(bundle.preview_available?'confirm_configuration':'confirm_configuration_publish',binding)}/>) }
-        {session?.configuration_confirmations?.map(proposal=><ConfigurationProposal key={proposal.id} proposal={proposal} onConfirm={binding=>api(proposal.purpose==='publish'?'confirm_configuration_publish':'confirm_configuration',binding)}/>) }
+        {session?.configuration_confirmations?.map(proposal=><ConfigurationProposal key={proposal.id} proposal={proposal} onConfirm={binding=>api(proposal.purpose==='publish'?'confirm_configuration_publish':'confirm_configuration',binding)} onVerify={binding=>api('verify_configuration',binding)}/>) }
       </div>
       <Select aria-label="任务领域" value={domain} onChange={setDomain} disabled={busy||!!session?.active_run} style={{width:'100%',marginBottom:12}}
         options={[{value:'query',label:'只读查询'},{value:'operation',label:'业务操作'},{value:'configuration',label:'应用配置'}]}/>

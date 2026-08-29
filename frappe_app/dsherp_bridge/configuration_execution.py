@@ -118,6 +118,31 @@ def _result(execution):
         'steps':json.loads(execution.steps),'error':execution.error or ('执行已开始，尚未核实；不会重复执行' if execution.status=='Running' else None)}
 
 
+@frappe.whitelist(methods=['GET'])
+def verify_execution(proposal_id):
+    public=get_confirmation(proposal_id)
+    confirmation=frappe.get_doc('DS Configuration Confirmation',proposal_id)
+    check_authorization(confirmation.bundle)
+    execution_id=frappe.db.get_value('DS Configuration Execution',{'confirmation':proposal_id},'name')
+    if not execution_id:
+        return {'execution':None,'observations':[],'note':'尚无配置执行记录；不会据配置列表猜测或自动执行。'}
+    execution=frappe.get_doc('DS Configuration Execution',execution_id)
+    steps=json.loads(execution.steps);expected=json.loads(confirmation.payload)['documents'];observations=[]
+    for index,wanted in enumerate(expected):
+        step=steps[index] if index<len(steps) else {}
+        doctype=step.get('doctype') or wanted['doctype']
+        name=step.get('name') or (wanted.get('name') if wanted['doctype']!='Custom Field' else wanted['dt']+'-'+wanted['fieldname'])
+        observation={'object':step.get('object') or wanted.get('name') or wanted.get('dt','')+'.'+wanted.get('fieldname',''),'doctype':doctype,'name':name}
+        if not name or not frappe.db.exists(doctype,name):
+            observation['state']='Missing'
+        else:
+            actual=frappe.get_doc(doctype,name);actual.check_permission('read')
+            observation.update(state='Matches' if _matches(actual.as_dict(),wanted) else 'Differs',version=str(actual.modified))
+        observations.append(observation)
+    return {'execution':public.get('execution') or _result(execution),'observations':observations,
+        'note':'只读核实当前原生配置；一致也不能单独证明某次响应成功，不会重试或改写执行记录。'}
+
+
 @frappe.whitelist(methods=['POST'])
 def confirm_preview(proposal_id,digest,request_id):
     return _confirm(proposal_id,digest,request_id,'preview')

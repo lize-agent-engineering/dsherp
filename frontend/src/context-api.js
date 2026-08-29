@@ -11,6 +11,7 @@ const methods = {
   prepare_configuration_publish:['transfer_id','digest'],
   accept_configuration_transfer:['transfer_id'],
   verify_operation:['proposal_id'],
+  verify_configuration:['proposal_id'],
 };
 const loginErrors=['企业成员绑定已变化，请重新登录','平台登录授权已失效','绑定的业务用户未开通或已停用','需要当前业务用户身份','平台身份不属于当前企业','平台身份响应无效'];
 export async function contextApi(method,params={},signal){
@@ -19,13 +20,14 @@ export async function contextApi(method,params={},signal){
   const options={credentials:'same-origin',signal};
   let url=method==='confirm_operation'?'/api/method/dsherp_bridge.operations.confirm':'/api/method/dsherp_bridge.context_api.'+method;
   if(method==='verify_operation')url='/api/method/dsherp_bridge.operations.verify_execution';
+  if(method==='verify_configuration')url='/api/method/dsherp_bridge.configuration_execution.verify_execution';
   if(method==='confirm_configuration')url='/api/method/dsherp_bridge.configuration_execution.confirm_preview';
   if(method==='confirm_configuration_publish')url='/api/method/dsherp_bridge.configuration_execution.confirm_publish';
   if(method==='prepare_configuration_preview')url='/api/method/dsherp_bridge.configuration_execution.prepare_preview';
   if(method==='prepare_configuration_transfer')url='/api/method/dsherp_bridge.configuration_transfer.prepare_transfer';
   if(method==='prepare_configuration_publish')url='/api/method/dsherp_bridge.configuration_execution.prepare_publish';
   if(method==='accept_configuration_transfer')url='/api/method/dsherp_bridge.configuration_transfer.accept_transfer';
-  if(method==='list_sessions'||method==='get_session'||method==='verify_operation'){
+  if(method==='list_sessions'||method==='get_session'||method==='verify_operation'||method==='verify_configuration'){
     const query=new URLSearchParams(params).toString();
     if(query)url+='?'+query;
   }else{
