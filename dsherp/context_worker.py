@@ -12,7 +12,7 @@ import uuid
 import sys
 from urllib.parse import urlsplit
 import httpx
-from dsherp.agent_worker import ROOT,IMAGE,load_settings
+from dsherp.runtime_host import ROOT,IMAGE,load_settings
 from dsherp.context_container import docker_command
 from dsherp.context_mcp import post
 from dsherp.runtime_revision import configuration_revision

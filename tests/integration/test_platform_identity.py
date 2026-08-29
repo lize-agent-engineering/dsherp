@@ -147,16 +147,8 @@ def test_platform_requires_its_own_cookie_hostname():
         assert client.get('/login').status_code == 421
 
 
-def test_platform_realtime_accepts_its_origin_and_rejects_other_sites():
-    import json
+def test_retired_platform_realtime_endpoint_stays_closed():
     with platform_client() as client:
         params = {'EIO':4, 'transport':'polling'}
         headers = {'Origin':'http://platform.localhost:18083'}
-        handshake = client.get('/socket.io/', params=params, headers=headers)
-        assert handshake.status_code == 200
-        params['sid'] = json.loads(handshake.text[1:])['sid']
-        assert client.post('/socket.io/', params=params, headers=headers, content='40/dsherp-platform.localhost,').status_code == 200
-        response = client.get('/socket.io/', params=params, headers=headers)
-        assert response.text.startswith('40/dsherp-platform.localhost,')
-        client.post('/socket.io/', params=params, headers=headers, content='1')
-        assert client.get('/socket.io/', params={'EIO':4,'transport':'polling'}, headers={'Origin':'http://127.0.0.1:18082'}).status_code == 403
+        assert client.get('/socket.io/', params=params, headers=headers).status_code == 404

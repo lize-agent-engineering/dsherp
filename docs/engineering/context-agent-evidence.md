@@ -499,3 +499,10 @@
 - 原生 `bench backup --with-files --compress` 生成数据库、Site 配置、公有文件和私有文件四件套。最新预初始化状态真实恢复到固定一次性 `dsherp-daily-restore.localhost`，回读三个 App、`setup_complete=0` 和四类业务数据为 0 后，原生 drop-site 删除恢复数据库/站点；日常验收 3 项通过（9.32s）。备份保留在日常 Site 私有目录，不入 Git。
 - 一次失败诊断将本地验证凭证带入工具错误文本后，已立即轮换数据库 root 与日常 Administrator 凭证，删除旧备份，再对轮换后的最终状态重新备份和恢复成功。凭证、profile 与备份均未加入 Git。
 - 剩余真实外部输入是日常企业的实际初始化资料，以及平台普通成员到日常普通业务用户的明确映射；当前没有擅自构造这些事实。完整目标仍 active。
+
+# 旧平台执行面退役（2026-08-29）
+
+- 退役前再次确认 DS Agent Task 的 Queued/Running 数量为 0。随后删除旧平台的 submit、claim、tool、finish、heartbeat RPC 和旧 DSH task runner/MCP/worker 配置及其已被替代测试；保留 DS Agent Task DocType、list/get 和已有两条成功历史，只读接口不再因超时写回旧记录。
+- 原独立 `dsherp-studio` 合成 Demo 页面和入口未删除、未扩展；平台首页仍只提供原生企业 Desk 入口和旧历史读取。原 worker 身份已禁用并清空 API key，本地 profile 删除；旧 websocket/scheduler/worker 容器继续不存在，没有删除历史数据库或数据卷。
+- 抽出上下文 Agent 仍需要的固定镜像、provider 配置读取和单容器预算到 `runtime_host`，避免新链依赖已退役 worker。上下文单元/真实恢复 7 项通过（67.11s）；平台身份与只读历史 14 项通过（13.28s）；全前端 88 项和构建通过。
+- 这次删除的是已被原生上下文 Agent 替代的执行服务，不是新增门禁，也不影响旧历史查阅。完整目标继续 active。

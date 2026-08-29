@@ -4,7 +4,7 @@ from pathlib import Path
 import uuid
 import httpx
 import dsherp.context_worker as worker
-from dsherp.agent_worker import ROOT
+from dsherp.runtime_host import ROOT
 from test_context_sessions import clients,created,API
 from test_context_mcp_chain import CONTAINER_TEST
 

@@ -217,3 +217,9 @@ beta 的签名回执会重新核对来源授权、唯一成功预览执行及当
 独立日常 Site 已安装三个固定 App，原生向导保持未完成，Company/Item/Customer/Sales Order 全为 0；复用现有 backend/nginx，仅新增 18086 入口，无新常驻服务。平台 daily 企业保持 Provisioning 且成员为 0，OAuth 已准备；业务 Site 的内部 Runtime 用户无业务读取角色。context_worker 已按 profile 支持不同 Site，daily 空队列真实运行零模型调用。
 
 轮换本地验证凭证后，已对最终预初始化状态重新执行带文件备份，并真实恢复到一次性隔离 Site；App、初始化状态和零业务数据回读一致后删除临时恢复站点。下一步不再造假填写企业事实：需要用户提供实际公司初始化资料和普通平台成员到普通业务用户的明确映射，之后完成原生向导、真实日常 SSO/Agent UI 验收。此前阶段一/二兼容清单仍需现场收敛，整体目标 active。
+
+# 最新接续：旧平台执行服务已退役
+
+确认无 Queued/Running 旧任务后，旧 submit/claim/tool/finish/heartbeat、worker/task runner/MCP 和本地执行凭证已删除或禁用；DS Agent Task 及 list/get 只读历史保留，独立 `dsherp-studio` Demo 页面保留且未扩展。新上下文 Agent 所需的固定容器预算配置已抽离，不依赖旧 worker。平台/历史 14 项、上下文 Runtime 7 项、全前端 88 项及构建通过。
+
+继续收敛阶段一/二无需企业资料的多标签、断线、取消及边界回归；日常真实初始化和普通成员映射仍等待外部真实信息，不能用合成身份冒充完成。

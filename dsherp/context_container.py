@@ -1,5 +1,5 @@
 """One scoped business runtime container; never mount the whole session store."""
-from dsherp.agent_worker import IMAGE, container_base
+from dsherp.runtime_host import IMAGE, container_base
 
 
 def docker_command(root,secret,session_directory,name):
