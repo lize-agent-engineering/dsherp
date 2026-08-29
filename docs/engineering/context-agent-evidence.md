@@ -531,3 +531,10 @@
 - 新 operation 会话真实生成 Item 修改提案 `04pnkv1thg`，侧栏展示 `item_name` 从“日常 Agent 合成物料”到“日常 Agent 合成物料（HITL 已验收）”。确认前零业务写入；浏览器明确确认后服务端复查并用原生 save 执行，重新打开 Item 页面及 Frappe Version 均回读新值。按需 Runtime 全部退出，无常驻 worker。
 - 验收后原生 `bench backup --with-files --compress` 新增四件套；恢复到一次性 `dsherp-daily-restore.localhost` 后逐项对比三个 App、setup_complete、公司、Item、Customer、Sales Order 与普通用户，完全一致，再原生 drop-site 清理恢复站点。初始化前备份继续保留。
 - 最终回归：Python 全仓 **171 passed / 402.04s**；前端 **15 files、88 passed** 且生产构建成功。daily/platform 真实组合另为 **16 passed / 22.47s**。这些证明本地实现与验证，不代表生产发布。
+
+# 原生 Agent 工作台最终补验（2026-08-29）
+
+- `/app/dsherp-agent` 新增显式“新建会话”，确保下一次发送使用空 `session_id`，不会误追加到最近会话；活动运行显示“停止”并调用既有 `cancel_run`，不另建取消协议。配置卡片补齐既有隔离预览、传递、发布、确认及结果核实回调；待确认、执行和配置摘要可按 `session_id` 按需打开完整会话详情。
+- TDD 先分别观察到新建、取消、配置回调和摘要详情行为缺失，再做最小实现。前端最终 **17 files、106 passed**，生产构建通过，Ant Design 检查为 0 项问题。
+- 隔离浏览器以现有合成业务用户在真实 Frappe 页面点击“新建会话”，提交仅查询 `DSHERP-HITL-ITEM.item_name` 的请求；一次性本地 Runtime 使用真实 `deepseek-v4-flash` 和 ERP 读取来源成功返回当前保存值“`HITL 仅填入草稿名称`”。刷新后会话与答案仍可恢复，`active_run` 已清空且提案数为 0；没有业务写入或生产操作。
+- 首次直接运行 `.venv/bin/pytest` 因仓库根目录未进入导入路径，在收集阶段出现 16 个 `ModuleNotFoundError`；按项目方式补 `PYTHONPATH=.` 后全仓 **177 passed / 419.06s**。其中包含 DSH 显式恢复/取消、当前用户权限和 HITL、配置预览/发布、daily Site、身份映射及备份恢复。测试、真实模型、ERP、UI 和本地部署证据仍分别陈述，不代表生产上线。
