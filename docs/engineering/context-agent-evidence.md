@@ -1,5 +1,14 @@
 # 原生上下文 Agent 实施证据
 
+## 最新接续：不可变配置包已跨站交接
+
+- 新增 DS Configuration Transfer 独立内部审计记录；源配置包、交接绑定和接收包均不可变。源站准备交接仍不执行 DDL，request_id 按当前用户摘要去重；重复接收按 source Site + transfer ID 复用同一预览会话/配置包。
+- 交接端点只接受项目固定的源站/预览站配置。请求和响应以 60 秒 HMAC 数据封套绑定用途、时间、源站、目标站、当前用户、transfer、bundle/package digest；禁用环境代理、禁止重定向，不接受模型提供 URL、Site、身份或密钥。传输内容只有纯数据配置包和摘要，无业务记录、会话历史、管理员凭证或任意代码。
+- 预览端必须由与源包 actor 相同的已登录原生用户接收，并重新执行本地原生配置权限/基线检查。prepare_preview 及后续 check_bundle 会通过固定源站重新核实来源用户、配置权限、来源运行成功状态和不可变包摘要；撤权或来源变化后停止，不用旧签名冒充当前授权。
+- alpha/beta 复用现有容器与网络，没有新增常驻服务或资源。项目私有配对密钥保存在 `.runtime/configuration-preview.json`（0600）及两个合成 Site 的私有配置中，不进 Git/模型；源站新增与 beta 同邮箱、同合成用途的 System Manager 配置验收用户，没有改变其他用户或通用业务角色。两站 backend 已重启。
+- 2 项纯签名协议、2 项真实 Frappe 来源/导入/撤权/幂等回归，及 1 项真实 alpha→beta 内部 HTTP 交接测试通过。两站真实测试创建源包→签名拉取→beta 包→30 分钟预览确认，未创建 DS HTTP Transfer Test DocType；测试会话/包/确认/交接记录清理。
+- 当前尚缺原生页面打开交接、beta 接收页面、源站读取预览结果和独立目标发布确认；因此不能将服务端交接等同用户可用发布链。下一步直接完成这些 UI/receipt/publish 路径，再跑真实模型与 UI。完整目标 active。
+
 ## 权限版本接续：停用后重启不能恢复旧上下文
 
 - 受控真实 User.save 红测证明：用户停用后重新启用，既有 permission_revision 原先会恢复为相同值。权限摘要现绑定原生 User.modified；不新增权限表、审批或发布门禁。

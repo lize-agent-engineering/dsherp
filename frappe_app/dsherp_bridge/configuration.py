@@ -76,22 +76,27 @@ def inspect_baseline(package):
 
 @frappe.whitelist(methods=['POST'])
 def propose_bundle(session_id,package,model_run=None):
+    return _propose_bundle(session_id,package,model_run=model_run)
+
+
+def _propose_bundle(session_id,package,model_run=None,origin=None,source_transfer=None):
     user=_user();_conversation(session_id)
-    origin=None
+    source_run=None
     if model_run:
-        origin=_origin(model_run,session_id,user)
-        if origin.status!='Running':raise frappe.PermissionError('配置提案来源运行尚未运行或已结束')
+        source_run=_origin(model_run,session_id,user)
+        if source_run.status!='Running':raise frappe.PermissionError('配置提案来源运行尚未运行或已结束')
     if isinstance(package,str):package=json.loads(package)
     try:frozen=freeze_bundle(package)
     except ValueError as error:frappe.throw(str(error))
     package=frozen['package'];authorize(package)
     baseline=inspect_baseline(package)
-    grant=origin.platform_grant if origin else frappe.session.data.get('dsherp_platform_grant')
+    grant=source_run.platform_grant if source_run else frappe.session.data.get('dsherp_platform_grant')
     payload={'site':frappe.local.site,'actor':user,'package':package,
         'authorization_revision':_authorization_revision(user,grant),'baseline':baseline}
     if model_run:payload['model_run']=model_run
+    if origin:payload['origin']=origin
     digest=hashlib.sha256(_json(payload).encode()).hexdigest()
-    doc=frappe.get_doc({'doctype':'DS Configuration Bundle','conversation':session_id,
+    doc=frappe.get_doc({'doctype':'DS Configuration Bundle','conversation':session_id,'source_transfer':source_transfer,
         'payload':_json(payload),'digest':digest,'baseline':baseline}).insert(ignore_permissions=True)
     return get_bundle(doc.name)
 
@@ -118,12 +123,15 @@ def get_bundle(bundle_id):
         'preview_available':bool(frappe.conf.get('dsherp_preview'))}
 
 
-def check_authorization(bundle_id):
+def check_authorization(bundle_id,grant=None):
     result=get_bundle(bundle_id)
     payload=json.loads(frappe.get_doc('DS Configuration Bundle',bundle_id).payload)
-    grant=frappe.session.data.get('dsherp_platform_grant')
+    grant=grant or frappe.session.data.get('dsherp_platform_grant')
     if payload['authorization_revision']!=_authorization_revision(_user(),grant):
         frappe.throw('配置权限或成员关系已变化，请重新提出配置')
+    if payload.get('origin'):
+        from dsherp_bridge.configuration_transfer import check_origin
+        check_origin(payload['origin'],payload['package'])
     return result
 
 
