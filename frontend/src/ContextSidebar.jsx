@@ -6,6 +6,7 @@ import ConfigurationProposal from './ConfigurationProposal.jsx';
 import ConfigurationBundle from './ConfigurationBundle.jsx';
 
 const label = context => context?.page_type === 'unknown' ? context.reason : [context?.doctype,context?.name].filter(Boolean).join(' / ');
+const blocksBundle = proposal => proposal.status!=='Pending'||!Number.isFinite(Date.parse(proposal.expires_at))||Date.parse(proposal.expires_at)>Date.now();
 export default function ContextSidebar({api,capture=capturePageContext,options=contextOptions,captureSelected=selectedContext,pollInterval=5000}) {
   const [open,setOpen]=useState(false);
   const [sessions,setSessions]=useState([]);
@@ -133,7 +134,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
           {m.status==='Cancelled'&&<p>已取消后续工作；已发生的操作不会自动撤销。</p>}
         </article>)}
         {session?.proposals?.map(proposal=><OperationProposal key={proposal.id} proposal={proposal} onConfirm={binding=>api('confirm_operation',binding)} onVerify={binding=>api('verify_operation',binding)}/>)}
-        {session?.configuration_bundles?.filter(bundle=>!session.configuration_confirmations?.some(proposal=>proposal.bundle_id===bundle.id)).map(bundle=><ConfigurationBundle key={`${bundle.id}:${bundle.digest}`} bundle={bundle}
+        {session?.configuration_bundles?.filter(bundle=>!session.configuration_confirmations?.some(proposal=>proposal.bundle_id===bundle.id&&blocksBundle(proposal))).map(bundle=><ConfigurationBundle key={`${bundle.id}:${bundle.digest}`} bundle={bundle}
           onPrepare={binding=>api('prepare_configuration_preview',binding)} onTransfer={binding=>api('prepare_configuration_transfer',binding)}
           onPublish={binding=>api('prepare_configuration_publish',binding)} onConfirm={binding=>api(bundle.preview_available?'confirm_configuration':'confirm_configuration_publish',binding)}/>) }
         {session?.configuration_confirmations?.map(proposal=><ConfigurationProposal key={proposal.id} proposal={proposal} onConfirm={binding=>api(proposal.purpose==='publish'?'confirm_configuration_publish':'confirm_configuration',binding)}/>) }

@@ -26,6 +26,15 @@ it('配置包准备确认后按同一包恢复，不重复显示或自动执行'
  expect(screen.getAllByText('配置字段说明')).toHaveLength(1);expect(screen.queryByRole('button',{name:'查看预览确认'})).toBeNull();
  expect(api.mock.calls.some(c=>c[0]==='confirm_configuration')).toBe(false);
 });
+it('待处理确认过期后重新展示配置包以生成新确认，不自动执行',async()=>{
+ const bundle={id:'B1',digest:'b1',site:'preview.localhost',preview_available:true,execution_ready:true,changes:[{object:'Inspection',action:'新增 DocType',detail:'过期重准备'}]};
+ const expired={id:'C0',bundle_id:'B1',digest:'c0',purpose:'preview',target:'preview.localhost',baseline:'v1',status:'Pending',expires_at:'2000-01-01T00:00:00Z',changes:bundle.changes};
+ const api=vi.fn(async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{...session,configuration_bundles:[bundle],configuration_confirmations:[expired]});
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ expect(await screen.findByRole('button',{name:'查看预览确认'})).toBeTruthy();
+ expect(screen.getByText('确认已过期，请重新生成确认')).toBeTruthy();
+ expect(api.mock.calls.some(c=>c[0]==='prepare_configuration_preview')).toBe(false);
+});
 it('配置确认卡来自会话历史，明确确认后执行，重新打开不重放',async()=>{
  let configuration={id:'C1',digest:'d1',purpose:'preview',target:'preview.localhost',baseline:'b1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{object:'Inspection',action:'新增 DocType',detail:'检查结果字段'}]};
  const api=vi.fn(async method=>{

@@ -9,7 +9,7 @@
 - 身份稳定后，最终源会话 `9s90c97fn8`、bundle `9sb2f061r9`、transfer `9scqitk42p` 重新走真实链：beta 原生接收页 → 侧栏冻结差异 → 单独预览确认 → `Item.ds_agent_publish_note` Succeeded；alpha 创建 publish confirmation `a5fdp62234`，在独立 `agent-source.localhost` 当前合成配置用户会话中明确点击“确认发布到目标站点”，execution `aiatvkormi` 唯一步骤 Succeeded。
 - alpha 与 beta 原生 Custom Field 均回读：字段 `ds_agent_publish_note`、标签“Agent 发布验收说明”、Data、非必填、位于 item_name 后。alpha 既有 Item=3、beta Item=1，两个站点新字段非空值均为 0，没有隐式回填；alpha 原生 Custom Field 表单实际打开并显示这些值。这是合成测试站点发布，不是生产上线。
 - 为不影响既有 127.0.0.1 / localhost / canonical Cookie，验证代理增加独立验收 host；没有退出或替换已有用户会话。上下文 Agent 使用认证 HTTP 轮询且仓库无 enqueue/realtime 调用，已停掉旧常驻 Frappe worker、业务 websocket、平台 websocket，并把它们移入 `legacy` profile；scheduler 仍在 `scheduled` profile。核心 backend/frontend/db/redis、平台身份和隔离预览继续运行。
-- 尚待真实模型生成配置包的全 UI 链、过期/并发/Unknown 组合及阶段四日常 Site/备份恢复；整体目标继续 active。
+- 过期 Pending 确认现在同时保留审计卡，并重新显示原配置包的“查看预览确认”入口；不会自动生成或执行。前端定向新增 1 项通过。尚待服务端过期写入零 DDL、并发、Unknown 核实组合，真实模型生成配置包的全 UI 链及阶段四日常 Site/备份恢复；整体目标继续 active。
 
 ## 最新接续：跨站预览原生 UI 与真实 Custom Field
 
