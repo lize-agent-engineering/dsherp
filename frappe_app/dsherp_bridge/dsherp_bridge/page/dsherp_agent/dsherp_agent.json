@@ -1,0 +1,9 @@
+{
+ "doctype": "Page",
+ "module": "DSHERP Bridge",
+ "name": "dsherp-agent",
+ "page_name": "dsherp-agent",
+ "title": "Agent 工作台",
+ "standard": "Yes",
+ "roles": []
+}

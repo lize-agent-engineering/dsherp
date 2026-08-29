@@ -109,6 +109,12 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
     }catch(e){fail(e,ticket);}
     finally{if(ticket===generation.current){pending.current=false;setBusy(false);}}
   }
+  function handoff(event){
+    const token=crypto.randomUUID().replaceAll('-','');
+    sessionStorage.setItem(`dsherp-agent-handoff:${token}`,JSON.stringify(page));
+    const sessionQuery=session?.id?`session=${encodeURIComponent(session.id)}&`:'';
+    event.currentTarget.href=`/app/dsherp-agent?${sessionQuery}handoff=${token}`;
+  }
   useEffect(()=>{
     if(!open||error)return;
     let stopped=false;
@@ -142,7 +148,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
         <div className="dsh-agent-history-list">
           {sessions.length===0?<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史会话"/>:sessions.map(s=><Button type={s.id===session?.id?'primary':'text'} key={s.id} aria-label={s.title} onClick={()=>{setHistoryOpen(false);restore(s.id);}}><span>{s.title}</span></Button>)}
         </div>
-        {hasMoreSessions&&<a className="dsh-agent-history-more" href={`/app/dsherp-agent${session?.id?`?session=${encodeURIComponent(session.id)}`:''}`}>在页面中打开</a>}
+        {hasMoreSessions&&<a className="dsh-agent-history-more" href={`/app/dsherp-agent${session?.id?`?session=${encodeURIComponent(session.id)}`:''}`} onClick={handoff}>在页面中打开</a>}
       </aside>}
       <section className="dsh-agent-context" aria-label="当前页面上下文">
         <span className="dsh-agent-context-icon">⌁</span><div><small>当前页面</small><strong>{label(page)||'正在识别页面'}</strong></div>

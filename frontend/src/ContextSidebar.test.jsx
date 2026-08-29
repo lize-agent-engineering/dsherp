@@ -13,7 +13,10 @@ it('近期会话有更多记录时提供正式页面入口并定位当前会话'
  const api=async method=>method==='list_sessions'?{items:[{id:'S-1',title:'查询物料',archived:false}],has_more:true}:session;
  render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();await screen.findByText('历史回答');
  fireEvent.click(screen.getByRole('button',{name:'打开会话历史'}));
- expect(screen.getByRole('link',{name:'在页面中打开'}).getAttribute('href')).toBe('/app/dsherp-agent?session=S-1');
+ const link=screen.getByRole('link',{name:'在页面中打开'});fireEvent.click(link);
+ expect(link.getAttribute('href')).toMatch(/^\/app\/dsherp-agent\?session=S-1&handoff=[a-f0-9]{32}$/);
+ const token=new URL(link.href).searchParams.get('handoff');
+ expect(JSON.parse(sessionStorage.getItem(`dsherp-agent-handoff:${token}`))).toEqual(snapshot);
 });
 it('配置包准备确认后按同一包恢复，不重复显示或自动执行',async()=>{
  const bundle={id:'B1',digest:'b1',site:'preview.localhost',preview_available:true,execution_ready:true,changes:[{object:'Inspection',action:'新增 DocType',detail:'配置字段说明'}]};

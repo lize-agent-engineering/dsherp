@@ -54,9 +54,29 @@ def test_dsherp_page_uses_native_authenticated_loader(erp):
     assert status in (401, 403)
 
 
+def test_agent_workbench_uses_native_authenticated_loader(erp):
+    status, body = erp('reader', '/api/method/frappe.desk.desk_page.getpage', name='dsherp-agent')
+    assert status == 200
+    page = body['docs'][0]
+    assert page['name'] == 'dsherp-agent'
+    assert '/assets/dsherp_bridge/dist/agent-workbench.js' in page['script']
+    assert '/assets/dsherp_bridge/dist/agent-workbench.css' in page['script']
+
+    status, body = erp('reader', '/api/method/frappe.desk.desktop.get_workspace_sidebar_items')
+    assert status == 200
+    workspace = next(item for item in body['message']['pages'] if item['name'] == 'DSHERP')
+    assert workspace['public'] == 1
+
+
 def test_dsherp_browser_bundle_is_served_without_replacing_native_assets():
     with httpx.Client(base_url=BASE_URL, trust_env=False, timeout=15) as client:
         for name, content_type in [('studio.js', 'javascript'), ('studio.css', 'text/css')]:
+            response = client.get('/assets/dsherp_bridge/dist/' + name)
+            assert response.status_code == 200
+            assert content_type in response.headers['content-type']
+            assert len(response.content) > 100
+
+        for name, content_type in [('agent-workbench.js', 'javascript'), ('agent-workbench.css', 'text/css')]:
             response = client.get('/assets/dsherp_bridge/dist/' + name)
             assert response.status_code == 200
             assert content_type in response.headers['content-type']

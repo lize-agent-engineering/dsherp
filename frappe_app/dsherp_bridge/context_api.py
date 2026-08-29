@@ -214,6 +214,77 @@ def restore_session(session_id):
     return _summary(doc)
 
 
+def _page(value):
+    try:value=int(value)
+    except (TypeError,ValueError):frappe.throw('列表分页参数无效')
+    if value<1:frappe.throw('列表分页参数无效')
+    return value
+
+
+def _owned_conversations():
+    return frappe.get_all('DS Conversation',filters={'owner':_user()},pluck='name')
+
+
+def _paged(items,page):
+    page=_page(page);start=(page-1)*20
+    return {'items':items[start:start+20],'page':page,'has_more':len(items)>start+20}
+
+
+@frappe.whitelist(methods=['GET'])
+def list_pending(page=1):
+    conversations=_owned_conversations()
+    if not conversations:return _paged([],page)
+    items=[]
+    for proposal in frappe.get_all('DS Operation Proposal',filters={'conversation':['in',conversations],'status':'Pending'},fields=['name','conversation','status','expires_at','payload','modified'],order_by='modified desc'):
+        payload=json.loads(proposal.payload)
+        items.append({'id':proposal.name,'session_id':proposal.conversation,'kind':'operation',
+            'title':f"{payload.get('doctype','业务对象')} · {payload.get('action','待确认操作')}",
+            'status':proposal.status,'expires_at':str(proposal.expires_at),'modified':str(proposal.modified)})
+    bundles=frappe.get_all('DS Configuration Bundle',filters={'conversation':['in',conversations]},fields=['name','conversation'])
+    bundle_sessions={item.name:item.conversation for item in bundles}
+    if bundle_sessions:
+        for confirmation in frappe.get_all('DS Configuration Confirmation',filters={'bundle':['in',list(bundle_sessions)],'status':'Pending'},fields=['name','bundle','status','expires_at','modified'],order_by='modified desc'):
+            items.append({'id':confirmation.name,'session_id':bundle_sessions[confirmation.bundle],'kind':'configuration',
+                'title':'应用配置确认','status':confirmation.status,'expires_at':str(confirmation.expires_at),'modified':str(confirmation.modified)})
+    items.sort(key=lambda item:item['modified'],reverse=True)
+    return _paged(items,page)
+
+
+@frappe.whitelist(methods=['GET'])
+def list_execution_records(page=1):
+    conversations=_owned_conversations()
+    if not conversations:return _paged([],page)
+    proposals=frappe.get_all('DS Operation Proposal',filters={'conversation':['in',conversations]},fields=['name','conversation'])
+    proposal_sessions={item.name:item.conversation for item in proposals}
+    items=[]
+    if proposal_sessions:
+        for record in frappe.get_all('DS Execution Record',filters={'proposal':['in',list(proposal_sessions)]},fields=['name','proposal','status','modified'],order_by='modified desc'):
+            items.append({'id':record.name,'session_id':proposal_sessions[record.proposal],'kind':'operation','title':'业务执行',
+                'status':record.status,'modified':str(record.modified)})
+    bundles=frappe.get_all('DS Configuration Bundle',filters={'conversation':['in',conversations]},fields=['name','conversation'])
+    bundle_sessions={item.name:item.conversation for item in bundles}
+    confirmations=frappe.get_all('DS Configuration Confirmation',filters={'bundle':['in',list(bundle_sessions)]},fields=['name','bundle']) if bundle_sessions else []
+    confirmation_sessions={item.name:bundle_sessions[item.bundle] for item in confirmations}
+    if confirmation_sessions:
+        for record in frappe.get_all('DS Configuration Execution',filters={'confirmation':['in',list(confirmation_sessions)]},fields=['name','confirmation','status','modified'],order_by='modified desc'):
+            items.append({'id':record.name,'session_id':confirmation_sessions[record.confirmation],'kind':'configuration','title':'配置执行',
+                'status':record.status,'modified':str(record.modified)})
+    items.sort(key=lambda item:item['modified'],reverse=True)
+    return _paged(items,page)
+
+
+@frappe.whitelist(methods=['GET'])
+def list_configuration_records(page=1):
+    conversations=_owned_conversations()
+    if not conversations:return _paged([],page)
+    items=[]
+    for bundle in frappe.get_all('DS Configuration Bundle',filters={'conversation':['in',conversations]},fields=['name','conversation','baseline','modified'],order_by='modified desc'):
+        latest=frappe.get_all('DS Configuration Confirmation',filters={'bundle':bundle.name},fields=['status'],order_by='modified desc',limit_page_length=1)
+        items.append({'id':bundle.name,'session_id':bundle.conversation,'kind':'configuration','title':'应用配置包',
+            'summary':f'基线 {bundle.baseline}','status':latest[0].status if latest else 'Draft','modified':str(bundle.modified)})
+    return _paged(items,page)
+
+
 @frappe.whitelist(methods=['POST'])
 def send_message(question, context, request_id, session_id=None, domain='query'):
     user=_user()

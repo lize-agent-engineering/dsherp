@@ -169,3 +169,16 @@ def test_session_management_never_exposes_other_users_sessions(clients,created):
     assert result.json()['message']['items']==[]
     assert denied.post(API+'rename_session',json={'session_id':data['id'],'title':'越权'}).status_code==403
     assert denied.post(API+'archive_session',json={'session_id':data['id']}).status_code==403
+
+def test_workbench_summary_endpoints_are_paginated_and_never_return_frozen_payloads(clients):
+    reader,denied=clients
+    for method in ('list_pending','list_execution_records','list_configuration_records'):
+        response=reader.get(API+method,params={'page':1})
+        assert response.status_code==200,response.text
+        result=response.json()['message']
+        assert result['page']==1
+        assert len(result['items'])<=20
+        assert all('payload' not in item and 'result' not in item and 'steps' not in item for item in result['items'])
+        other=denied.get(API+method,params={'page':1})
+        assert other.status_code==200,other.text
+        assert all(item.get('session_id')!=entry.get('session_id') for item in other.json()['message']['items'] for entry in result['items'])

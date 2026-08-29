@@ -1,0 +1,32 @@
+{
+ "charts": [],
+ "content": "[{\"id\":\"dsh-agent-heading\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>业务协作</b></span>\",\"col\":12}},{\"id\":\"dsh-agent-shortcut\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Agent 工作台\",\"col\":4}}]",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "sparkles",
+ "idx": 0,
+ "is_hidden": 0,
+ "label": "DSHERP",
+ "links": [],
+ "module": "DSHERP Bridge",
+ "name": "DSHERP",
+ "number_cards": [],
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "restrict_to_domain": "",
+ "roles": [],
+ "sequence_id": 1.0,
+ "shortcuts": [
+  {
+   "label": "Agent 工作台",
+   "link_to": "dsherp-agent",
+   "type": "Page"
+  }
+ ],
+ "title": "DSHERP",
+ "type": "Workspace"
+}
