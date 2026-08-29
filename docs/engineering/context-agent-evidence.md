@@ -512,3 +512,12 @@
 - 第一次全仓 170 项回归暴露 4 个失败：3 个仍要求已停 websocket 的旧测试，以及 1 个 Sales Order 历史来源 fixture 缺少实际工具名。前者改为验证 HTTP 轮询架构下 `/socket.io` 明确关闭，后者补齐真实来源契约；没有恢复旧服务或增加兼容兜底。
 - 修正后全仓 **170 passed / 426.13s**，包含固定版 DSH 原生跨进程恢复/取消/压缩、会话刷新和幂等、权限撤销、多次并发确认、Item/Customer/Sales Order/HITL、配置预览/发布、OAuth、日常 Site 和备份存在性。全前端另为 88 项及构建通过。
 - 测试通过仍不替代日常企业真实资料、真实普通用户 SSO、该 Site 的浏览器 Agent 闭环或生产上线；这些边界继续单列。
+
+# 日常合成企业完成验收（2026-08-29）
+
+- 用户明确授权模拟数据后，使用 Frappe 原生 setup wizard 方法初始化 daily：唯一公司“DSHERP 日常合成企业”（DSE/China/CNY/Asia-Shanghai/2026 财年）、普通 System User `daily-operator@example.invalid`、Item `DAILY-AGENT-ITEM` 与客户“日常 Agent 合成客户”。用户具有原生 Sales User/Sales Manager/Stock Manager/Item Manager 角色；内部 Runtime 用户仍无业务角色。
+- 平台 daily 企业改为 Ready，唯一成员将 `member@example.invalid` 显式映射到该 ERP 用户。真实浏览器从平台工作台进入 daily，完成原生 OAuth consent 后 Desk 用户为“日常合成操作员”，原生 Item 页显示全局 Agent 入口和页面上下文 `Item / DAILY-AGENT-ITEM`。
+- 真实 `deepseek-v4-flash` 首轮读取名称/编码成功。同会话首次追问只沿用历史、没有调用本轮 ERP 工具，业务 Site 以 HTTP 417 拒绝 `sources=[]` 的成功结果；运行到期后 Failed，未自动重试。TDD 将 query skill 升至 1.2.0 并固定摘要，要求每个模型运行重新取得来源；同会话追问随后成功读取 `is_stock_item=0`。
+- 新 operation 会话真实生成 Item 修改提案 `04pnkv1thg`，侧栏展示 `item_name` 从“日常 Agent 合成物料”到“日常 Agent 合成物料（HITL 已验收）”。确认前零业务写入；浏览器明确确认后服务端复查并用原生 save 执行，重新打开 Item 页面及 Frappe Version 均回读新值。按需 Runtime 全部退出，无常驻 worker。
+- 验收后原生 `bench backup --with-files --compress` 新增四件套；恢复到一次性 `dsherp-daily-restore.localhost` 后逐项对比三个 App、setup_complete、公司、Item、Customer、Sales Order 与普通用户，完全一致，再原生 drop-site 清理恢复站点。初始化前备份继续保留。
+- 最终回归：Python 全仓 **171 passed / 402.04s**；前端 **15 files、88 passed** 且生产构建成功。daily/platform 真实组合另为 **16 passed / 22.47s**。这些证明本地实现与验证，不代表生产发布。

@@ -6,7 +6,7 @@
 
 ## 结论
 
-当前尚不能完成持续目标。阶段一至三的项目代码和本地合成真实链已完成核心闭环；阶段四的空日常 Site、OAuth/Runtime 准备及备份恢复已完成，但日常 Site 仍为 `setup_complete=0`、Company=0、普通业务用户=0，平台 daily 企业仍为 `Provisioning`、成员=0。因此真实日常企业初始化、普通成员登录和该身份下的 Agent 浏览器闭环没有证据，不能以 alpha/beta 合成身份代替。
+用户已明确授权使用标识清楚的模拟数据自行创建日常企业和用户映射。四阶段本地交付已完成：阶段一至三既有真实合成链保持成立；阶段四新增 daily 原生初始化、普通成员映射、平台 OAuth、真实模型多轮查询、HITL 写入与原生页面回读，以及验收后四件套备份隔离恢复。它是本地合成可用环境，不是生产上线，也不包含真实企业数据。
 
 ## 逐项证据
 
@@ -17,29 +17,26 @@
 | 会话、模型运行、提案、执行分别持久化；幂等、刷新不重跑、单写者、配置/权限变化轮换原生会话 | 成立 | DS Conversation、DS Model Run、DS Operation Proposal、DS Execution Record；会话、claim/cancel、permission revision、session runtime 测试及真实双轮恢复 |
 | 页面快照只取路由/业务对象/筛选/选中项/明确允许的未保存字段和子表，不抓 DOM | 成立 | `frontend/src/page-context.js`、`frappe_app/dsherp_bridge/context_api.py`；伪造上下文、字段/子表权限、预算测试 |
 | 所有普通与压缩模型调用均受权限、来源、预算和 Runtime/skill 版本约束 | 成立 | `runtime/model-guard.cjs`、`context_execution.reserve_model_call`、原生 compaction 组合测试；固定业务 skill 摘要及 `includeDefaultRoots=false`、`watch=false` |
-| 平台登录只提供企业关系；业务 Site 使用明确映射的当前普通用户；撤权即时作用于会话和后台运行 | alpha 真实链成立；daily 未完成 | alpha 原生 OAuth 授权码→业务 Cookie、并发请求及撤权测试/浏览器证据成立。daily OAuth 已配置，但无普通成员与 ERP 用户映射，不能验收 |
+| 平台登录只提供企业关系；业务 Site 使用明确映射的当前普通用户；撤权即时作用于会话和后台运行 | 成立 | alpha 原有撤权/并发链保持；daily 平台 `member@example.invalid` 显式映射普通 ERP 用户 `daily-operator@example.invalid`，浏览器完成 OAuth 后原生 Desk 显示“日常合成操作员” |
 | Item、Customer 创建/修改；Sales Order 草稿创建/修改/提交/取消；确认前零写入、服务端复查、原生业务方法、唯一执行和回读 | 功能与本地真实 ERP 成立 | `operations.py`、操作领域 MCP/skill；真实 Frappe 并发/版本/权限测试；alpha 真实模型与浏览器完成 Item、Customer、Sales Order 生命周期证据 |
 | 建议填入当前表单；不自动保存；标量与既有子表行；保存/提交分别确认 | 成立 | `form-fill.js`、fill 提案/授权；真实浏览器填入后 DB 零变化、另点原生保存才持久化；子表逐行原生 `set_value` 验收 |
 | Unknown/Partial 不盲重试，当前权限下只读核实，不改写原执行结论 | 成立 | operation/configuration `verify_execution`、对应前端入口和真实 ERP 测试 |
 | 新应用/非破坏性字段/布局/工作流配置；禁止任意代码和破坏性变更 | 成立 | `configuration_bundle.py` fastfail 契约；真实原生 DocType、Custom Field、Workflow 状态链及并发插入保护 |
 | 隔离预览无业务数据外泄和外部副作用；预览与目标发布分别确认；签名不可变包/基线；逐项记录部分结果 | 本地合成链成立 | beta 独立 Site/DB、无外网网络、邮件/异步关闭；alpha→beta HMAC 交接、回执、独立发布；真实模型生成 `DS Model Quality Inspection` 后两站 UI/ERP 回读 |
-| 日常企业 Site 不含合成业务数据；真实信息由用户填写；首次真实数据前备份和隔离恢复 | 准备成立，真实初始化待输入 | `dsherp-daily.localhost` 三 App、`setup_complete=0`，Company/Item/Customer/Sales Order=0；四件套备份真实恢复并回读后清理临时 Site |
-| 日常企业普通用户从平台进入原生 Desk，在真实业务页连续问询、确认业务操作并核实结果 | **缺失/阻塞完成** | daily 平台企业 `Provisioning`、membership=0；Site 只有 Administrator 和无业务角色 Runtime 身份。缺少用户提供的企业资料、普通平台成员与普通 ERP 用户角色映射 |
+| 日常企业使用受控初始化数据；首次数据前和验收后均有备份和隔离恢复 | 本地合成成立 | 用户授权后用原生 setup wizard 方法创建唯一公司“DSHERP 日常合成企业”、Item/Customer fixture 和普通用户；初始化前备份保留，验收后四件套恢复到一次性 Site 并逐项比对后清理 |
+| 日常企业普通用户从平台进入原生 Desk，在真实业务页连续问询、确认业务操作并核实结果 | 成立 | daily 为 `Ready` 且唯一成员映射成立；Item 页面真实模型两轮读取成功；HITL 提案 `04pnkv1thg` 确认前零写入，确认后原生 Item 名称及 Frappe Version 回读一致 |
 | 旧 Demo 保留独立入口、退出正式导航；旧平台历史只读；被替代服务停止并删除 | 成立 | `dsherp-studio` 页面仍在；Portal 无提问入口；旧 task mutation/worker/MCP/runner 已删，worker 身份禁用，worker/websocket/scheduler 无运行容器 |
-| 文档、按功能本地提交、不推送、不改上游/其他项目 | 当前成立 | 计划、证据、HITL 和本审计；2026-08-29 功能提交链；工作区干净。未观察到自动 push 或上游/其他项目修改 |
+| 文档、按功能本地提交、不推送、不改上游/其他项目 | 提交前复核中 | 计划、证据、HITL 和本审计持续维护；未自动 push，未修改上游或其他项目 |
 
 ## 当前验证快照
 
-- Python 全仓：170 passed / 426.13s。
-- 前端：15 files、88 passed；生产构建成功。
+- Python 最终全仓：171 passed / 402.04s；本次受影响 daily/platform 组合另为 16 passed / 22.47s。
+- 前端最终：15 files、88 passed；生产构建成功。
 - 运行服务：backend、beta-backend、frontend、platform backend/frontend、MariaDB、Redis；无 worker、scheduler 或 websocket。
-- 按需 Runtime：alpha 真实多轮、业务操作和配置模型调用后均退出；daily 空队列运行成功，未产生模型调用。
-- 真实模型：`deepseek-v4-flash` 已在 alpha 完成查询、HITL 业务操作及配置生成；尚未在未初始化的 daily Site 运行。
-- 真实 ERP/UI：alpha/beta 为本地合成验收；daily 只有原生登录/设置向导入口和恢复验证。没有生产上线声明。
+- 按需 Runtime：daily 三次成功运行后均退出；一次第二轮因没有本轮工具来源被服务端拒绝，三分钟到期后标为 Failed 且未自动重试。固定 query skill 1.2.0 后同会话追问重新读取成功。
+- 真实模型：`deepseek-v4-flash` 在 daily 完成两轮只读查询和一次业务修改提案；不是替身测试。
+- 真实 ERP/UI：daily 普通用户经平台 OAuth 进入原生 Item 页面；确认前页面/数据库名称未变，确认后重新打开页面显示“日常 Agent 合成物料（HITL 已验收）”及原生 Version 变更。没有生产上线声明。
 
-## 完成目标仍需的外部事实
+## 交付边界
 
-1. 用户在 daily 原生向导提供公司名称、简称、国家、时区、默认币种和财年起始信息。
-2. 明确一个普通平台成员，以及 daily 中对应的普通 System User 与实际业务角色；不得映射 Guest、Administrator 或内部 Runtime 用户。
-3. 在该普通身份下完成平台→daily OAuth、原生业务页面多轮查询、至少一个明确 HITL 操作及 ERP 回读，并再次备份。
-4. 重跑与受影响范围相称的回归，更新证据；只有届时才能把持续目标标为完成。
+当前不再有企业资料或用户映射阻塞。合成 daily 用于本地日常使用和验收；替换为真实企业资料或发布到生产仍是新的外部变更，必须另行授权。本地交付完成不表述为生产上线。
