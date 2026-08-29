@@ -21,6 +21,8 @@ frappe.pages["dsherp-agent"].on_page_load = function (wrapper) {
   $(wrapper).on("hide", () => { active = false; if (dispose) dispose(); dispose = null; });
   wrapper.on_page_show = function () {
     active = true;
+    const globalAgent = document.getElementById("dsherp-context-root");
+    if (globalAgent) globalAgent.hidden = true;
     if (!dispose) root.textContent = "正在加载 Agent 工作台…";
     assets.then(() => {
       if (!active || dispose) return;
@@ -29,4 +31,8 @@ frappe.pages["dsherp-agent"].on_page_load = function (wrapper) {
       dispose = window.dsherpAgentWorkbench.mount(root);
     }).catch(() => { if (active) root.textContent = "Agent 工作台加载失败。请检查构建资源后刷新页面。"; });
   };
+  $(wrapper).on("hide", () => {
+    const globalAgent = document.getElementById("dsherp-context-root");
+    if (globalAgent) globalAgent.hidden = false;
+  });
 };

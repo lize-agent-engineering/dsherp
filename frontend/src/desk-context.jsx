@@ -5,6 +5,7 @@ import PreviewTransfer from './PreviewTransfer.jsx';
 import {contextApi} from './context-api.js';
 
 export function mountDeskContext(){
+  if(location.pathname==='/app/dsherp-agent')return;
   if(document.getElementById('dsherp-context-root'))return;
   const element=document.createElement('div');
   element.id='dsherp-context-root';
