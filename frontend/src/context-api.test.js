@@ -7,6 +7,14 @@ it('准备预览确认仅提交配置包身份，不执行配置',async()=>{
  expect(fetch.mock.calls[0][0]).toBe('/api/method/dsherp_bridge.configuration_execution.prepare_preview');
  expect(fetch.mock.calls[0][1].method).toBe('POST');
 });
+it('交接接口不接受站点、身份、URL或配置正文',async()=>{
+ const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{id:'T1'}})}));vi.stubGlobal('fetch',fetch);vi.stubGlobal('frappe',{csrf_token:'test-csrf'});
+ await api.contextApi('prepare_configuration_transfer',{bundle_id:'B1',digest:'d1',request_id:'r1'});
+ expect(fetch.mock.calls[0][0]).toBe('/api/method/dsherp_bridge.configuration_transfer.prepare_transfer');
+ await api.contextApi('accept_configuration_transfer',{transfer_id:'T1'});
+ expect(fetch.mock.calls[1][0]).toBe('/api/method/dsherp_bridge.configuration_transfer.accept_transfer');
+ await expect(api.contextApi('accept_configuration_transfer',{transfer_id:'T1',source_url:'http://other'})).rejects.toThrow(/参数/);
+});
 it('配置确认只发送同源冻结绑定与CSRF，不接受目标或配置正文',async()=>{
  const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{status:'Succeeded'}})}));vi.stubGlobal('fetch',fetch);
  vi.stubGlobal('frappe',{csrf_token:'test-csrf'});

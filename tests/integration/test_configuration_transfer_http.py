@@ -20,6 +20,7 @@ frappe.set_user('dsherp-preview@example.invalid')
 conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Two Site transfer test'}).insert(ignore_permissions=True)
 package={'version':1,'doctypes':[{'name':'DS HTTP Transfer Test','module':'DSHERP Bridge','fields':[{'fieldname':'result','label':'Result','fieldtype':'Data'}],'permissions':[{'role':'System Manager','read':1,'write':1,'create':1}]}],'extensions':[],'workflows':[]}
 bundle=propose_bundle(conversation.name,package);frappe.db.commit()
+assert not bundle['preview_available'] and bundle['preview_transfer_available']
 transfer=prepare_transfer(bundle['id'],bundle['digest'],'two-site-transfer-request')
 frappe.db.commit();print(json.dumps({'session':conversation.name,'bundle':bundle['id'],'transfer':transfer['id'],'digest':bundle['digest']}));frappe.destroy()
 """))

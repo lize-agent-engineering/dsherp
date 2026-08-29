@@ -191,3 +191,9 @@ configuration 领域的两个工具、固定 erp-configuration 1.0.0 skill、领
 源站 DS Configuration Transfer、用户绑定 request_id 去重、固定配对 HMAC 请求/响应、beta 幂等接收与回源权限检查已实现。alpha/beta 合成站已私有配对，不增加容器/资源；实际 alpha→beta 内部 HTTP 交接后仅创建预览包和确认，零 DDL，测试状态清理。停用/重启用户不会恢复旧来源授权。
 
 下一步接源站侧栏“发送到隔离预览”和 beta 原生接收页，读取预览执行凭证后在源站单独生成 30 分钟发布确认并逐项执行；真实模型/UI、Custom Field、并发/过期/未知结果及阶段四仍未完成。整体目标 active。
+
+# 当前接续：跨站预览 UI 和真实 Custom Field 已通过
+
+源站交接按钮、beta 原生接收页、当前用户幂等接收和侧栏确认已接线；83 项前端、两站真实回归通过。真实浏览器从 transfer sm0ivtm566 到 beta 预览确认，Item.ds_cross_site_note 唯一步骤成功；原生 Custom Field 表单与 DB 回读 Data/insert_after=item_name/非必填，既有 Item 无值回填，alpha 字段仍不存在。相关合成记录保留作发布验收基线。
+
+下一步读取 beta 唯一成功执行的签名回执，在 alpha 单独生成 30 分钟 publish 确认；用户再确认后逐项应用 alpha、回读 Custom Field 和既有数据，并补重放/部分失败/未知结果。真实模型链和阶段四仍未完成，整体 active。

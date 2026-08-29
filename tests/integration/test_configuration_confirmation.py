@@ -14,6 +14,7 @@ try:
     package={'version':1,'doctypes':[{'name':'DS Preview Confirmation Test','module':'DSHERP Bridge','fields':[{'fieldname':'result','label':'Result','fieldtype':'Data'}],'permissions':[{'role':'System Manager','read':1,'write':1,'create':1}]}],'extensions':[],'workflows':[]}
     bundle=propose_bundle(conversation.name,package)
     assert bundle['preview_available'] and 'Result' in bundle['changes'][0]['detail']
+    assert not bundle['preview_transfer_available']
     assert get_session(conversation.name)['configuration_bundles'][0]['id']==bundle['id']
     confirmation=prepare_preview(bundle['id'],bundle['digest'])
     assert confirmation['bundle_id']==bundle['id']

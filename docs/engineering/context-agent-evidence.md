@@ -1,5 +1,14 @@
 # 原生上下文 Agent 实施证据
 
+## 最新接续：跨站预览原生 UI 与真实 Custom Field
+
+- 源站配置包卡新增“发送到隔离预览”，只调用 prepare_transfer 并打开服务端固定的 preview URL；客户端不能传目标、身份、URL 或配置正文。beta 新增原生 Desk Page `dsherp-configuration-preview`，以当前登录用户自动、幂等接收内部配置记录，页面离开/返回会重新挂载；接收不执行 DDL，提示用户在右下角 Agent 查看差异并另行确认。
+- 前端缺交接按钮/API、接收组件和源/预览能力标识的红测后实现。全前端 15 files / 83 tests / 6.35s、构建通过；两站确认/HTTP 2 项 / 19.64s。alpha/beta Page 已加载，backend 重启。
+- 真实浏览器沿用本次创建的 preview.localhost 合成配置操作员会话：打开 transfer `sm0ivtm566` → 原生接收页显示成功 → Agent 恢复 `隔离配置预览` 会话 → 显示 Item 新增字段的完整冻结差异 → 点击查看预览确认 → 再点击确认应用。仅 1 步 `Item.ds_cross_site_note` Succeeded，按钮随后禁用；没有自动确认或重放。
+- 原生 Custom Field 表单 `Item-ds_cross_site_note` 实际显示 DocType 物料、字段名 `ds_cross_site_note`、标签“跨站验收说明”；数据库回读 fieldtype=Data、insert_after=item_name、reqd=0。beta 既有 Item=1，非空新字段值=0，证明非破坏性新增没有隐式回填；alpha Item=3 且目标字段仍不存在，证明预览没有发布到源站。
+- beta imported bundle `spfthvr1jq`、confirmation `t3va775nft`、execution `t7pe5q9g61` 均唯一且 Succeeded。源站会话 `sls84qp4tf`、bundle `sluqc2hd4j`、transfer `sm0ivtm566` 与 beta 合成 Custom Field 暂保留，作为下一步预览回执及独立发布验收基线；这是确定性合成 fixture，不是模型生成或生产数据。
+- 当前尚未完成预览回执、源站发布确认和目标逐项执行；不能把 beta Custom Field 当作发布完成。下一步直接实现回执/发布，再做真实模型两站 UI。整体目标 active。
+
 ## 最新接续：不可变配置包已跨站交接
 
 - 新增 DS Configuration Transfer 独立内部审计记录；源配置包、交接绑定和接收包均不可变。源站准备交接仍不执行 DDL，request_id 按当前用户摘要去重；重复接收按 source Site + transfer ID 复用同一预览会话/配置包。

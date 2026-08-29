@@ -1,0 +1,5 @@
+{
+ "doctype":"Page","name":"dsherp-configuration-preview","page_name":"dsherp-configuration-preview",
+ "title":"隔离配置预览","module":"DSHERP Bridge","standard":"Yes",
+ "roles":[{"role":"Desk User"}],"modified":"2026-08-29 10:00:00.000000"
+}

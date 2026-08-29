@@ -19,3 +19,12 @@ it('来源未成功不能准备，非预览站点不伪装成本地预览',()=>{
  expect(screen.getByText('配置包尚未应用；需在隔离预览站点继续')).toBeTruthy();
  expect(screen.queryByRole('button',{name:'查看预览确认'})).toBeNull();expect(prepare).not.toHaveBeenCalled();
 });
+it('源站只交接冻结包并提供预览入口，不在源站执行预览',async()=>{
+ const transfer=vi.fn(async()=>({id:'T1',preview_url:'http://preview.localhost/app/dsherp-configuration-preview/T1'}));
+ render(<ConfigurationBundle bundle={{...bundle,preview_available:false,preview_transfer_available:true}} onTransfer={transfer}/>);
+ fireEvent.click(screen.getByRole('button',{name:'发送到隔离预览'}));
+ const link=await screen.findByRole('link',{name:'打开隔离预览'});
+ expect(link.href).toBe('http://preview.localhost/app/dsherp-configuration-preview/T1');
+ expect(transfer).toHaveBeenCalledExactlyOnceWith({bundle_id:'B1',digest:'package-1',request_id:expect.any(String)});
+ expect(screen.queryByRole('button',{name:'确认应用到隔离预览'})).toBeNull();
+});
