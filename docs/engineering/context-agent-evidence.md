@@ -8,6 +8,7 @@
 - 侧栏跳转仅在 URL 放随机 handoff 标识与会话 ID；PageContext 一次性写入 `sessionStorage`，工作台读取后删除。刷新不会自动发送、运行或写入。
 - 新增 `list_pending`、`list_execution_records`、`list_configuration_records` 摘要接口；不在列表返回冻结 payload、执行 result 或配置 steps，详情仍通过当前用户可读会话按需取得。
 - TDD 证据：会话真实 Frappe HTTP 测试先 3 项失败后相关 10 项通过；工作台摘要接口先缺失失败后会话/Desk 组合 19 项通过；前端新增行为先失败后全量 17 files / 101 tests 通过，生产构建成功，Ant Design CLI 检查 0 issue。validation、daily、beta 三个本地合成 Site 已迁移；这不是生产发布或真实企业上线证据。
+- 独立 Playwright 浏览器以现有合成普通业务用户真实登录后打开 `/app/dsherp-agent`：桌面三栏恢复既有会话，待确认视图读取真实 Pending Sales Order 提交摘要；390×844 视口隐藏桌面左右栏并显示“会话/上下文”按钮，左侧会话 Drawer 可打开。工作台不再重复展示全局 Agent 按钮。控制台错误仅为本计划明确退役的 Frappe Socket.IO 客户端轮询 404；工作台自身资源和 API 无新增错误。自动化浏览器已关闭，未影响用户现有浏览器会话。
 
 ## 最新接续：隔离预览回执与目标原生发布已真实完成
 
