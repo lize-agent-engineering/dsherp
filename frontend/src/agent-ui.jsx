@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { SettingOutlined, SwapOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, FileSearchOutlined, SearchOutlined, SettingOutlined, SwapOutlined } from '@ant-design/icons';
 import { statusText, statusTone } from './agent-format.js';
 import './agent-theme.css';
 
@@ -126,6 +126,41 @@ export function LoadMore({ hasMore, busy, onLoad, label }) {
       ) : (
         <button type="button" className="dsh-more-btn" onClick={() => load.current()}>
           {label}
+        </button>
+      )}
+    </div>
+  );
+}
+
+const toolIcons = {
+  erp_read_record: FileSearchOutlined,
+  erp_read_schema: FileSearchOutlined,
+  erp_search_records: SearchOutlined,
+  erp_read_configuration: SettingOutlined,
+};
+
+// The ERP reads a run actually made, in the order the server recorded them.
+// Nothing here is inferred: no step exists unless the server authorized it.
+export function ToolTrail({ events, collapseAfter = 3 }) {
+  const [open, setOpen] = useState(false);
+  if (!events?.length) return null;
+  const hidden = Math.max(0, events.length - collapseAfter);
+  const shown = open || !hidden ? events : events.slice(0, collapseAfter);
+  return (
+    <div className="dsh-tools" aria-label="本轮 ERP 读取">
+      {shown.map((event) => {
+        const Icon = toolIcons[event.tool] ?? DatabaseOutlined;
+        return (
+          <div className="dsh-tool" key={event.key}>
+            <Icon aria-hidden="true" />
+            <span className="dsh-tool-label">{event.label}</span>
+            {event.detail && <span className="dsh-tool-detail">{event.detail}</span>}
+          </div>
+        );
+      })}
+      {hidden > 0 && (
+        <button type="button" className="dsh-tool-more" onClick={() => setOpen((value) => !value)}>
+          {open ? '收起读取记录' : `还有 ${hidden} 次读取`}
         </button>
       )}
     </div>

@@ -323,3 +323,36 @@
   transition: border-color var(--dsh-dur-2) var(--dsh-ease), color var(--dsh-dur-2) var(--dsh-ease);
 }
 .dsh-more-btn:hover { border-color: var(--dsh-accent-line); color: var(--dsh-accent-ink); }
+
+/* The ERP reads behind an answer, shown where they happened. */
+.dsh-tools { display: flex; flex-direction: column; gap: 1px; margin: 10px 0 0; }
+.dsh-tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  color: var(--dsh-muted);
+  font-size: var(--dsh-fs-meta);
+  line-height: 1.6;
+}
+.dsh-tool > .anticon { flex: none; font-size: var(--dsh-fs-body); opacity: .75; }
+.dsh-tool-label {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--dsh-mono);
+  font-size: var(--dsh-fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-tool-detail { flex: none; margin-left: auto; font-size: var(--dsh-fs-micro); opacity: .8; }
+.dsh-tool-more {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dsh-accent-ink);
+  font-size: var(--dsh-fs-micro);
+  cursor: pointer;
+}
+.dsh-tool-more:hover { text-decoration: underline; text-underline-offset: 3px; }
