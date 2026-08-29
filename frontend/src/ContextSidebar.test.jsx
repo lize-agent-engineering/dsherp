@@ -211,3 +211,22 @@ it('文本附件随问题发送并在输入区显示，可明确移除',async()=
  const sent=api.mock.calls.find(c=>c[0]==='send_message')[1].question;
  expect(sent).toContain('分析这个附件');expect(sent).toContain('analysis.txt');expect(sent).toContain('库存分析');
 });
+
+it('Markdown 表格按表格渲染并单独横向滚动，不退化成段落', async () => {
+ const answer='| 物料 | 库存 |\n| --- | --- |\n| DAILY-AGENT-ITEM | 12 |';
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{...session,messages:[{...session.messages[0],answer}]};
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ const cell=await screen.findByText('DAILY-AGENT-ITEM');
+ expect(cell.tagName).toBe('TD');
+ expect(cell.closest('table')).toBeTruthy();
+ expect(cell.closest('.dsh-table-scroll')).toBeTruthy();
+});
+
+it('运行阶段来自真实运行状态，不编造执行步骤', async () => {
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]
+  :{...session,active_run:'R-1',messages:[{id:'M-2',question:'查物料',answer:'',status:'Running',context:snapshot}]};
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ expect(await screen.findByText('正在处理')).toBeTruthy();
+ expect(screen.queryByText(/调用模型|读取 ERP/)).toBeNull();
+ expect(screen.getByRole('button',{name:'停止运行'})).toBeTruthy();
+});
