@@ -19,9 +19,36 @@
   white-space: normal;
   text-align: left;
 }
+.dsh-agent-suggestions-column { width: 100%; flex-direction: column; align-items: flex-start; }
+.dsh-agent-suggestions-column .ant-btn { max-width: 100%; }
 .dsh-agent-answer { white-space: normal; }
 .dsh-agent-answer p { margin: 0 0 10px; }
 .dsh-agent-answer ul, .dsh-agent-answer ol { margin: 6px 0 12px; padding-left: 20px; }
 .dsh-agent-answer code { padding: 1px 4px; border-radius: 4px; background: #e8eeec; color: #274944; font-size: .9em; }
 .dsh-agent-answer pre { overflow: auto; padding: 10px; border-radius: 8px; background: #17211f; color: #edf6f4; }
 .dsh-agent-answer pre code { padding: 0; background: transparent; color: inherit; }
+.dsh-agent-history-popover {
+  inset: 8px 10px auto;
+  max-height: min(420px, calc(100% - 24px));
+  overflow: hidden;
+  border: 1px solid #d9e2e0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .98);
+  box-shadow: 0 12px 32px rgba(25, 47, 44, .16);
+  backdrop-filter: blur(12px);
+  animation: dsh-history-popover-in .16s ease-out;
+}
+.dsh-agent-history-popover .dsh-agent-history-head { padding: 12px 14px 9px; }
+.dsh-agent-history-popover .dsh-agent-history-list { max-height: 330px; }
+@keyframes dsh-history-popover-in {
+  from { opacity: 0; transform: translateY(-5px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dsh-agent-history-popover { animation: none; }
+}
+.dsh-agent-composer-left { display: flex; align-items: center; gap: 2px; }
+.dsh-agent-file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.dsh-agent-attachment { display: flex; align-items: center; gap: 7px; margin: 2px 3px 6px; padding: 6px 8px; border-radius: 8px; background: #eef4f2; color: #40534f; font-size: 11px; }
+.dsh-agent-attachment strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-agent-attachment-error { display: block; margin: 2px 7px 6px; color: #b4483e; }

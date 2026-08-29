@@ -152,9 +152,9 @@ it('以消息时间线、固定输入区和独立历史面板组织侧边栏',as
  expect(screen.getByRole('form',{name:'Agent 输入区'})).toBeTruthy();
  expect(screen.queryByRole('combobox',{name:'会话历史'})).toBeNull();
  fireEvent.click(screen.getByRole('button',{name:'打开会话历史'}));
- expect(screen.getByRole('complementary',{name:'会话历史'})).toBeTruthy();
+ expect(screen.getByRole('complementary',{name:'会话历史'}).classList.contains('dsh-agent-history-popover')).toBe(true);
  expect(screen.getByRole('button',{name:'查询物料'})).toBeTruthy();
- fireEvent.click(screen.getByRole('button',{name:'关闭会话历史'}));
+ fireEvent.click(screen.getByRole('button',{name:'收起会话历史'}));
  expect(screen.queryByRole('complementary',{name:'会话历史'})).toBeNull();
 });
 
@@ -179,4 +179,26 @@ it('模型回答按安全 Markdown 排版而不是显示格式标记',async()=>{
  expect(heading.tagName).toBe('STRONG');
  expect(screen.getByText('item_code').tagName).toBe('CODE');
  expect(document.querySelector('.dsh-agent-answer').textContent).not.toContain('**');
+});
+
+it('空会话建议纵向排列且不显示冗余确认说明',async()=>{
+ const api=vi.fn(async method=>method==='list_sessions'?[]:null);
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ expect(await screen.findByText('今天需要我做些什么？')).toBeTruthy();
+ expect(screen.queryByText('我会结合当前业务页面回答，并在任何操作前请你确认。')).toBeNull();
+ expect(document.querySelector('.dsh-agent-suggestions').classList.contains('dsh-agent-suggestions-column')).toBe(true);
+});
+
+it('文本附件随问题发送并在输入区显示，可明确移除',async()=>{
+ const api=vi.fn(apiDefault);
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();await screen.findByText('历史回答');
+ const file=new File(['库存分析'], 'analysis.txt', {type:'text/plain'});
+ Object.defineProperty(file,'text',{value:async()=> '库存分析'});
+ fireEvent.change(screen.getByLabelText('选择文本附件'),{target:{files:[file]}});
+ expect(await screen.findByText('analysis.txt')).toBeTruthy();
+ fireEvent.change(screen.getByRole('textbox',{name:'业务问题'}),{target:{value:'分析这个附件'}});
+ fireEvent.click(screen.getByRole('button',{name:'发送问题'}));
+ await waitFor(()=>expect(api.mock.calls.some(c=>c[0]==='send_message')).toBe(true));
+ const sent=api.mock.calls.find(c=>c[0]==='send_message')[1].question;
+ expect(sent).toContain('分析这个附件');expect(sent).toContain('analysis.txt');expect(sent).toContain('库存分析');
 });
