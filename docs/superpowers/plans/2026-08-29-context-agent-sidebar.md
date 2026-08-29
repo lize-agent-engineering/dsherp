@@ -227,3 +227,7 @@ beta 的签名回执会重新核对来源授权、唯一成功预览执行及当
 # 最新接续：全仓回归已通过
 
 旧 websocket 关闭后的过时验收已改为明确验证 `/socket.io` 不可用，Sales Order 来源 fixture 补齐实际工具名；没有为了旧测试恢复服务。全仓 170 项在 426.13 秒内全部通过，前端 88 项及构建也通过。代码和本地合成链已收口到等待真实日常企业资料/普通用户映射的边界；不能把这些测试或 alpha/beta 合成证据称作日常企业真实上线。
+
+# 最新接续：完成度逐项审计
+
+新增 [`context-agent-completion-audit.md`](../../engineering/context-agent-completion-audit.md)，逐条对照四阶段目标、代码、测试、真实 Runtime/模型/ERP/UI 和当前服务。审计确认阶段一至三核心本地链及阶段四空 Site/备份恢复成立；唯一阻止完整目标完成的产品事实是 daily 尚未初始化公司、没有普通平台成员和普通 ERP 用户映射，因而没有该身份下的 SSO/Agent/UI/HITL 证据。保持目标 active，不用合成 alpha/beta 证据替代。
