@@ -24,11 +24,30 @@ def run(command):
     if result.returncode:
         raise SystemExit(f'Bench backup verification command failed with exit code {result.returncode}')
 
+
+def snapshot(site):
+    os.chdir(ROOT / 'sites')
+    frappe.init(site=site)
+    frappe.connect()
+    report = {
+        'apps': sorted(frappe.get_installed_apps()),
+        'setup_complete': int(frappe.db.get_single_value('System Settings', 'setup_complete') or 0),
+        'companies': sorted(frappe.get_all('Company', pluck='name')),
+        'items': sorted(frappe.get_all('Item', pluck='name')),
+        'customers': sorted(frappe.get_all('Customer', pluck='customer_name')),
+        'sales_orders': sorted(frappe.get_all('Sales Order', pluck='name')),
+        'operator_exists': bool(frappe.db.exists('User', 'daily-operator@example.invalid')),
+    }
+    frappe.destroy()
+    return report
+
 restored_exists = (ROOT / 'sites' / RESTORED).exists()
 if restored_exists and not resume_restored:
     raise SystemExit('Disposable restore Site already exists; inspect instead of overwriting it')
 if resume_restored and not restored_exists:
     raise SystemExit('No completed disposable restore Site exists to resume')
+
+expected = snapshot(SOURCE)
 
 databases = sorted(BACKUPS.glob('*-database.sql.gz'))
 if not databases:
@@ -55,18 +74,9 @@ if not restored_exists:
         '--force',
     ])
 
-os.chdir(ROOT / 'sites')
-frappe.init(site=RESTORED)
-frappe.connect()
-report = {
-    'site': RESTORED,
-    'apps': sorted(frappe.get_installed_apps()),
-    'setup_complete': int(frappe.db.get_single_value('System Settings', 'setup_complete') or 0),
-    'counts': {doctype: frappe.db.count(doctype) for doctype in ('Company', 'Item', 'Customer', 'Sales Order')},
-}
-frappe.destroy()
-if report['setup_complete'] != 0 or any(report['counts'].values()):
-    raise SystemExit('Restored daily Site is not an empty pre-setup Site: ' + json.dumps(report, sort_keys=True))
+report = snapshot(RESTORED)
+if report != expected:
+    raise SystemExit('Restored daily Site does not match the source snapshot: ' + json.dumps({'expected': expected, 'restored': report}, sort_keys=True))
 if not {'frappe', 'erpnext', 'dsherp_bridge'}.issubset(report['apps']):
     raise SystemExit('Restored daily Site is missing required apps: ' + json.dumps(report, sort_keys=True))
 
@@ -74,4 +84,4 @@ run([
     'bench', 'drop-site', RESTORED, '--force', '--no-backup',
     '--db-root-username', 'root', '--db-root-password', root_password,
 ])
-print(json.dumps(report, sort_keys=True))
+print(json.dumps({'site': RESTORED, **report}, sort_keys=True))

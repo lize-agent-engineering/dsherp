@@ -38,7 +38,7 @@ def test_native_session_lists_only_enabled_memberships_and_no_credentials():
         assert response.status_code==200
         payload=response.json()['message']
         assert payload['user']=='member@example.invalid'
-        assert {x['id'] for x in payload['enterprises']}=={'alpha','beta'}
+        assert {x['id'] for x in payload['enterprises']}=={'alpha','beta','daily'}
         assert 'api_key' not in response.text and 'api_secret' not in response.text
         assert 'base_url' not in response.text
     with platform_client('outsider') as client:
@@ -47,7 +47,7 @@ def test_native_session_lists_only_enabled_memberships_and_no_credentials():
 def test_desk_oauth_identity_uses_explicit_verified_business_mapping():
     endpoint='/api/method/dsherp_platform.api.desk_identity'
     with platform_client() as client:
-        for enterprise,user,site in [('alpha','dsherp-reader@example.invalid','dsherp-validation.localhost'),('beta','beta-reader@example.invalid','dsherp-beta.localhost')]:
+        for enterprise,user,site in [('alpha','dsherp-reader@example.invalid','dsherp-validation.localhost'),('beta','beta-reader@example.invalid','dsherp-beta.localhost'),('daily','daily-operator@example.invalid','dsherp-daily.localhost')]:
             response=client.get(endpoint,params={'enterprise':enterprise})
             assert response.status_code==200,response.text
             data=response.json()
@@ -61,7 +61,7 @@ def test_desk_oauth_identity_uses_explicit_verified_business_mapping():
 
 def test_membership_read_uses_distinct_business_users_and_sites():
     with platform_client() as client:
-        for enterprise,name in [('alpha','DSHERP-TEST-ITEM'),('beta','DSHERP-BETA-ITEM')]:
+        for enterprise,name in [('alpha','DSHERP-TEST-ITEM'),('beta','DSHERP-BETA-ITEM'),('daily','DAILY-AGENT-ITEM')]:
             response=client.get('/api/method/dsherp_platform.api.read_record',params={'enterprise':enterprise,'doctype':'Item','name':name})
             assert response.status_code==200
             assert response.json()['message']['name']==name
