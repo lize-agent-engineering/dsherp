@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "skills": [
-    {"name":"erp-query","version":"1.1.0","sha256":"6b39532afc3f9a87c906c3a458b268212b5f0f575ea5f4ca80a19d1d4645201d"},
+    {"name":"erp-query","version":"1.2.0","sha256":"f50bf9d621b7e902cacad3ad592828285d05173658b138ad5e42d595bf00a2c4"},
     {"name":"erp-operation","version":"1.5.0","sha256":"7afd4d7543008d01141c1b688e9e3040395891c74bf2f48fd60334831d062adb"},
     {"name":"erp-configuration","version":"1.0.0","sha256":"b8617102ad9a358e8043b066667e08714aa06ff9f0be5e58ffe71c31518b819d"}
   ]

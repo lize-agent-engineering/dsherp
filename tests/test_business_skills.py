@@ -45,3 +45,9 @@ def test_manifest_version_must_match_skill_body(tmp_path):
     manifest['skills'][0]['version']='999.0.0'
     path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError,match='version'):verify_business_skills(root)
+
+
+def test_query_skill_requires_fresh_source_on_every_model_run():
+    content=(ROOT/'business-skills/erp-query/SKILL.md').read_text()
+    assert '每个模型运行都必须至少调用一次 ERP 只读工具取得本轮新来源' in content
+    assert '不能只凭会话历史或上一轮工具结果回答' in content
