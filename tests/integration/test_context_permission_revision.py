@@ -1,6 +1,23 @@
 """Native synthetic role change invalidates a run and rotates its successor."""
 import subprocess
 
+def test_disable_then_reenable_does_not_restore_old_authorization_revision():
+    script="""
+import os,frappe
+os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-beta.localhost');frappe.connect()
+from dsherp_bridge.context_permissions import run_revision
+try:
+    actor='dsherp-preview@example.invalid'
+    before=run_revision(actor,'configuration')
+    frappe.set_user('Administrator')
+    user=frappe.get_doc('User',actor);user.enabled=0;user.save()
+    user=frappe.get_doc('User',actor);user.enabled=1;user.save()
+    assert run_revision(actor,'configuration')!=before,'reenabling restored an old authorization context'
+finally:frappe.db.rollback();frappe.destroy()
+"""
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)
+    assert result.returncode==0,result.stderr
+
 def test_context_permission_revision_tracks_native_child_schema():
     script="""
 import os,frappe

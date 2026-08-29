@@ -14,6 +14,7 @@ def revision(user,doctypes=None):
         return frappe.get_all(doctype,filters=filters,fields=['*'],order_by='name asc')
     state={
         'user':user,
+        'user_modified':str(frappe.db.get_value('User',user,'modified')),
         'enabled':frappe.db.get_value('User',user,'enabled'),
         'user_type':frappe.db.get_value('User',user,'user_type'),
         'effective_roles':sorted(frappe.get_roles(user)),
