@@ -8,10 +8,12 @@
     "build": "node build.mjs"
   },
   "dependencies": {
+    "@ant-design/icons": "5.6.1",
     "antd": "5.27.6",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "react-markdown": "10.1.0"
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@testing-library/react": "16.3.2",
