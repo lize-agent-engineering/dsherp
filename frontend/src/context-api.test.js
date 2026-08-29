@@ -24,6 +24,13 @@ it('配置确认只发送同源冻结绑定与CSRF，不接受目标或配置正
  expect(fetch.mock.calls[0][1]).toMatchObject({method:'POST',body:JSON.stringify(params),headers:{'X-Frappe-CSRF-Token':'test-csrf'}});
  await expect(api.contextApi('confirm_configuration',{...params,target:'other-site'})).rejects.toThrow(/参数/);
 });
+it('发布准备和发布确认使用独立端点',async()=>{
+ const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{id:'C2'}})}));vi.stubGlobal('fetch',fetch);vi.stubGlobal('frappe',{csrf_token:'test-csrf'});
+ await api.contextApi('prepare_configuration_publish',{transfer_id:'T1',digest:'d1'});
+ await api.contextApi('confirm_configuration_publish',{proposal_id:'C2',digest:'d2',request_id:'r2'});
+ expect(fetch.mock.calls[0][0]).toBe('/api/method/dsherp_bridge.configuration_execution.prepare_publish');
+ expect(fetch.mock.calls[1][0]).toBe('/api/method/dsherp_bridge.configuration_execution.confirm_publish');
+});
 it('结果核实使用同源只读GET，不发送确认或重放请求',async()=>{
  const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{observed:null}})}));vi.stubGlobal('fetch',fetch);
  await api.contextApi('verify_operation',{proposal_id:'P1'});

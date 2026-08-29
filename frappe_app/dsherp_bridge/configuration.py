@@ -118,10 +118,15 @@ def get_bundle(bundle_id):
     authorize(payload['package'])
     origin=_origin(payload['model_run'],doc.conversation,user) if payload.get('model_run') else None
     from dsherp_bridge.configuration_execution import _changes
+    transfer=None
+    transfer_id=frappe.db.get_value('DS Configuration Transfer',{'bundle':doc.name,'owner':user},'name',order_by='creation desc')
+    if transfer_id:
+        peer=frappe.conf.get('dsherp_configuration_preview') or {};public=peer.get('public_url','').rstrip('/')
+        transfer={'id':transfer_id,'preview_url':public+'/app/dsherp-configuration-preview/'+transfer_id}
     return {'id':doc.name,'digest':doc.digest,'baseline':doc.baseline,'site':payload['site'],'package':payload['package'],
         'execution_ready':not origin or origin.status=='Succeeded','changes':_changes(payload['package']),
         'preview_available':bool(frappe.conf.get('dsherp_preview')),
-        'preview_transfer_available':bool(frappe.conf.get('dsherp_configuration_preview'))}
+        'preview_transfer_available':bool(frappe.conf.get('dsherp_configuration_preview')),'transfer':transfer}
 
 
 def check_authorization(bundle_id,grant=None):

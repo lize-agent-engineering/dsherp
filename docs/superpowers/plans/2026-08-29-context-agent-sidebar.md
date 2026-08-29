@@ -197,3 +197,9 @@ configuration 领域的两个工具、固定 erp-configuration 1.0.0 skill、领
 源站交接按钮、beta 原生接收页、当前用户幂等接收和侧栏确认已接线；83 项前端、两站真实回归通过。真实浏览器从 transfer sm0ivtm566 到 beta 预览确认，Item.ds_cross_site_note 唯一步骤成功；原生 Custom Field 表单与 DB 回读 Data/insert_after=item_name/非必填，既有 Item 无值回填，alpha 字段仍不存在。相关合成记录保留作发布验收基线。
 
 下一步读取 beta 唯一成功执行的签名回执，在 alpha 单独生成 30 分钟 publish 确认；用户再确认后逐项应用 alpha、回读 Custom Field 和既有数据，并补重放/部分失败/未知结果。真实模型链和阶段四仍未完成，整体 active。
+
+# 当前接续：签名回执与目标发布闭环已通过
+
+beta 的签名回执会重新核对来源授权、唯一成功预览执行及当前原生配置；alpha 单独生成 30 分钟 publish 确认，并在确认前和逐项发布前重读回执。真实浏览器以当前合成配置用户在 beta 明确预览确认、在 alpha 独立明确发布确认；最终 Custom Field `Item-ds_agent_publish_note` 两站 Succeeded，alpha/beta 既有 Item 均零回填。失败的旧授权包在任何 alpha DDL 前被拒且不重试。确认/交接/应用/HTTP 8 项、前端定向 27 项及构建通过。
+
+按用户要求收敛旧常驻服务：仓库不使用 enqueue/realtime，worker 与两个 websocket 已停止并移入 legacy profile；scheduler 保持 scheduled profile，HTTP 轮询链及平台/业务/预览入口健康。下一步先补发布过期、并发、Unknown/部分成功的组合验收和真实模型生成配置包 UI 链，再进入日常企业 Site、备份与隔离恢复；阶段一/二剩余兼容项同步收敛，完整目标仍 active。

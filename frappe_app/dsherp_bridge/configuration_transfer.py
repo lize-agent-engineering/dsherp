@@ -61,6 +61,18 @@ def prepare_transfer(bundle_id,digest,request_id):
     return {'id':transfer.name,'preview_url':public.rstrip('/')+'/app/dsherp-configuration-preview/'+transfer.name}
 
 
+def read_receipt(transfer):
+    peer=_peer('preview');binding=json.loads(transfer.payload)
+    request={**binding,'transfer_id':transfer.name}
+    receipt=_request(peer,'receipt',request)
+    extra={'preview_bundle','preview_confirmation','preview_execution','verified_documents'}
+    if (not isinstance(receipt,dict) or set(receipt)!=set(request)|extra
+        or any(receipt.get(key)!=value for key,value in request.items())
+        or not isinstance(receipt.get('verified_documents'),list)):
+        raise frappe.PermissionError('隔离预览回执与源配置不匹配')
+    return receipt
+
+
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def export_transfer(envelope):
     peer=_peer('preview');request=_decode(envelope,peer,'export-request')
@@ -117,3 +129,50 @@ def check_origin(origin,package):
     artifact=_source(origin['transfer_id'])
     if any(artifact[key]!=value for key,value in origin.items()) or artifact['package_digest']!=freeze_bundle(package)['digest']:
         raise frappe.PermissionError('配置来源绑定已变化')
+
+
+def _verify_execution_current(bundle_id,execution):
+    from dsherp_bridge.configuration_execution import _documents,_matches
+    package=get_bundle(bundle_id)['package'];steps=json.loads(execution.steps)
+    expected=_documents(package)
+    if execution.status!='Succeeded' or len(steps)!=len(expected) or any(row.get('status')!='Succeeded' for row in steps):
+        frappe.throw('隔离预览没有完整成功，不能发布')
+    verified=[]
+    for wanted,step in zip(expected,steps):
+        doctype=step.get('doctype');name=step.get('name')
+        if not doctype or not name or not frappe.db.exists(doctype,name):frappe.throw('隔离预览结果已不存在，不能发布')
+        actual=frappe.get_doc(doctype,name);actual.check_permission('read')
+        if not _matches(actual.as_dict(),wanted):frappe.throw('隔离预览结果已变化，请重新预览')
+        verified.append({'doctype':doctype,'name':name,'version':str(actual.modified)})
+    return verified
+
+
+@frappe.whitelist(allow_guest=True,methods=['POST'])
+def receipt_transfer(envelope):
+    peer=_peer('source');request=_decode(envelope,peer,'receipt-request')
+    keys={'transfer_id','actor','source_site','preview_site','bundle_digest','package_digest'}
+    if not isinstance(request,dict) or set(request)!=keys or not all(isinstance(value,str) for value in request.values()):
+        raise frappe.PermissionError('配置预览回执请求无效')
+    if request['source_site']!=peer['site'] or request['preview_site']!=frappe.local.site:
+        raise frappe.PermissionError('配置预览回执站点不匹配')
+    identity=hashlib.sha256(_json([request['source_site'],request['transfer_id']]).encode()).hexdigest()
+    bundle_id=frappe.db.get_value('DS Configuration Bundle',{'source_transfer':identity},'name')
+    if not bundle_id:frappe.throw('隔离预览尚未接收此配置')
+    bundle_doc=frappe.get_doc('DS Configuration Bundle',bundle_id);payload=json.loads(bundle_doc.payload);origin=payload.get('origin') or {}
+    if any(origin.get(key)!=request[key] for key in keys):raise frappe.PermissionError('配置预览回执来源不匹配')
+    original=frappe.session.user
+    try:
+        frappe.set_user(request['actor']);check_authorization(bundle_id)
+        confirmation_id=frappe.db.get_value('DS Configuration Confirmation',{'bundle':bundle_id,'status':'Succeeded'},'name',order_by='creation desc')
+        if not confirmation_id:frappe.throw('隔离预览尚未成功应用')
+        confirmation=frappe.get_doc('DS Configuration Confirmation',confirmation_id)
+        binding=json.loads(confirmation.payload)
+        if binding.get('purpose')!='preview' or binding.get('target')!=frappe.local.site:frappe.throw('隔离预览确认绑定无效')
+        execution_id=frappe.db.get_value('DS Configuration Execution',{'confirmation':confirmation_id},'name')
+        if not execution_id:frappe.throw('隔离预览执行记录缺失')
+        execution=frappe.get_doc('DS Configuration Execution',execution_id)
+        verified=_verify_execution_current(bundle_id,execution)
+        receipt={**request,'preview_bundle':bundle_id,'preview_confirmation':confirmation_id,
+            'preview_execution':execution_id,'verified_documents':verified}
+        return seal(receipt,peer['secret'],'receipt-response')
+    finally:frappe.set_user(original)

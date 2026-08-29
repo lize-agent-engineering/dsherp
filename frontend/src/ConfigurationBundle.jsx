@@ -2,8 +2,8 @@ import React,{useRef,useState} from 'react';
 import {Alert,Button,Space,Typography} from 'antd';
 import ConfigurationProposal,{ConfigurationChanges} from './ConfigurationProposal.jsx';
 
-export default function ConfigurationBundle({bundle,onPrepare,onConfirm,onTransfer}){
- const [confirmation,setConfirmation]=useState(null),[transfer,setTransfer]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+export default function ConfigurationBundle({bundle,onPrepare,onConfirm,onTransfer,onPublish}){
+ const [confirmation,setConfirmation]=useState(null),[transfer,setTransfer]=useState(bundle.transfer),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const requested=useRef(false);
  async function prepare(){
   if(requested.current||!bundle.execution_ready||!bundle.preview_available)return;
@@ -15,7 +15,14 @@ export default function ConfigurationBundle({bundle,onPrepare,onConfirm,onTransf
  async function send(){
   if(requested.current||!bundle.execution_ready||!bundle.preview_transfer_available)return;
   requested.current=true;setBusy(true);
-  try{setTransfer(await onTransfer({bundle_id:bundle.id,digest:bundle.digest,request_id:crypto.randomUUID()}));}
+  try{setTransfer(await onTransfer({bundle_id:bundle.id,digest:bundle.digest,request_id:crypto.randomUUID()}));requested.current=false;}
+  catch(error){setError(error.message);}
+  finally{setBusy(false);}
+ }
+ async function publish(){
+  if(requested.current||!transfer||!bundle.execution_ready)return;
+  requested.current=true;setBusy(true);
+  try{setConfirmation(await onPublish({transfer_id:transfer.id,digest:bundle.digest}));}
   catch(error){setError(error.message);}
   finally{setBusy(false);}
  }
@@ -30,5 +37,6 @@ export default function ConfigurationBundle({bundle,onPrepare,onConfirm,onTransf
   {bundle.preview_available&&<Button onClick={prepare} loading={busy} disabled={!bundle.execution_ready||requested.current}>查看预览确认</Button>}
   {bundle.preview_transfer_available&&!transfer&&<Button onClick={send} loading={busy} disabled={!bundle.execution_ready||requested.current}>发送到隔离预览</Button>}
   {transfer&&<Typography.Link href={transfer.preview_url} target="_blank" rel="noreferrer">打开隔离预览</Typography.Link>}
+  {transfer&&<Button onClick={publish} loading={busy} disabled={!bundle.execution_ready||requested.current}>读取预览结果并准备发布</Button>}
  </Space>;
 }

@@ -1,5 +1,16 @@
 # 原生上下文 Agent 实施证据
 
+## 最新接续：隔离预览回执与目标原生发布已真实完成
+
+- beta 只向项目固定源站返回 60 秒 HMAC 回执；回执绑定 source/preview Site、actor、transfer、源 bundle/package digest、唯一成功的 preview confirmation/execution，以及逐项原生配置名称和当前版本。生成回执时重新核对来源授权、执行全成功、每个原生配置仍存在且与冻结文档一致；Partial、缺失或已变化均停止。
+- alpha 读取回执后另行创建 30 分钟 publish confirmation；没有自动沿用 preview 确认。发布按钮前及每个原生配置步骤前重新读取同一回执，并复用现有 Frappe 配置权限、锁、逐步执行、回读、幂等和 Unknown/Partial 记录，没有新增角色或通用发布门禁。
+- TDD 红测分别证明缺少 receipt endpoint、缺少 prepare_publish 和前端独立端点/按钮；实现后配置 confirmation/transfer/apply/HTTP 组合 8 项通过，前端定向 27 项通过并重新构建。
+- 首次使用旧 transfer `sm0ivtm566` 被权限版本变化正确拒绝；后续为独立浏览器设置合成用户登录时又改变了 User.modified，第二个包在写入前被拒，alpha 零 DDL、界面显示 Unknown 且不重试。这两次失败证明旧授权上下文不会被绕过。
+- 身份稳定后，最终源会话 `9s90c97fn8`、bundle `9sb2f061r9`、transfer `9scqitk42p` 重新走真实链：beta 原生接收页 → 侧栏冻结差异 → 单独预览确认 → `Item.ds_agent_publish_note` Succeeded；alpha 创建 publish confirmation `a5fdp62234`，在独立 `agent-source.localhost` 当前合成配置用户会话中明确点击“确认发布到目标站点”，execution `aiatvkormi` 唯一步骤 Succeeded。
+- alpha 与 beta 原生 Custom Field 均回读：字段 `ds_agent_publish_note`、标签“Agent 发布验收说明”、Data、非必填、位于 item_name 后。alpha 既有 Item=3、beta Item=1，两个站点新字段非空值均为 0，没有隐式回填；alpha 原生 Custom Field 表单实际打开并显示这些值。这是合成测试站点发布，不是生产上线。
+- 为不影响既有 127.0.0.1 / localhost / canonical Cookie，验证代理增加独立验收 host；没有退出或替换已有用户会话。上下文 Agent 使用认证 HTTP 轮询且仓库无 enqueue/realtime 调用，已停掉旧常驻 Frappe worker、业务 websocket、平台 websocket，并把它们移入 `legacy` profile；scheduler 仍在 `scheduled` profile。核心 backend/frontend/db/redis、平台身份和隔离预览继续运行。
+- 尚待真实模型生成配置包的全 UI 链、过期/并发/Unknown 组合及阶段四日常 Site/备份恢复；整体目标继续 active。
+
 ## 最新接续：跨站预览原生 UI 与真实 Custom Field
 
 - 源站配置包卡新增“发送到隔离预览”，只调用 prepare_transfer 并打开服务端固定的 preview URL；客户端不能传目标、身份、URL 或配置正文。beta 新增原生 Desk Page `dsherp-configuration-preview`，以当前登录用户自动、幂等接收内部配置记录，页面离开/返回会重新挂载；接收不执行 DDL，提示用户在右下角 Agent 查看差异并另行确认。

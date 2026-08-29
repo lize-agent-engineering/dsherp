@@ -5,8 +5,10 @@ const methods = {
   cancel_run:['session_id','run_id','request_id'],
   confirm_operation:['proposal_id','digest','request_id'],
   confirm_configuration:['proposal_id','digest','request_id'],
+  confirm_configuration_publish:['proposal_id','digest','request_id'],
   prepare_configuration_preview:['bundle_id','digest'],
   prepare_configuration_transfer:['bundle_id','digest','request_id'],
+  prepare_configuration_publish:['transfer_id','digest'],
   accept_configuration_transfer:['transfer_id'],
   verify_operation:['proposal_id'],
 };
@@ -18,8 +20,10 @@ export async function contextApi(method,params={},signal){
   let url=method==='confirm_operation'?'/api/method/dsherp_bridge.operations.confirm':'/api/method/dsherp_bridge.context_api.'+method;
   if(method==='verify_operation')url='/api/method/dsherp_bridge.operations.verify_execution';
   if(method==='confirm_configuration')url='/api/method/dsherp_bridge.configuration_execution.confirm_preview';
+  if(method==='confirm_configuration_publish')url='/api/method/dsherp_bridge.configuration_execution.confirm_publish';
   if(method==='prepare_configuration_preview')url='/api/method/dsherp_bridge.configuration_execution.prepare_preview';
   if(method==='prepare_configuration_transfer')url='/api/method/dsherp_bridge.configuration_transfer.prepare_transfer';
+  if(method==='prepare_configuration_publish')url='/api/method/dsherp_bridge.configuration_execution.prepare_publish';
   if(method==='accept_configuration_transfer')url='/api/method/dsherp_bridge.configuration_transfer.accept_transfer';
   if(method==='list_sessions'||method==='get_session'||method==='verify_operation'){
     const query=new URLSearchParams(params).toString();

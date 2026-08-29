@@ -89,3 +89,40 @@ finally:
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=50)
     assert result.returncode==0,result.stderr
+
+
+def test_publish_requires_a_signed_current_preview_receipt():
+    script=r'''
+import os,json,frappe
+os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-beta.localhost');frappe.connect()
+from dsherp_bridge import configuration_transfer as transfer
+from dsherp_bridge.configuration_transport import seal,open_envelope
+try:
+    actor='dsherp-preview@example.invalid';frappe.set_user(actor)
+    frappe.conf.dsherp_configuration_source={'site':'source.localhost','url':'http://source-backend:8000','secret':'test-pair-secret'}
+    package={'version':1,'doctypes':[],'extensions':[{'doctype':'Item','fields':[{'fieldname':'ds_receipt_test','label':'Receipt Test','fieldtype':'Data','insert_after':'item_name'}]}],'workflows':[]}
+    origin={'source_site':'source.localhost','preview_site':frappe.local.site,'actor':actor,'transfer_id':'receipt-transfer','bundle_digest':'a'*64,'package_digest':__import__('dsherp_bridge.configuration_bundle',fromlist=['freeze_bundle']).freeze_bundle(package)['digest']}
+    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Receipt test'}).insert(ignore_permissions=True)
+    identity=__import__('hashlib').sha256(json.dumps(['source.localhost','receipt-transfer'],ensure_ascii=False,separators=(',',':'),sort_keys=True).encode()).hexdigest()
+    bundle=__import__('dsherp_bridge.configuration',fromlist=['_propose_bundle'])._propose_bundle(conversation.name,package,origin=origin,source_transfer=identity)
+    confirmation=frappe.get_doc({'doctype':'DS Configuration Confirmation','bundle':bundle['id'],'payload':json.dumps({'purpose':'preview','target':frappe.local.site}),'digest':'b'*64,'expires_at':frappe.utils.add_to_date(frappe.utils.now_datetime(),minutes=30),'status':'Succeeded'}).insert(ignore_permissions=True)
+    execution=frappe.get_doc({'doctype':'DS Configuration Execution','confirmation':confirmation.name,'request_id':'receipt-run','status':'Succeeded','steps':json.dumps([{'object':'Item.ds_receipt_test','status':'Succeeded','doctype':'Custom Field','name':'Item-ds_receipt_test','version':'v1'}])}).insert(ignore_permissions=True)
+    frappe.db.commit()
+    transfer.check_authorization=lambda bundle_id:bundle
+    transfer._verify_execution_current=lambda bundle_id,record: ([{'doctype':'Custom Field','name':'Item-ds_receipt_test','version':'v1'}] if record.status=='Succeeded' else frappe.throw('preview incomplete'))
+    request={'transfer_id':'receipt-transfer','source_site':'source.localhost','preview_site':frappe.local.site,'actor':actor,'bundle_digest':'a'*64,'package_digest':origin['package_digest']}
+    frappe.set_user('Guest')
+    receipt=open_envelope(transfer.receipt_transfer(seal(request,'test-pair-secret','receipt-request')),'test-pair-secret','receipt-response')
+    assert receipt['transfer_id']=='receipt-transfer' and receipt['preview_execution']==execution.name
+    assert receipt['preview_confirmation']==confirmation.name and receipt['verified_documents'][0]['name']=='Item-ds_receipt_test'
+    frappe.db.set_value('DS Configuration Execution',execution.name,'status','Partial',update_modified=False);frappe.db.commit()
+    try:transfer.receipt_transfer(seal(request,'test-pair-secret','receipt-request'));raise AssertionError('partial preview accepted')
+    except frappe.ValidationError:pass
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    for doctype,name in [('DS Configuration Execution',locals().get('execution') and execution.name),('DS Configuration Confirmation',locals().get('confirmation') and confirmation.name),('DS Configuration Bundle',locals().get('bundle') and bundle['id']),('DS Conversation',locals().get('conversation') and conversation.name)]:
+        if name and frappe.db.exists(doctype,name):frappe.delete_doc(doctype,name,force=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=50)
+    assert result.returncode==0,result.stderr
