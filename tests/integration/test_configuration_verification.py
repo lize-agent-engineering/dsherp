@@ -16,6 +16,9 @@ try:
     confirmation=frappe.get_doc({'doctype':'DS Configuration Confirmation','bundle':bundle['id'],'payload':json.dumps(binding),'digest':hashlib.sha256(json.dumps(binding).encode()).hexdigest(),'expires_at':frappe.utils.add_to_date(frappe.utils.now_datetime(),minutes=30),'status':'Unknown'}).insert(ignore_permissions=True)
     native=frappe.get_doc(binding['documents'][0]).insert();frappe.db.commit()
     execution=frappe.get_doc({'doctype':'DS Configuration Execution','confirmation':confirmation.name,'request_id':'verification-only','status':'Unknown','steps':json.dumps([{'object':'Item.ds_verification_only','status':'Unknown','doctype':'Custom Field','name':native.name}]),'error':'Synthetic response lost'}).insert(ignore_permissions=True);frappe.db.commit()
+    # A changed authorization revision must stop new execution, but must not
+    # prevent the same owner from checking currently readable native state.
+    frappe.db.set_value('User',frappe.session.user,'modified',frappe.utils.add_to_date(frappe.utils.now_datetime(),seconds=1))
     result=verify_execution(confirmation.name)
     assert result['execution']['status']=='Unknown' and result['observations'][0]['state']=='Matches'
     assert result['observations'][0]['name']==native.name and result['observations'][0]['version']==str(native.modified)

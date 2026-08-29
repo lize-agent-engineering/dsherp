@@ -69,19 +69,19 @@ def _exchange(code):
 
 @frappe.whitelist(allow_guest=True,methods=['GET'])
 def start():
-    frappe.response.update(type='redirect',location=get_oauth2_authorize_url(configuration()['provider'],'/app'))
+    frappe.response.update(type='redirect',location=get_oauth2_authorize_url(configuration()['provider'],'/app/home'))
 
 
 @frappe.whitelist(allow_guest=True,methods=['GET'])
 def callback(code: str,state: str):
-    if consume_oauth_state(state)!='/app':raise frappe.PermissionError('登录请求已失效，请重新进入企业')
+    if consume_oauth_state(state)!='/app/home':raise frappe.PermissionError('登录请求已失效，请重新进入企业')
     info,token=exchange(code)
     user=validate_identity(info)
     frappe.local.login_manager.login_as(user)
     frappe.session.data.dsherp_platform_grant=encrypt(json.dumps({'identity':info,'token':token}))
     frappe.local.session_obj.update(force=True)
     frappe.db.commit()
-    frappe.response.update(type='redirect',location='/app')
+    frappe.response.update(type='redirect',location='/app/home')
 
 
 def validate_grant(grant,user):

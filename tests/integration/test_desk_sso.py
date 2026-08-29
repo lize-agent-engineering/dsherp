@@ -49,7 +49,7 @@ def test_real_native_oauth_code_exchange_logs_into_bound_business_user():
         assert callback.netloc=='localhost:18082'
         result=business.get(callback.path+'?'+callback.query)
         assert result.status_code==302,result.text
-        assert result.headers['location']=='/app'
+        assert result.headers['location']=='/app/home'
         identity=business.get('/api/method/frappe.auth.get_logged_user')
         assert identity.status_code==200,identity.text
         assert identity.json()['message']=='dsherp-reader@example.invalid'

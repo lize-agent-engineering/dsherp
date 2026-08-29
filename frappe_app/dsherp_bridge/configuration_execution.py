@@ -122,7 +122,6 @@ def _result(execution):
 def verify_execution(proposal_id):
     public=get_confirmation(proposal_id)
     confirmation=frappe.get_doc('DS Configuration Confirmation',proposal_id)
-    check_authorization(confirmation.bundle)
     execution_id=frappe.db.get_value('DS Configuration Execution',{'confirmation':proposal_id},'name')
     if not execution_id:
         return {'execution':None,'observations':[],'note':'尚无配置执行记录；不会据配置列表猜测或自动执行。'}
