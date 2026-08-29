@@ -142,3 +142,41 @@ it('已完成历史也轮询重新授权，撤权时不保留正文',async()=>{
  render(<ContextSidebar api={api} capture={()=>snapshot} pollInterval={30}/>);open();await screen.findByText('历史回答');
  await screen.findByText('历史读取权限已撤销');expect(screen.queryByText('历史回答')).toBeNull();
 });
+
+it('以消息时间线、固定输入区和独立历史面板组织侧边栏',async()=>{
+ const api=vi.fn(apiDefault);render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ expect(await screen.findByRole('log',{name:'对话记录'})).toBeTruthy();
+ expect(screen.queryByRole('button',{name:'打开 Agent'})).toBeNull();
+ expect(screen.getByRole('region',{name:'当前页面上下文'}).textContent).toContain('Item');
+ expect(screen.getByRole('region',{name:'当前页面上下文'}).textContent).toContain('I-1');
+ expect(screen.getByRole('form',{name:'Agent 输入区'})).toBeTruthy();
+ expect(screen.queryByRole('combobox',{name:'会话历史'})).toBeNull();
+ fireEvent.click(screen.getByRole('button',{name:'打开会话历史'}));
+ expect(screen.getByRole('complementary',{name:'会话历史'})).toBeTruthy();
+ expect(screen.getByRole('button',{name:'查询物料'})).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'关闭会话历史'}));
+ expect(screen.queryByRole('complementary',{name:'会话历史'})).toBeNull();
+});
+
+it('请求失败使用紧凑状态且允许刷新，不用大块警告阻断输入',async()=>{
+ let failed=true;
+ const api=vi.fn(async method=>{
+  if(method==='list_sessions'&&failed){failed=false;throw new Error('请求未完成（HTTP 502）');}
+  return apiDefault(method);
+ });
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ expect((await screen.findByRole('status',{name:'运行异常'})).textContent).toContain('请求未完成（HTTP 502）');
+ expect(document.querySelector('.ant-alert')).toBeNull();
+ expect(screen.getByRole('textbox',{name:'业务问题'})).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'刷新状态'}));
+ expect(await screen.findByText('历史回答')).toBeTruthy();
+});
+
+it('模型回答按安全 Markdown 排版而不是显示格式标记',async()=>{
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{...session,messages:[{...session.messages[0],answer:'**关键结果**\n\n- `item_code`: DAILY-AGENT-ITEM'}]};
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ const heading=await screen.findByText('关键结果');
+ expect(heading.tagName).toBe('STRONG');
+ expect(screen.getByText('item_code').tagName).toBe('CODE');
+ expect(document.querySelector('.dsh-agent-answer').textContent).not.toContain('**');
+});

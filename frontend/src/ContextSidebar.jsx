@@ -1,5 +1,8 @@
 import React, {useEffect,useRef,useState} from 'react';
-import {Alert,Button,Drawer,Input,Select} from 'antd';
+import {Alert,Button,Drawer,Empty,Input,Select} from 'antd';
+import ReactMarkdown from 'react-markdown';
+import './ContextSidebar.css';
+import './ContextSidebarEnhancements.css';
 import {capturePageContext,contextOptions,selectedContext} from './page-context.js';
 import OperationProposal from './OperationProposal.jsx';
 import ConfigurationProposal from './ConfigurationProposal.jsx';
@@ -16,6 +19,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
   const [page,setPage]=useState(null);
   const [error,setError]=useState('');
   const [busy,setBusy]=useState(false);
+  const [historyOpen,setHistoryOpen]=useState(false);
   const [provided,setProvided]=useState({route:null,keys:[]});
   const generation=useRef(0);
   const selected=useRef(null);
@@ -52,7 +56,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
   }
   function close(){
     visible.current=false;setOpen(false);generation.current++;
-    setSession(null);setSessions([]);setBusy(false);pending.current=false;
+    setSession(null);setSessions([]);setBusy(false);setHistoryOpen(false);pending.current=false;
   }
   function fresh(){
     generation.current++;selected.current=null;pending.current=false;
@@ -109,29 +113,36 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
     return()=>{stopped=true;clearTimeout(timer);};
   },[open,error,api,capture,pollInterval]);
   return <>
-    <Button aria-label="打开 Agent" onClick={show} style={{position:'fixed',right:20,bottom:20,zIndex:1040}}>Agent</Button>
-    <Drawer title="业务 Agent" open={open} onClose={close} mask={false} autoFocus={false} keyboard={false} width={440} rootStyle={{top:'var(--navbar-height)'}}
-      closable={false} extra={<Button aria-label="关闭 Agent" onClick={close}>关闭</Button>}>
-      <div style={{display:'flex',gap:8,marginBottom:16}}>
-        <Button onClick={fresh}>新建会话</Button>
-        <Select aria-label="会话历史" placeholder="会话历史" value={session?.id} style={{flex:1}}
-          options={sessions.map(s=>({value:s.id,label:s.title}))} onChange={id=>restore(id)}/>
-        <Button onClick={()=>restore(selected.current,true)}>刷新记录</Button>
-      </div>
-      <p>本次页面：{label(page)}</p>
-      {page?.dirty&&<p>未保存内容默认不发送，也不会自动保存或刷新表单。</p>}
-      {page?.dirty&&<Select mode="multiple" allowClear aria-label="提供未保存字段" placeholder="选择要提供的未保存字段或子表列"
-        style={{width:'100%',marginBottom:12}} options={options()} optionFilterProp="label"
-        value={provided.route===JSON.stringify(page.route)?provided.keys:[]}
-        onChange={keys=>setProvided({route:JSON.stringify(page.route),keys})}/>}
-      {error&&<Alert type="error" showIcon message={error} description="请刷新记录核实状态；不会自动重发。"/>}
-      <div aria-live="polite">
-        {session?.messages.map(m=><article key={m.id} style={{borderTop:'1px solid #eee',padding:'12px 0'}}>
-          <small>使用页面：{label(m.context)}</small><p>{m.question}</p>
-          {m.context?.server_version&&m.context.server_version!==m.context.version&&<p>页面版本与服务器已保存版本不同；查询以实际读取为准，未保存内容不会被覆盖。</p>}
-          <div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{m.answer}</div>
+    {!open&&<Button aria-label="打开 Agent" shape="round" onClick={show} className="dsh-agent-launcher"><span className="dsh-agent-spark">✦</span> Agent</Button>}
+    <Drawer title={<div className="dsh-agent-title"><span className="dsh-agent-mark">✦</span><span>业务 Agent<small>{busy||session?.active_run?'正在处理':'随时待命'}</small></span></div>}
+      open={open} onClose={close} mask={false} autoFocus={false} keyboard={false} width="clamp(400px, 34vw, 520px)"
+      rootClassName="dsh-agent-drawer" rootStyle={{top:'var(--navbar-height)'}} closable={false}
+      extra={<div className="dsh-agent-header-actions"><Button type="text" aria-label="打开会话历史" title="会话历史" onClick={()=>setHistoryOpen(true)}>☰</Button><Button type="text" aria-label="新建会话" title="新建会话" onClick={fresh}>＋</Button><Button type="text" aria-label="关闭 Agent" title="关闭" onClick={close}>×</Button></div>}>
+      <div className="dsh-agent-shell">
+      {historyOpen&&<aside className="dsh-agent-history-panel" aria-label="会话历史">
+        <div className="dsh-agent-history-head"><div><strong>会话历史</strong><small>{sessions.length} 个会话</small></div><Button type="text" aria-label="关闭会话历史" onClick={()=>setHistoryOpen(false)}>×</Button></div>
+        <div className="dsh-agent-history-list">
+          {sessions.length===0?<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史会话"/>:sessions.map(s=><Button type={s.id===session?.id?'primary':'text'} key={s.id} aria-label={s.title} onClick={()=>{setHistoryOpen(false);restore(s.id);}}><span>{s.title}</span></Button>)}
+        </div>
+      </aside>}
+      <section className="dsh-agent-context" aria-label="当前页面上下文">
+        <span className="dsh-agent-context-icon">⌁</span><div><small>当前页面</small><strong>{label(page)||'正在识别页面'}</strong></div>
+        {page?.dirty&&<span className="dsh-agent-dirty">有未保存内容</span>}
+      </section>
+      {page?.dirty&&<div className="dsh-agent-unsaved"><p>未保存内容不会自动发送、保存或刷新。</p><Select mode="multiple" allowClear aria-label="提供未保存字段" placeholder="选择允许 Agent 查看的未保存字段"
+        options={options()} optionFilterProp="label" value={provided.route===JSON.stringify(page.route)?provided.keys:[]}
+        onChange={keys=>setProvided({route:JSON.stringify(page.route),keys})}/></div>}
+      {error&&<div role="status" aria-label="运行异常" className="dsh-agent-error"><span>!</span><div><strong>{error}</strong><small>先核实状态，不会自动重复发送。</small></div><Button size="small" onClick={()=>restore(selected.current,true)}>刷新状态</Button></div>}
+      <div role="log" aria-label="对话记录" aria-live="polite" className="dsh-agent-timeline">
+        {!session?.messages?.length&&!session?.proposals?.length&&!session?.configuration_bundles?.length&&!session?.configuration_confirmations?.length&&!busy&&<div className="dsh-agent-empty"><span>你好</span><h3>今天需要我做些什么？</h3><p>我会结合当前业务页面回答，并在任何操作前请你确认。</p><div className="dsh-agent-suggestions">{['概括当前页面可用信息','帮我查找相关业务记录','为当前对象提出下一步建议'].map(item=><Button shape="round" key={item} onClick={()=>setQuestion(item)}>{item}</Button>)}</div></div>}
+        {busy&&!session&&<div className="dsh-agent-thinking"><i/><span>正在读取会话状态</span></div>}
+        {session?.messages.map(m=><article key={m.id} className="dsh-agent-message">
+          <div className="dsh-agent-message-meta"><span>页面上下文</span><code>{label(m.context)}</code></div>
+          <div className="dsh-agent-user-message">{m.question}</div>
+          {m.context?.server_version&&m.context.server_version!==m.context.version&&<p className="dsh-agent-notice">页面版本与服务器已保存版本不同；查询以实际读取为准，未保存内容不会被覆盖。</p>}
+          <div className="dsh-agent-answer"><ReactMarkdown skipHtml>{m.answer||''}</ReactMarkdown></div>
           {m.error&&<Alert type="error" message={m.error}/>}
-          {m.status==='Cancelled'&&<p>已取消后续工作；已发生的操作不会自动撤销。</p>}
+          {m.status==='Cancelled'&&<p className="dsh-agent-notice">已取消后续工作；已发生的操作不会自动撤销。</p>}
         </article>)}
         {session?.proposals?.map(proposal=><OperationProposal key={proposal.id} proposal={proposal} onConfirm={binding=>api('confirm_operation',binding)} onVerify={binding=>api('verify_operation',binding)}/>)}
         {session?.configuration_bundles?.filter(bundle=>!session.configuration_confirmations?.some(proposal=>proposal.bundle_id===bundle.id&&blocksBundle(proposal))).map(bundle=><ConfigurationBundle key={`${bundle.id}:${bundle.digest}`} bundle={bundle}
@@ -139,12 +150,15 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
           onPublish={binding=>api('prepare_configuration_publish',binding)} onConfirm={binding=>api(bundle.preview_available?'confirm_configuration':'confirm_configuration_publish',binding)}/>) }
         {session?.configuration_confirmations?.map(proposal=><ConfigurationProposal key={proposal.id} proposal={proposal} onConfirm={binding=>api(proposal.purpose==='publish'?'confirm_configuration_publish':'confirm_configuration',binding)} onVerify={binding=>api('verify_configuration',binding)}/>) }
       </div>
-      <Select aria-label="任务领域" value={domain} onChange={setDomain} disabled={busy||!!session?.active_run} style={{width:'100%',marginBottom:12}}
-        options={[{value:'query',label:'只读查询'},{value:'operation',label:'业务操作'},{value:'configuration',label:'应用配置'}]}/>
-      <Input.TextArea aria-label="业务问题" value={question} onChange={e=>setQuestion(e.target.value)} autoSize={{minRows:3,maxRows:8}} maxLength={8000}/>
-      <div style={{display:'flex',gap:8,marginTop:12}}>
-        <Button aria-label="发送问题" type="primary" onClick={send} loading={busy} disabled={busy||!!error||!!session?.active_run||!question.trim()}>发送问题</Button>
-        {session?.active_run&&<Button onClick={cancel} disabled={busy}>停止运行</Button>}
+      <form aria-label="Agent 输入区" className="dsh-agent-composer" onSubmit={e=>{e.preventDefault();void send();}}>
+        <Input.TextArea aria-label="业务问题" placeholder="询问当前页面，或描述要完成的业务工作…" value={question} onChange={e=>setQuestion(e.target.value)} autoSize={{minRows:2,maxRows:7}} maxLength={8000}
+          onPressEnter={e=>{if(!e.shiftKey){e.preventDefault();void send();}}}/>
+        <div className="dsh-agent-composer-tools">
+          <Select aria-label="任务领域" value={domain} onChange={setDomain} disabled={busy||!!session?.active_run} variant="borderless"
+            options={[{value:'query',label:'只读查询'},{value:'operation',label:'业务操作'},{value:'configuration',label:'应用配置'}]}/>
+          {session?.active_run?<Button aria-label="停止运行" danger shape="round" onClick={cancel} disabled={busy}>停止</Button>:<Button htmlType="submit" aria-label="发送问题" type="primary" shape="circle" loading={busy} disabled={busy||!!error||!question.trim()}>↑</Button>}
+        </div>
+      </form>
       </div>
     </Drawer>
   </>;

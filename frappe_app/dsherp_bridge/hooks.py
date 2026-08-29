@@ -5,6 +5,7 @@ app_description = "Restricted ERPNext read validation"
 app_email = "development@example.invalid"
 required_apps = ["erpnext"]
 app_include_js = ["/assets/dsherp_bridge/dist/context-agent.js"]
+app_include_css = ["/assets/dsherp_bridge/dist/context-agent.css"]
 auth_hooks = ["dsherp_bridge.sso.validate_session"]
 after_request = ["dsherp_bridge.configuration_locks.release"]
 doc_events = {
