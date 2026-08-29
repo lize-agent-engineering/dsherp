@@ -20,6 +20,7 @@ map $http_origin $dsherp_origin_allowed {
     "${DSHERP_PUBLIC_ORIGIN}" 1;
     "${DSHERP_SECONDARY_ORIGIN}" 1;
     "${DSHERP_CANONICAL_ORIGIN}" 1;
+    "${DSHERP_ACCEPTANCE_ORIGIN}" 1;
 }
 
 server {

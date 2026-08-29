@@ -67,12 +67,14 @@ services:
     ports: ["127.0.0.1:18082:8080", "127.0.0.1:18085:8081"]
     environment:
       BACKEND: dsherp-validation.localhost:8000
-      SOCKETIO: websocket:9000
+      # Context Agent uses authenticated HTTP polling; no realtime process is required.
+      SOCKETIO: dsherp-validation.localhost:8000
       FRAPPE_SITE_NAME_HEADER: dsherp-validation.localhost
       DSHERP_PUBLIC_ORIGIN: http://127.0.0.1:18082
       DSHERP_SECONDARY_ORIGIN: http://localhost:18082
       DSHERP_CANONICAL_ORIGIN: http://dsherp-validation.localhost:18082
-      DSHERP_ALLOWED_HOSTS: "127[.]0[.]0[.]1|localhost|dsherp-validation[.]localhost"
+      DSHERP_ACCEPTANCE_ORIGIN: http://agent-source.localhost:18082
+      DSHERP_ALLOWED_HOSTS: "127[.]0[.]0[.]1|localhost|dsherp-validation[.]localhost|agent-source[.]localhost"
     volumes:
       - sites:/home/frappe/frappe-bench/sites:ro
       - beta-sites:/home/frappe/frappe-bench/beta-sites:ro
@@ -80,11 +82,12 @@ services:
       - ./frappe.conf.template:/opt/dsherp-frappe.conf.template:ro
       - ./nginx-validation.sh:/opt/nginx-validation.sh:ro
       - ../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
-    depends_on: [backend, websocket, beta-backend]
+    depends_on: [backend, beta-backend]
     networks: [validation, api]
     logging: *logging
 
   websocket:
+    profiles: [legacy]
     image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
     pull_policy: never
     mem_limit: 256m
@@ -99,6 +102,7 @@ services:
     logging: *logging
 
   worker:
+    profiles: [legacy]
     image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
     pull_policy: never
     mem_limit: 512m
@@ -173,6 +177,7 @@ services:
     logging: *logging
 
   platform-websocket:
+    profiles: [legacy]
     image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
     pull_policy: never
     mem_limit: 128m
@@ -197,18 +202,19 @@ services:
     ports: ["127.0.0.1:18083:8080"]
     environment:
       BACKEND: dsherp-platform.localhost:8000
-      SOCKETIO: platform-websocket:9000
+      SOCKETIO: dsherp-platform.localhost:8000
       FRAPPE_SITE_NAME_HEADER: dsherp-platform.localhost
       DSHERP_PUBLIC_ORIGIN: http://platform.localhost:18083
       DSHERP_SECONDARY_ORIGIN: http://platform.localhost
       DSHERP_CANONICAL_ORIGIN: http://dsherp-platform.localhost:18083
-      DSHERP_ALLOWED_HOSTS: "platform[.]localhost"
+      DSHERP_ACCEPTANCE_ORIGIN: http://agent-platform.localhost:18083
+      DSHERP_ALLOWED_HOSTS: "platform[.]localhost|agent-platform[.]localhost"
     volumes:
       - platform-sites:/home/frappe/frappe-bench/sites:ro
       - ./frappe.conf.template:/opt/dsherp-frappe.conf.template:ro
       - ./nginx-validation.sh:/opt/nginx-validation.sh:ro
       - ../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
-    depends_on: [platform-backend, platform-websocket]
+    depends_on: [platform-backend]
     networks: [validation, api]
     logging: *logging
 
