@@ -12,4 +12,7 @@ envsubst '${BACKEND} ${SOCKETIO} ${FRAPPE_SITE_NAME_HEADER} ${UPSTREAM_REAL_IP_A
 if [ -f /opt/dsherp-preview.conf ]; then
     cp /opt/dsherp-preview.conf /etc/nginx/conf.d/dsherp-preview.conf
 fi
+if [ -f /opt/dsherp-daily.conf ]; then
+    cp /opt/dsherp-daily.conf /etc/nginx/conf.d/dsherp-daily.conf
+fi
 exec nginx -g 'daemon off;'

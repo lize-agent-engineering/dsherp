@@ -29,12 +29,12 @@ def test_service_worker_runs_two_messages_in_same_native_session(clients,created
             doc=response.json()['message']
             if session_id is None:
                 session_id=doc['id'];created.append(session_id)
-            assert worker.run_once(service,settings,tmp_path)
+            assert worker.run_once(service,settings,tmp_path,business={'business_url':p['business_url'],'site':p['site']})
             saved=reader.get(API+'get_session',params={'session_id':session_id}).json()['message']
             assert len(saved['messages'])==index+1
             assert saved['messages'][-1]['status']=='Succeeded'
             assert saved['messages'][-1]['answer']=='DSHERP_OK'
             assert saved['active_run'] is None
-        assert worker.run_once(service,settings,tmp_path) is False
+        assert worker.run_once(service,settings,tmp_path,business={'business_url':p['business_url'],'site':p['site']}) is False
     assert len(list(tmp_path.iterdir()))==1
     assert len(list(tmp_path.rglob('session.jsonl.zstd')))==1

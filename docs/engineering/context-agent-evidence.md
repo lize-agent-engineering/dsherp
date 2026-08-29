@@ -489,3 +489,13 @@
 - 全前端 15 个文件、88 项测试通过（6.26s），构建通过；配置核实、过期和真实并发组合 7 项通过（44.34s）。
 - 真实 `deepseek-v4-flash` 从原生 Custom Field 页面生成 `DS Model Quality Inspection` 配置包；alpha 会话 `iq2aarstes`、模型运行 `c400aec0d0ca56788a5607b57b3dcca9f1b4a95cec5430b7059a043a5d029a06`、来源包 `jdb4e188ip`、交接 `jkonslkltu`。beta 预览执行 `k1v2dek4hr` 成功，alpha 独立发布执行 `klk8fdhb1g` 成功；alpha 原生记录 `l3ret7i247` 保存后回读标题“模型配置真实发布验收”、结果“不合格”，beta 业务记录仍为零。全部是本地合成验证，不是生产上线。
 - 按需模型进程已经退出，无常驻付费 worker。阶段四日常 Site、登录衔接和备份恢复仍在继续，完整目标保持 active。
+
+# 阶段四：空日常 Site 与恢复验证（2026-08-29）
+
+- 新建独立 `dsherp-daily.localhost` Site 和数据库，安装固定 Frappe 15.118.0、ERPNext 15.119.3、dsherp_bridge 0.1.0；复用现有 alpha backend 和 nginx 进程，新增 `daily.localhost:18086` 原生入口，没有新增常驻容器或资源限额。
+- 日常 Site 保持原生设置向导未完成：`setup_complete=0`，Company、Item、Customer、Sales Order 均为 0。没有复制 alpha/beta 合成业务数据，也没有替用户填写公司名称、国家、币种或财年。
+- 平台已创建状态为 `Provisioning` 的 daily 企业与原生 OAuth 配置，但成员数为 0；因此不会在没有明确业务用户映射时开放企业入口。日常 Site 仅创建无 Item/Customer/Sales Order 读取权限的内部 Runtime 身份，不增加业务角色；空队列 `context_worker --once` 成功退出，零模型调用。
+- `context_worker` 不再硬编码 alpha Site，profile 明确提供协调入口、容器业务入口和 Site；仍复用全局单运行锁和同一 384MiB/.1CPU 按需容器预算。单元及真实双轮恢复组合 6 项通过（79.58s）。
+- 原生 `bench backup --with-files --compress` 生成数据库、Site 配置、公有文件和私有文件四件套。最新预初始化状态真实恢复到固定一次性 `dsherp-daily-restore.localhost`，回读三个 App、`setup_complete=0` 和四类业务数据为 0 后，原生 drop-site 删除恢复数据库/站点；日常验收 3 项通过（9.32s）。备份保留在日常 Site 私有目录，不入 Git。
+- 一次失败诊断将本地验证凭证带入工具错误文本后，已立即轮换数据库 root 与日常 Administrator 凭证，删除旧备份，再对轮换后的最终状态重新备份和恢复成功。凭证、profile 与备份均未加入 Git。
+- 剩余真实外部输入是日常企业的实际初始化资料，以及平台普通成员到日常普通业务用户的明确映射；当前没有擅自构造这些事实。完整目标仍 active。

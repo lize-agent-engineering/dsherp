@@ -64,7 +64,7 @@ services:
     # Assets are linked by backend; avoid mutating the read-only sites mount.
     entrypoint: []
     command: ["sh", "/opt/nginx-validation.sh"]
-    ports: ["127.0.0.1:18082:8080", "127.0.0.1:18085:8081"]
+    ports: ["127.0.0.1:18082:8080", "127.0.0.1:18085:8081", "127.0.0.1:18086:8082"]
     environment:
       BACKEND: dsherp-validation.localhost:8000
       # Context Agent uses authenticated HTTP polling; no realtime process is required.
@@ -79,6 +79,7 @@ services:
       - sites:/home/frappe/frappe-bench/sites:ro
       - beta-sites:/home/frappe/frappe-bench/beta-sites:ro
       - ./preview.conf:/opt/dsherp-preview.conf:ro
+      - ./daily.conf:/opt/dsherp-daily.conf:ro
       - ./frappe.conf.template:/opt/dsherp-frappe.conf.template:ro
       - ./nginx-validation.sh:/opt/nginx-validation.sh:ro
       - ../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
@@ -136,6 +137,28 @@ services:
       - sites:/home/frappe/frappe-bench/sites
       - logs:/home/frappe/frappe-bench/logs
       - ../frappe_app:/opt/dsherp-frappe:ro
+    depends_on: [db, redis]
+    networks: [validation]
+    logging: *logging
+
+  daily-provision:
+    profiles: [control]
+    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    pull_policy: never
+    mem_limit: 640m
+    memswap_limit: 640m
+    cpus: 0.5
+    restart: "no"
+    entrypoint: []
+    command: ["python", "/opt/provision_daily_site.py"]
+    environment: {PYTHONPATH: /opt/dsherp-frappe}
+    secrets: [db_root_password, daily_admin_password]
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - ../frappe_app:/opt/dsherp-frappe:ro
+      - ./provision_daily_site.py:/opt/provision_daily_site.py:ro
+      - ./verify_daily_backup.py:/opt/verify_daily_backup.py:ro
     depends_on: [db, redis]
     networks: [validation]
     logging: *logging
@@ -236,3 +259,5 @@ volumes:
 secrets:
   db_root_password:
     file: ../.runtime/control/db_root_password
+  daily_admin_password:
+    file: ../.runtime/control/daily_admin_password

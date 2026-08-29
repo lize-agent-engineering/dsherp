@@ -10,11 +10,22 @@ from tempfile import TemporaryDirectory
 import time
 import uuid
 import sys
+from urllib.parse import urlsplit
 import httpx
 from dsherp.agent_worker import ROOT,IMAGE,load_settings
 from dsherp.context_container import docker_command
 from dsherp.context_mcp import post
 from dsherp.runtime_revision import configuration_revision
+
+
+def profile_business(profile):
+    site=profile.get('site');business_url=profile.get('business_url')
+    if not isinstance(site,str) or not site or '/' in site:
+        raise ValueError('Missing business Site')
+    parts=urlsplit(business_url) if isinstance(business_url,str) else None
+    if not parts or parts.scheme not in ('http','https') or not parts.netloc or parts.path not in ('','/'):
+        raise ValueError('Missing business container URL')
+    return {'business_url':business_url.rstrip('/'),'site':site}
 
 
 def run_container(task,settings,directory):
@@ -25,7 +36,7 @@ def run_container(task,settings,directory):
         secret=Path(temporary)/'run.json'
         fd=os.open(secret,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
         with os.fdopen(fd,'w') as file:
-            json.dump({**task,**settings,'business_url':'http://dsherp-validation-backend-1:8000','site':'dsherp-validation.localhost'},file)
+            json.dump({**task,**settings},file)
         name='dsherp-context-'+uuid.uuid4().hex
         try:
             result=subprocess.run(docker_command(ROOT,secret,directory,name),capture_output=True,text=True,timeout=140)
@@ -47,7 +58,7 @@ def run_container(task,settings,directory):
             subprocess.run(['docker','rm','-f',name],capture_output=True,timeout=15)
 
 
-def run_once(client,settings,state_root,*,execute=run_container):
+def run_once(client,settings,state_root,*,business=None,execute=run_container):
     task=post(client,'claim_run',runtime_revision=configuration_revision(settings))
     if task is None:return False
     cap={key:task[key] for key in ('run_id','capability')}
@@ -55,7 +66,7 @@ def run_once(client,settings,state_root,*,execute=run_container):
         scope=task.get('scope_id')
         if not isinstance(scope,str) or not re.fullmatch('[a-f0-9]{64}',scope):
             raise ValueError('Invalid server session scope')
-        result=execute({**task,'resume':'inspect'},settings,Path(state_root)/scope)
+        result=execute({**task,**(business or {}),'resume':'inspect'},settings,Path(state_root)/scope)
     except Exception as exc:
         post(client,'finish_run',**cap,status='Failed',error='业务运行失败：'+type(exc).__name__)
         return True
@@ -72,8 +83,10 @@ def main():
     args=parser.parse_args()
     load_settings(args.provider_env)
     profile=json.loads(args.profile.read_text())
-    if profile.get('base_url')!='http://127.0.0.1:18081' or profile.get('site')!='dsherp-validation.localhost':
-        raise ValueError('Expected local alpha business Site profile')
+    business=profile_business(profile)
+    base=urlsplit(profile.get('base_url',''))
+    if base.scheme not in ('http','https') or not base.netloc or base.path not in ('','/'):
+        raise ValueError('Missing business coordinator URL')
     for key in ('api_key','api_secret'):
         if not isinstance(profile.get(key),str) or not profile[key].strip():raise ValueError('Missing service credential')
     state_root=ROOT/'.runtime'/'business-sessions';state_root.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -85,7 +98,7 @@ def main():
         with httpx.Client(base_url=profile['base_url'],headers={'X-Frappe-Site-Name':profile['site'],
             'Authorization':'token '+profile['api_key']+':'+profile['api_secret']},timeout=25,trust_env=False,follow_redirects=False) as client:
             while True:
-                run_once(client,load_settings(args.provider_env),state_root)
+                run_once(client,load_settings(args.provider_env),state_root,business=business)
                 if args.once:return 0
                 time.sleep(3)
 

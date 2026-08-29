@@ -1,7 +1,7 @@
 import json
 import httpx
 import pytest
-from dsherp.context_worker import run_once
+from dsherp.context_worker import profile_business,run_once
 SETTINGS={'DEEPSEEK_API_KEY':'synthetic','DSH_MODEL':'deepseek-v4-flash','DEEPSEEK_BASE_URL':'http://synthetic'}
 
 
@@ -44,3 +44,24 @@ def test_bad_scope_is_failed_without_opening_any_directory(tmp_path):
         run_once(client,SETTINGS,tmp_path,execute=lambda *args:pytest.fail('invalid scope executed'))
     assert calls[-1][1]['status']=='Failed'
     assert not list(tmp_path.iterdir())
+
+
+def test_worker_injects_the_selected_business_site_without_alpha_hardcoding(tmp_path):
+    claim={'run_id':'r','scope_id':'c'*64,'capability':'cap'}
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        return httpx.Response(200,json={'message':claim if method=='claim_run' else {'status':'Succeeded'}})
+    def execute(task,settings,directory):
+        assert task['business_url']=='http://backend:8000'
+        assert task['site']=='dsherp-daily.localhost'
+        return {'status':'Succeeded','answer':'daily answer'}
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        run_once(client,SETTINGS,tmp_path,business={'business_url':'http://backend:8000','site':'dsherp-daily.localhost'},execute=execute)
+
+
+def test_business_profile_requires_explicit_urls_and_site():
+    assert profile_business({'base_url':'http://127.0.0.1:18086','business_url':'http://backend:8000','site':'dsherp-daily.localhost'}) == {
+        'business_url':'http://backend:8000','site':'dsherp-daily.localhost'}
+    for profile in ({'base_url':'http://127.0.0.1:18086','site':'dsherp-daily.localhost'},
+                    {'base_url':'http://127.0.0.1:18086','business_url':'backend','site':'dsherp-daily.localhost'}):
+        with pytest.raises(ValueError):profile_business(profile)
