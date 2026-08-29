@@ -11,7 +11,7 @@ import ConfigurationBundle from "./ConfigurationBundle.jsx";
 import AgentRecords from "./AgentRecords.jsx";
 import AgentArchive from "./AgentArchive.jsx";
 import { ConfirmCard, EmptyState, LoadMore, Prose, SkeletonLine, Spark, StatusChip, ToolTrail } from "./agent-ui.jsx";
-import { dayGroup, relativeTime } from "./agent-format.js";
+import { relativeTime } from "./agent-format.js";
 import { buildTranscript, pendingCount } from "./agent-transcript.js";
 import "./AgentWorkbench.css";
 
@@ -329,12 +329,6 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
     }
   }
 
-  const grouped = useMemo(() => {
-    const order = ["今天", "昨天", "更早"];
-    const buckets = new Map(order.map((title) => [title, []]));
-    for (const item of sessions) buckets.get(dayGroup(item.modified)).push(item);
-    return order.map((title) => ({ title, items: buckets.get(title) })).filter((group) => group.items.length);
-  }, [sessions]);
   const transcript = useMemo(() => buildTranscript(session), [session]);
   const pending = pendingCount(session);
   const lastContext = session?.messages?.length ? session.messages[session.messages.length - 1].context : null;
@@ -362,40 +356,33 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
             ))}
           </div>
         )}
-        {grouped.length
-          ? grouped.map((group) => (
-              <section key={group.title}>
-                <h3 className="dsh-label dsh-rail-group">{group.title}</h3>
-                {group.items.map((item) => {
-                  const waiting = (pendingBySession[item.id] ?? 0) > 0;
-                  const unread = Boolean(seen[item.id]) && seen[item.id] !== item.modified;
-                  const state = waiting ? "需要确认" : unread ? "有新消息" : null;
-                  return (
-                    <button
-                      type="button"
-                      className={item.id === selected && view === "chat" ? "dsh-rail-item dsh-is-current" : "dsh-rail-item"}
-                      key={item.id}
-                      aria-label={state ? `${item.title}（${state}）` : item.title}
-                      aria-current={item.id === selected && view === "chat" ? "true" : undefined}
-                      onClick={() => choose(item.id)}
-                    >
-                      <span
-                        className={`dsh-rail-dot${waiting ? " dsh-is-waiting" : unread ? " dsh-is-unread" : ""}`}
-                        aria-hidden="true"
-                      />
-                      <span className="dsh-rail-item-main">
-                        <span className="dsh-rail-title">{item.title}</span>
-                        <span className="dsh-rail-meta">
-                          <span>{relativeTime(item.modified) || "—"}</span>
-                          {item.archived && <span>已归档</span>}
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </section>
-            ))
-          : !busy && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />}
+        {sessions.map((item) => {
+          const waiting = (pendingBySession[item.id] ?? 0) > 0;
+          const unread = Boolean(seen[item.id]) && seen[item.id] !== item.modified;
+          const state = waiting ? "需要确认" : unread ? "有新消息" : null;
+          return (
+            <button
+              type="button"
+              className={item.id === selected && view === "chat" ? "dsh-rail-item dsh-is-current" : "dsh-rail-item"}
+              key={item.id}
+              aria-label={state ? `${item.title}（${state}）` : item.title}
+              aria-current={item.id === selected && view === "chat" ? "true" : undefined}
+              onClick={() => choose(item.id)}
+            >
+              <span
+                className={`dsh-rail-dot${waiting ? " dsh-is-waiting" : unread ? " dsh-is-unread" : ""}`}
+                aria-hidden="true"
+              />
+              <span className="dsh-rail-item-main">
+                <span className="dsh-rail-title">{item.title}</span>
+                <span className="dsh-rail-meta">
+                  <span>{relativeTime(item.modified) || "—"}</span>
+                </span>
+              </span>
+            </button>
+          );
+        })}
+        {!sessions.length && !busy && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />}
         <LoadMore hasMore={hasMore} busy={moreBusy} onLoad={growSessions} label="加载更多会话" />
       </div>
       <div className="dsh-rail-foot">

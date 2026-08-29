@@ -328,8 +328,8 @@ it("窄屏会话抽屉的关闭按钮有明确名称并能关闭面板", async (
   await waitFor(() => expect(screen.queryByRole("button", { name: "关闭会话面板" })).toBeNull());
 });
 
-it("会话按本地日历日分组，刚刚的会话不会掉进「更早」", async () => {
-  // 本地 2026-08-30 01:11：此刻 UTC 仍是 08-29，按 UTC 分组会把 29 分钟前的会话推进「更早」。
+it("会话列表是扁平的一条流，按最近活动排序并显示相对时间", async () => {
+  // 本地 2026-08-30 01:11，此刻 UTC 仍是 08-29：任何按 UTC 日期做的分桶都会自相矛盾。
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(2026, 7, 30, 1, 11, 0));
   try {
@@ -347,13 +347,12 @@ it("会话按本地日历日分组，刚刚的会话不会掉进「更早」", a
       return { items: [] };
     });
     render(<AgentWorkbench api={api} />);
-    const list = await within(rail()).findByRole("button", { name: "刚刚的会话" });
-    const groupOf = (button) =>
-      button.closest("section").querySelector(".dsh-rail-group").textContent;
-    expect(groupOf(list)).toBe("今天");
-    expect(groupOf(within(rail()).getByRole("button", { name: "昨天下午的会话" }))).toBe("昨天");
-    expect(groupOf(within(rail()).getByRole("button", { name: "上周的会话" }))).toBe("更早");
-    expect(within(list).getByText("29 分钟前")).toBeTruthy();
+    const recent = await within(rail()).findByRole("button", { name: "刚刚的会话" });
+    expect(within(recent).getByText("29 分钟前")).toBeTruthy();
+    expect(within(rail()).queryByText("今天")).toBeNull();
+    expect(within(rail()).queryByText("更早")).toBeNull();
+    const titles = [...rail().querySelectorAll(".dsh-rail-title")].map((node) => node.textContent);
+    expect(titles).toEqual(["刚刚的会话", "昨天下午的会话", "上周的会话"]);
   } finally {
     vi.useRealTimers();
   }
