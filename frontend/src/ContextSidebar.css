@@ -73,6 +73,9 @@
   min-height: 0;
   flex-direction: column;
 }
+/* Only the timeline may give up height. Everything else keeps its own, so a
+   full column scrolls instead of squashing its rows. */
+.dsh-agent-shell > :not(.dsh-agent-timeline) { flex: none; }
 
 /* A hairline strip rather than a card: the page binding must stay visible in a
    long conversation without spending a block of vertical space on it. */
@@ -374,6 +377,7 @@
   overflow-y: auto;
   padding: 8px;
 }
+.dsh-agent-history-list > * { flex: none; }
 .dsh-agent-history-item {
   display: flex !important;
   height: auto !important;
@@ -385,6 +389,7 @@
   border-radius: var(--dsh-r-2);
   text-align: left;
 }
+.dsh-agent-history-item > * { flex: none; }
 .dsh-agent-history-item:hover { background: var(--dsh-sunken) !important; }
 .dsh-agent-history-item.dsh-is-current { background: var(--dsh-accent-soft) !important; color: var(--dsh-accent-ink) !important; }
 .dsh-agent-history-title {
@@ -392,6 +397,7 @@
   overflow: hidden;
   max-width: 100%;
   font-size: var(--dsh-fs-body);
+  line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

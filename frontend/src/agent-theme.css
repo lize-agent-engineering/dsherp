@@ -311,7 +311,7 @@
 .dsh-empty strong { color: var(--dsh-ink-2); font-size: var(--dsh-fs-body); font-weight: 600; }
 .dsh-empty p { max-width: 34ch; margin: 0; font-size: var(--dsh-fs-meta); line-height: 1.65; }
 
-.dsh-more { display: flex; flex-direction: column; gap: 6px; padding: 10px 10px 14px; }
+.dsh-more { display: flex; flex: none; flex-direction: column; gap: 6px; padding: 10px 10px 14px; }
 .dsh-more-btn {
   padding: 7px 10px;
   border: 1px dashed var(--dsh-line-strong);

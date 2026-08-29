@@ -338,6 +338,7 @@
   border-right: 1px solid var(--dsh-line);
   background: var(--dsh-panel);
 }
+.dsh-wb-record-list > * { flex: none; }
 .dsh-wb-record {
   display: flex;
   align-items: flex-start;
@@ -371,6 +372,7 @@
   color: var(--dsh-ink);
   font-size: var(--dsh-fs-body);
   font-weight: 500;
+  line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -398,6 +400,7 @@
 
 /* Context rail: facts about what this request will actually carry. */
 .dsh-wb-context { display: flex; height: 100%; flex-direction: column; gap: 18px; overflow-y: auto; padding: 18px 16px; }
+.dsh-wb-context > * { flex: none; }
 .dsh-wb-context-block { display: flex; flex-direction: column; gap: 8px; }
 .dsh-wb-context-object { display: flex; align-items: baseline; gap: 7px; color: var(--dsh-accent); }
 .dsh-wb-context-object strong { min-width: 0; color: var(--dsh-ink); font-size: var(--dsh-fs-base); font-weight: 600; overflow-wrap: anywhere; }
