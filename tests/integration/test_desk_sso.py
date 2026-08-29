@@ -169,10 +169,10 @@ assert not calls
 frappe.local.session=frappe._dict(user='Guest',data=frappe._dict())
 frappe.local.login_manager=SimpleNamespace(login_as=lambda user:frappe.set_user(user))
 frappe.local.session_obj=SimpleNamespace(update=lambda force:None)
-state=create_oauth_state('/app')
+state=create_oauth_state('/app/home')
 sso.callback('code',state)
 assert frappe.session.user==info['email']
-assert frappe.response['location']=='/app'
+assert frappe.response['location']=='/app/home'
 grant=frappe.session.data.dsherp_platform_grant
 assert 'synthetic-oauth-token' not in grant
 sso.identity_for_token=lambda token:info
