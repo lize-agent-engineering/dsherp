@@ -1,0 +1,325 @@
+/* Shared visual world for the two Agent surfaces: the drawer that rides along
+   native business pages, and the full Agent workbench page. Tokens live on the
+   surface roots so nothing leaks into the surrounding Frappe desk. */
+.dsh-agent-drawer,
+.dsh-agent-launcher,
+.dsh-workbench {
+  --dsh-canvas: #f2f5f4;
+  --dsh-panel: #fff;
+  --dsh-rail: #f8faf9;
+  --dsh-sunken: #eef2f1;
+
+  --dsh-ink: #141d1b;
+  --dsh-ink-2: #3d4c49;
+  --dsh-muted: #5f706b;
+
+  --dsh-line: #e4eae8;
+  --dsh-line-strong: #d0dad7;
+
+  --dsh-accent: #0e7a66;
+  --dsh-accent-hover: #0b6354;
+  --dsh-accent-ink: #0a564a;
+  --dsh-accent-soft: #e7f3f0;
+  --dsh-accent-line: #bcdcd4;
+
+  --dsh-success-ink: #146c4f;
+  --dsh-success-soft: #e6f4ec;
+  --dsh-success-line: #bfe0cd;
+  --dsh-warning-ink: #8a5d10;
+  --dsh-warning-soft: #fdf3e2;
+  --dsh-warning-line: #eed7ab;
+  --dsh-danger-ink: #a53f34;
+  --dsh-danger-soft: #fdefed;
+  --dsh-danger-line: #f0cdc7;
+  --dsh-neutral-ink: #5a6a66;
+  --dsh-neutral-soft: #eef2f1;
+  --dsh-neutral-line: #dbe3e1;
+
+  --dsh-r-1: 6px;
+  --dsh-r-2: 10px;
+  --dsh-r-3: 14px;
+  --dsh-r-pill: 999px;
+
+  --dsh-shadow-1: 0 1px 2px rgba(20, 40, 36, .06), 0 1px 1px rgba(20, 40, 36, .04);
+  --dsh-shadow-2: 0 4px 14px rgba(20, 40, 36, .09), 0 1px 3px rgba(20, 40, 36, .05);
+  --dsh-shadow-3: 0 14px 40px rgba(18, 38, 34, .16), 0 3px 10px rgba(18, 38, 34, .07);
+
+  --dsh-fs-micro: 11px;
+  --dsh-fs-meta: 12px;
+  --dsh-fs-body: 13px;
+  --dsh-fs-base: 14px;
+  --dsh-fs-lg: 15px;
+  --dsh-fs-title: 17px;
+  --dsh-fs-display: 21px;
+
+  --dsh-mono: ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --dsh-dur-1: 120ms;
+  --dsh-dur-2: 180ms;
+  --dsh-dur-3: 220ms;
+  --dsh-ease: cubic-bezier(.22, .61, .36, 1);
+
+  color: var(--dsh-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Browser surfaces the design still owns. */
+.dsh-agent-drawer ::selection,
+.dsh-workbench ::selection { background: #cce9e1; color: var(--dsh-accent-ink); }
+.dsh-agent-drawer :focus-visible,
+.dsh-workbench :focus-visible {
+  outline: 2px solid var(--dsh-accent);
+  outline-offset: 2px;
+  border-radius: var(--dsh-r-1);
+}
+.dsh-agent-drawer .ant-input::placeholder,
+.dsh-workbench .ant-input::placeholder,
+.dsh-agent-drawer textarea::placeholder,
+.dsh-workbench textarea::placeholder { color: var(--dsh-muted); }
+.dsh-agent-drawer .ant-select-selection-placeholder,
+.dsh-workbench .ant-select-selection-placeholder { color: var(--dsh-muted); }
+
+.dsh-scroll { scrollbar-width: thin; scrollbar-color: var(--dsh-line-strong) transparent; }
+.dsh-scroll::-webkit-scrollbar { width: 9px; height: 9px; }
+.dsh-scroll::-webkit-scrollbar-track { background: transparent; }
+.dsh-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: var(--dsh-r-pill);
+  background: var(--dsh-line-strong);
+  background-clip: content-box;
+}
+.dsh-scroll:hover::-webkit-scrollbar-thumb { background: #b4c3bf; background-clip: content-box; }
+
+/* Status vocabulary — the Chinese label sits next to the raw server status,
+   which stays visible so Partial, Unknown and Failed cannot be dressed up. */
+.dsh-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--dsh-neutral-line);
+  border-radius: var(--dsh-r-pill);
+  background: var(--dsh-neutral-soft);
+  color: var(--dsh-neutral-ink);
+  font-size: var(--dsh-fs-micro);
+  line-height: 18px;
+  white-space: nowrap;
+}
+.dsh-chip::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.dsh-chip-accent { border-color: var(--dsh-accent-line); background: var(--dsh-accent-soft); color: var(--dsh-accent-ink); }
+.dsh-chip-success { border-color: var(--dsh-success-line); background: var(--dsh-success-soft); color: var(--dsh-success-ink); }
+.dsh-chip-warning { border-color: var(--dsh-warning-line); background: var(--dsh-warning-soft); color: var(--dsh-warning-ink); }
+.dsh-chip-danger { border-color: var(--dsh-danger-line); background: var(--dsh-danger-soft); color: var(--dsh-danger-ink); }
+.dsh-chip-plain { border-color: transparent; background: transparent; padding-inline: 0; }
+.dsh-chip-plain::before { display: none; }
+.dsh-raw {
+  font-family: var(--dsh-mono);
+  font-size: var(--dsh-fs-micro);
+  color: var(--dsh-muted);
+  letter-spacing: -.01em;
+}
+
+.dsh-label {
+  color: var(--dsh-muted);
+  font-size: var(--dsh-fs-micro);
+  font-weight: 500;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.dsh-meta { color: var(--dsh-muted); font-size: var(--dsh-fs-micro); }
+
+/* Model answers. GFM tables scroll inside their own container so a wide result
+   never stretches the drawer or the conversation column. */
+.dsh-prose { line-height: 1.75; overflow-wrap: anywhere; }
+.dsh-prose > :first-child { margin-top: 0; }
+.dsh-prose > :last-child { margin-bottom: 0; }
+.dsh-prose p { margin: 0 0 10px; }
+.dsh-prose h1, .dsh-prose h2, .dsh-prose h3, .dsh-prose h4 {
+  margin: 18px 0 7px;
+  font-size: var(--dsh-fs-lg);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.dsh-prose h1 { font-size: var(--dsh-fs-title); }
+.dsh-prose ul, .dsh-prose ol { margin: 6px 0 12px; padding-left: 20px; }
+.dsh-prose li { margin: 3px 0; }
+.dsh-prose li::marker { color: var(--dsh-muted); }
+.dsh-prose a { color: var(--dsh-accent-ink); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.dsh-prose code {
+  padding: 1px 5px;
+  border-radius: var(--dsh-r-1);
+  background: var(--dsh-sunken);
+  color: var(--dsh-accent-ink);
+  font-family: var(--dsh-mono);
+  font-size: .88em;
+}
+.dsh-prose pre {
+  overflow: auto;
+  margin: 10px 0;
+  padding: 12px 14px;
+  border-radius: var(--dsh-r-2);
+  background: #16211f;
+  color: #e6f1ee;
+  font-size: var(--dsh-fs-meta);
+  line-height: 1.6;
+}
+.dsh-prose pre code { padding: 0; background: transparent; color: inherit; }
+.dsh-prose blockquote {
+  margin: 10px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 1px solid var(--dsh-accent-line);
+  color: var(--dsh-ink-2);
+}
+.dsh-prose hr { margin: 16px 0; border: 0; border-top: 1px solid var(--dsh-line); }
+.dsh-prose table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: var(--dsh-fs-meta);
+}
+.dsh-prose th, .dsh-prose td {
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--dsh-line);
+  text-align: left;
+  vertical-align: top;
+}
+.dsh-prose th { background: var(--dsh-rail); color: var(--dsh-ink-2); font-weight: 600; white-space: nowrap; }
+.dsh-prose tr:last-child td { border-bottom: 0; }
+.dsh-table-scroll {
+  overflow-x: auto;
+  margin: 10px 0;
+  border: 1px solid var(--dsh-line);
+  border-radius: var(--dsh-r-2);
+}
+
+/* Long answers stay readable: the fold is a reading aid, never a way to hide
+   an error, a partial result or a confirmation. */
+.dsh-fold { position: relative; }
+.dsh-fold-clipped { max-height: 420px; overflow: hidden; }
+.dsh-fold-clipped::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 84px;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0), var(--dsh-fold-bg, #fff));
+  pointer-events: none;
+}
+.dsh-fold-toggle {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dsh-accent-ink);
+  font-size: var(--dsh-fs-meta);
+  cursor: pointer;
+}
+.dsh-fold-toggle:hover { color: var(--dsh-accent-hover); text-decoration: underline; text-underline-offset: 3px; }
+
+/* Confirmation surface. Proposals are the product's most consequential moment,
+   so they sit on their own card instead of dissolving into the transcript. */
+.dsh-confirm {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid var(--dsh-accent-line);
+  border-radius: var(--dsh-r-3);
+  background: var(--dsh-panel);
+  box-shadow: var(--dsh-shadow-1);
+}
+.dsh-confirm-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--dsh-line);
+}
+.dsh-confirm-head .dsh-confirm-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--dsh-r-1);
+  background: var(--dsh-accent-soft);
+  color: var(--dsh-accent);
+  font-size: 14px;
+}
+.dsh-confirm-head strong { flex: 1; min-width: 0; font-size: var(--dsh-fs-body); font-weight: 600; }
+.dsh-confirm .ant-table-wrapper { overflow-x: auto; }
+.dsh-confirm .ant-table { font-size: var(--dsh-fs-meta); }
+.dsh-confirm .ant-table-thead > tr > th { background: var(--dsh-rail); color: var(--dsh-ink-2); }
+.dsh-confirm .ant-btn-primary:not(:disabled) { background: var(--dsh-accent); }
+.dsh-confirm .ant-btn-primary:not(:disabled):hover { background: var(--dsh-accent-hover) !important; }
+
+/* Loading shows the shape of what is arriving, not a spinner over nothing. */
+.dsh-skeleton {
+  border-radius: var(--dsh-r-1);
+  background: linear-gradient(90deg, var(--dsh-sunken) 25%, #f5f8f7 37%, var(--dsh-sunken) 63%);
+  background-size: 400% 100%;
+  animation: dsh-shimmer 1.4s var(--dsh-ease) infinite;
+}
+@keyframes dsh-shimmer { from { background-position: 100% 50%; } to { background-position: 0 50%; } }
+
+@keyframes dsh-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes dsh-fade { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dsh-agent-drawer *,
+  .dsh-workbench * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.dsh-chip-raw {
+  font-family: var(--dsh-mono);
+  font-size: 10px;
+  font-style: normal;
+  opacity: .62;
+}
+
+.dsh-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--dsh-muted);
+}
+.dsh-empty-compact { padding: 22px 14px; }
+.dsh-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 7px;
+  border-radius: var(--dsh-r-2);
+  background: var(--dsh-sunken);
+  color: var(--dsh-muted);
+  font-size: 17px;
+}
+.dsh-empty strong { color: var(--dsh-ink-2); font-size: var(--dsh-fs-body); font-weight: 600; }
+.dsh-empty p { max-width: 34ch; margin: 0; font-size: var(--dsh-fs-meta); line-height: 1.65; }
+
+.dsh-more { display: flex; flex-direction: column; gap: 6px; padding: 10px 10px 14px; }
+.dsh-more-btn {
+  padding: 7px 10px;
+  border: 1px dashed var(--dsh-line-strong);
+  border-radius: var(--dsh-r-2);
+  background: none;
+  color: var(--dsh-muted);
+  font-size: var(--dsh-fs-meta);
+  cursor: pointer;
+  transition: border-color var(--dsh-dur-2) var(--dsh-ease), color var(--dsh-dur-2) var(--dsh-ease);
+}
+.dsh-more-btn:hover { border-color: var(--dsh-accent-line); color: var(--dsh-accent-ink); }
