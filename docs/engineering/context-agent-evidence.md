@@ -1,5 +1,14 @@
 # 原生上下文 Agent 实施证据
 
+## 2026-08-29：正式 Agent 工作台首轮实现
+
+- 新增 Frappe 原生 Page `/app/dsherp-agent` 与公开 `DSHERP` Workspace 快捷入口；旧 `/app/dsherp-studio` 保留为独立 Demo，没有重新进入正式导航。
+- `DS Conversation` 增加归档状态。侧栏 `list_sessions` 固定返回最多 10 条未归档会话及 `has_more`；正式页面新增每页 20 条的搜索、重命名、归档和恢复。活动运行归档及归档会话发送均 HTTP 409 fastfail，所有列表继续限定当前业务 Site 当前用户并重验历史来源权限。
+- 正式工作台提供对话、待确认、执行记录、应用配置四个一级视图；桌面为会话列表、主内容、按需上下文三栏，窄屏左右栏使用 Ant Design Drawer。轮询保持 5 秒并在隐藏页暂停，没有增加 WebSocket。
+- 侧栏跳转仅在 URL 放随机 handoff 标识与会话 ID；PageContext 一次性写入 `sessionStorage`，工作台读取后删除。刷新不会自动发送、运行或写入。
+- 新增 `list_pending`、`list_execution_records`、`list_configuration_records` 摘要接口；不在列表返回冻结 payload、执行 result 或配置 steps，详情仍通过当前用户可读会话按需取得。
+- TDD 证据：会话真实 Frappe HTTP 测试先 3 项失败后相关 10 项通过；工作台摘要接口先缺失失败后会话/Desk 组合 19 项通过；前端新增行为先失败后全量 17 files / 101 tests 通过，生产构建成功，Ant Design CLI 检查 0 issue。validation、daily、beta 三个本地合成 Site 已迁移；这不是生产发布或真实企业上线证据。
+
 ## 最新接续：隔离预览回执与目标原生发布已真实完成
 
 - beta 只向项目固定源站返回 60 秒 HMAC 回执；回执绑定 source/preview Site、actor、transfer、源 bundle/package digest、唯一成功的 preview confirmation/execution，以及逐项原生配置名称和当前版本。生成回执时重新核对来源授权、执行全成功、每个原生配置仍存在且与冻结文档一致；Partial、缺失或已变化均停止。

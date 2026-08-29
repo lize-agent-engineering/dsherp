@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-2026-08-29 起按 [原生业务页面上下文 Agent 计划](docs/superpowers/plans/2026-08-29-context-agent-sidebar.md) 实施：原生 Desk 全局侧栏取代独立聊天工作台方向，所有业务/配置/填表操作经 HITL。以下验收数字与入口描述为旧链路历史证据，不代表新侧栏或会话恢复已完成。旧 Demo 独立入口保留但退出正式导航。
+2026-08-29 起按 [原生业务页面上下文 Agent 计划](docs/superpowers/plans/2026-08-29-context-agent-sidebar.md) 实施：原生 Desk 全局侧栏负责页面内协作，正式完整入口为 `/app/dsherp-agent`，包含对话、待确认、执行记录和应用配置。旧 Demo `/app/dsherp-studio` 独立保留并退出正式导航；所有业务/配置/填表操作继续复用同一 HITL 链路。当前工作台为本地合成环境实现，不代表生产上线。
 
 用户要求收敛旧服务后，旧独立聊天付费 worker 已于 2026-08-29 停止（无在途任务），其提交、领取、工具和完成端点及本地凭证随后退役；旧任务记录只读保留。下文“已启用”的历史描述不再代表当前运行状态。原生 ERP 与身份服务保留。新实现进度见 [上下文 Agent 证据](docs/engineering/context-agent-evidence.md)。
 
