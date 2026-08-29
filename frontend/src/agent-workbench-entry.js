@@ -17,8 +17,14 @@ export function readWorkbenchState(search=globalThis.location?.search||''){
  return {initialSession,handoff};
 }
 
+// The Frappe page owns its own header chrome; it opens Agent settings through
+// this handle instead of the React tree drawing a second toolbar.
 export function mount(element){
  const root=createRoot(element);
- root.render(React.createElement(AgentWorkbench,{api:contextApi,...readWorkbenchState()}));
- return()=>root.unmount();
+ const controls={};
+ root.render(React.createElement(AgentWorkbench,{api:contextApi,controls,...readWorkbenchState()}));
+ const dispose=()=>root.unmount();
+ dispose.openSettings=()=>controls.openSettings?.();
+ dispose.unmount=dispose;
+ return dispose;
 }

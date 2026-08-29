@@ -12,3 +12,15 @@ it('URL 只读取会话和随机 handoff 标识，业务正文从 sessionStorage
  expect(sessionStorage.getItem(`dsherp-agent-handoff:${token}`)).toBeNull();
  expect(readWorkbenchState('?session=S-2&handoff=Item-I-1')).toEqual({initialSession:'S-2',handoff:null});
 });
+
+it('挂载句柄既能卸载，也把 Agent 设置入口交给原生页面头部', async () => {
+ const {mount}=await import('./agent-workbench-entry.js');
+ const element=document.createElement('div');
+ document.body.append(element);
+ const dispose=mount(element);
+ expect(typeof dispose).toBe('function');
+ expect(typeof dispose.openSettings).toBe('function');
+ expect(dispose.unmount).toBe(dispose);
+ dispose();
+ element.remove();
+});

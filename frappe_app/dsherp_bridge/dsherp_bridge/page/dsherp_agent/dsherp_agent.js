@@ -18,6 +18,16 @@ frappe.pages["dsherp-agent"].on_page_load = function (wrapper) {
     load("link", "/assets/dsherp_bridge/dist/agent-workbench.css"),
     load("script", "/assets/dsherp_bridge/dist/agent-workbench.js"),
   ]);
+  // Agent settings live in the native page header, not in a second in-app
+  // toolbar. add_button also registers the mobile menu entry for us.
+  let settings = null;
+  function ensureSettingsButton() {
+    if (settings) return;
+    settings = page.add_button("Agent 设置", () => {
+      if (dispose && dispose.openSettings) dispose.openSettings();
+      else frappe.show_alert({message: "Agent 工作台尚未加载完成", indicator: "orange"});
+    }, {icon: "setting-gear"});
+  }
   $(wrapper).on("hide", () => { active = false; if (dispose) dispose(); dispose = null; });
   wrapper.on_page_show = function () {
     active = true;
@@ -29,6 +39,7 @@ frappe.pages["dsherp-agent"].on_page_load = function (wrapper) {
       if (!window.dsherpAgentWorkbench) throw new Error("Agent 工作台资源未加载");
       root.textContent = "";
       dispose = window.dsherpAgentWorkbench.mount(root);
+      ensureSettingsButton();
     }).catch(() => { if (active) root.textContent = "Agent 工作台加载失败。请检查构建资源后刷新页面。"; });
   };
   $(wrapper).on("hide", () => {
