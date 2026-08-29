@@ -418,3 +418,7 @@
 @media (max-width: 560px) {
   .dsh-agent-drawer .ant-drawer-content-wrapper { width: 100vw !important; }
 }
+
+.dsh-agent-loose { padding-bottom: 20px; }
+.dsh-agent-loose .dsh-label { display: block; margin: 0 0 2px; }
+.dsh-agent-loose .dsh-meta { margin: 0 0 8px; line-height: 1.6; }

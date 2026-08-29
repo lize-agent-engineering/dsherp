@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import {afterEach,beforeAll,expect,it,vi} from 'vitest';
-import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import ContextSidebar from './ContextSidebar.jsx';
 beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
 afterEach(cleanup);
@@ -229,4 +229,25 @@ it('运行阶段来自真实运行状态，不编造执行步骤', async () => {
  expect(await screen.findByText('正在处理')).toBeTruthy();
  expect(screen.queryByText(/调用模型|读取 ERP/)).toBeNull();
  expect(screen.getByRole('button',{name:'停止运行'})).toBeTruthy();
+});
+
+it('本轮实际发生的 ERP 读取跟着它那条消息显示，提案落在同一轮下', async () => {
+ const proposal={id:'P1',model_run:'M-1',digest:'d1',action:'update',doctype:'Item',name:'I-1',version:'v1',
+   expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{field:'item_name',label:'物料名称',before:'原名',after:'新名'}]};
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{
+   ...session,
+   messages:[{...session.messages[0],sources:[
+     {tool:'erp_read_record',arguments:{doctype:'Item',name:'I-1'},fields:['item_name','item_code'],records:['I-1']},
+     {tool:'erp_search_records',arguments:{doctype:'Item',query:'合成'},fields:[],records:['I-1','I-2']},
+   ]}],
+   proposals:[proposal],
+ };
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ const turn=(await screen.findByText('历史回答')).closest('article');
+ expect(within(turn).getByLabelText('本轮 ERP 读取')).toBeTruthy();
+ expect(within(turn).getByText('读取 Item / I-1')).toBeTruthy();
+ expect(within(turn).getByText('搜索 Item：合成')).toBeTruthy();
+ expect(within(turn).getByText('2 条记录')).toBeTruthy();
+ expect(within(turn).getByRole('button',{name:'确认执行'})).toBeTruthy();
+ expect(screen.queryByRole('region',{name:'未归属到具体消息的条目'})).toBeNull();
 });

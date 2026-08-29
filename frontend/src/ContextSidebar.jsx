@@ -4,7 +4,8 @@ import {ArrowUpOutlined,CloseOutlined,FormOutlined,HistoryOutlined,LinkOutlined,
 import './ContextSidebar.css';
 import {capturePageContext,contextOptions,selectedContext} from './page-context.js';
 import {relativeTime} from './agent-format.js';
-import {ConfirmCard,Prose,Spark,StatusChip} from './agent-ui.jsx';
+import {ConfirmCard,Prose,Spark,StatusChip,ToolTrail} from './agent-ui.jsx';
+import {buildTranscript} from './agent-transcript.js';
 import OperationProposal from './OperationProposal.jsx';
 import ConfigurationProposal from './ConfigurationProposal.jsx';
 import ConfigurationBundle from './ConfigurationBundle.jsx';
@@ -149,6 +150,26 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
     if(node)node.scrollTop=node.scrollHeight;
   },[session?.messages?.length,session?.id]);
   const empty=!session?.messages?.length&&!session?.proposals?.length&&!session?.configuration_bundles?.length&&!session?.configuration_confirmations?.length;
+  const transcript=buildTranscript(session);
+  const openBundles=list=>list.filter(bundle=>!session?.configuration_confirmations?.some(proposal=>proposal.bundle_id===bundle.id&&blocksBundle(proposal)));
+  const confirmations=group=><>
+    {group.proposals.map(proposal=>
+      <ConfirmCard key={proposal.id} icon={<SwapOutlined aria-hidden="true"/>} title={proposal.status==='Pending'?'待你确认的业务操作':'业务操作'}
+        meta={<StatusChip status={proposal.status}/>}>
+        <OperationProposal proposal={proposal} onConfirm={binding=>api('confirm_operation',binding)} onVerify={binding=>api('verify_operation',binding)}/>
+      </ConfirmCard>)}
+    {openBundles(group.bundles).map(bundle=>
+      <ConfirmCard key={`${bundle.id}:${bundle.digest}`} icon={<SettingOutlined aria-hidden="true"/>} title="应用配置提案">
+        <ConfigurationBundle bundle={bundle}
+          onPrepare={binding=>api('prepare_configuration_preview',binding)} onTransfer={binding=>api('prepare_configuration_transfer',binding)}
+          onPublish={binding=>api('prepare_configuration_publish',binding)} onConfirm={binding=>api(bundle.preview_available?'confirm_configuration':'confirm_configuration_publish',binding)}/>
+      </ConfirmCard>)}
+    {group.confirmations.map(proposal=>
+      <ConfirmCard key={proposal.id} icon={<SafetyCertificateOutlined aria-hidden="true"/>} title={`${proposal.status==='Pending'?'待你确认的':''}${proposal.purpose==='publish'?'配置发布':'隔离预览'}`}
+        meta={<StatusChip status={proposal.status}/>}>
+        <ConfigurationProposal proposal={proposal} onConfirm={binding=>api(proposal.purpose==='publish'?'confirm_configuration_publish':'confirm_configuration',binding)} onVerify={binding=>api('verify_configuration',binding)}/>
+      </ConfirmCard>)}
+  </>;
   return <>
     {!open&&<Button aria-label="打开 Agent" shape="round" onClick={show} className="dsh-agent-launcher"><Spark size={14} className="dsh-agent-spark"/> Agent</Button>}
     <Drawer
@@ -200,34 +221,26 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
           </div>
         </div>}
         {busy&&!session&&<div className="dsh-agent-thinking"><i/><span>正在读取会话状态</span></div>}
-        {session?.messages.map(m=><article key={m.id} className="dsh-agent-message">
-          <div className="dsh-agent-user-message">{visibleQuestion(m.question)}</div>
-          <div className="dsh-agent-message-meta"><LinkOutlined aria-hidden="true"/><code>{label(m.context)}</code></div>
-          {m.context?.server_version&&m.context.server_version!==m.context.version&&<p className="dsh-agent-notice">页面版本与服务器已保存版本不同；查询以实际读取为准，未保存内容不会被覆盖。</p>}
-          {(m.answer||!runPhase[m.status])&&<div className="dsh-agent-reply">
+        {transcript.turns.map(turn=><article key={turn.message.id} className="dsh-agent-message">
+          <div className="dsh-agent-user-message">{visibleQuestion(turn.message.question)}</div>
+          <div className="dsh-agent-message-meta"><LinkOutlined aria-hidden="true"/><code>{label(turn.message.context)}</code></div>
+          {turn.message.context?.server_version&&turn.message.context.server_version!==turn.message.context.version&&<p className="dsh-agent-notice">页面版本与服务器已保存版本不同；查询以实际读取为准，未保存内容不会被覆盖。</p>}
+          <ToolTrail events={turn.tools}/>
+          {(turn.message.answer||!runPhase[turn.message.status])&&<div className="dsh-agent-reply">
             <span className="dsh-agent-reply-mark"><Spark size={12}/></span>
-            <div className="dsh-agent-answer"><Prose>{m.answer}</Prose></div>
+            <div className="dsh-agent-answer"><Prose>{turn.message.answer}</Prose></div>
           </div>}
-          {runPhase[m.status]&&<div className="dsh-agent-thinking"><i/><span>{runPhase[m.status]}</span></div>}
-          {m.error&&<div className="dsh-agent-alert" role="alert"><WarningFilled aria-hidden="true"/><span>{m.error}</span></div>}
-          {m.status==='Cancelled'&&<p className="dsh-agent-notice">已取消后续工作；已发生的操作不会自动撤销。</p>}
+          {runPhase[turn.message.status]&&<div className="dsh-agent-thinking"><i/><span>{runPhase[turn.message.status]}</span></div>}
+          {turn.message.error&&<div className="dsh-agent-alert" role="alert"><WarningFilled aria-hidden="true"/><span>{turn.message.error}</span></div>}
+          {turn.message.status==='Cancelled'&&<p className="dsh-agent-notice">已取消后续工作；已发生的操作不会自动撤销。</p>}
+          {confirmations(turn)}
         </article>)}
-        {session?.proposals?.map(proposal=>
-          <ConfirmCard key={proposal.id} icon={<SwapOutlined aria-hidden="true"/>} title={proposal.status==='Pending'?'待你确认的业务操作':'业务操作'}
-            meta={<StatusChip status={proposal.status}/>}>
-            <OperationProposal proposal={proposal} onConfirm={binding=>api('confirm_operation',binding)} onVerify={binding=>api('verify_operation',binding)}/>
-          </ConfirmCard>)}
-        {session?.configuration_bundles?.filter(bundle=>!session.configuration_confirmations?.some(proposal=>proposal.bundle_id===bundle.id&&blocksBundle(proposal))).map(bundle=>
-          <ConfirmCard key={`${bundle.id}:${bundle.digest}`} icon={<SettingOutlined aria-hidden="true"/>} title="应用配置提案">
-            <ConfigurationBundle bundle={bundle}
-              onPrepare={binding=>api('prepare_configuration_preview',binding)} onTransfer={binding=>api('prepare_configuration_transfer',binding)}
-              onPublish={binding=>api('prepare_configuration_publish',binding)} onConfirm={binding=>api(bundle.preview_available?'confirm_configuration':'confirm_configuration_publish',binding)}/>
-          </ConfirmCard>)}
-        {session?.configuration_confirmations?.map(proposal=>
-          <ConfirmCard key={proposal.id} icon={<SafetyCertificateOutlined aria-hidden="true"/>} title={`${proposal.status==='Pending'?'待你确认的':''}${proposal.purpose==='publish'?'配置发布':'隔离预览'}`}
-            meta={<StatusChip status={proposal.status}/>}>
-            <ConfigurationProposal proposal={proposal} onConfirm={binding=>api(proposal.purpose==='publish'?'confirm_configuration_publish':'confirm_configuration',binding)} onVerify={binding=>api('verify_configuration',binding)}/>
-          </ConfirmCard>)}
+        {(transcript.loose.proposals.length>0||transcript.loose.bundles.length>0||transcript.loose.confirmations.length>0)&&
+          <section className="dsh-agent-loose" aria-label="未归属到具体消息的条目">
+            <h4 className="dsh-label">未能归属到具体消息</h4>
+            <p className="dsh-meta">这些条目没有记录产生它们的运行，按原样列出，不推测归属。</p>
+            {confirmations(transcript.loose)}
+          </section>}
       </div>
       <form aria-label="Agent 输入区" className="dsh-agent-composer" onSubmit={e=>{e.preventDefault();void send();}}>
         {attachment&&<div className="dsh-agent-attachment"><PaperClipOutlined aria-hidden="true"/><strong>{attachment.name}</strong><Button type="text" size="small" aria-label="移除附件" icon={<CloseOutlined/>} onClick={()=>setAttachment(null)}/></div>}
