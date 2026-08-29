@@ -124,6 +124,7 @@ def get_bundle(bundle_id):
         peer=frappe.conf.get('dsherp_configuration_preview') or {};public=peer.get('public_url','').rstrip('/')
         transfer={'id':transfer_id,'preview_url':public+'/app/dsherp-configuration-preview/'+transfer_id}
     return {'id':doc.name,'digest':doc.digest,'baseline':doc.baseline,'site':payload['site'],'package':payload['package'],
+        'model_run':payload.get('model_run'),
         'execution_ready':not origin or origin.status=='Succeeded','changes':_changes(payload['package']),
         'preview_available':bool(frappe.conf.get('dsherp_preview')),
         'preview_transfer_available':bool(frappe.conf.get('dsherp_configuration_preview')),'transfer':transfer}

@@ -123,9 +123,13 @@ def _public(doc):
     for run in runs:
         context=_context(run.page_context,check_version=False)
         from dsherp_bridge.context_execution import authorize_sources
-        authorize_sources(json.loads(run.sources or '[]'))
+        # Reauthorized on every read; exposing them lets the transcript show the
+        # actual ERP reads in the run that made them, instead of a flat list.
+        sources=json.loads(run.sources or '[]')
+        authorize_sources(sources)
         messages.append({'id':run.name,'question':run.question,'answer':run.answer or '',
-                         'error':run.error or '', 'status':run.status,'context':context,'domain':run.domain})
+                         'error':run.error or '', 'status':run.status,'context':context,'domain':run.domain,
+                         'sources':sources})
         if run.status in ('Queued','Running','Cancelling'):active=run.name
     from dsherp_bridge.operations import get_proposal
     proposals=[get_proposal(name) for name in frappe.get_all('DS Operation Proposal',

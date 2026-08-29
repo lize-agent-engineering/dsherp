@@ -254,7 +254,7 @@ def get_proposal(proposal_id):
             child_readable=set(frappe.get_meta(definition.options).get_permitted_fieldnames(parenttype=doc.doctype,user=user,permission_type='read'))|{'name'}
             if any(key not in child_readable for rows in (change['before'],change['after'],change.get('form_before')) if rows for row in rows for key in row):
                 raise frappe.PermissionError('无权读取提案明细字段')
-    result = {**payload, 'id': proposal.name, 'digest': proposal.digest,
+    result = {**payload, 'id': proposal.name, 'digest': proposal.digest, 'model_run': proposal.model_run,
         'expires_at': proposal.expires_at.replace(tzinfo=ZoneInfo(get_system_timezone())).isoformat(), 'status': proposal.status}
     result['execution_ready']=not proposal.model_run or frappe.db.get_value('DS Model Run',proposal.model_run,'status')=='Succeeded'
     if outcome:
