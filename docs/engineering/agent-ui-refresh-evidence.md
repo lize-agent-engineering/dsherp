@@ -94,3 +94,57 @@ Frappe desk 的 navbar 用 Bootstrap 的 `.sticky-top`（`z-index:1020`）/ `.fi
 排查期间在验证容器内运行的一次性用户列表脚本导致 gunicorn worker 超时卡死，`dsherp-validation-backend-1` 已重启恢复，`/api/method/ping` 返回 200。
 
 站点数据的唯一改动是验收归档只读时对一个会话做的归档→恢复，已恢复原状；该操作只改 `DS Conversation.archived`，副作用是那个会话的 `modified` 时间被刷新，因而在列表中排到了最前。没有修改用户或配置，没有任何 ERP 业务写入。
+
+---
+
+# 第二轮：以对话为主体的重构
+
+第一轮把四个一级视图做成了平级标签，用户反馈"太乱、信息太平铺"，并明确要求参考 Codex / Claude Code 桌面版：待确认应绑定在会话里、执行的工具按发生位置显示在对话中、归档独立成设置页。本节记录这一轮。
+
+## DSH 侧的既有设计
+
+`deepseek_harness` SDK 的 `RunResult` 把一次运行建模为 `events: [{type, data}]`，并提供 `final_response(events)` / `finish_reason(events)`，事件类型形如 `assistant/message`、`turn/end` —— 与 Claude Code / Codex 渲染的事件流同构。
+
+但本项目的 runner（`dsherp/context_runner.py`）只保留 `final_response` 与 `finish_reason`，**丢弃 `result.events`**，没有任何地方持久化 DSH 事件流。真正被持久化的是 `DS Model Run.sources`：服务端在 `run_tool` 里逐条记录并逐次重新授权的 ERP 读取（工具名、参数、读到的字段与记录、版本）。
+
+因此对话里显示的"工具调用"取自 `sources`，是服务端已授权的真实读取，而不是模型自述的步骤。**代价要说清楚**：`sources` 不含逐条时间戳，只有追加顺序，所以能还原"在这一轮的第几步"，但还原不了每次调用的墙钟时间；要精确到时间需要在写入 `sources` 时加时间戳，那是一次后端写入路径的改动，本轮没有做。
+
+## 后端改动（只在已授权的读取序列化里补字段）
+
+| 位置 | 改动 | 为什么安全 |
+| --- | --- | --- |
+| `context_api._public` | 每条消息补 `sources` | 同一函数本就对这批数据调用 `authorize_sources`（逐字段、逐记录复查读权限，权限变了就抛错），暴露它没有放宽任何访问 |
+| `operations.get_proposal` | 补 `model_run` | 该字段本就存在于 `DS Operation Proposal`，`execution_ready` 已在读它 |
+| `configuration.get_bundle` | 补 `model_run` | 取自 payload，`_origin` 已在读它 |
+
+没有新增接口、没有改变任何接口语义、没有改动 HITL 或配置执行路径。新增 `tests/integration/test_context_transcript.py` 覆盖：消息带回自己那一轮的工具读取、提案带回产生它的运行。
+
+## 信息架构
+
+- **对话是唯一主表面**：删掉一级标签栏。Frappe 页面头部已有标题，页面内不再重复。
+- **待确认回到会话里**：提案／配置确认按 `model_run` 落在产生它的那条消息下（`agent-transcript.js`，纯函数 + 单测）。归属不明的条目单列在"未能归属到具体消息"，如实说明不推测。
+- **工具调用内联**：每轮的 ERP 读取以安静的单行事件显示在回答之上。
+- **会话栏状态点**：橙点＝有待确认（来自既有 `list_pending`），蓝点＝有本机未看过的新消息（`localStorage`，首次见到的会话不标记，避免满屏蓝点）。颜色不单独承载含义——状态同时写进按钮的可访问名。
+- **新建会话**移到会话栏顶部的图标按钮。
+- **执行记录**降为会话栏底部的次级入口。
+- **应用配置 + 已归档对话**移入 **Agent 设置**：用 Frappe 原生 `page.add_button("Agent 设置", …, {icon:"setting-gear"})` 注册在页面头部右上角（它同时自动生成移动端菜单项）。设置内部是 Codex 式的分区导航；以后所有 Agent 配置相关内容都进这里。
+- **归档**：会话栏不再有"进行中／已归档"切换，左栏只列进行中；归档列表成为设置里的独立页，可搜索、可取消归档、可直接打开（只读）。没有删除操作——后端没有删除接口，就不做出有这个能力的样子。
+- 右侧上下文栏删除，事实收进对话标题行下可展开的一行。
+
+前端新增 `agent-transcript.js`、`AgentRecords.jsx`、`AgentArchive.jsx`，`mount()` 返回的句柄带上 `openSettings`，交给原生页面头部调用。
+
+## 本轮验证
+
+- 前端 129 用例通过（含时间线归属、工具内联、设置内归档取消、渐次加载等新用例）；生产构建通过；设计检测器 0 项。
+- 后端集成回归全量通过：105 passed。
+- 真实浏览器（1440×900 与 390×844）：对话主表面、工具内联（`读取 Item 结构 / 69 个字段`）、提案落在其消息下、原生 Agent 设置按钮、设置内两个分区、归档→设置→取消归档端到端可逆（结束时回到 7 进行中 / 0 归档）、390 下会话抽屉关闭按钮三点命中且指针序列可关闭。
+
+## 两次误判，记录在此
+
+1. 一度以为 `destroyOnHidden` 破坏了抽屉展开动画。真实原因是 Browser 面板隐藏时 `document.hidden === true`，rAF 被节流，rc-motion 的进入过渡没走完，导致读到的 transform 停在起始值。面板置前并产生真实帧后读数正常。虽然结论是"没有 bug"，仍保留了改动：设置内容改为"保持挂载 + 令牌刷新"，比每次重挂更好——不闪骨架屏，也不会让测试拿到已脱离文档的节点。
+2. 记录视图"没撑满高度"同样是截图合成的缩放假象，实测详情面板底部正好落在视口底部。
+
+## 部署注意
+
+Frappe 把 Desk Page 的 JS 缓存在浏览器 `localStorage`（`_page:<name>`），并由 `metadata_version` 决定失效。改动 `dsherp_agent.js` 后，仅重启后端不足以让已有会话看到新页面头部按钮；需要站点缓存清理并让 `metadata_version` 变化，否则用户会继续拿到旧的页面脚本。本次验证中是手动清掉了 `_page:dsherp-agent` 才看到 Agent 设置按钮。
+
