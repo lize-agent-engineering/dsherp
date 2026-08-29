@@ -1,38 +1,16 @@
 @import "./agent-theme.css";
 
-/* The Frappe page already prints the title, so the workbench opens straight
-   into its own command bar: views on the left, actions on the right. */
+/* The Frappe page head carries the title and the Agent settings button, so the
+   workbench opens straight into the conversation: one rail, one surface. */
 .dsh-workbench {
   display: flex;
   height: calc(100vh - var(--dsh-wb-top, var(--navbar-height, 48px)));
   flex-direction: column;
   background: var(--dsh-canvas);
 }
-.dsh-wb-bar {
-  display: flex;
-  height: 52px;
-  flex: none;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--dsh-line);
-  background: var(--dsh-panel);
-}
-.dsh-wb-tabs.ant-tabs { min-width: 0; }
-.dsh-wb-tabs .ant-tabs-nav { height: 51px; margin: 0; }
-.dsh-wb-tabs .ant-tabs-nav::before { border: 0; }
-.dsh-wb-tabs .ant-tabs-tab { padding: 14px 2px; font-size: var(--dsh-fs-base); }
-.dsh-wb-tabs .ant-tabs-tab + .ant-tabs-tab { margin-left: 22px; }
-.dsh-wb-tabs .ant-tabs-tab-btn { color: var(--dsh-muted); }
-.dsh-wb-tabs .ant-tabs-tab-active .ant-tabs-tab-btn { color: var(--dsh-ink) !important; font-weight: 600; }
-.dsh-wb-tabs .ant-tabs-ink-bar { height: 2px; background: var(--dsh-accent); }
-.dsh-wb-bar-actions { display: flex; flex: none; align-items: center; gap: 6px; }
-.dsh-wb-bar-actions .ant-btn-primary:not(:disabled) { background: var(--dsh-accent); box-shadow: none; }
-.dsh-wb-bar-actions .ant-btn-primary:not(:disabled):hover { background: var(--dsh-accent-hover) !important; }
-.dsh-wb-context-toggle { color: var(--dsh-muted); }
-.dsh-wb-context-toggle[aria-pressed="true"] { background: var(--dsh-accent-soft); color: var(--dsh-accent-ink); }
-.dsh-wb-mobile-actions { display: none; }
+.dsh-wb-body { display: flex; min-height: 0; flex: 1; }
+.dsh-wb-desktop-rail { flex: none; width: 272px; border-right: 1px solid var(--dsh-line); background: var(--dsh-panel); }
+.dsh-wb-main { display: flex; min-width: 0; flex: 1; }
 
 .dsh-wb-error {
   display: flex;
@@ -49,108 +27,179 @@
 .dsh-wb-error strong { display: block; font-size: var(--dsh-fs-body); }
 .dsh-wb-error small { display: block; font-size: var(--dsh-fs-micro); opacity: .82; }
 
-.dsh-wb-body { min-height: 0; flex: 1; background: transparent; }
-.dsh-workbench .ant-layout-content { display: flex; min-width: 0; }
-.dsh-wb-desktop-sessions,
-.dsh-wb-desktop-context { height: 100%; background: var(--dsh-panel) !important; }
-.dsh-wb-desktop-sessions { border-right: 1px solid var(--dsh-line); }
-.dsh-wb-desktop-context { border-left: 1px solid var(--dsh-line); }
-
 /* Session rail */
-.dsh-wb-sessions { display: flex; height: 100%; flex-direction: column; }
-.dsh-wb-sessions-head { flex: none; padding: 14px 14px 10px; }
-.dsh-wb-filter {
+.dsh-rail { display: flex; height: 100%; flex-direction: column; }
+.dsh-rail > :not(.dsh-rail-list) { flex: none; }
+.dsh-rail-head { display: flex; align-items: center; gap: 4px; padding: 12px 10px 8px 12px; }
+.dsh-rail-head .ant-input-search { min-width: 0; flex: 1; }
+.dsh-rail-head > .ant-btn { width: 32px; height: 32px; flex: none; color: var(--dsh-muted); }
+.dsh-rail-head > .ant-btn:hover { color: var(--dsh-accent-ink) !important; background: var(--dsh-accent-soft) !important; }
+.dsh-rail-filter {
   display: flex;
   gap: 2px;
-  margin-top: 10px;
+  margin: 0 12px 8px;
   padding: 2px;
   border-radius: var(--dsh-r-2);
   background: var(--dsh-sunken);
 }
-.dsh-wb-filter .ant-btn {
-  height: 28px;
+.dsh-rail-filter .ant-btn {
+  height: 26px;
   flex: 1;
   border-radius: var(--dsh-r-1);
   color: var(--dsh-muted);
   font-size: var(--dsh-fs-meta);
 }
-.dsh-wb-filter .dsh-is-on {
+.dsh-rail-filter .dsh-is-on {
   background: var(--dsh-panel) !important;
   color: var(--dsh-ink) !important;
   font-weight: 600;
   box-shadow: var(--dsh-shadow-1);
 }
-.dsh-wb-session-list { min-height: 0; flex: 1; overflow-y: auto; padding: 0 8px 8px; }
-.dsh-wb-group {
+.dsh-rail-list { min-height: 0; flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+.dsh-rail-group {
   position: sticky;
   top: 0;
   z-index: 1;
-  margin: 10px 0 4px;
+  margin: 8px 0 3px;
   padding: 5px 6px;
   background: var(--dsh-panel);
 }
-.dsh-wb-session {
-  display: flex !important;
+.dsh-rail-item {
+  display: flex;
   width: 100%;
-  height: auto !important;
-  flex-direction: column;
-  align-items: flex-start !important;
-  gap: 3px;
-  padding: 8px 10px !important;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
   border-radius: var(--dsh-r-2);
+  background: none;
+  color: inherit;
   text-align: left;
+  cursor: pointer;
   transition: background var(--dsh-dur-2) var(--dsh-ease);
 }
-.dsh-wb-session:hover { background: var(--dsh-sunken) !important; }
-.dsh-wb-session.dsh-is-current { background: var(--dsh-accent-soft) !important; }
-.dsh-wb-session.dsh-is-current .dsh-wb-session-title { color: var(--dsh-accent-ink); font-weight: 600; }
-.dsh-wb-session-title {
+.dsh-rail-item:hover { background: var(--dsh-sunken); }
+.dsh-rail-item.dsh-is-current { background: var(--dsh-accent-soft); }
+.dsh-rail-item.dsh-is-current .dsh-rail-title { color: var(--dsh-accent-ink); font-weight: 600; }
+/* Colour never carries the meaning alone: the state is in the accessible name. */
+.dsh-rail-dot {
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: transparent;
+}
+.dsh-rail-dot.dsh-is-waiting { background: #c8791b; }
+.dsh-rail-dot.dsh-is-unread { background: #2f6fd0; }
+.dsh-rail-item-main { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.dsh-rail-title {
   display: -webkit-box;
   overflow: hidden;
-  max-width: 100%;
   color: var(--dsh-ink);
   font-size: var(--dsh-fs-body);
   line-height: 1.45;
-  white-space: normal;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
-.dsh-wb-session-meta {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--dsh-muted);
-  font-size: var(--dsh-fs-micro);
-  font-weight: 400;
-}
-.dsh-wb-session-skeleton { display: flex; flex-direction: column; gap: 14px; padding: 12px 6px; }
-.dsh-wb-session-skeleton > div { display: flex; flex-direction: column; gap: 6px; }
-.dsh-wb-session-actions {
-  display: flex;
-  flex: none;
-  gap: 4px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--dsh-line);
-}
-.dsh-wb-session-actions .ant-btn { color: var(--dsh-muted); font-size: var(--dsh-fs-meta); }
-.dsh-wb-session-actions .ant-btn:hover { color: var(--dsh-accent-ink) !important; background: var(--dsh-accent-soft) !important; }
-
-/* Conversation */
-.dsh-wb-chat {
+.dsh-rail-meta { display: flex; gap: 8px; color: var(--dsh-muted); font-size: var(--dsh-fs-micro); }
+.dsh-rail-foot { padding: 6px 8px 8px; border-top: 1px solid var(--dsh-line); }
+.dsh-rail-link {
   display: flex;
   width: 100%;
-  max-width: 880px;
-  height: 100%;
-  flex-direction: column;
-  margin: 0 auto;
-  padding: 0 24px 18px;
-}
-.dsh-wb-readonly {
-  display: flex;
-  flex: none;
   align-items: center;
   gap: 8px;
-  margin: 14px 0 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--dsh-r-2);
+  background: none;
+  color: var(--dsh-muted);
+  font-size: var(--dsh-fs-body);
+  text-align: left;
+  cursor: pointer;
+}
+.dsh-rail-link:hover { background: var(--dsh-sunken); color: var(--dsh-ink-2); }
+.dsh-rail-link.dsh-is-current { background: var(--dsh-accent-soft); color: var(--dsh-accent-ink); font-weight: 600; }
+.dsh-wb-session-skeleton { display: flex; flex-direction: column; gap: 14px; padding: 12px 6px; }
+.dsh-wb-session-skeleton > div { display: flex; flex-direction: column; gap: 6px; }
+
+/* Conversation */
+.dsh-wb-chat,
+.dsh-wb-records-view {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  flex-direction: column;
+}
+.dsh-wb-chat > :not(.dsh-wb-timeline),
+.dsh-wb-records-view > :not(.dsh-wb-records) { flex: none; }
+.dsh-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 22px;
+  border-bottom: 1px solid var(--dsh-line);
+  background: var(--dsh-panel);
+}
+.dsh-chat-rail-toggle { display: none; color: var(--dsh-muted); }
+.dsh-chat-identity { min-width: 0; flex: 1; }
+.dsh-chat-title {
+  overflow: hidden;
+  margin: 0;
+  color: var(--dsh-ink);
+  font-size: var(--dsh-fs-lg);
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-chat-identity > .dsh-meta { margin: 2px 0 0; }
+.dsh-chat-rename { display: flex; gap: 6px; }
+.dsh-chat-facts-toggle {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dsh-muted);
+  font-size: var(--dsh-fs-micro);
+  cursor: pointer;
+}
+.dsh-chat-facts-toggle:hover { color: var(--dsh-accent-ink); }
+.dsh-chat-facts-toggle > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-chat-facts-toggle .anticon:last-child { font-size: 9px; transition: transform var(--dsh-dur-2) var(--dsh-ease); }
+.dsh-chat-facts-toggle .dsh-is-open { transform: rotate(180deg); }
+.dsh-chat-pending { flex: none; }
+.dsh-chat-actions { display: flex; flex: none; gap: 2px; }
+.dsh-chat-actions .ant-btn { color: var(--dsh-muted); }
+.dsh-chat-actions .ant-btn:hover { color: var(--dsh-accent-ink) !important; background: var(--dsh-accent-soft) !important; }
+.dsh-chat-facts {
+  margin: 0;
+  padding: 12px 22px;
+  border-bottom: 1px solid var(--dsh-line);
+  background: var(--dsh-rail);
+  animation: dsh-rise var(--dsh-dur-2) var(--dsh-ease);
+}
+.dsh-chat-facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 3px 0; }
+.dsh-chat-facts dt { flex: none; color: var(--dsh-muted); font-size: var(--dsh-fs-micro); }
+.dsh-chat-facts dd { min-width: 0; margin: 0; color: var(--dsh-ink-2); font-size: var(--dsh-fs-meta); text-align: right; overflow-wrap: anywhere; }
+.dsh-chat-facts p { margin: 8px 0 0; color: var(--dsh-muted); font-size: var(--dsh-fs-micro); line-height: 1.7; }
+
+.dsh-wb-readonly {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px auto 0;
+  width: min(100%, 880px);
   padding: 8px 12px;
   border: 1px solid var(--dsh-line-strong);
   border-radius: var(--dsh-r-2);
@@ -163,10 +212,10 @@
   min-height: 0;
   flex: 1;
   overflow-y: auto;
-  padding: 22px 4px 12px;
+  padding: 24px max(22px, calc(50% - 440px)) 12px;
   scroll-behavior: smooth;
 }
-.dsh-wb-message { padding-bottom: 26px; animation: dsh-rise var(--dsh-dur-3) var(--dsh-ease); }
+.dsh-wb-message { padding-bottom: 28px; animation: dsh-rise var(--dsh-dur-3) var(--dsh-ease); }
 .dsh-wb-user {
   width: fit-content;
   max-width: 78%;
@@ -194,7 +243,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.dsh-wb-reply { display: flex; gap: 11px; margin-top: 16px; }
+.dsh-wb-reply { display: flex; gap: 11px; margin-top: 14px; }
 .dsh-wb-reply-mark {
   display: grid;
   flex: none;
@@ -247,6 +296,8 @@
   font-size: var(--dsh-fs-meta);
   line-height: 1.6;
 }
+.dsh-wb-loose { padding-bottom: 24px; }
+.dsh-wb-loose .dsh-label { display: block; margin-bottom: 2px; }
 .dsh-wb-chat-skeleton { display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
 .dsh-wb-jump {
   align-self: center;
@@ -263,7 +314,8 @@
 }
 
 .dsh-wb-composer {
-  flex: none;
+  width: min(100%, 880px);
+  margin: 0 auto 18px;
   padding: 9px;
   border: 1px solid var(--dsh-line-strong);
   border-radius: var(--dsh-r-3);
@@ -278,12 +330,7 @@
   box-shadow: none !important;
   resize: none;
 }
-.dsh-wb-composer-tools {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 3px 0;
-}
+.dsh-wb-composer-tools { display: flex; align-items: center; justify-content: space-between; padding: 4px 3px 0; }
 .dsh-wb-composer-left { display: flex; align-items: center; gap: 2px; }
 .dsh-wb-composer-left .ant-btn { color: var(--dsh-muted); }
 .dsh-wb-composer-left .ant-btn:hover { color: var(--dsh-accent-ink) !important; background: var(--dsh-accent-soft) !important; }
@@ -310,24 +357,11 @@
   color: var(--dsh-ink-2);
   font-size: var(--dsh-fs-micro);
 }
-.dsh-wb-attachment strong {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.dsh-wb-attachment strong { min-width: 0; flex: 1; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .dsh-wb-attachment-error { display: block; margin: 2px 8px 6px; color: var(--dsh-danger-ink); font-size: var(--dsh-fs-micro); }
 
-/* Records: a real master–detail. The list keeps object, kind, status, age and
-   expiry side by side; the detail resolves the record inside its own session. */
-.dsh-wb-records {
-  display: grid;
-  width: 100%;
-  height: 100%;
-  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
-}
+/* Records: master–detail, reused inside the settings drawer as a stack. */
+.dsh-wb-records { display: grid; min-height: 0; width: 100%; flex: 1; grid-template-columns: minmax(320px, 380px) minmax(0, 1fr); }
 .dsh-wb-record-list {
   display: flex;
   min-height: 0;
@@ -380,7 +414,6 @@
 .dsh-wb-record-status { display: flex; flex: none; flex-direction: column; align-items: flex-end; gap: 4px; }
 .dsh-wb-record-expiry { color: var(--dsh-muted); font-size: var(--dsh-fs-micro); white-space: nowrap; }
 .dsh-wb-record-expiry.dsh-is-expired { color: var(--dsh-warning-ink); font-weight: 500; }
-
 .dsh-wb-detail { min-height: 0; overflow-y: auto; padding: 20px 24px 28px; }
 .dsh-wb-detail-head {
   display: flex;
@@ -398,56 +431,112 @@
 .dsh-wb-detail-open:hover { color: var(--dsh-accent-hover) !important; background: transparent !important; }
 .dsh-wb-detail .dsh-confirm { --dsh-fold-bg: var(--dsh-panel); }
 
-/* Context rail: facts about what this request will actually carry. */
-.dsh-wb-context { display: flex; height: 100%; flex-direction: column; gap: 18px; overflow-y: auto; padding: 18px 16px; }
-.dsh-wb-context > * { flex: none; }
-.dsh-wb-context-block { display: flex; flex-direction: column; gap: 8px; }
-.dsh-wb-context-object { display: flex; align-items: baseline; gap: 7px; color: var(--dsh-accent); }
-.dsh-wb-context-object strong { min-width: 0; color: var(--dsh-ink); font-size: var(--dsh-fs-base); font-weight: 600; overflow-wrap: anywhere; }
-.dsh-wb-facts { display: flex; flex-direction: column; gap: 7px; margin: 0; }
-.dsh-wb-facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.dsh-wb-facts dt { flex: none; color: var(--dsh-muted); font-size: var(--dsh-fs-micro); }
-.dsh-wb-facts dd {
-  min-width: 0;
-  margin: 0;
-  color: var(--dsh-ink-2);
-  font-size: var(--dsh-fs-meta);
-  text-align: right;
-  overflow-wrap: anywhere;
-}
-.dsh-wb-context-note { margin: auto 0 0; color: var(--dsh-muted); font-size: var(--dsh-fs-micro); line-height: 1.7; }
-
-/* The mobile panels are portalled above the native desk header, so their close
-   control is never intercepted by the Frappe navbar or app logo layer. */
+/* Agent settings: one place for every agent-configuration surface. */
 .dsh-wb-drawer { z-index: 1080; }
 .dsh-wb-drawer .ant-drawer-header { min-height: 52px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--dsh-line); }
 .dsh-wb-drawer .ant-drawer-body { padding: 0; }
 .dsh-wb-drawer .ant-drawer-extra .ant-btn { width: 34px; height: 34px; color: var(--dsh-muted); }
+.dsh-wb-settings .ant-drawer-body { display: flex; flex-direction: column; background: var(--dsh-canvas); }
+.dsh-settings-section { display: flex; min-height: 0; flex: 1; flex-direction: column; }
+.dsh-settings-section > h3 { margin: 0; padding: 16px 18px 4px; font-size: var(--dsh-fs-base); font-weight: 600; }
+.dsh-settings-section > .dsh-meta { margin: 0; padding: 0 18px 12px; line-height: 1.7; }
+.dsh-wb-records.dsh-is-stacked { display: flex; min-height: 0; flex: 1; flex-direction: column; }
+.dsh-wb-records.dsh-is-stacked .dsh-wb-record-list { max-height: 46%; border-right: 0; border-bottom: 1px solid var(--dsh-line); }
+.dsh-wb-records.dsh-is-stacked .dsh-wb-detail { flex: 1; padding: 16px 18px 24px; }
 
 @media (max-width: 900px) {
-  .dsh-wb-desktop-sessions,
-  .dsh-wb-desktop-context { display: none; }
-  .dsh-wb-mobile-actions { display: flex; gap: 2px; }
-  .dsh-wb-context-toggle { display: none; }
-  .dsh-wb-bar { padding: 0 12px; gap: 8px; }
-  .dsh-wb-tabs .ant-tabs-tab + .ant-tabs-tab { margin-left: 14px; }
-  .dsh-wb-chat { padding: 0 14px 12px; }
-  .dsh-wb-timeline { padding: 14px 0 10px; }
+  .dsh-wb-desktop-rail { display: none; }
+  .dsh-chat-rail-toggle { display: inline-flex; }
+  .dsh-chat-head { padding: 10px 14px; }
+  .dsh-chat-facts { padding: 12px 14px; }
+  .dsh-wb-timeline { padding: 16px 14px 10px; }
   .dsh-wb-user { max-width: 88%; }
+  .dsh-wb-composer { margin: 0 14px 14px; width: auto; }
+  .dsh-wb-readonly { width: auto; margin: 12px 14px 0; }
   .dsh-wb-records { grid-template-columns: minmax(0, 1fr); }
   .dsh-wb-records .dsh-wb-detail { display: none; }
   .dsh-wb-records.dsh-has-detail .dsh-wb-record-list { display: none; }
   .dsh-wb-records.dsh-has-detail .dsh-wb-detail { display: block; padding: 16px 14px 24px; }
+  .dsh-wb-records.dsh-is-stacked .dsh-wb-record-list { display: flex; max-height: 40%; }
+  .dsh-wb-records.dsh-is-stacked .dsh-wb-detail { display: block; }
   .dsh-wb-detail-back { display: inline-flex; }
 }
 @media (max-width: 560px) {
-  /* Keep all four views reachable without horizontal tab scrolling. */
-  .dsh-wb-bar { padding: 0 8px; gap: 4px; }
-  .dsh-wb-bar-actions { gap: 2px; }
-  .dsh-wb-bar-actions .ant-btn { padding-inline: 7px; }
-  .dsh-wb-bar-actions .ant-btn > span:not(.ant-btn-icon) { display: none; }
-  .dsh-wb-bar-actions .ant-btn-icon { margin-inline-end: 0 !important; }
-  .dsh-wb-tabs .ant-tabs-tab { font-size: var(--dsh-fs-body); }
-  .dsh-wb-tabs .ant-tabs-tab + .ant-tabs-tab { margin-left: 12px; }
+  .dsh-chat-title { font-size: var(--dsh-fs-base); }
   .dsh-wb-detail-head strong { font-size: var(--dsh-fs-lg); }
+}
+
+/* Agent settings is a small settings app of its own: a section rail on the
+   left, one surface at a time on the right. Everything agent-configuration
+   related belongs here rather than in the working chrome. */
+.dsh-settings { display: flex; min-height: 0; flex: 1; }
+.dsh-settings-nav {
+  display: flex;
+  width: 176px;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  padding: 14px 10px;
+  border-right: 1px solid var(--dsh-line);
+  background: var(--dsh-panel);
+}
+.dsh-settings-nav > .dsh-label { padding: 10px 8px 4px; }
+.dsh-settings-nav > .dsh-label:first-child { padding-top: 0; }
+.dsh-settings-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--dsh-r-2);
+  background: none;
+  color: var(--dsh-ink-2);
+  font-size: var(--dsh-fs-body);
+  text-align: left;
+  cursor: pointer;
+}
+.dsh-settings-tab:hover { background: var(--dsh-sunken); }
+.dsh-settings-tab.dsh-is-current { background: var(--dsh-accent-soft); color: var(--dsh-accent-ink); font-weight: 600; }
+
+.dsh-archive { display: flex; min-height: 0; flex: 1; flex-direction: column; padding: 0 18px 18px; }
+.dsh-archive > :not(.dsh-archive-list) { flex: none; }
+.dsh-archive-list { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 4px; overflow-y: auto; margin-top: 12px; }
+.dsh-archive-list > * { flex: none; }
+.dsh-archive-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--dsh-line);
+  border-radius: var(--dsh-r-2);
+  background: var(--dsh-panel);
+}
+.dsh-archive-open {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dsh-archive-title {
+  overflow: hidden;
+  color: var(--dsh-ink);
+  font-size: var(--dsh-fs-body);
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-archive-open:hover .dsh-archive-title { color: var(--dsh-accent-ink); }
+@media (max-width: 700px) {
+  .dsh-settings { flex-direction: column; }
+  .dsh-settings-nav { width: auto; flex-direction: row; overflow-x: auto; padding: 8px 10px; border-right: 0; border-bottom: 1px solid var(--dsh-line); }
+  .dsh-settings-nav > .dsh-label { display: none; }
+  .dsh-settings-tab { white-space: nowrap; }
 }
