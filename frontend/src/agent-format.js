@@ -22,8 +22,26 @@ export const recordKind = (kind) =>
 
 const MINUTE = 60000;
 const pad = (value) => String(value).padStart(2, '0');
+// Frappe sends naive datetimes in the site's timezone, which the browser parses
+// as local time. Grouping must use the same local calendar day: comparing a UTC
+// date against those strings puts a session from ten minutes ago under 更早.
+const parse = (value) => Date.parse(typeof value === 'string' ? value.replace(' ', 'T') : value);
+const startOfDay = (stamp) => {
+  const date = new Date(stamp);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+};
+export function dayGroup(value, now = Date.now()) {
+  const stamp = parse(value);
+  if (!Number.isFinite(stamp)) return '更早';
+  const days = Math.round((startOfDay(now) - startOfDay(stamp)) / 86400000);
+  if (days <= 0) return '今天';
+  if (days === 1) return '昨天';
+  return '更早';
+}
+
 export function relativeTime(value, now = Date.now()) {
-  const stamp = Date.parse(typeof value === 'string' ? value.replace(' ', 'T') : value);
+  const stamp = parse(value);
   if (!Number.isFinite(stamp)) return '';
   const minutes = Math.floor((now - stamp) / MINUTE);
   if (minutes < 1) return '刚刚';

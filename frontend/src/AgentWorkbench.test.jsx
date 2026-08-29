@@ -327,3 +327,34 @@ it("窄屏会话抽屉的关闭按钮有明确名称并能关闭面板", async (
   fireEvent.click(close);
   await waitFor(() => expect(screen.queryByRole("button", { name: "关闭会话面板" })).toBeNull());
 });
+
+it("会话按本地日历日分组，刚刚的会话不会掉进「更早」", async () => {
+  // 本地 2026-08-30 01:11：此刻 UTC 仍是 08-29，按 UTC 分组会把 29 分钟前的会话推进「更早」。
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 7, 30, 1, 11, 0));
+  try {
+    const api = vi.fn(async (method) => {
+      if (method === "search_sessions")
+        return {
+          items: [
+            { id: "S-1", title: "刚刚的会话", modified: "2026-08-30 00:42:00" },
+            { id: "S-2", title: "昨天下午的会话", modified: "2026-08-29 16:10:00" },
+            { id: "S-3", title: "上周的会话", modified: "2026-08-20 09:00:00" },
+          ],
+          has_more: false,
+        };
+      if (method === "get_session") return active;
+      return { items: [] };
+    });
+    render(<AgentWorkbench api={api} />);
+    const list = await within(rail()).findByRole("button", { name: "刚刚的会话" });
+    const groupOf = (button) =>
+      button.closest("section").querySelector(".dsh-rail-group").textContent;
+    expect(groupOf(list)).toBe("今天");
+    expect(groupOf(within(rail()).getByRole("button", { name: "昨天下午的会话" }))).toBe("昨天");
+    expect(groupOf(within(rail()).getByRole("button", { name: "上周的会话" }))).toBe("更早");
+    expect(within(list).getByText("29 分钟前")).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
+});

@@ -11,7 +11,7 @@ import ConfigurationBundle from "./ConfigurationBundle.jsx";
 import AgentRecords from "./AgentRecords.jsx";
 import AgentArchive from "./AgentArchive.jsx";
 import { ConfirmCard, EmptyState, LoadMore, Prose, SkeletonLine, Spark, StatusChip, ToolTrail } from "./agent-ui.jsx";
-import { relativeTime } from "./agent-format.js";
+import { dayGroup, relativeTime } from "./agent-format.js";
 import { buildTranscript, pendingCount } from "./agent-transcript.js";
 import "./AgentWorkbench.css";
 
@@ -330,11 +330,10 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
   }
 
   const grouped = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    return [
-      { title: "今天", items: sessions.filter((item) => item.modified?.slice(0, 10) === today) },
-      { title: "更早", items: sessions.filter((item) => item.modified?.slice(0, 10) !== today) },
-    ].filter((group) => group.items.length);
+    const order = ["今天", "昨天", "更早"];
+    const buckets = new Map(order.map((title) => [title, []]));
+    for (const item of sessions) buckets.get(dayGroup(item.modified)).push(item);
+    return order.map((title) => ({ title, items: buckets.get(title) })).filter((group) => group.items.length);
   }, [sessions]);
   const transcript = useMemo(() => buildTranscript(session), [session]);
   const pending = pendingCount(session);

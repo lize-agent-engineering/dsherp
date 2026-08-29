@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {statusTone,statusText,recordKind,relativeTime,expiryText,isExpired} from './agent-format.js';
+import {statusTone,statusText,recordKind,relativeTime,expiryText,isExpired,dayGroup} from './agent-format.js';
 
 it('把后端真实状态翻译成中文说明，但不改写原状态', () => {
  expect(statusText('Authorized')).toBe('已授权，结果待核实');
@@ -50,4 +50,22 @@ it('过期时间如实显示，已过期不掩饰', () => {
  expect(expiryText('2026-08-29 11:00:00', now)).toBe('已过期');
  expect(expiryText('2026-08-29 12:20:00', now)).toBe('20 分钟后过期');
  expect(expiryText(undefined, now)).toBe('无有效期，需重新提出');
+});
+
+it('会话分组按本地日历日，不拿 UTC 日期去比本地时间字符串', () => {
+ // 本地 2026-08-30 01:11，此刻 UTC 还是 08-29：用 UTC 日期分组会把刚刚的会话推进「更早」。
+ const now = Date.parse('2026-08-30 01:11:00');
+ expect(dayGroup('2026-08-30 00:42:00', now)).toBe('今天');
+ expect(dayGroup('2026-08-30 00:00:00', now)).toBe('今天');
+ expect(dayGroup('2026-08-29 04:10:00', now)).toBe('昨天');
+ expect(dayGroup('2026-08-29 23:59:59', now)).toBe('昨天');
+ expect(dayGroup('2026-08-20 09:00:00', now)).toBe('更早');
+ expect(dayGroup(undefined, now)).toBe('更早');
+ expect(dayGroup('not-a-date', now)).toBe('更早');
+});
+
+it('分组与相对时间对同一条记录不会互相矛盾', () => {
+ const now = Date.parse('2026-08-30 01:11:00');
+ expect(relativeTime('2026-08-30 00:42:00', now)).toBe('29 分钟前');
+ expect(dayGroup('2026-08-30 00:42:00', now)).toBe('今天');
 });
