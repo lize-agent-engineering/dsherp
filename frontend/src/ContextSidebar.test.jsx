@@ -9,6 +9,12 @@ const snapshot={schema_version:1,route:['Form','Item','I-1'],page_type:'form',do
 const session={id:'S-1',title:'查询物料',messages:[{id:'M-1',question:'旧问题',answer:'历史回答',status:'Succeeded',context:snapshot}],active_run:null};
 const open=()=>fireEvent.click(screen.getByRole('button',{name:'打开 Agent'}));
 const apiDefault=async(method)=>method==='list_sessions'?[{id:'S-1',title:'查询物料'}]:session;
+it('近期会话有更多记录时提供正式页面入口并定位当前会话',async()=>{
+ const api=async method=>method==='list_sessions'?{items:[{id:'S-1',title:'查询物料',archived:false}],has_more:true}:session;
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();await screen.findByText('历史回答');
+ fireEvent.click(screen.getByRole('button',{name:'打开会话历史'}));
+ expect(screen.getByRole('link',{name:'在页面中打开'}).getAttribute('href')).toBe('/app/dsherp-agent?session=S-1');
+});
 it('配置包准备确认后按同一包恢复，不重复显示或自动执行',async()=>{
  const bundle={id:'B1',digest:'b1',site:'preview.localhost',preview_available:true,execution_ready:true,changes:[{object:'Inspection',action:'新增 DocType',detail:'配置字段说明'}]};
  let confirmations=[];

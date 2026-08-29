@@ -135,8 +135,28 @@ def _public(doc):
     configurations=[get_confirmation(name) for name in frappe.get_all('DS Configuration Confirmation',
         filters={'bundle':['in',bundles]},pluck='name',order_by='creation asc')] if bundles else []
     from dsherp_bridge.configuration import get_bundle
-    return {'id':doc.name,'title':doc.title,'messages':messages,'active_run':active,'proposals':proposals,
+    return {'id':doc.name,'title':doc.title,'archived':bool(doc.archived),'messages':messages,'active_run':active,'proposals':proposals,
         'configuration_confirmations':configurations,'configuration_bundles':[get_bundle(name) for name in bundles]}
+
+
+def _summary(doc):
+    # Reauthorize provenance before exposing even a title or timestamp.
+    _public(doc)
+    return {'id':doc.name,'title':doc.title,'archived':bool(doc.archived),
+            'modified':str(doc.modified),'archived_at':str(doc.archived_at) if doc.archived_at else None}
+
+
+def _summaries(*, archived, query='', limit=None, offset=0):
+    filters={'owner':_user(),'archived':1 if archived else 0}
+    if query:
+        filters['title']=['like',f'%{query}%']
+    names=frappe.get_all('DS Conversation',filters=filters,pluck='name',order_by='modified desc')
+    visible=[]
+    for name in names:
+        try:visible.append(_summary(_conversation(name)))
+        except frappe.PermissionError:continue
+    page=visible[offset:offset+limit] if limit is not None else visible[offset:]
+    return page,len(visible)>offset+len(page)
 
 
 @frappe.whitelist(methods=['GET'])
@@ -146,16 +166,52 @@ def get_session(session_id):
 
 @frappe.whitelist(methods=['GET'])
 def list_sessions():
-    user=_user()
-    names=frappe.get_all('DS Conversation',filters={'owner':user},pluck='name',order_by='modified desc',limit_page_length=20)
-    result=[]
-    for name in names:
-        doc=_conversation(name)
-        # Reauthorize provenance before exposing even the conversation title.
-        try:_public(doc)
-        except frappe.PermissionError:continue
-        result.append({'id':name,'title':doc.title})
-    return result
+    items,has_more=_summaries(archived=False,limit=10)
+    return {'items':items,'has_more':has_more}
+
+
+@frappe.whitelist(methods=['GET'])
+def search_sessions(query='',page=1,archived=0):
+    _user()
+    if not isinstance(query,str) or len(query)>100:frappe.throw('会话搜索内容无效')
+    try:page=int(page);archived=int(archived)
+    except (TypeError,ValueError):frappe.throw('会话分页参数无效')
+    if page<1 or archived not in (0,1):frappe.throw('会话分页参数无效')
+    items,has_more=_summaries(archived=bool(archived),query=query.strip(),limit=20,offset=(page-1)*20)
+    return {'items':items,'page':page,'has_more':has_more}
+
+
+@frappe.whitelist(methods=['POST'])
+def rename_session(session_id,title):
+    if not isinstance(title,str) or not title.strip() or len(title.strip())>100:
+        frappe.throw('会话标题必须包含 1–100 个字符')
+    doc=_conversation(session_id)
+    doc.title=title.strip()
+    doc.save(ignore_permissions=True)
+    return _summary(doc)
+
+
+@frappe.whitelist(methods=['POST'])
+def archive_session(session_id):
+    doc=_conversation(session_id)
+    current=_public(doc)
+    if current['active_run']:_conflict('活动运行结束前不能归档会话')
+    if not doc.archived:
+        from frappe.utils import now_datetime
+        doc.archived=1
+        doc.archived_at=now_datetime()
+        doc.save(ignore_permissions=True)
+    return _summary(doc)
+
+
+@frappe.whitelist(methods=['POST'])
+def restore_session(session_id):
+    doc=_conversation(session_id)
+    if doc.archived:
+        doc.archived=0
+        doc.archived_at=None
+        doc.save(ignore_permissions=True)
+    return _summary(doc)
 
 
 @frappe.whitelist(methods=['POST'])
@@ -186,6 +242,7 @@ def send_message(question, context, request_id, session_id=None, domain='query')
     if session_id:
         doc=_conversation(session_id)
         current=_public(doc)
+        if doc.archived:_conflict('归档会话为只读，请先恢复')
         if current['active_run']:_conflict('本会话仍有运行，请等待或取消')
     else:
         doc=frappe.get_doc({'doctype':'DS Conversation','title':question.strip()[:100],

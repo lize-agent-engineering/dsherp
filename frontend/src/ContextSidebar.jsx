@@ -14,6 +14,7 @@ const visibleQuestion = question => question?.split('\n\n[用户附件：')[0];
 export default function ContextSidebar({api,capture=capturePageContext,options=contextOptions,captureSelected=selectedContext,pollInterval=5000}) {
   const [open,setOpen]=useState(false);
   const [sessions,setSessions]=useState([]);
+  const [hasMoreSessions,setHasMoreSessions]=useState(false);
   const [session,setSession]=useState(null);
   const [question,setQuestion]=useState('');
   const [domain,setDomain]=useState('query');
@@ -42,7 +43,8 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
       if(list){
         const history=await api('list_sessions');
         if(ticket!==generation.current)return;
-        setSessions(history);id=id??history[0]?.id;
+        const items=Array.isArray(history)?history:history.items;
+        setSessions(items);setHasMoreSessions(Boolean(history.has_more));id=id??items[0]?.id;
       }
       selected.current=id??null;
       if(id){
@@ -60,7 +62,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
   }
   function close(){
     visible.current=false;setOpen(false);generation.current++;
-    setSession(null);setSessions([]);setBusy(false);setHistoryOpen(false);pending.current=false;
+    setSession(null);setSessions([]);setHasMoreSessions(false);setBusy(false);setHistoryOpen(false);pending.current=false;
   }
   function fresh(){
     generation.current++;selected.current=null;pending.current=false;
@@ -140,6 +142,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
         <div className="dsh-agent-history-list">
           {sessions.length===0?<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史会话"/>:sessions.map(s=><Button type={s.id===session?.id?'primary':'text'} key={s.id} aria-label={s.title} onClick={()=>{setHistoryOpen(false);restore(s.id);}}><span>{s.title}</span></Button>)}
         </div>
+        {hasMoreSessions&&<a className="dsh-agent-history-more" href={`/app/dsherp-agent${session?.id?`?session=${encodeURIComponent(session.id)}`:''}`}>在页面中打开</a>}
       </aside>}
       <section className="dsh-agent-context" aria-label="当前页面上下文">
         <span className="dsh-agent-context-icon">⌁</span><div><small>当前页面</small><strong>{label(page)||'正在识别页面'}</strong></div>

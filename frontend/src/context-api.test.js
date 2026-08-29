@@ -66,6 +66,16 @@ it('业务会话走当前 Site 同源 GET，不接受模型指定 URL 或身份'
  await expect(api.contextApi('https://elsewhere')).rejects.toThrow(/不支持/);
  await expect(api.contextApi('get_session',{session_id:'S-1',user:'Administrator'})).rejects.toThrow(/参数/);
 });
+it('正式会话管理接口固定同源方法与参数',async()=>{
+ const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{items:[]}})}));vi.stubGlobal('fetch',fetch);vi.stubGlobal('frappe',{csrf_token:'test-csrf'});
+ await api.contextApi('search_sessions',{query:'物料',page:2,archived:0});
+ await api.contextApi('rename_session',{session_id:'S-1',title:'新标题'});
+ await api.contextApi('archive_session',{session_id:'S-1'});
+ await api.contextApi('restore_session',{session_id:'S-1'});
+ expect(fetch.mock.calls[0][0]).toBe('/api/method/dsherp_bridge.context_api.search_sessions?query=%E7%89%A9%E6%96%99&page=2&archived=0');
+ expect(fetch.mock.calls.slice(1).every(call=>call[1].method==='POST')).toBe(true);
+ await expect(api.contextApi('archive_session',{session_id:'S-1',user:'Administrator'})).rejects.toThrow(/参数/);
+});
 it('发送必须使用 CSRF、POST 和完整快照；缺少 CSRF 不请求',async()=>{
  const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{id:'S-1'}})}));vi.stubGlobal('fetch',fetch);
  vi.stubGlobal('frappe',{});

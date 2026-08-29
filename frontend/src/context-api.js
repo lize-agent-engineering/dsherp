@@ -1,6 +1,9 @@
 // Identity and authorization are determined by the authenticated business Site.
 const methods = {
   list_sessions:[], get_session:['session_id'],
+  search_sessions:['query','page','archived'],
+  rename_session:['session_id','title'],
+  archive_session:['session_id'], restore_session:['session_id'],
   send_message:['session_id','question','context','request_id','domain'],
   cancel_run:['session_id','run_id','request_id'],
   confirm_operation:['proposal_id','digest','request_id'],
@@ -27,7 +30,7 @@ export async function contextApi(method,params={},signal){
   if(method==='prepare_configuration_transfer')url='/api/method/dsherp_bridge.configuration_transfer.prepare_transfer';
   if(method==='prepare_configuration_publish')url='/api/method/dsherp_bridge.configuration_execution.prepare_publish';
   if(method==='accept_configuration_transfer')url='/api/method/dsherp_bridge.configuration_transfer.accept_transfer';
-  if(method==='list_sessions'||method==='get_session'||method==='verify_operation'||method==='verify_configuration'){
+  if(method==='list_sessions'||method==='get_session'||method==='search_sessions'||method==='verify_operation'||method==='verify_configuration'){
     const query=new URLSearchParams(params).toString();
     if(query)url+='?'+query;
   }else{

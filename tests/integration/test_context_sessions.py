@@ -118,3 +118,54 @@ def test_forged_context_identity_fails_but_stale_page_can_query_without_refresh(
     response=reader.post(API+'send_message',json=invalid)
     if response.status_code==200:created.append(response.json()['message']['id'])
     assert response.status_code==417
+
+def test_sidebar_lists_only_ten_recent_unarchived_sessions_with_has_more(clients,created):
+    reader,_=clients
+    for index in range(12):
+        data=send(reader,created,{**params(),'question':f'近期会话 {index:02d}'})
+        reader.post(API+'cancel_run',json={'session_id':data['id'],'run_id':data['active_run'],'request_id':uuid.uuid4().hex}).raise_for_status()
+    response=reader.get(API+'list_sessions')
+    assert response.status_code==200,response.text
+    result=response.json()['message']
+    assert len(result['items'])==10
+    assert result['has_more'] is True
+    assert all(item['archived'] is False for item in result['items'])
+
+def test_search_rename_archive_and_restore_session_lifecycle(clients,created):
+    reader,_=clients
+    first=send(reader,created,{**params(),'question':'今天的物料核对'})
+    reader.post(API+'cancel_run',json={'session_id':first['id'],'run_id':first['active_run'],'request_id':uuid.uuid4().hex}).raise_for_status()
+    second=send(reader,created,{**params(),'question':'更早的客户核对'})
+
+    active_archive=reader.post(API+'archive_session',json={'session_id':second['id']})
+    assert active_archive.status_code==409,active_archive.text
+
+    reader.post(API+'cancel_run',json={'session_id':second['id'],'run_id':second['active_run'],'request_id':uuid.uuid4().hex}).raise_for_status()
+    renamed=reader.post(API+'rename_session',json={'session_id':first['id'],'title':'物料核对结果'})
+    assert renamed.status_code==200,renamed.text
+    assert renamed.json()['message']['title']=='物料核对结果'
+
+    archived=reader.post(API+'archive_session',json={'session_id':first['id']})
+    assert archived.status_code==200,archived.text
+    assert archived.json()['message']['archived'] is True
+    assert reader.post(API+'send_message',json={**params(),'session_id':first['id']}).status_code==409
+
+    hidden=reader.get(API+'search_sessions',params={'query':'物料核对','page':1,'archived':0})
+    assert hidden.status_code==200,hidden.text
+    assert hidden.json()['message']['items']==[]
+    found=reader.get(API+'search_sessions',params={'query':'物料核对','page':1,'archived':1})
+    assert found.status_code==200,found.text
+    assert found.json()['message']['items'][0]['id']==first['id']
+
+    restored=reader.post(API+'restore_session',json={'session_id':first['id']})
+    assert restored.status_code==200,restored.text
+    assert restored.json()['message']['archived'] is False
+
+def test_session_management_never_exposes_other_users_sessions(clients,created):
+    reader,denied=clients
+    data=send(reader,created)
+    result=denied.get(API+'search_sessions',params={'query':'','page':1,'archived':0})
+    assert result.status_code==200,result.text
+    assert result.json()['message']['items']==[]
+    assert denied.post(API+'rename_session',json={'session_id':data['id'],'title':'越权'}).status_code==403
+    assert denied.post(API+'archive_session',json={'session_id':data['id']}).status_code==403

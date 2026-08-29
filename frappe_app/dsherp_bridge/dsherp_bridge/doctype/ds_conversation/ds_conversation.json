@@ -7,6 +7,8 @@
   "autoname": "hash",
   "field_order": [
     "title",
+    "archived",
+    "archived_at",
     "runtime_session",
     "runtime_revision"
   ],
@@ -15,6 +17,18 @@
       "fieldname": "title",
       "label": "title",
       "fieldtype": "Data"
+    },
+    {
+      "fieldname": "archived",
+      "label": "archived",
+      "fieldtype": "Check",
+      "default": "0"
+    },
+    {
+      "fieldname": "archived_at",
+      "label": "archived_at",
+      "fieldtype": "Datetime",
+      "read_only": 1
     },
     {
       "fieldname": "runtime_session",
