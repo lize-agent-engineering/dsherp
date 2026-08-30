@@ -149,3 +149,50 @@ Frappe desk 的 navbar 用 Bootstrap 的 `.sticky-top`（`z-index:1020`）/ `.fi
 
 Frappe 把 Desk Page 的 JS 缓存在浏览器 `localStorage`（`_page:<name>`），并由 `metadata_version` 决定失效。改动 `dsherp_agent.js` 后，仅重启后端不足以让已有会话看到新页面头部按钮；需要站点缓存清理并让 `metadata_version` 变化，否则用户会继续拿到旧的页面脚本。本次验证中是手动清掉了 `_page:dsherp-agent` 才看到 Agent 设置按钮。
 
+
+---
+
+# 第三轮：审查修复
+
+对第二轮的提交做了 10 角度审查（逐行、删除行为、跨文件、语言陷阱、包装正确性、复用、简化、效率、深度、规范）+ 逐条对抗验证，15 项发现全部处理。全程测试先行：每个行为修复先有失败用例。
+
+## 正确性修复
+
+- **轮询竞态**（`AgentWorkbench.jsx`）：会话轮询 effect 原本没有取消保护——切换会话时在途的 `get_session` 会用旧会话覆盖新会话，并在已清理的 effect 里重新挂上永远清不掉的定时器。现在 effect 内有 `stopped` 标志，await 之后先检查再落状态、再续期。
+- **stale closure**：`loadSessions` 的 `selected ?? items[0]` 读的是渲染闭包里的旧值，归档会话后会立即把它重新打开。引入 `selectedRef` + `select()`，所有异步路径读 ref。
+- **未读误标**：`seen` 只在点击会话时写一次，自己发消息刷新列表后当前会话反而变成"有新消息"。修复：当前打开的会话永不标未读，且打开期间列表刷新时同步把最新 `modified` 记为已读。
+- **状态点是快照**：待确认橙点/未读蓝点原本只在切会话时加载。现在轮询同时刷新 `list_pending` 与会话列表第一页（"加载更多"载入的后续页保留原样）。
+- **Safari 全部提案显示过期**：`isExpired`/`expiryText` 及三处内联副本（OperationProposal、ConfigurationProposal、ContextSidebar）仍裸调 `Date.parse`，空格分隔的 Frappe 时间在 WebKit 下是 NaN。统一改走导出的 `parseTime`（纯日期串也钉在本地零点，不再落回 UTC）。
+- **运行中工具不可见**：工具链被移进"回答出现后才渲染"的块里，Running 期间服务端已授权并随轮询下发的读取全被藏起。现在只要有已记录的读取，回复区就出现（回答仍按原条件渲染）。
+- **配置读取只剩参数行**：`toolEvents` 只认 `schema_version`/`record_versions`，而 `erp_read_configuration` 的 source 携带 `modules/roles/exists/version/configuration_revision`，全被丢弃。数据层现在原样透传全部服务端字段（不再在数据层拼"X 结构"这种展示串），措辞归 `ToolStep`。
+
+## 弹层与可访问性
+
+- **CSS 令牌失效**：`--dsh-*` 只定义在三个表面根类上，而 antd Popover portal 到 `document.body`，弹层内所有 `var()` 解析失败（等宽字体、分隔线、序号圆片全部回落）。把 `.dsh-chain-popover` 加进令牌作用域选择器。
+- **工具链触发器**：可访问名称现在包含可见文本"工具"（WCAG 2.5.3）；补 `aria-haspopup`/`aria-expanded`；弹层打开时焦点移入内容（`role="group"`），Esc 关闭并把焦点还给触发器；内容改为函数式渲染，不再每次渲染都构建整棵弹层 JSX。
+- **截断一致性**：基线版本清单与参数行同样遵守"截断必写真实总数"；服务端补的空 `query` 不再渲染成悬空的 `query=`。
+
+## 结构与清理
+
+- **共享 TranscriptTurn**：两个表面（工作台、页面侧栏）手工复制的整段轮次渲染（用户消息、上下文、回复+工具链、运行指示、错误、取消提示、确认卡）收敛为 `agent-turn.jsx` 的 `TranscriptTurn`/`TurnConfirmations`，类名经 `cx` 参数化，侧栏的 bundle 过滤/键、版本提示作为参数与子节点传入。本轮"同一改动做两遍"的问题从机制上消除。
+- **执行记录视图遗留**：`AgentRecords` 删掉不可达的 `stacked=false` 分支与 `locate()` 的 operation/config 分支（现在只服务配置记录）；随 flash 机制一起失效的锚点 id 移除；孤儿 CSS（`.dsh-rail-filter`、`.dsh-chat-identity > .dsh-meta`、records 网格布局及其媒体查询）删除；客户端不再映射 `list_execution_records`。**后端端点保留**——所属会话不可见的执行记录目前没有任何界面可见，是否需要审计入口是产品决定，端点与其集成测试原样留着。
+- **死胡同文案**：提案兜底错误从"请查看执行记录"（视图已删）改为指向本提案卡的核实入口；记录详情现在写明"所属会话"（读取失败时退回会话标识），"请在对话中核实"变得可执行。
+- **`openSettings` 如实返回**：入口句柄在工作台尚未注册处理器时返回 `false`，页面头部按钮据此弹"尚未加载完成"，不再被可选链静默吞掉。
+
+## 本轮验证
+
+前端 149 用例通过（20 文件）；生产构建通过；后端非集成 76 用例通过（本轮无 Python 改动，集成回归未跑——需要验证容器）。
+
+### 真实浏览器（dsherp-validation.localhost:18082，dsherp-writer@example.invalid）
+
+- 登录用容器内复刻 `login_as` 生成 sid（`bench browse --user` 需要 developer_mode，且它的 xdg-open 失败会把 gunicorn 容器带崩一次，已重启恢复）。
+- **真实浏览器抓到一个 jsdom 漏掉的 bug**：`useEffect([open])` 聚焦弹层在真实 antd 下不生效——真实弹层内容在打开动效后才挂载，effect 执行时 `chainRef.current` 还是 null；jsdom 同步挂载所以单测通过。补 `afterOpenChange` 聚焦（两条路径都保留），实测：点击 → `aria-expanded=true` 且焦点落在 `role=group` 弹层上；Esc → 关闭且焦点回到触发器。注意 Esc 只在焦点位于弹层内时生效（监听在弹层上），键盘用户焦点本来就在里面，符合设计。
+- 弹层 CSS 令牌修复实测生效：portal 到 body 的弹层内等宽字体、步骤分隔线、序号圆片背景、脚注边框全部按令牌解析（计算样式核对）。
+- 端到端两次真实 DeepSeek 运行（单工具与三工具只读查询，`context_worker --once` 手动领取）：发送 → 排队 → 执行 → 轮询取回回答 + 「工具 N」入口；三步链路展开显示 `doctype=Item，query=DSHERP` 参数、3 条涉及记录、逐条基线版本。省略/空参数不显示悬空 `query=`（本轮实测查询均带 query，空 query 形态由单测覆盖）。
+- 「运行中就地显示工具读取」：两次真实运行的工具调用都在两个 5 秒轮询点之间一次性完成，Running+sources 的中间态没被轮询捕获到——这是短运行的时序特性，不是渲染缺陷；该行为由单测钉住（Running 状态 + sources → 入口渲染）。
+- 归档→恢复端到端可逆：归档后**不再重新打开该会话**（旧 stale-closure bug 的真实浏览器复核），落到剩余会话；设置→已归档→取消归档后 7 个会话全部回来。恢复会刷新 modified，该会话在未打开状态下出现蓝色「有新消息」点——与未读语义一致。
+- 左栏橙点（待确认）/蓝点实测正常；当前打开的会话在自己发消息后不出现蓝点。
+- 390×844：无横向溢出，链路弹层宽 297px（≤84vw 上限），会话抽屉汉堡入口正常。
+- **轮询在 `document.visibilityState === 'hidden'` 时按设计跳过取数**——在 Browser 面板隐藏时页面永远"排队中"是面板环境的可见性问题，真实前台标签页不受影响（覆写 visibilityState 后轮询立即恢复并取回结果，作为佐证）。
+
+副作用：验证会话里新增两轮真实只读查询问答；一次归档→恢复让该会话 modified 刷新。`dsherp_agent.js` 有改动，部署时仍需注意上文的 `_page:dsherp-agent` 缓存问题。
