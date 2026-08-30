@@ -3,6 +3,9 @@
    surface roots so nothing leaks into the surrounding Frappe desk. */
 .dsh-agent-drawer,
 .dsh-agent-launcher,
+/* The tool-chain popover portals to document.body, outside every surface
+   root; it must carry the tokens itself or all its var() lookups fail. */
+.dsh-chain-popover,
 .dsh-workbench {
   --dsh-canvas: #f2f5f4;
   --dsh-panel: #fff;
@@ -352,6 +355,9 @@
 }
 .dsh-chain-popover .ant-popover-inner { padding: 0; border-radius: var(--dsh-r-3); }
 .dsh-chain { width: min(84vw, 380px); }
+/* Focus lands here programmatically when the popover opens; the ring belongs
+   on the steps inside, not the whole panel. */
+.dsh-chain:focus { outline: none; }
 .dsh-chain-list { margin: 0; padding: 6px; list-style: none; max-height: 320px; overflow-y: auto; }
 .dsh-chain-step + .dsh-chain-step { border-top: 1px solid var(--dsh-line); }
 .dsh-chain-head {

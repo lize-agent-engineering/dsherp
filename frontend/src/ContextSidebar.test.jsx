@@ -244,7 +244,7 @@ it('本轮实际发生的 ERP 读取跟着它那条消息显示，提案落在�
  };
  render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
  const turn=(await screen.findByText('历史回答')).closest('article');
- fireEvent.click(within(turn).getByRole('button',{name:'查看本轮 ERP 读取（2 次）'}));
+ fireEvent.click(within(turn).getByRole('button',{name:'工具：查看本轮 ERP 读取（2 次）'}));
  const chain=await screen.findByLabelText('本轮 ERP 读取');
  expect(within(chain).getByText('读取 Item / I-1')).toBeTruthy();
  expect(within(chain).getByText('搜索 Item：合成')).toBeTruthy();

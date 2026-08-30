@@ -16,22 +16,34 @@ export function toolEvents(sources = []) {
   return (sources ?? []).map((source, index) => {
     const records = source.records ?? [];
     const fields = source.fields ?? [];
-    const versions = source.schema_version
-      ? { [`${source.arguments?.doctype} 结构`]: source.schema_version }
-      : (source.record_versions ?? null);
+    const modules = source.modules ?? [];
+    const roles = source.roles ?? [];
     return {
       key: `${index}:${source.tool}`,
       step: index + 1,
       tool: source.tool,
       label: toolNames[source.tool]?.(source) ?? source.tool,
-      detail: [fields.length ? `${fields.length} 个字段` : '', records.length ? `${records.length} 条记录` : '']
+      detail: [
+        fields.length ? `${fields.length} 个字段` : '',
+        records.length ? `${records.length} 条记录` : '',
+        modules.length ? `${modules.length} 个模块` : '',
+        roles.length ? `${roles.length} 个角色` : '',
+      ]
         .filter(Boolean)
         .join(' · '),
       doctype: source.arguments?.doctype ?? null,
       arguments: source.arguments ?? null,
       records,
       fields,
-      versions,
+      modules,
+      roles,
+      // Baselines are passed through as the server recorded them; how they are
+      // worded is the presentation layer's business.
+      schemaVersion: source.schema_version ?? null,
+      recordVersions: source.record_versions ?? null,
+      exists: source.exists ?? null,
+      configVersion: source.version ?? null,
+      configRevision: source.configuration_revision ?? null,
     };
   });
 }

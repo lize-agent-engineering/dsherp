@@ -1,19 +1,16 @@
 import React, {useEffect,useRef,useState} from 'react';
 import {Button,Drawer,Empty,Input,Select} from 'antd';
-import {ArrowUpOutlined,CloseOutlined,FormOutlined,HistoryOutlined,LinkOutlined,PaperClipOutlined,ReloadOutlined,SafetyCertificateOutlined,SettingOutlined,SwapOutlined,WarningFilled} from '@ant-design/icons';
+import {ArrowUpOutlined,CloseOutlined,FormOutlined,HistoryOutlined,LinkOutlined,PaperClipOutlined,ReloadOutlined,WarningFilled} from '@ant-design/icons';
 import './ContextSidebar.css';
 import {capturePageContext,contextOptions,selectedContext} from './page-context.js';
-import {relativeTime} from './agent-format.js';
-import {ConfirmCard,Prose,Spark,StatusChip,ToolChain} from './agent-ui.jsx';
+import {parseTime,relativeTime} from './agent-format.js';
+import {Spark} from './agent-ui.jsx';
+import {TranscriptTurn,TurnConfirmations} from './agent-turn.jsx';
 import {buildTranscript} from './agent-transcript.js';
-import OperationProposal from './OperationProposal.jsx';
-import ConfigurationProposal from './ConfigurationProposal.jsx';
-import ConfigurationBundle from './ConfigurationBundle.jsx';
 
 const label = context => context?.page_type === 'unknown' ? context.reason : [context?.doctype,context?.name].filter(Boolean).join(' / ');
-const blocksBundle = proposal => proposal.status!=='Pending'||!Number.isFinite(Date.parse(proposal.expires_at))||Date.parse(proposal.expires_at)>Date.now();
-const visibleQuestion = question => question?.split('\n\n[用户附件：')[0];
-const runPhase = {Queued:'已排队，等待运行',Running:'正在处理',Cancelling:'正在取消'};
+const blocksBundle = proposal => proposal.status!=='Pending'||!Number.isFinite(parseTime(proposal.expires_at))||parseTime(proposal.expires_at)>Date.now();
+const turnClasses = {user:'dsh-agent-user-message',meta:'dsh-agent-message-meta',reply:'dsh-agent-reply',replyMark:'dsh-agent-reply-mark',answer:'dsh-agent-answer',thinking:'dsh-agent-thinking',alert:'dsh-agent-alert',notice:'dsh-agent-notice'};
 const suggestions = [
   {text:'概括当前页面可用信息',hint:'只读，不改动任何记录'},
   {text:'帮我查找相关业务记录',hint:'不限当前页面，按你的权限检索'},
@@ -152,24 +149,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
   const empty=!session?.messages?.length&&!session?.proposals?.length&&!session?.configuration_bundles?.length&&!session?.configuration_confirmations?.length;
   const transcript=buildTranscript(session);
   const openBundles=list=>list.filter(bundle=>!session?.configuration_confirmations?.some(proposal=>proposal.bundle_id===bundle.id&&blocksBundle(proposal)));
-  const confirmations=group=><>
-    {group.proposals.map(proposal=>
-      <ConfirmCard key={proposal.id} icon={<SwapOutlined aria-hidden="true"/>} title={proposal.status==='Pending'?'待你确认的业务操作':'业务操作'}
-        meta={<StatusChip status={proposal.status}/>}>
-        <OperationProposal proposal={proposal} onConfirm={binding=>api('confirm_operation',binding)} onVerify={binding=>api('verify_operation',binding)}/>
-      </ConfirmCard>)}
-    {openBundles(group.bundles).map(bundle=>
-      <ConfirmCard key={`${bundle.id}:${bundle.digest}`} icon={<SettingOutlined aria-hidden="true"/>} title="应用配置提案">
-        <ConfigurationBundle bundle={bundle}
-          onPrepare={binding=>api('prepare_configuration_preview',binding)} onTransfer={binding=>api('prepare_configuration_transfer',binding)}
-          onPublish={binding=>api('prepare_configuration_publish',binding)} onConfirm={binding=>api(bundle.preview_available?'confirm_configuration':'confirm_configuration_publish',binding)}/>
-      </ConfirmCard>)}
-    {group.confirmations.map(proposal=>
-      <ConfirmCard key={proposal.id} icon={<SafetyCertificateOutlined aria-hidden="true"/>} title={`${proposal.status==='Pending'?'待你确认的':''}${proposal.purpose==='publish'?'配置发布':'隔离预览'}`}
-        meta={<StatusChip status={proposal.status}/>}>
-        <ConfigurationProposal proposal={proposal} onConfirm={binding=>api(proposal.purpose==='publish'?'confirm_configuration_publish':'confirm_configuration',binding)} onVerify={binding=>api('verify_configuration',binding)}/>
-      </ConfirmCard>)}
-  </>;
+  const confirmations=group=><TurnConfirmations group={group} api={api} filterBundles={openBundles} bundleKey={bundle=>`${bundle.id}:${bundle.digest}`}/>;
   return <>
     {!open&&<Button aria-label="打开 Agent" shape="round" onClick={show} className="dsh-agent-launcher"><Spark size={14} className="dsh-agent-spark"/> Agent</Button>}
     <Drawer
@@ -222,17 +202,9 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
         </div>}
         {busy&&!session&&<div className="dsh-agent-thinking"><i/><span>正在读取会话状态</span></div>}
         {transcript.turns.map(turn=><article key={turn.message.id} className="dsh-agent-message">
-          <div className="dsh-agent-user-message">{visibleQuestion(turn.message.question)}</div>
-          <div className="dsh-agent-message-meta"><LinkOutlined aria-hidden="true"/><code>{label(turn.message.context)}</code></div>
-          {turn.message.context?.server_version&&turn.message.context.server_version!==turn.message.context.version&&<p className="dsh-agent-notice">页面版本与服务器已保存版本不同；查询以实际读取为准，未保存内容不会被覆盖。</p>}
-          {(turn.message.answer||!runPhase[turn.message.status])&&<div className="dsh-agent-reply">
-            <span className="dsh-agent-reply-mark"><Spark size={12}/></span>
-            <div className="dsh-agent-answer"><Prose>{turn.message.answer}</Prose><ToolChain events={turn.tools}/></div>
-          </div>}
-          {runPhase[turn.message.status]&&<div className="dsh-agent-thinking"><i/><span>{runPhase[turn.message.status]}</span></div>}
-          {turn.message.error&&<div className="dsh-agent-alert" role="alert"><WarningFilled aria-hidden="true"/><span>{turn.message.error}</span></div>}
-          {turn.message.status==='Cancelled'&&<p className="dsh-agent-notice">已取消后续工作；已发生的操作不会自动撤销。</p>}
-          {confirmations(turn)}
+          <TranscriptTurn turn={turn} cx={turnClasses} labelContext={label} confirmations={confirmations(turn)}>
+            {turn.message.context?.server_version&&turn.message.context.server_version!==turn.message.context.version&&<p className="dsh-agent-notice">页面版本与服务器已保存版本不同；查询以实际读取为准，未保存内容不会被覆盖。</p>}
+          </TranscriptTurn>
         </article>)}
         {(transcript.loose.proposals.length>0||transcript.loose.bundles.length>0||transcript.loose.confirmations.length>0)&&
           <section className="dsh-agent-loose" aria-label="未归属到具体消息的条目">

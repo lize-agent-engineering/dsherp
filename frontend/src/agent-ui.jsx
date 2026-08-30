@@ -140,19 +140,32 @@ const toolIcons = {
   erp_read_configuration: SettingOutlined,
 };
 
+// Long lists are trimmed with their real total stated, never silently cut.
+const listed = (values, unit, separator = '、') =>
+  values.length > 12 ? `${values.slice(0, 12).join(separator)}…共 ${values.length} ${unit}` : values.join(separator);
+
 function ToolStep({ event }) {
   const [open, setOpen] = useState(false);
   const Icon = toolIcons[event.tool] ?? DatabaseOutlined;
-  // Long lists are trimmed with their real total stated, never silently cut.
-  const listed = (values, unit) =>
-    values.length > 12 ? `${values.slice(0, 12).join('、')}…共 ${values.length} ${unit}` : values.join('、');
+  // The server pads optional arguments with empty strings; a dangling
+  // `query=` says nothing, so empty values stay out of the row.
+  const args = Object.entries(event.arguments ?? {}).filter(([, value]) => value !== '' && value != null);
+  // Baseline wording lives here, not in the transcript model: schema, record
+  // and configuration baselines are different server facts.
+  const baselines = [
+    ...(event.schemaVersion ? [`${event.doctype ?? event.tool} 结构：${event.schemaVersion}`] : []),
+    ...(event.configVersion ? [`配置：${event.configVersion}`] : []),
+    ...(event.configRevision ? [`配置修订：${event.configRevision}`] : []),
+    ...Object.entries(event.recordVersions ?? {}).map(([name, version]) => `${name}：${version}`),
+  ];
   const details = [
-    event.arguments && Object.keys(event.arguments).length ? ['参数', Object.entries(event.arguments).map(([key, value]) => `${key}=${value}`).join('，')] : null,
+    args.length ? ['参数', args.map(([key, value]) => `${key}=${value}`).join('，')] : null,
     event.fields?.length ? ['读取字段', listed(event.fields, '个')] : null,
     event.records?.length ? ['涉及记录', listed(event.records, '条')] : null,
-    event.versions && Object.keys(event.versions).length
-      ? ['基线版本', Object.entries(event.versions).map(([key, value]) => `${key}：${value}`).join('；')]
-      : null,
+    event.modules?.length ? ['涉及模块', listed(event.modules, '个')] : null,
+    event.roles?.length ? ['涉及角色', listed(event.roles, '个')] : null,
+    event.exists === false ? ['结果', '该对象尚无已保存配置'] : null,
+    baselines.length ? ['基线版本', listed(baselines, '项', '；')] : null,
   ].filter(Boolean);
   return (
     <li className="dsh-chain-step">
@@ -182,9 +195,32 @@ function ToolStep({ event }) {
 // is inferred from the model's own account, and the record carries order but
 // no per-call timestamp, so none is shown.
 export function ToolChain({ events }) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef(null);
+  const chainRef = useRef(null);
+  // The popover portals to the end of the document; without moving focus a
+  // keyboard user would have to tab through the whole page to reach it. The
+  // content mounts synchronously in tests but asynchronously (after the open
+  // motion) in a real browser, so both the effect and afterOpenChange focus it.
+  useEffect(() => {
+    if (open) chainRef.current?.focus();
+  }, [open]);
   if (!events?.length) return null;
-  const content = (
-    <div className="dsh-chain" aria-label="本轮 ERP 读取">
+  const close = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+  const renderChain = () => (
+    <div
+      className="dsh-chain"
+      role="group"
+      aria-label="本轮 ERP 读取"
+      tabIndex={-1}
+      ref={chainRef}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') close();
+      }}
+    >
       <ol className="dsh-chain-list">
         {events.map((event) => (
           <ToolStep key={event.key} event={event} />
@@ -194,8 +230,25 @@ export function ToolChain({ events }) {
     </div>
   );
   return (
-    <Popover content={content} trigger="click" placement="bottomLeft" rootClassName="dsh-chain-popover">
-      <button type="button" className="dsh-chain-trigger" aria-label={`查看本轮 ERP 读取（${events.length} 次）`}>
+    <Popover
+      content={renderChain}
+      trigger="click"
+      open={open}
+      onOpenChange={setOpen}
+      afterOpenChange={(value) => {
+        if (value) chainRef.current?.focus();
+      }}
+      placement="bottomLeft"
+      rootClassName="dsh-chain-popover"
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="dsh-chain-trigger"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={`工具：查看本轮 ERP 读取（${events.length} 次）`}
+      >
         <ToolOutlined aria-hidden="true" />
         工具
         <span className="dsh-chain-count">{events.length}</span>

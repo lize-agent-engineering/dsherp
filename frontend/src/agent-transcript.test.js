@@ -96,15 +96,32 @@ it('工具事件保留参数、字段、记录与版本，供链路详情逐条�
  expect(event.arguments).toEqual({doctype:'Item',name:'I-1'});
  expect(event.fields).toEqual(['item_name','item_code']);
  expect(event.records).toEqual(['I-1']);
- expect(event.versions).toEqual({'I-1':'2026-08-29 03:26:23'});
+ expect(event.recordVersions).toEqual({'I-1':'2026-08-29 03:26:23'});
  expect(event.step).toBe(1);
 });
 
-it('结构读取带回 schema 版本，步骤按服务端记录顺序编号', () => {
+it('结构读取带回 schema 版本原始字段，步骤按服务端记录顺序编号', () => {
+ // 版本如何措辞属于展示层；数据层只透传服务端字段，不拼展示串。
  const events = toolEvents([
   {tool:'erp_read_schema',arguments:{doctype:'Item'},fields:['a'],records:[],schema_version:'2026-08-01 00:00:00'},
   {tool:'erp_search_records',arguments:{doctype:'Item',query:'合成'},fields:[],records:['I-1']},
  ]);
  expect(events.map(e=>e.step)).toEqual([1,2]);
- expect(events[0].versions).toEqual({'Item 结构':'2026-08-01 00:00:00'});
+ expect(events[0].schemaVersion).toBe('2026-08-01 00:00:00');
+ expect(events[1].schemaVersion).toBeNull();
+});
+
+it('配置读取事件带回模块、角色与配置基线，而不是只剩参数', () => {
+ // 服务端为 erp_read_configuration 记录的是 modules/roles/exists/version/
+ // configuration_revision（无 fields/records），这些同样要能被链路展示。
+ const [event] = toolEvents([
+  {tool:'erp_read_configuration',arguments:{doctype:'Item'},modules:['stock','manufacturing'],roles:['Item Manager'],
+   exists:true,version:'2026-08-29 03:00:00',configuration_revision:'r-9'},
+ ]);
+ expect(event.modules).toEqual(['stock','manufacturing']);
+ expect(event.roles).toEqual(['Item Manager']);
+ expect(event.exists).toBe(true);
+ expect(event.configVersion).toBe('2026-08-29 03:00:00');
+ expect(event.configRevision).toBe('r-9');
+ expect(event.detail).toBe('2 个模块 · 1 个角色');
 });

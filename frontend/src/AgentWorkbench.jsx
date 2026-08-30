@@ -3,14 +3,12 @@ import { Button, Drawer, Empty, Input, Select } from "antd";
 import {
   ArrowDownOutlined, ArrowUpOutlined, CheckOutlined, CloseOutlined, DownOutlined, EditOutlined,
   FormOutlined, InboxOutlined, LinkOutlined, MenuOutlined, PaperClipOutlined, ReloadOutlined,
-  SafetyCertificateOutlined, SettingOutlined, SwapOutlined, UndoOutlined, WarningFilled,
+  SettingOutlined, UndoOutlined, WarningFilled,
 } from "@ant-design/icons";
-import OperationProposal from "./OperationProposal.jsx";
-import ConfigurationProposal from "./ConfigurationProposal.jsx";
-import ConfigurationBundle from "./ConfigurationBundle.jsx";
 import AgentRecords from "./AgentRecords.jsx";
 import AgentArchive from "./AgentArchive.jsx";
-import { ConfirmCard, EmptyState, LoadMore, Prose, SkeletonLine, Spark, StatusChip, ToolChain } from "./agent-ui.jsx";
+import { EmptyState, LoadMore, SkeletonLine, Spark } from "./agent-ui.jsx";
+import { TranscriptTurn, TurnConfirmations } from "./agent-turn.jsx";
 import { relativeTime } from "./agent-format.js";
 import { buildTranscript, pendingCount } from "./agent-transcript.js";
 import "./AgentWorkbench.css";
@@ -19,9 +17,17 @@ const contextLabel = (context) =>
   context?.page_type === "unknown"
     ? "未绑定业务页面"
     : [context?.doctype, context?.name].filter(Boolean).join(" / ");
-const visibleQuestion = (question) => question?.split("\n\n[用户附件：")[0];
-const runPhase = { Queued: "已排队，等待运行", Running: "正在处理", Cancelling: "正在取消" };
 const attachmentTypes = ["text/plain", "text/markdown", "text/csv", "application/json"];
+const turnClasses = {
+  user: "dsh-wb-user",
+  meta: "dsh-wb-message-meta",
+  reply: "dsh-wb-reply",
+  replyMark: "dsh-wb-reply-mark",
+  answer: "dsh-wb-answer",
+  thinking: "dsh-wb-thinking",
+  alert: "dsh-wb-alert",
+  notice: "dsh-wb-notice",
+};
 const emptyContext = {
   schema_version: 1,
   route: ["dsherp-agent"],
@@ -79,6 +85,15 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
   const shell = useRef(null);
   const sending = useRef(false);
   const growing = useRef(false);
+  // Async handlers must not read `selected`/`query` from a stale render
+  // closure; the refs always carry the latest value.
+  const selectedRef = useRef(initialSession);
+  const queryRef = useRef("");
+
+  function select(id) {
+    selectedRef.current = id;
+    setSelected(id);
+  }
 
   useEffect(() => {
     if (!controls) return undefined;
@@ -104,15 +119,15 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
     setHasMore(Boolean(result.has_more));
     setPage(nextPage);
     if (append) return;
-    const target = selected ?? result.items[0]?.id ?? null;
+    const target = selectedRef.current ?? result.items[0]?.id ?? null;
     if (target) {
-      setSelected(target);
+      select(target);
       setSession(await api("get_session", { session_id: target }));
     } else setSession(null);
   }
   // Which sessions still hold something for the user is real server state, read
   // from the existing pending endpoint rather than guessed from the open one.
-  async function loadPending() {
+  async function countPending() {
     const counts = {};
     let next = 1;
     let more = true;
@@ -122,9 +137,30 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
       more = Boolean(result.has_more);
       next += 1;
     }
-    setPendingBySession(counts);
+    return counts;
+  }
+  async function loadPending() {
+    setPendingBySession(await countPending());
+  }
+  // The rail's status dots advertise live server state, so the poll refreshes
+  // them too: pending counts plus the first page of rows (later pages loaded
+  // via "load more" are kept as they are). Returns an applier so the caller
+  // can drop the result if the poll was cancelled meanwhile.
+  async function refreshRail() {
+    const [counts, result] = await Promise.all([
+      countPending(),
+      api("search_sessions", { query: queryRef.current, page: 1, archived: 0 }),
+    ]);
+    return () => {
+      setPendingBySession(counts);
+      setSessions((old) => [
+        ...result.items,
+        ...old.filter((row) => !result.items.some((item) => item.id === row.id)),
+      ]);
+    };
   }
   useEffect(() => {
+    queryRef.current = query;
     let live = true;
     const timer = setTimeout(() => {
       setBusy(true);
@@ -147,27 +183,49 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
   }, [session?.id, api]);
   useEffect(() => {
     if (!initialSession) return;
-    setSelected(initialSession);
+    select(initialSession);
     api("get_session", { session_id: initialSession })
       .then(setSession)
       .catch((e) => setError(e.message));
   }, [initialSession]);
   useEffect(() => {
     if (!selected) return undefined;
+    // The cleanup can run while a fetch is in flight; `stopped` keeps that
+    // stale response from overwriting the newly selected session and keeps the
+    // dead effect from re-arming its timer.
+    let stopped = false;
     let timer;
     const poll = async () => {
       if (document.visibilityState !== "hidden") {
         try {
-          setSession(await api("get_session", { session_id: selected }));
+          const loaded = await api("get_session", { session_id: selected });
+          if (stopped) return;
+          setSession(loaded);
+          const applyRail = await refreshRail();
+          if (stopped) return;
+          applyRail();
         } catch (e) {
-          setError(e.message);
+          if (!stopped) setError(e.message);
         }
       }
-      timer = setTimeout(poll, pollInterval);
+      if (!stopped) timer = setTimeout(poll, pollInterval);
     };
     timer = setTimeout(poll, pollInterval);
-    return () => clearTimeout(timer);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
   }, [selected, api, pollInterval]);
+  // While a session is open, its newest activity counts as read; without this
+  // the row would flag "有新消息" the moment the user switches away.
+  useEffect(() => {
+    if (!selected) return;
+    const row = sessions.find((item) => item.id === selected);
+    if (!row?.modified || seen[selected] === row.modified) return;
+    const next = { ...readSeen(), [selected]: row.modified };
+    writeSeen(next);
+    setSeen(next);
+  }, [sessions, selected, seen]);
   useEffect(() => {
     const node = timeline.current;
     if (node && atBottom) node.scrollTop = node.scrollHeight;
@@ -186,7 +244,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
     setError("");
     try {
       const loaded = await api("get_session", { session_id: id });
-      setSelected(id);
+      select(id);
       setSession(loaded);
       setMobileSessions(false);
       setAtBottom(true);
@@ -233,7 +291,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
     try {
       await api(session.archived ? "restore_session" : "archive_session", { session_id: session.id });
       setSession(null);
-      setSelected(null);
+      select(null);
       await loadSessions(1, query);
     } catch (e) {
       setError(e.message);
@@ -242,7 +300,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
     }
   }
   function fresh() {
-    setSelected(null);
+    select(null);
     setSession(null);
     setQuestion("");
     setAttachment(null);
@@ -282,7 +340,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
         request_id: crypto.randomUUID(),
         domain,
       });
-      setSelected(result.id);
+      select(result.id);
       setSession(result);
       setQuestion("");
       setAttachment(null);
@@ -344,7 +402,8 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
         )}
         {sessions.map((item) => {
           const waiting = (pendingBySession[item.id] ?? 0) > 0;
-          const unread = Boolean(seen[item.id]) && seen[item.id] !== item.modified;
+          // The open session is being read right now — it is never "unread".
+          const unread = item.id !== selected && Boolean(seen[item.id]) && seen[item.id] !== item.modified;
           const state = waiting ? "需要确认" : unread ? "有新消息" : null;
           return (
             <button
@@ -447,58 +506,6 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
         )}
       </div>
     </form>
-  );
-
-  const confirmations = (turn) => (
-    <>
-      {turn.proposals.map((proposal) => (
-        <div key={proposal.id} id={`dsh-proposal-${proposal.id}`}>
-          <ConfirmCard
-            icon={<SwapOutlined aria-hidden="true" />}
-            title={proposal.status === "Pending" ? "待你确认的业务操作" : "业务操作"}
-            meta={<StatusChip status={proposal.status} />}
-          >
-            <OperationProposal
-              proposal={proposal}
-              onConfirm={(binding) => api("confirm_operation", binding)}
-              onVerify={(binding) => api("verify_operation", binding)}
-            />
-          </ConfirmCard>
-        </div>
-      ))}
-      {turn.bundles.map((bundle) => (
-        <div key={bundle.id} id={`dsh-bundle-${bundle.id}`}>
-          <ConfirmCard icon={<SettingOutlined aria-hidden="true" />} title="应用配置提案">
-            <ConfigurationBundle
-              bundle={bundle}
-              onPrepare={(binding) => api("prepare_configuration_preview", binding)}
-              onTransfer={(binding) => api("prepare_configuration_transfer", binding)}
-              onPublish={(binding) => api("prepare_configuration_publish", binding)}
-              onConfirm={(binding) =>
-                api(bundle.preview_available ? "confirm_configuration" : "confirm_configuration_publish", binding)
-              }
-            />
-          </ConfirmCard>
-        </div>
-      ))}
-      {turn.confirmations.map((item) => (
-        <div key={item.id} id={`dsh-proposal-${item.id}`}>
-          <ConfirmCard
-            icon={<SafetyCertificateOutlined aria-hidden="true" />}
-            title={`${item.status === "Pending" ? "待你确认的" : ""}${item.purpose === "publish" ? "配置发布" : "隔离预览"}`}
-            meta={<StatusChip status={item.status} />}
-          >
-            <ConfigurationProposal
-              proposal={item}
-              onConfirm={(binding) =>
-                api(item.purpose === "publish" ? "confirm_configuration_publish" : "confirm_configuration", binding)
-              }
-              onVerify={(binding) => api("verify_configuration", binding)}
-            />
-          </ConfirmCard>
-        </div>
-      ))}
-    </>
   );
 
   const chat = (
@@ -608,39 +615,13 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
         }}
       >
         {transcript.turns.map((turn) => (
-          <article key={turn.message.id} id={`dsh-msg-${turn.message.id}`} className="dsh-wb-message">
-            <div className="dsh-wb-user">{visibleQuestion(turn.message.question)}</div>
-            <div className="dsh-wb-message-meta">
-              <LinkOutlined aria-hidden="true" />
-              <code>{contextLabel(turn.message.context) || "未绑定业务页面"}</code>
-            </div>
-            {(turn.message.answer || !runPhase[turn.message.status]) && (
-              <div className="dsh-wb-reply">
-                <span className="dsh-wb-reply-mark">
-                  <Spark size={12} />
-                </span>
-                <div className="dsh-wb-answer">
-                  <Prose>{turn.message.answer}</Prose>
-                  <ToolChain events={turn.tools} />
-                </div>
-              </div>
-            )}
-            {runPhase[turn.message.status] && (
-              <div className="dsh-wb-thinking">
-                <i />
-                <span>{runPhase[turn.message.status]}</span>
-              </div>
-            )}
-            {turn.message.error && (
-              <div className="dsh-wb-alert" role="alert">
-                <WarningFilled aria-hidden="true" />
-                <span>{turn.message.error}</span>
-              </div>
-            )}
-            {turn.message.status === "Cancelled" && (
-              <p className="dsh-wb-notice">已取消后续工作；已发生的操作不会自动撤销。</p>
-            )}
-            {confirmations(turn)}
+          <article key={turn.message.id} className="dsh-wb-message">
+            <TranscriptTurn
+              turn={turn}
+              cx={turnClasses}
+              labelContext={(context) => contextLabel(context) || "未绑定业务页面"}
+              confirmations={<TurnConfirmations group={turn} api={api} />}
+            />
           </article>
         ))}
         {(transcript.loose.proposals.length > 0 ||
@@ -649,7 +630,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
           <section className="dsh-wb-loose" aria-label="未归属到具体消息的条目">
             <h3 className="dsh-label">未能归属到具体消息</h3>
             <p className="dsh-meta">这些条目没有记录产生它们的运行，按原样列出，不推测归属。</p>
-            {confirmations(transcript.loose)}
+            <TurnConfirmations group={transcript.loose} api={api} />
           </section>
         )}
         {!session && busy && (
@@ -764,9 +745,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
               <AgentRecords
                 api={api}
                 method="list_configuration_records"
-                kind="configuration"
                 refresh={settingsGeneration}
-                stacked
                 empty={{ title: "暂无配置记录", hint: "配置包属于发起配置的业务用户；当前用户看不到别人的配置记录。" }}
               />
             </section>
