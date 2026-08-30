@@ -78,12 +78,13 @@ it('正式会话管理接口固定同源方法与参数',async()=>{
 });
 it('工作台摘要列表只使用同源分页 GET',async()=>{
  const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{items:[]}})}));vi.stubGlobal('fetch',fetch);
- for(const method of ['list_pending','list_execution_records','list_configuration_records'])await api.contextApi(method,{page:1});
+ for(const method of ['list_pending','list_configuration_records'])await api.contextApi(method,{page:1});
  expect(fetch.mock.calls.map(call=>call[0])).toEqual([
   '/api/method/dsherp_bridge.context_api.list_pending?page=1',
-  '/api/method/dsherp_bridge.context_api.list_execution_records?page=1',
   '/api/method/dsherp_bridge.context_api.list_configuration_records?page=1',
  ]);
+ // list_execution_records 仍是后端端点，但 UI 已无入口，客户端不再映射它。
+ await expect(api.contextApi('list_execution_records',{page:1})).rejects.toThrow();
  expect(fetch.mock.calls.every(call=>call[1].method===undefined)).toBe(true);
 });
 it('发送必须使用 CSRF、POST 和完整快照；缺少 CSRF 不请求',async()=>{

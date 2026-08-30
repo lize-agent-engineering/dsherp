@@ -1,34 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from 'antd';
-import {
-  ClockCircleOutlined, InboxOutlined, InfoCircleOutlined, LeftOutlined,
-  SafetyCertificateOutlined, SettingOutlined, SwapOutlined,
-} from '@ant-design/icons';
-import OperationProposal from './OperationProposal.jsx';
-import ConfigurationProposal from './ConfigurationProposal.jsx';
+import { ClockCircleOutlined, InboxOutlined, InfoCircleOutlined, LeftOutlined, SettingOutlined } from '@ant-design/icons';
 import ConfigurationBundle from './ConfigurationBundle.jsx';
 import { ConfirmCard, EmptyState, KindIcon, LoadMore, SkeletonLine, StatusChip } from './agent-ui.jsx';
 import { expiryText, isExpired, recordKind, relativeTime } from './agent-format.js';
 
-// A record row names a frozen object inside one session. The detail pane reads
-// that session on demand and shows the exact item, never a guess.
-function locate(kind, record, detail) {
-  if (!record || !detail) return null;
-  if (kind === 'configuration') {
-    const bundle = detail.configuration_bundles?.find((row) => row.id === record.id);
-    return bundle ? { type: 'bundle', item: bundle } : null;
-  }
-  const operation = detail.proposals?.find(
-    (row) => row.id === record.id || row.execution?.execution_id === record.id,
-  );
-  if (operation) return { type: 'operation', item: operation };
-  const configuration = detail.configuration_confirmations?.find(
-    (row) => row.id === record.id || row.execution?.execution_id === record.id,
-  );
-  return configuration ? { type: 'config', item: configuration } : null;
-}
+// A record row names a frozen configuration bundle inside one session. The
+// detail pane reads that session on demand and shows the exact bundle, never
+// a guess.
+const locate = (record, detail) =>
+  detail?.configuration_bundles?.find((row) => row.id === record?.id) ?? null;
 
-export default function AgentRecords({ api, method, kind, empty, refresh = 0, stacked = false }) {
+export default function AgentRecords({ api, method, empty, refresh = 0 }) {
   const [records, setRecords] = useState([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -91,7 +74,7 @@ export default function AgentRecords({ api, method, kind, empty, refresh = 0, st
       if (ticket === inspection.current) setDetailBusy(false);
     }
   }
-  const located = useMemo(() => locate(kind, active, detail), [kind, active, detail]);
+  const located = useMemo(() => locate(active, detail), [active, detail]);
 
   const list = (
     <div className="dsh-wb-record-list dsh-scroll" aria-label="记录列表">
@@ -172,6 +155,9 @@ export default function AgentRecords({ api, method, kind, empty, refresh = 0, st
               <div className="dsh-wb-detail-meta">
                 <span>{recordKind(active.kind)}</span>
                 <span className="dsh-raw">{active.id}</span>
+                {/* The in-conversation shortcut is gone with the records view;
+                    the detail must say which session it belongs to itself. */}
+                <span>所属会话：{detail?.title ?? active.session_id}</span>
                 {relativeTime(active.modified) && <span>{relativeTime(active.modified)}</span>}
               </div>
             </div>
@@ -194,39 +180,15 @@ export default function AgentRecords({ api, method, kind, empty, refresh = 0, st
               <SkeletonLine width="100%" height={110} />
             </div>
           )}
-          {!detailBusy && located?.type === 'operation' && (
-            <ConfirmCard icon={<SwapOutlined aria-hidden="true" />} title="业务操作" meta={<StatusChip status={located.item.status} />}>
-              <OperationProposal
-                proposal={located.item}
-                onConfirm={(binding) => api('confirm_operation', binding)}
-                onVerify={(binding) => api('verify_operation', binding)}
-              />
-            </ConfirmCard>
-          )}
-          {!detailBusy && located?.type === 'config' && (
-            <ConfirmCard
-              icon={<SafetyCertificateOutlined aria-hidden="true" />}
-              title={located.item.purpose === 'publish' ? '配置发布' : '隔离预览'}
-              meta={<StatusChip status={located.item.status} />}
-            >
-              <ConfigurationProposal
-                proposal={located.item}
-                onConfirm={(binding) =>
-                  api(located.item.purpose === 'publish' ? 'confirm_configuration_publish' : 'confirm_configuration', binding)
-                }
-                onVerify={(binding) => api('verify_configuration', binding)}
-              />
-            </ConfirmCard>
-          )}
-          {!detailBusy && located?.type === 'bundle' && (
+          {!detailBusy && located && (
             <ConfirmCard icon={<SettingOutlined aria-hidden="true" />} title="应用配置包">
               <ConfigurationBundle
-                bundle={located.item}
+                bundle={located}
                 onPrepare={(binding) => api('prepare_configuration_preview', binding)}
                 onTransfer={(binding) => api('prepare_configuration_transfer', binding)}
                 onPublish={(binding) => api('prepare_configuration_publish', binding)}
                 onConfirm={(binding) =>
-                  api(located.item.preview_available ? 'confirm_configuration' : 'confirm_configuration_publish', binding)
+                  api(located.preview_available ? 'confirm_configuration' : 'confirm_configuration_publish', binding)
                 }
               />
             </ConfirmCard>
@@ -241,13 +203,10 @@ export default function AgentRecords({ api, method, kind, empty, refresh = 0, st
     </section>
   );
 
-  if (stacked) {
-    return (
-      <div className={active ? 'dsh-wb-records dsh-is-stacked dsh-has-detail' : 'dsh-wb-records dsh-is-stacked'}>
-        {list}
-        {pane}
-      </div>
-    );
-  }
-  return <div className={active ? 'dsh-wb-records dsh-has-detail' : 'dsh-wb-records'}>{list}{pane}</div>;
+  return (
+    <div className="dsh-wb-records">
+      {list}
+      {pane}
+    </div>
+  );
 }
