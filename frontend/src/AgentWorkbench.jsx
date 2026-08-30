@@ -10,7 +10,7 @@ import ConfigurationProposal from "./ConfigurationProposal.jsx";
 import ConfigurationBundle from "./ConfigurationBundle.jsx";
 import AgentRecords from "./AgentRecords.jsx";
 import AgentArchive from "./AgentArchive.jsx";
-import { ConfirmCard, EmptyState, LoadMore, Prose, SkeletonLine, Spark, StatusChip, ToolTrail } from "./agent-ui.jsx";
+import { ConfirmCard, EmptyState, LoadMore, Prose, SkeletonLine, Spark, StatusChip, ToolChain } from "./agent-ui.jsx";
 import { relativeTime } from "./agent-format.js";
 import { buildTranscript, pendingCount } from "./agent-transcript.js";
 import "./AgentWorkbench.css";
@@ -48,7 +48,6 @@ function writeSeen(next) {
 }
 
 export default function AgentWorkbench({ api, initialSession = null, handoff = null, pollInterval = 5000, controls = null }) {
-  const [view, setView] = useState("chat");
   const [sessions, setSessions] = useState([]);
   const [session, setSession] = useState(null);
   const [selected, setSelected] = useState(initialSession);
@@ -75,7 +74,6 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
   const [factsOpen, setFactsOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [atBottom, setAtBottom] = useState(true);
-  const [anchor, setAnchor] = useState(null);
   const timeline = useRef(null);
   const fileInput = useRef(null);
   const shell = useRef(null);
@@ -155,7 +153,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
       .catch((e) => setError(e.message));
   }, [initialSession]);
   useEffect(() => {
-    if (view !== "chat" || !selected) return undefined;
+    if (!selected) return undefined;
     let timer;
     const poll = async () => {
       if (document.visibilityState !== "hidden") {
@@ -169,7 +167,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
     };
     timer = setTimeout(poll, pollInterval);
     return () => clearTimeout(timer);
-  }, [view, selected, api, pollInterval]);
+  }, [selected, api, pollInterval]);
   useEffect(() => {
     const node = timeline.current;
     if (node && atBottom) node.scrollTop = node.scrollHeight;
@@ -182,16 +180,6 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
   }, []);
-  useEffect(() => {
-    if (!anchor || view !== "chat") return undefined;
-    const node = document.getElementById(anchor);
-    if (!node) return undefined;
-    node.scrollIntoView({ block: "center" });
-    node.classList.add("dsh-wb-flash");
-    setAnchor(null);
-    const timer = setTimeout(() => node.classList.remove("dsh-wb-flash"), 1400);
-    return () => clearTimeout(timer);
-  }, [anchor, view, session?.id]);
 
   async function choose(id) {
     setBusy(true);
@@ -201,7 +189,6 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
       setSelected(id);
       setSession(loaded);
       setMobileSessions(false);
-      setView("chat");
       setAtBottom(true);
       const row = sessions.find((item) => item.id === id);
       if (row?.modified) {
@@ -262,7 +249,6 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
     setAttachmentError("");
     setEditingTitle(false);
     setError("");
-    setView("chat");
     setMobileSessions(false);
   }
   async function attach(event) {
@@ -363,10 +349,10 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
           return (
             <button
               type="button"
-              className={item.id === selected && view === "chat" ? "dsh-rail-item dsh-is-current" : "dsh-rail-item"}
+              className={item.id === selected ? "dsh-rail-item dsh-is-current" : "dsh-rail-item"}
               key={item.id}
               aria-label={state ? `${item.title}（${state}）` : item.title}
-              aria-current={item.id === selected && view === "chat" ? "true" : undefined}
+              aria-current={item.id === selected ? "true" : undefined}
               onClick={() => choose(item.id)}
             >
               <span
@@ -384,20 +370,6 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
         })}
         {!sessions.length && !busy && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />}
         <LoadMore hasMore={hasMore} busy={moreBusy} onLoad={growSessions} label="加载更多会话" />
-      </div>
-      <div className="dsh-rail-foot">
-        <button
-          type="button"
-          className={view === "records" ? "dsh-rail-link dsh-is-current" : "dsh-rail-link"}
-          aria-current={view === "records" ? "true" : undefined}
-          onClick={() => {
-            setView("records");
-            setMobileSessions(false);
-          }}
-        >
-          <InboxOutlined aria-hidden="true" />
-          执行记录
-        </button>
       </div>
     </nav>
   );
@@ -642,7 +614,6 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
               <LinkOutlined aria-hidden="true" />
               <code>{contextLabel(turn.message.context) || "未绑定业务页面"}</code>
             </div>
-            <ToolTrail events={turn.tools} />
             {(turn.message.answer || !runPhase[turn.message.status]) && (
               <div className="dsh-wb-reply">
                 <span className="dsh-wb-reply-mark">
@@ -650,6 +621,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
                 </span>
                 <div className="dsh-wb-answer">
                   <Prose>{turn.message.answer}</Prose>
+                  <ToolChain events={turn.tools} />
                 </div>
               </div>
             )}
@@ -734,44 +706,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
       )}
       <div className="dsh-wb-body">
         <div className="dsh-wb-desktop-rail">{rail}</div>
-        <main className="dsh-wb-main">
-          {view === "chat" ? (
-            chat
-          ) : (
-            <div className="dsh-wb-records-view">
-              <header className="dsh-chat-head">
-                <Button
-                  className="dsh-chat-rail-toggle"
-                  type="text"
-                  aria-label="打开会话列表"
-                  icon={<MenuOutlined aria-hidden="true" />}
-                  onClick={() => setMobileSessions(true)}
-                />
-                <div className="dsh-chat-identity">
-                  <h2 className="dsh-chat-title">执行记录</h2>
-                  <p className="dsh-meta">确认后的每一次业务与配置执行，包括部分成功与结果不明。</p>
-                </div>
-                <Button type="text" aria-label="返回对话" onClick={() => setView("chat")}>
-                  返回对话
-                </Button>
-              </header>
-              <AgentRecords
-                api={api}
-                method="list_execution_records"
-                kind="execution"
-                empty={{ title: "暂无执行记录", hint: "确认后的每一次业务或配置执行都会留下记录，包括部分成功与结果不明。" }}
-                onOpenSession={async (record, located) => {
-                  await choose(record.session_id);
-                  setAnchor(
-                    located?.type === "bundle"
-                      ? `dsh-bundle-${located.item.id}`
-                      : `dsh-proposal-${located?.item.id ?? record.id}`,
-                  );
-                }}
-              />
-            </div>
-          )}
-        </main>
+        <main className="dsh-wb-main">{chat}</main>
       </div>
       <Drawer
         placement="left"

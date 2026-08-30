@@ -96,37 +96,18 @@
   -webkit-line-clamp: 2;
 }
 .dsh-rail-meta { display: flex; gap: 8px; color: var(--dsh-muted); font-size: var(--dsh-fs-micro); }
-.dsh-rail-foot { padding: 6px 8px 8px; border-top: 1px solid var(--dsh-line); }
-.dsh-rail-link {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--dsh-r-2);
-  background: none;
-  color: var(--dsh-muted);
-  font-size: var(--dsh-fs-body);
-  text-align: left;
-  cursor: pointer;
-}
-.dsh-rail-link:hover { background: var(--dsh-sunken); color: var(--dsh-ink-2); }
-.dsh-rail-link.dsh-is-current { background: var(--dsh-accent-soft); color: var(--dsh-accent-ink); font-weight: 600; }
 .dsh-wb-session-skeleton { display: flex; flex-direction: column; gap: 14px; padding: 12px 6px; }
 .dsh-wb-session-skeleton > div { display: flex; flex-direction: column; gap: 6px; }
 
 /* Conversation */
-.dsh-wb-chat,
-.dsh-wb-records-view {
+.dsh-wb-chat {
   display: flex;
   width: 100%;
   min-width: 0;
   height: 100%;
   flex-direction: column;
 }
-.dsh-wb-chat > :not(.dsh-wb-timeline),
-.dsh-wb-records-view > :not(.dsh-wb-records) { flex: none; }
+.dsh-wb-chat > :not(.dsh-wb-timeline) { flex: none; }
 .dsh-chat-head {
   display: flex;
   align-items: center;
@@ -300,11 +281,6 @@
   color: var(--dsh-ink-2) !important;
   box-shadow: var(--dsh-shadow-2);
 }
-.dsh-wb-flash { animation: dsh-flash 1.4s var(--dsh-ease); }
-@keyframes dsh-flash {
-  from { box-shadow: 0 0 0 3px var(--dsh-accent-line); }
-  to { box-shadow: 0 0 0 3px rgba(188, 220, 212, 0); }
-}
 
 .dsh-wb-composer {
   width: min(100%, 880px);
@@ -420,8 +396,6 @@
 .dsh-wb-detail-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; color: var(--dsh-muted); font-size: var(--dsh-fs-micro); }
 .dsh-wb-detail-back { display: none; color: var(--dsh-muted); }
 .dsh-wb-detail-expiry { margin: 12px 0 0; color: var(--dsh-muted); font-size: var(--dsh-fs-meta); }
-.dsh-wb-detail-open { margin-top: 12px; padding-left: 0; color: var(--dsh-accent-ink); }
-.dsh-wb-detail-open:hover { color: var(--dsh-accent-hover) !important; background: transparent !important; }
 .dsh-wb-detail .dsh-confirm { --dsh-fold-bg: var(--dsh-panel); }
 
 /* Agent settings: one place for every agent-configuration surface. */

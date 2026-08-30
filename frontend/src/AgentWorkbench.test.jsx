@@ -83,17 +83,41 @@ it("对话是唯一主表面：没有一级标签栏，会话在左栏，记录�
   expect(screen.queryAllByRole("tab")).toHaveLength(0);
   expect(await within(rail()).findByRole("button", { name: "今天的物料核对" })).toBeTruthy();
   expect(within(rail()).getByRole("button", { name: "新建会话" })).toBeTruthy();
-  expect(within(rail()).getByRole("button", { name: "执行记录" })).toBeTruthy();
+  expect(within(rail()).queryByRole("button", { name: "执行记录" })).toBeNull();
   expect(screen.getByRole("log", { name: "对话记录" })).toBeTruthy();
 });
 
-it("本轮实际发生的 ERP 读取跟着它那条消息显示", async () => {
+it("回答之后可以查看本轮实际发生的 ERP 读取链路，并逐条展开", async () => {
   const api = apiFactory();
   render(<AgentWorkbench api={api} initialSession="S-1" />);
   const turn = (await screen.findByText("已核对")).closest("article");
-  expect(within(turn).getByLabelText("本轮 ERP 读取")).toBeTruthy();
-  expect(within(turn).getByText("读取 Item / I-1")).toBeTruthy();
-  expect(within(turn).getByText("1 个字段")).toBeTruthy();
+  expect(within(turn).queryByLabelText("本轮 ERP 读取")).toBeNull();
+
+  const trigger = within(turn).getByRole("button", { name: "查看本轮 ERP 读取（1 次）" });
+  expect(within(trigger).getByText("1")).toBeTruthy();
+  fireEvent.click(trigger);
+
+  const chain = await screen.findByLabelText("本轮 ERP 读取");
+  const step = within(chain).getByRole("button", { name: /读取 Item \/ I-1/ });
+  expect(step.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(step);
+  expect(step.getAttribute("aria-expanded")).toBe("true");
+  expect(within(chain).getByText("item_name")).toBeTruthy();
+  expect(within(chain).getByText(/不含每次调用的时间/)).toBeTruthy();
+});
+
+it("没有工具读取的一轮不显示工具入口", async () => {
+  const api = apiFactory();
+  api.mockImplementation(async (method) => {
+    if (method === "search_sessions")
+      return { items: [{ id: "S-1", title: active.title, modified: "2026-08-29" }], has_more: false };
+    if (method === "get_session")
+      return { ...active, messages: [{ ...active.messages[0], sources: [] }] };
+    return { items: [] };
+  });
+  render(<AgentWorkbench api={api} initialSession="S-1" />);
+  const turn = (await screen.findByText("已核对")).closest("article");
+  expect(within(turn).queryByRole("button", { name: /查看本轮 ERP 读取/ })).toBeNull();
 });
 
 it("待确认提案就地出现在产生它的那条消息下，标题右侧提示需要确认", async () => {
@@ -158,40 +182,6 @@ it("应用配置只在 Agent 设置里，由原生页面头部按钮打开", asy
     expect(api.mock.calls.some((call) => call[0] === "list_configuration_records")).toBe(true),
   );
   fireEvent.click(screen.getByRole("button", { name: "关闭 Agent 设置" }));
-});
-
-it("执行记录是次级视图，从会话栏进入并调用真实摘要接口", async () => {
-  const api = apiFactory();
-  render(<AgentWorkbench api={api} />);
-  await screen.findByText("已核对");
-  fireEvent.click(within(rail()).getByRole("button", { name: "执行记录" }));
-  await waitFor(() =>
-    expect(api.mock.calls.some((call) => call[0] === "list_execution_records")).toBe(true),
-  );
-  expect(screen.getByRole("heading", { name: "执行记录" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "返回对话" }));
-  expect(await screen.findByRole("log", { name: "对话记录" })).toBeTruthy();
-});
-
-it("执行记录详情在原地定位到所属会话中的那一条，不跳回长对话", async () => {
-  const api = vi.fn(async (method, params) => {
-    if (method === "search_sessions")
-      return { items: [{ id: "S-1", title: active.title, modified: "2026-08-29" }], has_more: false };
-    if (method === "get_session") return active;
-    if (method === "list_execution_records")
-      return {
-        items: [{ id: "E-9", session_id: "S-1", kind: "operation", title: "业务执行", status: "Unknown", modified: "2026-08-29" }],
-      };
-    return { items: [] };
-  });
-  render(<AgentWorkbench api={api} />);
-  await screen.findByText("已核对");
-  fireEvent.click(within(rail()).getByRole("button", { name: "执行记录" }));
-  fireEvent.click(await screen.findByRole("button", { name: "查看业务执行（E-9）详情" }));
-  const detail = await screen.findByRole("region", { name: "记录详情" });
-  expect(within(detail).getByText("结果不明")).toBeTruthy();
-  expect(within(detail).getByText("Unknown")).toBeTruthy();
-  expect(await within(detail).findByText(/这条记录在所属会话中已不可见/)).toBeTruthy();
 });
 
 it("左栏只列进行中的对话，搜索也不会翻出归档的", async () => {
@@ -356,4 +346,32 @@ it("会话列表是扁平的一条流，按最近活动排序并显示相对时�
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("超长字段清单截断时把真实总数写出来，不静默省略", async () => {
+  const fields = Array.from({ length: 69 }, (_, index) => `field_${index + 1}`);
+  const api = apiFactory();
+  api.mockImplementation(async (method) => {
+    if (method === "search_sessions")
+      return { items: [{ id: "S-1", title: active.title, modified: "2026-08-29" }], has_more: false };
+    if (method === "get_session")
+      return {
+        ...active,
+        messages: [
+          {
+            ...active.messages[0],
+            sources: [{ tool: "erp_read_schema", arguments: { doctype: "Item" }, fields, records: [] }],
+          },
+        ],
+      };
+    return { items: [] };
+  });
+  render(<AgentWorkbench api={api} initialSession="S-1" />);
+  const turn = (await screen.findByText("已核对")).closest("article");
+  fireEvent.click(within(turn).getByRole("button", { name: "查看本轮 ERP 读取（1 次）" }));
+  const chain = await screen.findByLabelText("本轮 ERP 读取");
+  fireEvent.click(within(chain).getByRole("button", { name: /读取 Item 结构/ }));
+  expect(within(chain).getByText(/共 69 个/)).toBeTruthy();
+  expect(within(chain).getByText(/field_12/)).toBeTruthy();
+  expect(within(chain).queryByText(/field_69/)).toBeNull();
 });

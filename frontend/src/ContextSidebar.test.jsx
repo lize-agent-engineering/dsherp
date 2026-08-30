@@ -244,10 +244,11 @@ it('本轮实际发生的 ERP 读取跟着它那条消息显示，提案落在�
  };
  render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
  const turn=(await screen.findByText('历史回答')).closest('article');
- expect(within(turn).getByLabelText('本轮 ERP 读取')).toBeTruthy();
- expect(within(turn).getByText('读取 Item / I-1')).toBeTruthy();
- expect(within(turn).getByText('搜索 Item：合成')).toBeTruthy();
- expect(within(turn).getByText('2 条记录')).toBeTruthy();
+ fireEvent.click(within(turn).getByRole('button',{name:'查看本轮 ERP 读取（2 次）'}));
+ const chain=await screen.findByLabelText('本轮 ERP 读取');
+ expect(within(chain).getByText('读取 Item / I-1')).toBeTruthy();
+ expect(within(chain).getByText('搜索 Item：合成')).toBeTruthy();
+ expect(within(chain).getByText('2 条记录')).toBeTruthy();
  expect(within(turn).getByRole('button',{name:'确认执行'})).toBeTruthy();
  expect(screen.queryByRole('region',{name:'未归属到具体消息的条目'})).toBeNull();
 });

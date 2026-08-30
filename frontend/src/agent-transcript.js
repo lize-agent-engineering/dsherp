@@ -16,18 +16,22 @@ export function toolEvents(sources = []) {
   return (sources ?? []).map((source, index) => {
     const records = source.records ?? [];
     const fields = source.fields ?? [];
+    const versions = source.schema_version
+      ? { [`${source.arguments?.doctype} 结构`]: source.schema_version }
+      : (source.record_versions ?? null);
     return {
       key: `${index}:${source.tool}`,
+      step: index + 1,
       tool: source.tool,
       label: toolNames[source.tool]?.(source) ?? source.tool,
-      detail: fields.length
-        ? `${fields.length} 个字段`
-        : records.length
-          ? `${records.length} 条记录`
-          : '',
+      detail: [fields.length ? `${fields.length} 个字段` : '', records.length ? `${records.length} 条记录` : '']
+        .filter(Boolean)
+        .join(' · '),
       doctype: source.arguments?.doctype ?? null,
+      arguments: source.arguments ?? null,
       records,
       fields,
+      versions,
     };
   });
 }

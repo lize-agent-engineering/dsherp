@@ -4,7 +4,7 @@ import {ArrowUpOutlined,CloseOutlined,FormOutlined,HistoryOutlined,LinkOutlined,
 import './ContextSidebar.css';
 import {capturePageContext,contextOptions,selectedContext} from './page-context.js';
 import {relativeTime} from './agent-format.js';
-import {ConfirmCard,Prose,Spark,StatusChip,ToolTrail} from './agent-ui.jsx';
+import {ConfirmCard,Prose,Spark,StatusChip,ToolChain} from './agent-ui.jsx';
 import {buildTranscript} from './agent-transcript.js';
 import OperationProposal from './OperationProposal.jsx';
 import ConfigurationProposal from './ConfigurationProposal.jsx';
@@ -225,10 +225,9 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
           <div className="dsh-agent-user-message">{visibleQuestion(turn.message.question)}</div>
           <div className="dsh-agent-message-meta"><LinkOutlined aria-hidden="true"/><code>{label(turn.message.context)}</code></div>
           {turn.message.context?.server_version&&turn.message.context.server_version!==turn.message.context.version&&<p className="dsh-agent-notice">页面版本与服务器已保存版本不同；查询以实际读取为准，未保存内容不会被覆盖。</p>}
-          <ToolTrail events={turn.tools}/>
           {(turn.message.answer||!runPhase[turn.message.status])&&<div className="dsh-agent-reply">
             <span className="dsh-agent-reply-mark"><Spark size={12}/></span>
-            <div className="dsh-agent-answer"><Prose>{turn.message.answer}</Prose></div>
+            <div className="dsh-agent-answer"><Prose>{turn.message.answer}</Prose><ToolChain events={turn.tools}/></div>
           </div>}
           {runPhase[turn.message.status]&&<div className="dsh-agent-thinking"><i/><span>{runPhase[turn.message.status]}</span></div>}
           {turn.message.error&&<div className="dsh-agent-alert" role="alert"><WarningFilled aria-hidden="true"/><span>{turn.message.error}</span></div>}

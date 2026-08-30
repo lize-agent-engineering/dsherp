@@ -18,7 +18,7 @@ it('把工具读取翻译成可读事件，未知工具保留原名', () => {
   '读取配置 Inspection',
   'erp_future_tool',
  ]);
- expect(events[0].detail).toBe('2 个字段');
+ expect(events[0].detail).toBe('2 个字段 · 1 条记录');
  expect(events[2].detail).toBe('2 条记录');
 });
 
@@ -86,4 +86,25 @@ it('待确认计数只算真正待确认的条目', () => {
 
 it('空会话不会崩', () => {
  expect(buildTranscript(null)).toEqual({turns:[],loose:{proposals:[],bundles:[],confirmations:[]}});
+});
+
+it('工具事件保留参数、字段、记录与版本，供链路详情逐条展开', () => {
+ const [event] = toolEvents([
+  {tool:'erp_read_record',arguments:{doctype:'Item',name:'I-1'},fields:['item_name','item_code'],records:['I-1'],
+   record_versions:{'I-1':'2026-08-29 03:26:23'}},
+ ]);
+ expect(event.arguments).toEqual({doctype:'Item',name:'I-1'});
+ expect(event.fields).toEqual(['item_name','item_code']);
+ expect(event.records).toEqual(['I-1']);
+ expect(event.versions).toEqual({'I-1':'2026-08-29 03:26:23'});
+ expect(event.step).toBe(1);
+});
+
+it('结构读取带回 schema 版本，步骤按服务端记录顺序编号', () => {
+ const events = toolEvents([
+  {tool:'erp_read_schema',arguments:{doctype:'Item'},fields:['a'],records:[],schema_version:'2026-08-01 00:00:00'},
+  {tool:'erp_search_records',arguments:{doctype:'Item',query:'合成'},fields:[],records:['I-1']},
+ ]);
+ expect(events.map(e=>e.step)).toEqual([1,2]);
+ expect(events[0].versions).toEqual({'Item 结构':'2026-08-01 00:00:00'});
 });

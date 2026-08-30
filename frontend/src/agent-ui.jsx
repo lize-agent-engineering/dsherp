@@ -1,7 +1,8 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Popover } from 'antd';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { DatabaseOutlined, FileSearchOutlined, SearchOutlined, SettingOutlined, SwapOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, FileSearchOutlined, RightOutlined, SearchOutlined, SettingOutlined, SwapOutlined, ToolOutlined } from '@ant-design/icons';
 import { statusText, statusTone } from './agent-format.js';
 import './agent-theme.css';
 
@@ -139,30 +140,66 @@ const toolIcons = {
   erp_read_configuration: SettingOutlined,
 };
 
-// The ERP reads a run actually made, in the order the server recorded them.
-// Nothing here is inferred: no step exists unless the server authorized it.
-export function ToolTrail({ events, collapseAfter = 3 }) {
+function ToolStep({ event }) {
   const [open, setOpen] = useState(false);
-  if (!events?.length) return null;
-  const hidden = Math.max(0, events.length - collapseAfter);
-  const shown = open || !hidden ? events : events.slice(0, collapseAfter);
+  const Icon = toolIcons[event.tool] ?? DatabaseOutlined;
+  // Long lists are trimmed with their real total stated, never silently cut.
+  const listed = (values, unit) =>
+    values.length > 12 ? `${values.slice(0, 12).join('、')}…共 ${values.length} ${unit}` : values.join('、');
+  const details = [
+    event.arguments && Object.keys(event.arguments).length ? ['参数', Object.entries(event.arguments).map(([key, value]) => `${key}=${value}`).join('，')] : null,
+    event.fields?.length ? ['读取字段', listed(event.fields, '个')] : null,
+    event.records?.length ? ['涉及记录', listed(event.records, '条')] : null,
+    event.versions && Object.keys(event.versions).length
+      ? ['基线版本', Object.entries(event.versions).map(([key, value]) => `${key}：${value}`).join('；')]
+      : null,
+  ].filter(Boolean);
   return (
-    <div className="dsh-tools" aria-label="本轮 ERP 读取">
-      {shown.map((event) => {
-        const Icon = toolIcons[event.tool] ?? DatabaseOutlined;
-        return (
-          <div className="dsh-tool" key={event.key}>
-            <Icon aria-hidden="true" />
-            <span className="dsh-tool-label">{event.label}</span>
-            {event.detail && <span className="dsh-tool-detail">{event.detail}</span>}
-          </div>
-        );
-      })}
-      {hidden > 0 && (
-        <button type="button" className="dsh-tool-more" onClick={() => setOpen((value) => !value)}>
-          {open ? '收起读取记录' : `还有 ${hidden} 次读取`}
-        </button>
+    <li className="dsh-chain-step">
+      <button type="button" className="dsh-chain-head" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <span className="dsh-chain-step-no">{event.step}</span>
+        <Icon aria-hidden="true" />
+        <span className="dsh-chain-label">{event.label}</span>
+        {event.detail && <span className="dsh-chain-detail">{event.detail}</span>}
+        <RightOutlined aria-hidden="true" className={open ? 'dsh-chain-caret dsh-is-open' : 'dsh-chain-caret'} />
+      </button>
+      {open && (
+        <dl className="dsh-chain-body">
+          {details.map(([term, value]) => (
+            <div key={term}>
+              <dt>{term}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
       )}
+    </li>
+  );
+}
+
+// The ERP reads a run actually made, offered after the answer rather than in
+// front of it. Every step comes from the server's authorized record: nothing
+// is inferred from the model's own account, and the record carries order but
+// no per-call timestamp, so none is shown.
+export function ToolChain({ events }) {
+  if (!events?.length) return null;
+  const content = (
+    <div className="dsh-chain" aria-label="本轮 ERP 读取">
+      <ol className="dsh-chain-list">
+        {events.map((event) => (
+          <ToolStep key={event.key} event={event} />
+        ))}
+      </ol>
+      <p className="dsh-chain-note">服务端逐次复核权限并记录；顺序为实际调用次序，不含每次调用的时间。</p>
     </div>
+  );
+  return (
+    <Popover content={content} trigger="click" placement="bottomLeft" rootClassName="dsh-chain-popover">
+      <button type="button" className="dsh-chain-trigger" aria-label={`查看本轮 ERP 读取（${events.length} 次）`}>
+        <ToolOutlined aria-hidden="true" />
+        工具
+        <span className="dsh-chain-count">{events.length}</span>
+      </button>
+    </Popover>
   );
 }

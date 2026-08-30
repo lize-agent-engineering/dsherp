@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from 'antd';
 import {
-  ClockCircleOutlined, InboxOutlined, InfoCircleOutlined, LeftOutlined, RightOutlined,
+  ClockCircleOutlined, InboxOutlined, InfoCircleOutlined, LeftOutlined,
   SafetyCertificateOutlined, SettingOutlined, SwapOutlined,
 } from '@ant-design/icons';
 import OperationProposal from './OperationProposal.jsx';
@@ -28,7 +28,7 @@ function locate(kind, record, detail) {
   return configuration ? { type: 'config', item: configuration } : null;
 }
 
-export default function AgentRecords({ api, method, kind, empty, onOpenSession, refresh = 0, stacked = false }) {
+export default function AgentRecords({ api, method, kind, empty, refresh = 0, stacked = false }) {
   const [records, setRecords] = useState([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -235,17 +235,6 @@ export default function AgentRecords({ api, method, kind, empty, onOpenSession, 
             <p className="dsh-wb-notice">
               这条记录在所属会话中已不可见，可能权限、成员绑定或版本已经变化。请在对话中核实，系统不会据列表推测结果。
             </p>
-          )}
-          {onOpenSession && (
-            <Button
-              className="dsh-wb-detail-open"
-              type="text"
-              icon={<RightOutlined aria-hidden="true" />}
-              aria-label="在对话中打开所属会话"
-              onClick={() => onOpenSession(active, located)}
-            >
-              在对话中打开所属会话
-            </Button>
           )}
         </>
       )}
