@@ -19,14 +19,16 @@ frappe.pages["dsherp-agent"].on_page_load = function (wrapper) {
     load("script", "/assets/dsherp_bridge/dist/agent-workbench.js"),
   ]);
   // Agent settings live in the native page header, not in a second in-app
-  // toolbar. add_button also registers the mobile menu entry for us.
+  // toolbar. set_secondary_action fills the header's own action slot and, unlike
+  // add_button, does not push a desktop-hidden twin into the "..." menu, which
+  // would reveal that menu with nothing visible inside it.
   let settings = null;
   function ensureSettingsButton() {
     if (settings) return;
-    settings = page.add_button("Agent 设置", () => {
+    settings = page.set_secondary_action("Agent 设置", () => {
       if (dispose && dispose.openSettings) dispose.openSettings();
       else frappe.show_alert({message: "Agent 工作台尚未加载完成", indicator: "orange"});
-    }, {icon: "setting-gear"});
+    }, "setting-gear");
   }
   $(wrapper).on("hide", () => { active = false; if (dispose) dispose(); dispose = null; });
   wrapper.on_page_show = function () {
