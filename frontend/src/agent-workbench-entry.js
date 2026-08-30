@@ -24,7 +24,13 @@ export function mount(element){
  const controls={};
  root.render(React.createElement(AgentWorkbench,{api:contextApi,controls,...readWorkbenchState()}));
  const dispose=()=>root.unmount();
- dispose.openSettings=()=>controls.openSettings?.();
+ // Returns whether the workbench actually opened settings; before the React
+ // tree registers its handler the caller must be told, not silently ignored.
+ dispose.openSettings=()=>{
+  if(!controls.openSettings)return false;
+  controls.openSettings();
+  return true;
+ };
  dispose.unmount=dispose;
  return dispose;
 }

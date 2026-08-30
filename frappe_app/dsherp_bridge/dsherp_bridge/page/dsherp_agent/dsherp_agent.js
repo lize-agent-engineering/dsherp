@@ -26,8 +26,10 @@ frappe.pages["dsherp-agent"].on_page_load = function (wrapper) {
   function ensureSettingsButton() {
     if (settings) return;
     settings = page.set_secondary_action("Agent 设置", () => {
-      if (dispose && dispose.openSettings) dispose.openSettings();
-      else frappe.show_alert({message: "Agent 工作台尚未加载完成", indicator: "orange"});
+      // openSettings reports whether the workbench actually opened; a tree
+      // that mounted but has not registered its handler must not eat the click.
+      const opened = Boolean(dispose && dispose.openSettings && dispose.openSettings());
+      if (!opened) frappe.show_alert({message: "Agent 工作台尚未加载完成", indicator: "orange"});
     }, "setting-gear");
   }
   $(wrapper).on("hide", () => { active = false; if (dispose) dispose(); dispose = null; });

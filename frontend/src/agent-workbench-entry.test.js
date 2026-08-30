@@ -24,3 +24,14 @@ it('挂载句柄既能卸载，也把 Agent 设置入口交给原生页面头部
  dispose();
  element.remove();
 });
+
+it('工作台尚未注册设置入口时 openSettings 如实返回 false，不静默吞掉', async () => {
+ // 若 React 树没渲染成功（或点击发生在注册 effect 之前），调用方需要据此
+ // 提示"尚未加载完成"，而不是让按钮看起来点了没反应。
+ const {mount}=await import('./agent-workbench-entry.js');
+ const element=document.createElement('div');
+ // 不挂进 document：React 树不会提交 effect，controls.openSettings 不存在。
+ const dispose=mount(element);
+ expect(dispose.openSettings()).toBe(false);
+ dispose();
+});
