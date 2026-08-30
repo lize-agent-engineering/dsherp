@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {statusTone,statusText,recordKind,relativeTime,expiryText,isExpired} from './agent-format.js';
+import {statusTone,statusText,recordKind,relativeTime,expiryText,isExpired,parseTime} from './agent-format.js';
 
 it('把后端真实状态翻译成中文说明，但不改写原状态', () => {
  expect(statusText('Authorized')).toBe('已授权，结果待核实');
@@ -52,3 +52,24 @@ it('过期时间如实显示，已过期不掩饰', () => {
  expect(expiryText(undefined, now)).toBe('无有效期，需重新提出');
 });
 
+it('parseTime 统一解析 Frappe 的本地裸时间串，供所有时间比较复用', () => {
+ // 空格分隔的形式在部分引擎（Safari）下 Date.parse 直接返回 NaN。
+ expect(parseTime('2026-08-29 12:20:00')).toBe(new Date(2026, 7, 29, 12, 20, 0).getTime());
+ expect(Number.isFinite(parseTime('not-a-date'))).toBe(false);
+ expect(Number.isFinite(parseTime(undefined))).toBe(false);
+});
+
+it('纯日期串按本地零点解析，不落回 UTC 零点', () => {
+ // Date.parse('YYYY-MM-DD') 是 UTC 零点，带时间的形式却是本地时间；
+ // 混用会让同一列表里的时间相互矛盾。
+ expect(parseTime('2026-08-29')).toBe(new Date(2026, 7, 29).getTime());
+ const now = new Date(2026, 7, 29, 12, 0, 0).getTime();
+ expect(relativeTime('2026-08-20', now)).toBe('08-20 00:00');
+});
+
+it('过期判断对 Safari 无法解析的空格时间串仍然正确', () => {
+ // isExpired/expiryText 必须与 relativeTime 走同一 parseTime，不再裸调 Date.parse。
+ const now = new Date(2026, 7, 29, 12, 0, 0).getTime();
+ expect(isExpired('2026-08-29 12:30:00', now)).toBe(false);
+ expect(expiryText('2026-08-29 12:30:00', now)).toBe('30 分钟后过期');
+});

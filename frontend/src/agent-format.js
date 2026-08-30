@@ -23,10 +23,18 @@ export const recordKind = (kind) =>
 const MINUTE = 60000;
 const pad = (value) => String(value).padStart(2, '0');
 // Frappe sends naive datetimes in the site's timezone, which the browser parses
-// as local time; never mix these with a UTC-derived date.
-const parse = (value) => Date.parse(typeof value === 'string' ? value.replace(' ', 'T') : value);
+// as local time; never mix these with a UTC-derived date. Date-only strings are
+// pinned to local midnight too — bare Date.parse would read them as UTC.
+export const parseTime = (value) =>
+  Date.parse(
+    typeof value === 'string'
+      ? /^\d{4}-\d{2}-\d{2}$/.test(value)
+        ? `${value}T00:00:00`
+        : value.replace(' ', 'T')
+      : value,
+  );
 export function relativeTime(value, now = Date.now()) {
-  const stamp = parse(value);
+  const stamp = parseTime(value);
   if (!Number.isFinite(stamp)) return '';
   const minutes = Math.floor((now - stamp) / MINUTE);
   if (minutes < 1) return '刚刚';
@@ -37,11 +45,11 @@ export function relativeTime(value, now = Date.now()) {
 }
 
 export function isExpired(value, now = Date.now()) {
-  const stamp = Date.parse(value);
+  const stamp = parseTime(value);
   return !Number.isFinite(stamp) || stamp <= now;
 }
 export function expiryText(value, now = Date.now()) {
-  const stamp = Date.parse(value);
+  const stamp = parseTime(value);
   if (!Number.isFinite(stamp)) return '无有效期，需重新提出';
   if (stamp <= now) return '已过期';
   const minutes = Math.round((stamp - now) / MINUTE);

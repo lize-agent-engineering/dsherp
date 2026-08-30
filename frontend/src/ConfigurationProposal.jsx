@@ -1,5 +1,6 @@
 import React,{useRef,useState} from 'react';
 import {Alert,Button,Space,Table,Typography} from 'antd';
+import {isExpired} from './agent-format.js';
 
 export default function ConfigurationProposal(props){
  return <Confirmation key={`${props.proposal.id}:${props.proposal.digest}`} {...props}/>;
@@ -13,7 +14,7 @@ function Confirmation({proposal,onConfirm,onVerify}){
  const [local,setLocal]=useState(null),[verification,setVerification]=useState(null),[verifying,setVerifying]=useState(false);const claimed=useRef(false);
  const result=local||proposal.execution;
  const preview=proposal.purpose==='preview';
- const expired=()=>!Number.isFinite(Date.parse(proposal.expires_at))||Date.parse(proposal.expires_at)<=Date.now();
+ const expired=()=>isExpired(proposal.expires_at);
  const disabled=Boolean(result)||proposal.status!=='Pending'||proposal.execution_ready===false||expired();
  async function confirm(){
   if(claimed.current||disabled||expired())return;

@@ -2,6 +2,7 @@ import React, {useRef, useState} from 'react';
 import {Alert, Button, Space, Table, Typography} from 'antd';
 import {applyFormProposal} from './form-fill.js';
 import {proposalRows} from './proposal-rows.js';
+import {isExpired} from './agent-format.js';
 
 const display = value => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value);
 const actions={create:'创建',update:'修改',submit:'提交',cancel:'取消',fill:'填入当前草稿'};
@@ -19,7 +20,7 @@ function Proposal({proposal, onConfirm,onApply=applyFormProposal,onVerify}) {
   const [verification,setVerification]=useState(null);
   const [verifying,setVerifying]=useState(false);
   const state = localState || proposal.execution;
-  const expired = !Number.isFinite(Date.parse(proposal.expires_at)) || Date.parse(proposal.expires_at) <= Date.now();
+  const expired = isExpired(proposal.expires_at);
   async function verify(){
     if(verifying)return;
     setVerifying(true);
@@ -28,7 +29,7 @@ function Proposal({proposal, onConfirm,onApply=applyFormProposal,onVerify}) {
     finally{setVerifying(false);}
   }
   async function confirm() {
-    if (claimed.current || proposal.execution_ready===false || expired || Date.parse(proposal.expires_at) <= Date.now() || proposal.status !== 'Pending') return;
+    if (claimed.current || proposal.execution_ready===false || isExpired(proposal.expires_at) || proposal.status !== 'Pending') return;
     claimed.current = true;
     setState({status: 'Running'});
     try {
@@ -38,7 +39,7 @@ function Proposal({proposal, onConfirm,onApply=applyFormProposal,onVerify}) {
         for(const change of proposal.changes)if(JSON.stringify(result.values?.[change.field])!==JSON.stringify(change.after))throw new Error('填入授权内容不一致，请核实');
         setState(await onApply(proposal));return;
       }
-      setState(result.status === 'Succeeded' ? result : {...result, error: result.error || '执行结果尚未核实，请查看执行记录'});
+      setState(result.status === 'Succeeded' ? result : {...result, error: result.error || '执行结果尚未核实，请在本提案卡中核实业务结果'});
     } catch (error) {
       setState({status: 'Unknown', error: error.message});
     }

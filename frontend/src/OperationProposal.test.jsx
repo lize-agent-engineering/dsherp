@@ -35,6 +35,15 @@ it('新建提案先展示新记录，成功后显示原生命名结果',async()=
  expect(screen.getByText('Customer / 新记录')).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'确认执行'}));
  expect(await screen.findByText('已保存记录：Customer / C-NEW')).toBeTruthy();
 });
+it('结果未核实的兜底提示指向本卡片的核实入口，而不是已删除的执行记录视图',async()=>{
+ const confirm=vi.fn(async()=>({status:'Unknown'}));
+ render(<OperationProposal proposal={proposal} onConfirm={confirm} onVerify={vi.fn()}/>);
+ fireEvent.click(screen.getByRole('button',{name:'确认执行'}));
+ expect(await screen.findByText('执行结果尚未核实，请在本提案卡中核实业务结果')).toBeTruthy();
+ expect(screen.queryByText(/请查看执行记录/)).toBeNull();
+ expect(screen.getByRole('button',{name:'核实业务结果'})).toBeTruthy();
+});
+
 it('刷新从服务端执行记录恢复结果，不重发确认',()=>{
  const confirm=vi.fn();render(<OperationProposal proposal={{...proposal,status:'Succeeded',execution:{status:'Succeeded',execution_id:'E1',version:'v2',values:{item_name:'新名称'}}}} onConfirm={confirm}/>);
  expect(screen.getByText('执行成功，已读取业务结果')).toBeTruthy();
