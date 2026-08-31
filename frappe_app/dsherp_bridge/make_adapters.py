@@ -22,6 +22,28 @@ def _purchase_order_to_purchase_receipt(source_name):
     return make_purchase_receipt(source_name)
 
 
+def _purchase_order_to_subcontracting_order(source_name):
+    from erpnext.buying.doctype.purchase_order.purchase_order import make_subcontracting_order
+    return make_subcontracting_order(source_name)
+
+
+def _subcontracting_order_to_supply_stock_entry(source_name):
+    from erpnext.controllers.subcontracting_controller import make_rm_stock_entry
+    return make_rm_stock_entry(
+        source_name,
+        rm_items=None,
+        order_doctype='Subcontracting Order',
+        target_doc=None,
+    )
+
+
+def _subcontracting_order_to_subcontracting_receipt(source_name):
+    from erpnext.subcontracting.doctype.subcontracting_order.subcontracting_order import (
+        make_subcontracting_receipt,
+    )
+    return make_subcontracting_receipt(source_name)
+
+
 _ADAPTERS={
     ('Sales Order','sales_order_to_delivery_note',
      'erpnext.selling.doctype.sales_order.sales_order.make_delivery_note','Delivery Note'):
@@ -36,6 +58,17 @@ _ADAPTERS={
      'erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_receipt',
      'Purchase Receipt'):
         _purchase_order_to_purchase_receipt,
+    ('Purchase Order','purchase_order_to_subcontracting_order',
+     'erpnext.buying.doctype.purchase_order.purchase_order.make_subcontracting_order',
+     'Subcontracting Order'):
+        _purchase_order_to_subcontracting_order,
+    ('Subcontracting Order','subcontracting_order_to_supply_stock_entry',
+     'erpnext.controllers.subcontracting_controller.make_rm_stock_entry','Stock Entry'):
+        _subcontracting_order_to_supply_stock_entry,
+    ('Subcontracting Order','subcontracting_order_to_subcontracting_receipt',
+     'erpnext.subcontracting.doctype.subcontracting_order.subcontracting_order.make_subcontracting_receipt',
+     'Subcontracting Receipt'):
+        _subcontracting_order_to_subcontracting_receipt,
 }
 
 

@@ -37,7 +37,10 @@ try:
             'DSHERP 制造测试瞬时合成委外仓 - DVT',
         ],
         'suppliers': ['DSHERP 制造测试瞬时合成供应商', 'DSHERP-MFG-SYN-SUPPLIER-CONFLICT'],
-        'items': ['DSHERP-MFG-FRESH-FG', 'DSHERP-MFG-FRESH-RM'],
+        'items': [
+            'DSHERP-MFG-FRESH-FG', 'DSHERP-MFG-FRESH-RM',
+            'DSHERP-MFG-FRESH-SERVICE',
+        ],
         'boms': ['BOM-DSHERP-MFG-FRESH-FG-001', 'BOM-DSHERP-MFG-SYN-FG-CONFLICT'],
         'reconciliations': ['DSHERP-MFG-FRESH-OPENING-STOCK'],
     }
@@ -111,8 +114,13 @@ try:
             fields=['name', 'supplier_name', 'supplier_group', 'supplier_type'], order_by='name'
         ),
         'items': frappe.get_all(
-            'Item', filters={'name': ['in', ['DSHERP-MFG-SYN-FG', 'DSHERP-MFG-SYN-RM']]},
-            fields=['name', 'item_name', 'item_group', 'stock_uom', 'is_stock_item'], order_by='name'
+            'Item', filters={'name': ['in', [
+                'DSHERP-MFG-SYN-FG', 'DSHERP-MFG-SYN-RM', 'DSHERP-MFG-SYN-SERVICE',
+            ]]},
+            fields=[
+                'name', 'item_name', 'item_group', 'stock_uom', 'is_stock_item',
+                'is_purchase_item', 'is_sub_contracted_item',
+            ], order_by='name'
         ),
         'bom': {
             'name': bom.name, 'item': bom.item, 'company': bom.company,
@@ -147,7 +155,9 @@ try:
         'owned_counts': {
             'warehouses': frappe.db.count('Warehouse', {'name': ['in', warehouse_names]}),
             'suppliers': frappe.db.count('Supplier', {'supplier_name': 'DSHERP 制造测试合成供应商'}),
-            'items': frappe.db.count('Item', {'name': ['in', ['DSHERP-MFG-SYN-FG', 'DSHERP-MFG-SYN-RM']]}),
+            'items': frappe.db.count('Item', {'name': ['in', [
+                'DSHERP-MFG-SYN-FG', 'DSHERP-MFG-SYN-RM', 'DSHERP-MFG-SYN-SERVICE',
+            ]]}),
             'boms': frappe.db.count('BOM', {'item': 'DSHERP-MFG-SYN-FG'}),
             'reconciliations': frappe.db.count(
                 'Stock Reconciliation Item',
@@ -181,11 +191,40 @@ def test_provisioner_creates_readable_bom_and_deterministic_opening_stock():
     assert state["owned_counts"] == {
         "warehouses": 5,
         "suppliers": 1,
-        "items": 2,
+        "items": 3,
         "boms": 1,
         "reconciliations": 1,
         "stock_ledger_entries": 1,
     }
+    assert state["items"] == [
+        {
+            "name": "DSHERP-MFG-SYN-FG",
+            "item_name": "DSHERP 制造测试合成成品",
+            "item_group": "产品展示",
+            "stock_uom": "Nos",
+            "is_stock_item": 1,
+            "is_purchase_item": 1,
+            "is_sub_contracted_item": 1,
+        },
+        {
+            "name": "DSHERP-MFG-SYN-RM",
+            "item_name": "DSHERP 制造测试合成原料",
+            "item_group": "原材料",
+            "stock_uom": "Nos",
+            "is_stock_item": 1,
+            "is_purchase_item": 1,
+            "is_sub_contracted_item": 0,
+        },
+        {
+            "name": "DSHERP-MFG-SYN-SERVICE",
+            "item_name": "DSHERP 制造测试合成委外加工服务",
+            "item_group": "服务",
+            "stock_uom": "Nos",
+            "is_stock_item": 0,
+            "is_purchase_item": 1,
+            "is_sub_contracted_item": 0,
+        },
+    ]
     assert state["bom"] == {
         "name": "BOM-DSHERP-MFG-SYN-FG-001",
         "item": "DSHERP-MFG-SYN-FG",
@@ -249,6 +288,7 @@ def test_fresh_rollback_mode_really_creates_then_removes_a_transient_fixture():
         "finished_good": "DSHERP-MFG-FRESH-FG",
         "opening_qty": 100.0,
         "raw_material": "DSHERP-MFG-FRESH-RM",
+        "service_item": "DSHERP-MFG-FRESH-SERVICE",
         "reconciliation": "DSHERP-MFG-FRESH-OPENING-STOCK",
         "supplier": "DSHERP 制造测试瞬时合成供应商",
         "warehouse_group": "DSHERP 制造测试瞬时合成仓库 - DVT",
@@ -263,7 +303,7 @@ def test_fresh_rollback_mode_really_creates_then_removes_a_transient_fixture():
     state = result.get("first_state")
     assert state["counts"] == {
         "boms": 1,
-        "items": 2,
+        "items": 3,
         "reconciliations": 1,
         "stock_ledger_entries": 1,
         "suppliers": 1,

@@ -134,10 +134,17 @@ try:
         'DS Doctype Policy Route',filters={'parent':'Purchase Order'},
         fields=['route_name','method_path','target_doctype'],order_by='idx asc,name asc',
     )
-    assert routes==[{
-        'route_name':route_name,'method_path':method_path,
-        'target_doctype':'Purchase Receipt',
-    }],routes
+    assert routes==[
+        {
+            'route_name':route_name,'method_path':method_path,
+            'target_doctype':'Purchase Receipt',
+        },
+        {
+            'route_name':'purchase_order_to_subcontracting_order',
+            'method_path':'erpnext.buying.doctype.purchase_order.purchase_order.make_subcontracting_order',
+            'target_doctype':'Subcontracting Order',
+        },
+    ],routes
 
     company=frappe.get_all('Company',pluck='name')
     assert company==['DSHERP 原生验收测试公司'],company
@@ -547,7 +554,9 @@ finally:
             assert not frappe.db.exists('DS Conversation',conversation)
         if frappe.db.exists('DS Doctype Policy','Purchase Order'):
             purchase_order_policy=frappe.get_doc('DS Doctype Policy','Purchase Order')
-            assert [row.route_name for row in purchase_order_policy.routes]==[route_name]
+            assert [row.route_name for row in purchase_order_policy.routes]==[
+                route_name,'purchase_order_to_subcontracting_order',
+            ]
         if evidence:
             evidence['bin_cleanup']=fresh_bin
             evidence['fresh_residual']={
