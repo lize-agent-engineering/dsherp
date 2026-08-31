@@ -101,7 +101,7 @@ make 路由候选方法名（`make_delivery_note`、`make_stock_entry`、`make_p
 - [x] **T2.3 采购段**：Supplier/PO/PR 策略行 + `purchase_order_to_purchase_receipt` 路由。失败测试 `tests/integration/test_purchase_operations.py::test_purchase_order_to_receipt_updates_stock`：Supplier 创建确认 → PO 创建（Purchase User 角色）→ submit 确认 → make PR 草稿 → submit 确认 → Bin `actual_qty` 增、PO `per_received` 回读；同一 PR submit 提案二次 confirm 返回同一执行（去重断言）。
 - [x] **T2.4 委外段（企业供料加工）**：`is_subcontracted` PO / SCO / SCR 策略行 + 三条路由（PO→SCO、SCO→供料 SE、SCO→SCR）。失败测试 `tests/integration/test_subcontracting_operations.py::test_supplied_material_subcontracting_chain`：委外 PO 提交 → make SCO → submit → make 供料 SE（Send to Subcontractor）→ submit → 委外仓 Bin 增 → make SCR → submit → 成品入库、供料消耗回读；反例：SCO 直接 propose_create 被策略拒。供料方法以 T0.2 发现的确切签名接入。
 - [x] **T2.5 交付段**：Delivery Note 策略行 + `sales_order_to_delivery_note` 路由。失败测试 `tests/integration/test_delivery_operations.py::test_delivery_note_from_sales_order_updates_delivery_status`：已提交 SO → make DN → submit 确认 → SO `per_delivered`/status 回读、库存扣减断言。
-- [ ] **T2.6 库存影响展示**：action 提案 `impact` 只读块（冻结物料/数量/仓库摘要）+ 前端 `frontend/src/OperationProposal.jsx` 展示。失败测试：前端组件测试（确认卡渲染"将变动库存：物料×数量@仓库"）+ `tests/integration/test_operation_proposals.py::test_stock_action_proposal_carries_impact_summary`。
+- [x] **T2.6 库存影响展示**：action 提案 `impact` 只读块（冻结物料/数量/仓库摘要）+ 前端 `frontend/src/OperationProposal.jsx` 展示。失败测试：前端组件测试（确认卡渲染"将变动库存：物料×数量@仓库"）+ `tests/integration/test_operation_proposals.py::test_stock_action_proposal_carries_impact_summary`。
 
 ## 阶段 3：skills 升版（排在阶段 4 之前，见风险 R5）
 
