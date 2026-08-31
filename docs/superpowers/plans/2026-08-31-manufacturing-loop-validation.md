@@ -105,7 +105,7 @@ make 路由候选方法名（`make_delivery_note`、`make_stock_entry`、`make_p
 
 ## 阶段 3：skills 升版（排在阶段 4 之前，见风险 R5）
 
-- [ ] **T3.1 erp-query → 1.3.0**：补缺料解释读取策略（先 BOM 后 Bin、filters 批量读、先规划后读取的预算意识）。
+- [x] **T3.1 erp-query → 1.3.0**：补缺料解释读取策略（先 BOM 后 Bin、filters 批量读、先规划后读取的预算意识）。
 - [ ] **T3.2 erp-operation → 2.0.0**：改为"能力以 schema + 策略枚举为准"（删除逐 DocType 列举）、make 路由用法、草稿与提交分别确认、库存影响措辞、委外链步骤、明确缺口声明（供应商供料/直接采购成品/BOM 创建/发票不支持）。
 - [ ] **T3.3 manifest 同步**：`config/business-skills.json` 升版本+sha256；先改 SKILL.md 不改 manifest 观察 `tests/test_runtime_revision.py` 校验变红，再同步转绿。容器链回归通过后提交。
 
