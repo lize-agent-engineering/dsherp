@@ -37,6 +37,7 @@
 - [准确版本与运行契约](docs/engineering/runtime-baseline.md)
 - [DSH 分层验证证据](docs/engineering/dsh-validation-evidence.md)
 - [ERPNext 真实验证证据](docs/engineering/erpnext-integration-evidence.md)
+- [ERPNext 中文术语纠正包实施与验收证据](docs/engineering/terminology-pack-evidence.md)
 - [当前前端优先与应用生成计划](docs/superpowers/plans/2026-08-28-frontend-agent-app-generation.md)
 - [已确认的平台身份实施计划](docs/superpowers/plans/2026-08-28-platform-identity.md)
 - [阶段 3 身份绑定参考](docs/superpowers/plans/2026-08-28-identity-bound-read-execution.md)
