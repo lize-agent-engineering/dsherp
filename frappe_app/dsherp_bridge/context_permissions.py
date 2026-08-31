@@ -9,9 +9,10 @@ CONFIGURATION_DOCTYPES=['DocType','Custom Field','Workflow','Workflow State','Wo
 
 def revision(user,doctypes=None):
     doctypes=DOCTYPES if doctypes is None else list(doctypes)
-    from dsherp_bridge.doctype_policy import enabled_policy_material
-    policy_material=enabled_policy_material()
-    doctypes=sorted(set(doctypes)|{row['target_doctype'] for row in policy_material})
+    from dsherp_bridge.doctype_policy import policy_revision_material
+    policy_material=policy_revision_material()
+    enabled_targets={row['target_doctype'] for row in policy_material if row['enabled']}
+    doctypes=sorted(set(doctypes)|enabled_targets)
     schema_doctypes=sorted(set(doctypes)|{field.options for name in doctypes for field in frappe.get_meta(name).get_table_fields()})
     def rows(doctype,filters):
         return frappe.get_all(doctype,filters=filters,fields=['*'],order_by='name asc')

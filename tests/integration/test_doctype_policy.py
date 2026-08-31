@@ -140,3 +140,71 @@ finally:
         input=script,text=True,capture_output=True,timeout=40,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_disabled_policy_creation_rotates_revision_before_confirmation():
+    script = r'''
+import os,uuid,frappe
+os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge.context_permissions import revision
+from dsherp_bridge.operations import propose_update,confirm
+
+tag=uuid.uuid4().hex;actor='disabled-policy-'+tag+'@example.invalid';conversation=None;proposal_id=None
+original_policies={};item_name='DS-POLICY-'+tag
+try:
+    frappe.set_user('Administrator')
+    frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic disabled policy revision','enabled':1,
+                    'send_welcome_email':0,'roles':[{'role':'Item Manager'}]}).insert()
+    item=frappe.copy_doc(frappe.get_doc('Item','DSHERP-TEST-ITEM'))
+    item.item_code=item_name;item.item_name='Before disabled policy';item.insert()
+    for target in ('Item','Customer'):
+        policy_name=frappe.db.get_value('DS Doctype Policy',{'target_doctype':target},'name')
+        if policy_name:
+            policy=frappe.get_doc('DS Doctype Policy',policy_name)
+            snapshot={field:policy.get(field) for field in ('enabled','allow_read','allow_create','allow_update',
+                'allow_submit','allow_cancel','allow_fill','company_scope')}
+            snapshot['routes']=[{key:row.get(key) for key in ('route_name','method_path','target_doctype')} for row in policy.routes]
+            original_policies[target]=snapshot;frappe.delete_doc('DS Doctype Policy',policy_name)
+    frappe.set_user(actor)
+    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Synthetic disabled policy revision'}).insert(ignore_permissions=True).name
+    item=frappe.get_doc('Item',item_name)
+    before_revision=revision(actor)
+    proposal=propose_update(conversation,'Item',item.name,{'item_name':'Disabled policy must invalidate'},str(item.modified))
+    proposal_id=proposal['id'];frappe.db.commit()
+
+    frappe.set_user('Administrator')
+    policy=frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':'Customer','enabled':0,
+        'allow_read':0,'allow_create':0,'allow_update':0,'allow_submit':0,'allow_cancel':0,'allow_fill':0}).insert()
+    frappe.db.commit();frappe.set_user(actor)
+    after_revision=revision(actor)
+    assert after_revision!=before_revision,'disabled policy creation did not rotate authorization revision'
+    result=confirm(proposal_id,proposal['digest'],uuid.uuid4().hex)
+    assert result['status']=='Failed',result
+    assert '权限或企业成员关系已变化' in result['error'],result
+    assert frappe.db.get_value('Item',item_name,'item_name')=='Before disabled policy'
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if proposal_id:
+        for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal_id},pluck='name'):
+            frappe.delete_doc('DS Execution Record',execution,ignore_permissions=True)
+        if frappe.db.exists('DS Operation Proposal',proposal_id):
+            frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
+    if conversation and frappe.db.exists('DS Conversation',conversation):
+        frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
+    for target in ('Item','Customer'):
+        current=frappe.db.get_value('DS Doctype Policy',{'target_doctype':target},'name')
+        if current:frappe.delete_doc('DS Doctype Policy',current)
+        if target in original_policies:
+            restored=frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':target})
+            for field,value in original_policies[target].items():
+                if field!='routes':restored.set(field,value)
+            restored.set('routes',original_policies[target]['routes']);restored.insert()
+    if frappe.db.exists('Item',item_name):frappe.delete_doc('Item',item_name,ignore_permissions=True)
+    if frappe.db.exists('User',actor):frappe.delete_doc('User',actor)
+    frappe.db.commit();frappe.destroy()
+'''
+    result = subprocess.run(
+        ['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],
+        input=script,text=True,capture_output=True,timeout=40,
+    )
+    assert result.returncode == 0, result.stderr

@@ -35,13 +35,13 @@ def require_action(target_doctype, action):
         raise frappe.PermissionError('DS DocType 策略未允许 ' + target_doctype + ' 的 ' + action + ' 操作')
 
 
-def enabled_policy_material():
-    """Return stable policy values and ordered routes without mutable timestamps."""
+def policy_revision_material():
+    """Return every policy identity/state and full enabled-policy material."""
     policies = frappe.get_all(
-        'DS Doctype Policy', filters={'enabled': 1}, fields=['name', *POLICY_FIELDS],
+        'DS Doctype Policy', fields=['name', *POLICY_FIELDS],
         order_by='target_doctype asc',
     )
-    names = [row['name'] for row in policies]
+    names = [row['name'] for row in policies if row['enabled']]
     routes = frappe.get_all(
         'DS Doctype Policy Route', filters={'parent': ['in', names]},
         fields=['parent', 'idx', 'route_name', 'method_path', 'target_doctype'],
@@ -52,7 +52,9 @@ def enabled_policy_material():
         by_parent[route.pop('parent')].append(route)
     material = []
     for policy in policies:
-        row = dict(policy)
-        row['routes'] = by_parent[row.pop('name')]
+        row = {'target_doctype': policy['target_doctype'], 'enabled': policy['enabled']}
+        if policy['enabled']:
+            row.update({field: policy[field] for field in POLICY_FIELDS})
+            row['routes'] = by_parent[policy['name']]
         material.append(row)
     return material
