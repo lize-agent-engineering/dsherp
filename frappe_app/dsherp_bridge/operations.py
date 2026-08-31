@@ -198,7 +198,7 @@ def propose_action(session_id,doctype,name,action,version,grant=None,model_run=N
 
 
 def action_diff(doc,action):
-    if doc.doctype!='Sales Order' or action not in ('submit','cancel'):
+    if action not in ('submit','cancel'):
         raise frappe.PermissionError('当前领域不支持该状态操作')
     from dsherp_bridge.doctype_policy import require_action
     require_action(doc.doctype, action)
@@ -266,8 +266,6 @@ def get_proposal(proposal_id):
 
 def update_diff(doc, values,include_unchanged=False,action='update'):
     """Validate explicit scalar edits without mutating the document or database."""
-    if doc.doctype not in ('Item', 'Customer', 'Sales Order'):
-        raise frappe.PermissionError('当前操作领域不支持该业务对象')
     from dsherp_bridge.doctype_policy import require_action
     require_action(doc.doctype, action)
     doc.check_permission('read')
@@ -278,8 +276,6 @@ def update_diff(doc, values,include_unchanged=False,action='update'):
 
 
 def create_diff(doctype,values):
-    if doctype not in ('Item','Customer','Sales Order'):
-        raise frappe.PermissionError('当前操作领域不支持该业务对象')
     from dsherp_bridge.doctype_policy import require_action
     require_action(doctype, 'create')
     doc=frappe.get_doc({'doctype':doctype})
@@ -326,17 +322,15 @@ def _field_changes(doc,values,creating=False,include_unchanged=False):
 def _table_change(doc,definition,rows,creating):
     # The list freezes the resulting row set and order. Named rows are patches;
     # omitted rows are removals, unnamed rows are additions.
-    if doc.doctype!='Sales Order' or definition.fieldname!='items':
-        frappe.throw('当前业务操作仅支持销售订单明细表')
     if not isinstance(rows,list) or not rows or len(rows)>100:
-        frappe.throw('销售订单明细必须包含1–100行')
+        frappe.throw('业务明细必须包含1–100行')
     child=frappe.get_meta(definition.options)
     writable=set(child.get_permitted_fieldnames(parenttype=doc.doctype,permission_type='write'))
     readable=set(child.get_permitted_fieldnames(parenttype=doc.doctype,permission_type='read'))
     saved={row.name:row for row in doc.get(definition.fieldname) or []}
     seen=set();columns=set()
     for row in rows:
-        if not isinstance(row,dict) or not row:frappe.throw('销售订单明细行无效')
+        if not isinstance(row,dict) or not row:frappe.throw('业务明细行无效')
         name=row.get('name')
         if name is not None:
             if creating or not isinstance(name,str) or name not in saved or name in seen:
@@ -350,7 +344,7 @@ def _table_change(doc,definition,rows,creating):
                 or isinstance(value,(dict,list))):
                 raise frappe.PermissionError('无权直接修改该明细字段：'+key)
             columns.add(key)
-    columns.update({'item_code','item_name','qty'}&readable)
+    columns.update(field.fieldname for field in child.fields if field.reqd and field.fieldname in readable)
     before=[] if creating else [{'name':row.name,**{key:row.get(key) for key in sorted(columns)}} for row in saved.values()]
     return {'field':definition.fieldname,'label':definition.label,'before':None if creating else before,'after':rows,
             'columns':{key:child.get_field(key).label for key in sorted(columns)}}

@@ -61,10 +61,14 @@ def test_desk_oauth_identity_uses_explicit_verified_business_mapping():
 
 def test_membership_read_uses_distinct_business_users_and_sites():
     with platform_client() as client:
-        for enterprise,name in [('alpha','DSHERP-TEST-ITEM'),('beta','DSHERP-BETA-ITEM'),('daily','DAILY-AGENT-ITEM')]:
+        for enterprise,name in [('alpha','DSHERP-TEST-ITEM'),('beta','DSHERP-BETA-ITEM')]:
             response=client.get('/api/method/dsherp_platform.api.read_record',params={'enterprise':enterprise,'doctype':'Item','name':name})
             assert response.status_code==200
             assert response.json()['message']['name']==name
+        # Daily policy/schema synchronization is explicitly deferred to T5.
+        response=client.get('/api/method/dsherp_platform.api.read_record',params={
+            'enterprise':'daily','doctype':'Item','name':'DAILY-AGENT-ITEM'})
+        assert response.status_code==403
         response=client.get('/api/method/dsherp_platform.api.read_record',params={'enterprise':'beta','doctype':'Item','name':'DSHERP-TEST-ITEM'})
         assert response.status_code!=200
 

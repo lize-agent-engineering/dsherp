@@ -3,16 +3,14 @@ import hashlib
 import json
 import frappe
 
-DOCTYPES=['Item','Customer','Sales Order']
 CONFIGURATION_DOCTYPES=['DocType','Custom Field','Workflow','Workflow State','Workflow Action Master','Module Def','Role']
 
 
 def revision(user,doctypes=None):
-    doctypes=DOCTYPES if doctypes is None else list(doctypes)
     from dsherp_bridge.doctype_policy import policy_revision_material
     policy_material=policy_revision_material()
     enabled_targets={row['target_doctype'] for row in policy_material if row['enabled']}
-    doctypes=sorted(set(doctypes)|enabled_targets)
+    doctypes=sorted(enabled_targets if doctypes is None else set(doctypes))
     schema_doctypes=sorted(set(doctypes)|{field.options for name in doctypes for field in frappe.get_meta(name).get_table_fields()})
     def rows(doctype,filters):
         return frappe.get_all(doctype,filters=filters,fields=['*'],order_by='name asc')

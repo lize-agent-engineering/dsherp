@@ -32,7 +32,7 @@ def test_operation_domain_can_propose_but_cannot_confirm_business_writes():
         server=context_mcp.create_server(client,'RUN-1','CAP-1',domain='operation')
         catalog=asyncio.run(server.list_tools())
         assert {tool.name for tool in catalog}=={'erp_read_schema','erp_read_record','erp_search_records','erp_propose_update','erp_propose_create','erp_propose_action','erp_propose_fill'}
-        assert all('Sales Order' in tool.inputSchema['properties']['doctype']['enum'] for tool in catalog if tool.name!='erp_propose_action')
+        assert all(tool.inputSchema['properties']['doctype']=={'title':'Doctype','type':'string'} for tool in catalog)
         proposal=next(tool for tool in catalog if tool.name=='erp_propose_update')
         assert not {'session_id','user','site','grant','capability'} & set(proposal.inputSchema['properties'])
         asyncio.run(server.call_tool('erp_propose_update',{'doctype':'Item','name':'I1','values':{'item_name':'New'},'version':'v1'}))
@@ -54,6 +54,7 @@ def test_tools_send_only_bound_run_capability_and_named_arguments():
         tools=asyncio.run(server.list_tools())
         assert {t.name for t in tools}=={'erp_read_schema','erp_read_record','erp_search_records'}
         assert all(not {'user','site','url','capability'} & set(t.inputSchema['properties']) for t in tools)
+        assert all(t.inputSchema['properties']['doctype']=={'title':'Doctype','type':'string'} for t in tools)
         result=asyncio.run(server.call_tool('erp_read_record',{'doctype':'Item','name':'SYNTHETIC-ITEM'}))
         assert 'SYNTHETIC-ITEM' in str(result)
     assert calls==[('/api/method/dsherp_bridge.context_execution.run_tool',{

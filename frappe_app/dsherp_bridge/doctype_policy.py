@@ -2,7 +2,6 @@
 import frappe
 
 
-COMPATIBILITY_DOCTYPES = frozenset({'Item', 'Customer', 'Sales Order'})
 ACTION_FIELDS = {
     'read': 'allow_read',
     'create': 'allow_create',
@@ -18,7 +17,7 @@ POLICY_FIELDS = (
 
 
 def require_action(target_doctype, action):
-    """Require an explicit action when a policy exists; only the old trio may lack one."""
+    """Require one enabled policy row that explicitly allows the action."""
     field = ACTION_FIELDS.get(action)
     if not field:
         frappe.throw('未知 DocType 策略动作：' + str(action))
@@ -26,8 +25,6 @@ def require_action(target_doctype, action):
         'DS Doctype Policy', {'target_doctype': target_doctype}, ['name', 'enabled', field], as_dict=True,
     )
     if not policy:
-        if target_doctype in COMPATIBILITY_DOCTYPES:
-            return
         raise frappe.PermissionError('缺少 DS DocType 策略：' + target_doctype)
     if not policy.enabled:
         raise frappe.PermissionError('DS DocType 策略未启用：' + target_doctype)
