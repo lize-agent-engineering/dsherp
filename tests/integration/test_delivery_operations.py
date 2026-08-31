@@ -37,6 +37,7 @@ fresh_bin=None
 delete_linked_ledger_entries_before=None
 evidence={}
 fixture_ledger_names=[]
+initial_document_counts=None
 
 
 def quantity():
@@ -50,6 +51,15 @@ def site_document_counts():
         'sales_orders':frappe.db.count('Sales Order'),
         'delivery_notes':frappe.db.count('Delivery Note'),
     }
+
+
+def stock_ledger_snapshot():
+    return frappe.get_all(
+        'Stock Ledger Entry',
+        filters={'item_code':item_code,'warehouse':warehouse},
+        fields=['name','voucher_type','voucher_no','actual_qty','is_cancelled'],
+        order_by='creation asc,name asc',
+    )
 
 
 def new_run():
@@ -252,6 +262,9 @@ try:
     )
     rejected_notes=frappe.db.count('Delivery Note',{'owner':actor})
     rejected_counts=site_document_counts()
+    rejected_sle_count=frappe.db.count('Stock Ledger Entry')
+    rejected_sle_snapshot=stock_ledger_snapshot()
+    rejected_bin=quantity()
     try:
         run_tool(**cap,tool='erp_propose_make',arguments={
             'source_doctype':'Sales Order','source_name':sales_order,
@@ -266,6 +279,9 @@ try:
     )==rejected_proposals
     assert frappe.db.count('Delivery Note',{'owner':actor})==rejected_notes
     assert site_document_counts()==rejected_counts
+    assert frappe.db.count('Stock Ledger Entry')==rejected_sle_count
+    assert stock_ledger_snapshot()==rejected_sle_snapshot
+    assert quantity()==rejected_bin
 
     make_proposal=run_tool(**cap,tool='erp_propose_make',arguments={
         'source_doctype':'Sales Order','source_name':sales_order,
@@ -342,6 +358,9 @@ try:
     )
     direct_notes=frappe.db.count('Delivery Note',{'owner':actor})
     direct_counts=site_document_counts()
+    direct_sle_count=frappe.db.count('Stock Ledger Entry')
+    direct_sle_snapshot=stock_ledger_snapshot()
+    direct_bin=quantity()
     try:
         run_tool(**cap,tool='erp_propose_create',arguments={
             'doctype':'Delivery Note',
@@ -356,6 +375,9 @@ try:
     )==direct_proposals
     assert frappe.db.count('Delivery Note',{'owner':actor})==direct_notes
     assert site_document_counts()==direct_counts
+    assert frappe.db.count('Stock Ledger Entry')==direct_sle_count
+    assert stock_ledger_snapshot()==direct_sle_snapshot
+    assert quantity()==direct_bin
 
     # Read the native outcome through the same bound tool path.
     cap,outcome_run=new_run()
@@ -469,7 +491,8 @@ finally:
         assert all(
             frappe.db.exists('Stock Ledger Entry',name) for name in fixture_ledger_names
         )
-        assert site_document_counts()==initial_document_counts
+        if initial_document_counts is not None:
+            assert site_document_counts()==initial_document_counts
         assert all(not frappe.db.exists('Sales Order',name) for name in sales_order_names)
         assert frappe.db.count('Sales Order',{'owner':actor})==0
         assert all(not frappe.db.exists('Delivery Note',name) for name in delivery_note_names)
@@ -562,3 +585,185 @@ print(json.dumps(evidence,ensure_ascii=False,sort_keys=True))
         "executions": 0,
         "stock_ledger_entries": 0,
     }
+
+
+def test_delivery_zero_write_guards_detect_a_native_stock_mutation():
+    script = r'''
+import json,os,uuid,frappe
+from frappe.utils import flt,nowdate
+
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost')
+frappe.connect()
+
+item_code='DSHERP-MFG-SYN-RM'
+stock_entry=None
+stock_entry_names=[]
+warehouse=None
+pre_bin=None
+delete_linked_ledger_entries_before=None
+evidence={}
+
+
+def quantity():
+    return flt(frappe.db.get_value(
+        'Bin',{'item_code':item_code,'warehouse':warehouse},'actual_qty'
+    ) or 0)
+
+
+def stock_ledger_snapshot():
+    return frappe.get_all(
+        'Stock Ledger Entry',
+        filters={'item_code':item_code,'warehouse':warehouse},
+        fields=['name','voucher_type','voucher_no','actual_qty','is_cancelled'],
+        order_by='creation asc,name asc',
+    )
+
+
+try:
+    frappe.set_user('Administrator')
+    company=frappe.get_all('Company',pluck='name')
+    assert len(company)==1,company
+    warehouse=frappe.get_all(
+        'Warehouse',filters={
+            'warehouse_name':'DSHERP 制造测试合成原料仓',
+            'company':company[0],
+            'is_group':0,
+        },pluck='name',
+    )
+    assert len(warehouse)==1,warehouse
+    warehouse=warehouse[0]
+    pre_bin=quantity()
+    pre_sle_count=frappe.db.count('Stock Ledger Entry')
+    pre_sle_snapshot=stock_ledger_snapshot()
+    old_guards={
+        'sales_orders':frappe.db.count('Sales Order'),
+        'delivery_notes':frappe.db.count('Delivery Note'),
+        'proposals':frappe.db.count('DS Operation Proposal'),
+    }
+    delete_linked_ledger_entries_before=int(
+        frappe.db.get_single_value('Accounts Settings','delete_linked_ledger_entries') or 0
+    )
+
+    stock_entry=frappe.get_doc({
+        'doctype':'Stock Entry',
+        'stock_entry_type':'Material Receipt',
+        'purpose':'Material Receipt',
+        'company':company[0],
+        'posting_date':str(nowdate()),
+        'items':[{
+            'item_code':item_code,
+            'qty':1,
+            't_warehouse':warehouse,
+            'basic_rate':1,
+        }],
+    })
+    stock_entry.insert()
+    stock_entry_names.append(stock_entry.name)
+    stock_entry.submit()
+    frappe.db.commit()
+
+    assert old_guards=={
+        'sales_orders':frappe.db.count('Sales Order'),
+        'delivery_notes':frappe.db.count('Delivery Note'),
+        'proposals':frappe.db.count('DS Operation Proposal'),
+    }
+    detected=[]
+    for label,guard in (
+        ('site_sle',lambda: frappe.db.count('Stock Ledger Entry')==pre_sle_count),
+        ('related_sle',lambda: stock_ledger_snapshot()==pre_sle_snapshot),
+        ('bin',lambda: quantity()==pre_bin),
+    ):
+        try:
+            assert guard()
+        except AssertionError:
+            detected.append(label)
+    assert detected==['site_sle','related_sle','bin'],detected
+    evidence={
+        'detected':detected,
+        'bin_before':pre_bin,
+        'bin_mutated':quantity(),
+        'temporary_stock_entry':stock_entry.name,
+        'delete_linked_ledger_entries_before':delete_linked_ledger_entries_before,
+    }
+finally:
+    frappe.db.rollback()
+    frappe.set_user('Administrator')
+    stock_entry_names.extend(frappe.get_all(
+        'Stock Entry',filters={'name':['in',stock_entry_names]},pluck='name'
+    ))
+    stock_entry_names=list(dict.fromkeys(filter(None,stock_entry_names)))
+    docs=[]
+    for name in stock_entry_names:
+        if frappe.db.exists('Stock Entry',name):
+            docs.append(frappe.get_doc('Stock Entry',name))
+    for doc in docs:
+        if doc.docstatus==1:
+            doc.cancel()
+    from frappe.tests.utils import change_settings
+    with change_settings('Accounts Settings',{'delete_linked_ledger_entries':1}):
+        for doc in docs:
+            if frappe.db.exists('Stock Entry',doc.name):
+                frappe.delete_doc('Stock Entry',doc.name,ignore_permissions=True)
+    frappe.db.commit()
+    frappe.destroy()
+
+    os.chdir('/home/frappe/frappe-bench/sites')
+    frappe.init(site='dsherp-validation.localhost')
+    frappe.connect()
+    try:
+        fresh_bin=quantity() if warehouse and pre_bin is not None else pre_bin
+        assert fresh_bin==pre_bin,(pre_bin,fresh_bin)
+        assert all(not frappe.db.exists('Stock Entry',name) for name in stock_entry_names)
+        assert frappe.db.count('Stock Ledger Entry',{
+            'voucher_type':'Stock Entry','voucher_no':['in',stock_entry_names],
+        })==0
+        if delete_linked_ledger_entries_before is not None:
+            assert int(frappe.db.get_single_value(
+                'Accounts Settings','delete_linked_ledger_entries'
+            ) or 0)==delete_linked_ledger_entries_before
+        if evidence:
+            evidence['bin_cleanup']=fresh_bin
+            evidence['fresh_stock_entries']=sum(
+                bool(frappe.db.exists('Stock Entry',name)) for name in stock_entry_names
+            )
+            evidence['fresh_stock_ledger_entries']=frappe.db.count(
+                'Stock Ledger Entry',{
+                    'voucher_type':'Stock Entry','voucher_no':['in',stock_entry_names],
+                },
+            )
+            evidence['delete_linked_ledger_entries_after']=int(
+                frappe.db.get_single_value(
+                    'Accounts Settings','delete_linked_ledger_entries'
+                ) or 0
+            )
+    finally:
+        frappe.destroy()
+
+print(json.dumps(evidence,ensure_ascii=False,sort_keys=True))
+'''
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-i",
+            "dsherp-validation-backend-1",
+            "/home/frappe/frappe-bench/env/bin/python",
+            "-",
+        ],
+        input=script,
+        text=True,
+        capture_output=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    evidence = json.loads(result.stdout)
+    assert evidence["detected"] == ["site_sle", "related_sle", "bin"]
+    assert evidence["bin_mutated"] == evidence["bin_before"] + 1
+    assert evidence["bin_cleanup"] == evidence["bin_before"]
+    assert evidence["fresh_stock_entries"] == 0
+    assert evidence["fresh_stock_ledger_entries"] == 0
+    assert (
+        evidence["delete_linked_ledger_entries_after"]
+        == evidence["delete_linked_ledger_entries_before"]
+    )

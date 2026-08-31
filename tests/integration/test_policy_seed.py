@@ -19,14 +19,18 @@ SITES = [
 ]
 
 
-def _provision(site, *arguments):
-    result = subprocess.run(
+def _run_provision(site, *arguments):
+    return subprocess.run(
         [sys.executable, str(PROVISIONER), "--site", site, *arguments],
         cwd=ROOT,
         text=True,
         capture_output=True,
         timeout=60,
     )
+
+
+def _provision(site, *arguments):
+    result = _run_provision(site, *arguments)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
@@ -65,6 +69,39 @@ finally:
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
+
+
+def _set_alpha_sales_order_routes(routes):
+    script = r'''
+import json, os, frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost')
+frappe.connect()
+try:
+    frappe.set_user('Administrator')
+    policy=frappe.get_doc('DS Doctype Policy','Sales Order')
+    policy.set('routes',json.loads(__ROUTES__))
+    policy.save()
+    frappe.db.commit()
+finally:
+    frappe.destroy()
+'''.replace("__ROUTES__", repr(json.dumps(routes)))
+    result = subprocess.run(
+        [
+            *COMPOSE,
+            "exec",
+            "-T",
+            "backend",
+            "/home/frappe/frappe-bench/env/bin/python",
+            "-",
+        ],
+        cwd=ROOT,
+        input=script,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 EXPECTED_ROWS = [
@@ -446,41 +483,7 @@ def test_manufacturing_policy_set_migrates_exact_pre_delivery_sales_order_route(
     site = "dsherp-validation.localhost"
     service = "backend"
     _provision(site, "--policy-set", "manufacturing")
-    set_routes_script = r'''
-import json, os, frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost')
-frappe.connect()
-try:
-    frappe.set_user('Administrator')
-    policy=frappe.get_doc('DS Doctype Policy','Sales Order')
-    policy.set('routes',json.loads(__ROUTES__))
-    policy.save()
-    frappe.db.commit()
-finally:
-    frappe.destroy()
-'''
-
-    def set_routes(routes):
-        script = set_routes_script.replace("__ROUTES__", repr(json.dumps(routes)))
-        result = subprocess.run(
-            [
-                *COMPOSE,
-                "exec",
-                "-T",
-                service,
-                "/home/frappe/frappe-bench/env/bin/python",
-                "-",
-            ],
-            cwd=ROOT,
-            input=script,
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
-        assert result.returncode == 0, result.stderr
-
-    set_routes([])
+    _set_alpha_sales_order_routes([])
     try:
         downgraded = next(
             row
@@ -495,7 +498,53 @@ finally:
         rows = _read_policy_rows(site, service)
         sales_order = next(row for row in rows if row["target_doctype"] == "Sales Order")
         if sales_order != EXPECTED_ALPHA_SALES_ORDER:
-            set_routes(EXPECTED_ALPHA_SALES_ORDER["routes"])
+            _set_alpha_sales_order_routes(EXPECTED_ALPHA_SALES_ORDER["routes"])
+
+
+@pytest.mark.parametrize(
+    "routes",
+    [
+        [
+            {
+                "route_name": "unknown_sales_order_route",
+                "method_path": "erpnext.selling.doctype.sales_order.sales_order.make_delivery_note",
+                "target_doctype": "Delivery Note",
+            }
+        ],
+        [
+            {
+                "route_name": "sales_order_to_delivery_not",
+                "method_path": "erpnext.selling.doctype.sales_order.sales_order.make_delivery_note",
+                "target_doctype": "Delivery Note",
+            }
+        ],
+        [
+            *EXPECTED_ALPHA_SALES_ORDER["routes"],
+            {
+                "route_name": "sales_order_to_delivery_note_extra",
+                "method_path": "erpnext.selling.doctype.sales_order.sales_order.make_delivery_note",
+                "target_doctype": "Delivery Note",
+            },
+        ],
+    ],
+    ids=("unknown", "near_match", "extra"),
+)
+def test_manufacturing_policy_set_rejects_sales_order_route_drift_without_rewrite(
+    routes,
+):
+    site = "dsherp-validation.localhost"
+    service = "backend"
+    _provision(site, "--policy-set", "manufacturing")
+    _set_alpha_sales_order_routes(routes)
+    try:
+        before = _read_policy_rows(site, service)
+        result = _run_provision(site, "--policy-set", "manufacturing")
+        assert result.returncode != 0
+        assert "DS DocType policy conflict for Sales Order" in result.stderr
+        assert _read_policy_rows(site, service) == before
+    finally:
+        _set_alpha_sales_order_routes(EXPECTED_ALPHA_SALES_ORDER["routes"])
+        assert _read_policy_rows(site, service) == EXPECTED_ALL_ROWS
 
 
 def test_manufacturing_policy_set_fast_fails_and_rolls_back_conflict():
