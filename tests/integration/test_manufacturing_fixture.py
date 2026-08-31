@@ -241,21 +241,64 @@ def test_fresh_rollback_mode_really_creates_then_removes_a_transient_fixture():
 
     result = _provision("--verify-fresh")
 
-    assert result == {
+    assert result.get("mode") == "fresh_rollback"
+    assert result.get("site") == "dsherp-validation.localhost"
+    assert result.get("provision_invocations") == 2
+    assert result.get("first_result") == result.get("second_result") == {
         "bom": "BOM-DSHERP-MFG-FRESH-FG-001",
-        "created_counts": {
-            "boms": 1,
-            "items": 2,
-            "reconciliations": 1,
-            "stock_ledger_entries": 1,
-            "suppliers": 1,
-            "warehouses": 5,
-        },
-        "mode": "fresh_rollback",
+        "finished_good": "DSHERP-MFG-FRESH-FG",
         "opening_qty": 100.0,
+        "raw_material": "DSHERP-MFG-FRESH-RM",
         "reconciliation": "DSHERP-MFG-FRESH-OPENING-STOCK",
-        "site": "dsherp-validation.localhost",
+        "supplier": "DSHERP 制造测试瞬时合成供应商",
+        "warehouse_group": "DSHERP 制造测试瞬时合成仓库 - DVT",
+        "warehouses": {
+            "finished_goods": "DSHERP 制造测试瞬时合成成品仓 - DVT",
+            "raw": "DSHERP 制造测试瞬时合成原料仓 - DVT",
+            "subcontracting": "DSHERP 制造测试瞬时合成委外仓 - DVT",
+            "work_in_process": "DSHERP 制造测试瞬时合成在制仓 - DVT",
+        },
     }
+    assert result.get("first_state") == result.get("second_state")
+    state = result.get("first_state")
+    assert state["counts"] == {
+        "boms": 1,
+        "items": 2,
+        "reconciliations": 1,
+        "stock_ledger_entries": 1,
+        "suppliers": 1,
+        "warehouses": 5,
+    }
+    assert state["bom"] == {
+        "docstatus": 1,
+        "is_active": 1,
+        "is_default": 1,
+        "item": "DSHERP-MFG-FRESH-FG",
+        "items": [{"item_code": "DSHERP-MFG-FRESH-RM", "qty": 2.0, "uom": "Nos"}],
+        "name": "BOM-DSHERP-MFG-FRESH-FG-001",
+        "quantity": 1.0,
+    }
+    assert state["reconciliation"] == {
+        "docstatus": 1,
+        "items": [
+            {
+                "item_code": "DSHERP-MFG-FRESH-RM",
+                "qty": 100.0,
+                "valuation_rate": 10.0,
+                "warehouse": "DSHERP 制造测试瞬时合成原料仓 - DVT",
+            }
+        ],
+        "name": "DSHERP-MFG-FRESH-OPENING-STOCK",
+        "purpose": "Opening Stock",
+    }
+    assert state["bin_actual_qty"] == 100.0
+    assert state["stock_ledger_entries"] == [
+        {
+            "actual_qty": 0.0,
+            "qty_after_transaction": 100.0,
+            "voucher_no": "DSHERP-MFG-FRESH-OPENING-STOCK",
+        }
+    ]
     assert _read_probe_state() == empty
 
 

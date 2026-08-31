@@ -277,6 +277,120 @@ def fixture_counts(abbreviation):
     }
 
 
+def fixture_state(abbreviation, raw_warehouse):
+    bom = frappe.get_doc('BOM', BOM)
+    reconciliation = frappe.get_doc('Stock Reconciliation', RECONCILIATION)
+    bin_actual_qty = frappe.db.get_value(
+        'Bin', {'item_code': RAW_MATERIAL, 'warehouse': raw_warehouse}, 'actual_qty'
+    )
+    return {
+        'counts': fixture_counts(abbreviation),
+        'warehouses': [
+            dict(row) for row in frappe.get_all(
+                'Warehouse',
+                filters={
+                    'name': ['in', [
+                        warehouse_name(label, abbreviation) for label in WAREHOUSE_LABELS.values()
+                    ]],
+                },
+                fields=['name', 'warehouse_name', 'parent_warehouse', 'is_group', 'company'],
+                order_by='name',
+            )
+        ],
+        'supplier': dict(frappe.db.get_value(
+            'Supplier', SUPPLIER,
+            ['name', 'supplier_name', 'supplier_group', 'supplier_type'], as_dict=True,
+        )),
+        'items': [
+            dict(row) for row in frappe.get_all(
+                'Item',
+                filters={'name': ['in', [FINISHED_GOOD, RAW_MATERIAL]]},
+                fields=['name', 'item_name', 'item_group', 'stock_uom', 'is_stock_item'],
+                order_by='name',
+            )
+        ],
+        'bom': {
+            'name': bom.name,
+            'item': bom.item,
+            'docstatus': bom.docstatus,
+            'is_active': bom.is_active,
+            'is_default': bom.is_default,
+            'quantity': flt(bom.quantity),
+            'items': [
+                {'item_code': row.item_code, 'qty': flt(row.qty), 'uom': row.uom}
+                for row in bom.items
+            ],
+        },
+        'reconciliation': {
+            'name': reconciliation.name,
+            'purpose': reconciliation.purpose,
+            'docstatus': reconciliation.docstatus,
+            'items': [
+                {
+                    'item_code': row.item_code,
+                    'warehouse': row.warehouse,
+                    'qty': flt(row.qty),
+                    'valuation_rate': flt(row.valuation_rate),
+                }
+                for row in reconciliation.items
+            ],
+        },
+        'bin_actual_qty': flt(bin_actual_qty),
+        'stock_ledger_entries': [
+            {
+                'voucher_no': row.voucher_no,
+                'actual_qty': flt(row.actual_qty),
+                'qty_after_transaction': flt(row.qty_after_transaction),
+            }
+            for row in frappe.get_all(
+                'Stock Ledger Entry',
+                filters={
+                    'item_code': RAW_MATERIAL,
+                    'warehouse': raw_warehouse,
+                    'voucher_type': 'Stock Reconciliation',
+                },
+                fields=['voucher_no', 'actual_qty', 'qty_after_transaction'],
+                order_by='name',
+            )
+        ],
+    }
+
+
+def provision_fixture(
+    company, root_warehouse, supplier_group, finished_group, raw_group, stock_uom,
+    opening_account,
+):
+    group = ensure_warehouse(
+        WAREHOUSE_LABELS['group'], company.abbr, company.name, root_warehouse, 1
+    )
+    warehouses = {
+        key: ensure_warehouse(label, company.abbr, company.name, group.name, 0).name
+        for key, label in WAREHOUSE_LABELS.items()
+        if key != 'group'
+    }
+    supplier = ensure_supplier(supplier_group, company.country)
+    finished_good = ensure_item(
+        FINISHED_GOOD, 'DSHERP 制造测试合成成品', finished_group, stock_uom
+    )
+    raw_material = ensure_item(
+        RAW_MATERIAL, 'DSHERP 制造测试合成原料', raw_group, stock_uom
+    )
+    bom = ensure_bom(company.name, company.default_currency, stock_uom)
+    reconciliation, actual_qty = ensure_opening_stock(
+        company.name, warehouses['raw'], opening_account, company.cost_center
+    )
+    return {
+        'warehouse_group': group.name,
+        'warehouses': warehouses,
+        'supplier': supplier.name,
+        'finished_good': finished_good.name,
+        'raw_material': raw_material.name,
+        'bom': bom.name,
+        'reconciliation': reconciliation.name,
+        'opening_qty': actual_qty,
+    }
+
+
 def require_runtime_error(operation, label):
     try:
         operation()
@@ -415,52 +529,40 @@ try:
         }
         if RUN_MODE == 'verify-fresh':
             require(fixture_counts(company.abbr) == empty_counts, 'Transient fixture baseline is not empty')
-        group = ensure_warehouse(WAREHOUSE_LABELS['group'], company.abbr, company.name, root_warehouse, 1)
-        warehouses = {
-            key: ensure_warehouse(label, company.abbr, company.name, group.name, 0).name
-            for key, label in WAREHOUSE_LABELS.items()
-            if key != 'group'
-        }
-        supplier = ensure_supplier(supplier_group, company.country)
-        finished_good = ensure_item(
-            FINISHED_GOOD, 'DSHERP 制造测试合成成品', finished_group, stock_uom
-        )
-        raw_material = ensure_item(
-            RAW_MATERIAL, 'DSHERP 制造测试合成原料', raw_group, stock_uom
-        )
-        bom = ensure_bom(company.name, company.default_currency, stock_uom)
-        reconciliation, actual_qty = ensure_opening_stock(
-            company.name, warehouses['raw'], opening_account, company.cost_center
+        first_result = provision_fixture(
+            company, root_warehouse, supplier_group, finished_group, raw_group, stock_uom,
+            opening_account,
         )
         if RUN_MODE == 'verify-fresh':
-            created_counts = fixture_counts(company.abbr)
-            require(created_counts == {
+            first_state = fixture_state(company.abbr, first_result['warehouses']['raw'])
+            require(first_state['counts'] == {
                 'warehouses': 5, 'suppliers': 1, 'items': 2, 'boms': 1,
                 'reconciliations': 1, 'stock_ledger_entries': 1,
-            }, f'Transient fixture creation counts differ: {created_counts}')
+            }, f"Transient fixture creation counts differ: {first_state['counts']}")
+            second_result = provision_fixture(
+                company, root_warehouse, supplier_group, finished_group, raw_group, stock_uom,
+                opening_account,
+            )
+            second_state = fixture_state(company.abbr, second_result['warehouses']['raw'])
+            require(second_result == first_result, 'Second transient provision returned another fixture')
+            require(second_state == first_state, 'Second transient provision changed owned state')
             frappe.db.rollback()
             require(fixture_counts(company.abbr) == empty_counts, 'Transient fixture rollback left records')
             result = {
                 'site': SITE,
                 'mode': 'fresh_rollback',
-                'bom': bom.name,
-                'reconciliation': reconciliation.name,
-                'opening_qty': actual_qty,
-                'created_counts': created_counts,
+                'provision_invocations': 2,
+                'first_result': first_result,
+                'second_result': second_result,
+                'first_state': first_state,
+                'second_state': second_state,
             }
         else:
             frappe.db.commit()
             result = {
                 'site': SITE,
                 'company': company.name,
-                'warehouse_group': group.name,
-                'warehouses': warehouses,
-                'supplier': supplier.name,
-                'finished_good': finished_good.name,
-                'raw_material': raw_material.name,
-                'bom': bom.name,
-                'reconciliation': reconciliation.name,
-                'opening_qty': actual_qty,
+                **first_result,
             }
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
 except Exception:
