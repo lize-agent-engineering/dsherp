@@ -19,7 +19,7 @@ conversation=None
 runs=[]
 raw_item='DSHERP-MFG-SYN-RM'
 finished_item='DSHERP-MFG-SYN-FG'
-field_permlevel_before=None
+field_permlevels_before={}
 
 def new_run(domain):
     capability=uuid.uuid4().hex
@@ -100,6 +100,33 @@ try:
     assert first_source['record_versions']=={
         single[0]['name']:str(single[0]['modified']),
     }
+    assert first_source['match_fields']==['item_code','warehouse'],first_source
+
+    filter_only=run_tool(**query_cap,tool='erp_search_records',arguments={
+        'doctype':'Bin',
+        'filters':{'projected_qty':['=',expected[(raw_item,raw_warehouse)][1]]},
+        'fields':['item_code'],
+    })
+    assert filter_only,filter_only
+    filter_only_source=sources(query_cap)[-1]
+    assert filter_only_source['fields']==['name','modified','item_code'],filter_only_source
+    assert filter_only_source['match_fields']==['projected_qty'],filter_only_source
+    assert 'projected_qty' not in filter_only_source['fields']
+
+    titled=run_tool(**query_cap,tool='erp_search_records',arguments={
+        'doctype':'Item','query':raw_item,
+    })
+    assert any(row['name']==raw_item for row in titled),titled
+    title_source=sources(query_cap)[-1]
+    assert title_source['fields']==['name','modified'],title_source
+    assert title_source['match_fields']==['name','item_name'],title_source
+    legacy_title_source={**title_source,
+        'arguments':{'doctype':'Item','query':raw_item},
+        'fields':['item_name'],
+    }
+    legacy_title_source.pop('match_fields')
+    frappe.set_user(actor)
+    authorize_sources([legacy_title_source])
 
     operation_cap=new_run('operation')
     frappe.set_user('Guest')
@@ -144,6 +171,7 @@ try:
     })
     assert len(old_shape)<=20
     assert all(set(row)=={'name','modified'} for row in old_shape),old_shape
+    assert sources(operation_cap)[-1]['match_fields']==[]
 
     for governance in ('DS Doctype Policy','DS Doctype Policy Route'):
         before=len(sources(operation_cap))
@@ -155,31 +183,41 @@ try:
         except frappe.PermissionError:pass
         assert len(sources(operation_cap))==before
 
-    # A successful source is no longer reusable after native field access changes.
+    # Filter-only and title match fields remain authorization dependencies even
+    # though neither one is returned in fields.
     frappe.set_user('Administrator')
-    field_permlevel_before=frappe.db.get_value(
-        'DocField',{'parent':'Bin','fieldname':'projected_qty'},'permlevel'
-    )
-    assert field_permlevel_before==0,field_permlevel_before
-    frappe.db.set_value(
-        'DocField',{'parent':'Bin','fieldname':'projected_qty'},'permlevel',1
-    )
-    frappe.clear_cache(doctype='Bin')
-    frappe.set_user(actor)
-    try:
-        authorize_sources([first_source])
-        raise AssertionError('field permission change preserved historical source')
-    except frappe.PermissionError as error:
-        assert '字段权限已改变' in str(error),error
+    for doctype,field,source in (
+        ('Bin','projected_qty',filter_only_source),
+        ('Item','item_name',title_source),
+    ):
+        field_permlevels_before[(doctype,field)]=frappe.db.get_value(
+            'DocField',{'parent':doctype,'fieldname':field},'permlevel'
+        )
+        assert field_permlevels_before[(doctype,field)]==0,(doctype,field)
+        frappe.db.set_value(
+            'DocField',{'parent':doctype,'fieldname':field},'permlevel',1
+        )
+        frappe.clear_cache(doctype=doctype)
+        frappe.set_user(actor)
+        try:
+            authorize_sources([source])
+            raise AssertionError(('match field permission change preserved source',field))
+        except frappe.PermissionError as error:
+            assert '匹配字段权限已改变' in str(error),error
+        frappe.set_user('Administrator')
+        frappe.db.set_value(
+            'DocField',{'parent':doctype,'fieldname':field},
+            'permlevel',field_permlevels_before[(doctype,field)],
+        )
+        frappe.clear_cache(doctype=doctype)
 finally:
     frappe.db.rollback()
     frappe.set_user('Administrator')
-    if field_permlevel_before is not None:
+    for (doctype,field),permlevel in field_permlevels_before.items():
         frappe.db.set_value(
-            'DocField',{'parent':'Bin','fieldname':'projected_qty'},
-            'permlevel',field_permlevel_before,
+            'DocField',{'parent':doctype,'fieldname':field},'permlevel',permlevel,
         )
-        frappe.clear_cache(doctype='Bin')
+        frappe.clear_cache(doctype=doctype)
     if conversation:
         for run_name in frappe.get_all(
             'DS Model Run',filters={'conversation':conversation},pluck='name'

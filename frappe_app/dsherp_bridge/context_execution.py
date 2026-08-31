@@ -46,6 +46,14 @@ def authorize_sources(sources):
             visible.add('docstatus')
         if set(source['fields'])-visible:
             raise frappe.PermissionError('历史结果的字段权限已改变')
+        # Sources written before match_fields existed retain their prior fields-based
+        # authorization. Every new search source carries the key, including [].
+        if 'match_fields' in source:
+            match_fields=source['match_fields']
+            if (not isinstance(match_fields,list)
+                or any(not isinstance(field,str) for field in match_fields)
+                or set(match_fields)-visible):
+                raise frappe.PermissionError('历史结果的匹配字段权限已改变')
         for table,columns in source.get('child_fields',{}).items():
             readable={field['fieldname'] for field in schema.get(table,{}).get('fields',[])}|{'name','idx'}
             if table not in visible or set(columns)-readable:
@@ -240,6 +248,11 @@ def run_tool(run_id,capability,tool,arguments):
             else:
                 fields=['name','modified']
         source={'tool':tool,'arguments':arguments,'fields':fields,'records':records}
+        if tool=='erp_search_records':
+            meta=frappe.get_meta(arguments['doctype'])
+            source['match_fields']=erp._search_match_fields(
+                meta,erp._searchable_fields(meta),arguments['query'],arguments['filters'],
+            )
         if tool=='erp_read_schema':
             source['child_fields']={field['fieldname']:[child['fieldname'] for child in field['fields']] for field in result['fields'] if 'fields' in field}
         elif tool=='erp_read_record':

@@ -126,6 +126,17 @@ def _restricted_result_fields(fields, permitted):
     )]
 
 
+def _search_match_fields(meta, permitted, query, filters):
+    if filters is not None:
+        return sorted(filters)
+    if not query:
+        return []
+    result = ['name']
+    if meta.title_field in permitted:
+        result.append(meta.title_field)
+    return result
+
+
 @frappe.whitelist(methods=["GET"])
 def search_records(doctype: str, query: str = "", filters=None, fields=None):
     _authorize(doctype)
@@ -148,10 +159,11 @@ def search_records(doctype: str, query: str = "", filters=None, fields=None):
     if query:
         if not title or not meta.get_field(title):
             frappe.throw('业务对象没有可搜索的标题字段')
-        fuzzy = {'name':['like','%'+query+'%']}
-        # Filtering unreadable fields would disclose their contents through matches.
-        if title in permitted:
-            fuzzy[title]=['like','%'+query+'%']
+        # Match fields are also persisted by context_execution and reauthorized.
+        fuzzy = {
+            field:['like','%'+query+'%']
+            for field in _search_match_fields(meta, permitted, query, filters)
+        }
         return frappe.get_list(
             doctype, or_filters=fuzzy, fields=['name','modified'],
             order_by='name asc', page_length=20,
