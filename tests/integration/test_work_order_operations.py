@@ -260,6 +260,7 @@ try:
         'doctype':'Work Order','name':work_order,'action':'submit',
         'version':str(draft_read['modified']),
     })
+    assert submit_work_order['impact']=={'kind':'none','entries':[]},submit_work_order
     assert site_document_counts()==submit_work_order_documents_before
     assert frappe.db.get_value('Work Order',work_order,'docstatus')==0
     submitted=confirm_once(submit_work_order,submit_work_order_run)
@@ -314,6 +315,10 @@ try:
         'doctype':'Stock Entry','name':transfer_entry,'action':'submit',
         'version':str(transfer_read['modified']),
     })
+    assert transfer_submit['impact']=={'kind':'stock','entries':[
+        {'item_code':raw_item,'quantity':-2,'uom':'Nos','warehouse':raw_warehouse},
+        {'item_code':raw_item,'quantity':2,'uom':'Nos','warehouse':wip_warehouse},
+    ]},transfer_submit
     assert site_document_counts()==transfer_submit_documents_before
     assert frappe.db.get_value('Stock Entry',transfer_entry,'docstatus')==0
     transfer_sle_before=frappe.db.count('Stock Ledger Entry',{
@@ -362,6 +367,10 @@ try:
         'doctype':'Stock Entry','name':manufacture_entry,'action':'submit',
         'version':str(manufacture_read['modified']),
     })
+    assert manufacture_submit['impact']=={'kind':'stock','entries':[
+        {'item_code':finished_item,'quantity':1,'uom':'Nos','warehouse':fg_warehouse},
+        {'item_code':raw_item,'quantity':-2,'uom':'Nos','warehouse':wip_warehouse},
+    ]},manufacture_submit
     assert site_document_counts()==manufacture_submit_documents_before
     manufacture_submitted=confirm_once(manufacture_submit,manufacture_submit_run)
     assert manufacture_submitted['status']=='Succeeded',manufacture_submitted

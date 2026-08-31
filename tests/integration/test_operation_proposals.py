@@ -57,8 +57,18 @@ try:
     read=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Sales Order','name':order.name})
     sources=json.loads(frappe.db.get_value('DS Model Run',run.name,'sources'))
     assert 'qty' in sources[-1]['child_fields']['items']
+    proposal_count=frappe.db.count('DS Operation Proposal',{'conversation':conversation.name})
+    try:
+        run_tool(**cap,tool='erp_propose_action',arguments={
+            **action,'impact':{'kind':'stock','entries':[]},
+        })
+        raise AssertionError('model supplied a writable impact block')
+    except frappe.ValidationError as error:
+        assert str(error)=='操作提案参数无效',error
+    assert frappe.db.count('DS Operation Proposal',{'conversation':conversation.name})==proposal_count
     proposed=run_tool(**cap,tool='erp_propose_action',arguments=action)
     assert proposed['action']=='submit' and proposed['status']=='Pending'
+    assert proposed['impact']=={'kind':'none','entries':[]}
     assert frappe.get_doc('Sales Order',order.name).docstatus==0
     try:run_tool(**cap,tool='confirm',arguments={});raise AssertionError('model confirmed write')
     except frappe.ValidationError:pass
@@ -253,4 +263,265 @@ finally:
     frappe.db.rollback();frappe.destroy()
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)
+    assert result.returncode==0,result.stderr
+
+
+def test_stock_action_proposal_carries_impact_summary():
+    script=r'''
+import hashlib,json,os,uuid,frappe
+from frappe.utils import flt,nowdate
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import operations
+from dsherp_bridge.operations import confirm,get_proposal,propose_action
+
+tag=uuid.uuid4().hex
+actor='impact-'+tag+'@example.invalid'
+conversation=None
+stock_entry=None
+proposal_names=[]
+execution_names=[]
+warehouses={}
+pre_bins={}
+delete_linked_ledger_entries_before=None
+
+def quantity(warehouse):
+    return flt(frappe.db.get_value('Bin',{
+        'item_code':'DSHERP-MFG-SYN-RM','warehouse':warehouse,
+    },'actual_qty') or 0)
+
+try:
+    frappe.set_user('Administrator')
+    company=frappe.get_all('Company',pluck='name')
+    assert len(company)==1,company
+    for key,label in (
+        ('source','DSHERP 制造测试合成原料仓'),
+        ('target','DSHERP 制造测试合成在制仓'),
+    ):
+        matches=frappe.get_all('Warehouse',filters={
+            'warehouse_name':label,'company':company[0],'is_group':0,
+        },pluck='name')
+        assert len(matches)==1,(key,matches)
+        warehouses[key]=matches[0]
+    pre_bins={key:quantity(name) for key,name in warehouses.items()}
+    delete_linked_ledger_entries_before=int(
+        frappe.db.get_single_value('Accounts Settings','delete_linked_ledger_entries') or 0
+    )
+    frappe.get_doc({
+        'doctype':'User','email':actor,'first_name':'Synthetic stock impact actor',
+        'enabled':1,'send_welcome_email':0,'roles':[{'role':'Stock User'}],
+    }).insert()
+    frappe.set_user(actor)
+    conversation=frappe.get_doc({
+        'doctype':'DS Conversation','title':'Synthetic stock impact '+tag,
+    }).insert(ignore_permissions=True).name
+    stock_entry=frappe.get_doc({
+        'doctype':'Stock Entry','stock_entry_type':'Material Transfer','purpose':'Material Transfer',
+        'company':company[0],'posting_date':str(nowdate()),'items':[
+            {'item_code':'DSHERP-MFG-SYN-RM','qty':1,'s_warehouse':warehouses['source'],'t_warehouse':warehouses['target'],'basic_rate':1},
+            {'item_code':'DSHERP-MFG-SYN-RM','qty':2,'s_warehouse':warehouses['source'],'t_warehouse':warehouses['target'],'basic_rate':1},
+        ],
+    }).insert()
+    frappe.db.commit()
+    entry_name=stock_entry.name
+    entry_version=str(stock_entry.modified)
+    expected={'kind':'stock','entries':[
+        {'item_code':'DSHERP-MFG-SYN-RM','quantity':-3,'uom':'Nos','warehouse':warehouses['source']},
+        {'item_code':'DSHERP-MFG-SYN-RM','quantity':3,'uom':'Nos','warehouse':warehouses['target']},
+    ]}
+    proposal=propose_action(conversation,'Stock Entry',entry_name,'submit',entry_version)
+    proposal_names.append(proposal['id'])
+    assert proposal.get('impact')==expected,proposal
+    assert frappe.db.get_value('Stock Entry',entry_name,'docstatus')==0
+    assert str(frappe.db.get_value('Stock Entry',entry_name,'modified'))==entry_version
+    assert frappe.db.count('Stock Ledger Entry',{'voucher_type':'Stock Entry','voucher_no':entry_name})==0
+    assert {key:quantity(name) for key,name in warehouses.items()}==pre_bins
+    stored=json.loads(frappe.db.get_value('DS Operation Proposal',proposal['id'],'payload'))
+    assert stored['impact']==expected and get_proposal(proposal['id'])['impact']==expected
+    assert frappe.db.get_value('DS Operation Proposal',proposal['id'],'digest')==proposal['digest']
+    frappe.db.commit()
+
+    # A native source edit changes both version and movement; the frozen proposal cannot execute.
+    changed=frappe.get_doc('Stock Entry',entry_name)
+    changed.items[0].qty=2
+    changed.save();frappe.db.commit()
+    stale=confirm(proposal['id'],proposal['digest'],uuid.uuid4().hex)
+    execution_names.append(stale['execution_id'])
+    assert stale['status']=='Failed' and '记录版本已变化' in stale['error'],stale
+    assert frappe.db.get_value('Stock Entry',entry_name,'docstatus')==0
+
+    # Even with the same source version, a changed registry result invalidates the frozen impact.
+    current=frappe.get_doc('Stock Entry',entry_name)
+    drift=propose_action(conversation,'Stock Entry',entry_name,'submit',str(current.modified))
+    proposal_names.append(drift['id']);frappe.db.commit()
+    original=operations.action_impact
+    try:
+        operations.action_impact=lambda doc,action:{'kind':'stock','entries':[
+            {**drift['impact']['entries'][0],'quantity':-99},
+            drift['impact']['entries'][1],
+        ]}
+        rejected=confirm(drift['id'],drift['digest'],uuid.uuid4().hex)
+    finally:
+        operations.action_impact=original
+    execution_names.append(rejected['execution_id'])
+    assert rejected['status']=='Failed' and '库存影响已变化' in rejected['error'],rejected
+    assert frappe.db.get_value('Stock Entry',entry_name,'docstatus')==0
+
+    current=frappe.get_doc('Stock Entry',entry_name)
+    submit=propose_action(conversation,'Stock Entry',entry_name,'submit',str(current.modified))
+    proposal_names.append(submit['id']);frappe.db.commit()
+    submitted=confirm(submit['id'],submit['digest'],uuid.uuid4().hex)
+    execution_names.append(submitted['execution_id'])
+    assert submitted['status']=='Succeeded',submitted
+    assert frappe.db.get_value('Stock Entry',entry_name,'docstatus')==1
+    submitted_impact=submit['impact']
+    submitted_doc=frappe.get_doc('Stock Entry',entry_name)
+    cancel=propose_action(conversation,'Stock Entry',entry_name,'cancel',str(submitted_doc.modified))
+    proposal_names.append(cancel['id'])
+    assert cancel['impact']=={'kind':'stock','entries':[
+        {**entry,'quantity':-entry['quantity']} for entry in submitted_impact['entries']
+    ]},cancel
+    frappe.db.commit()
+    cancelled=confirm(cancel['id'],cancel['digest'],uuid.uuid4().hex)
+    execution_names.append(cancelled['execution_id'])
+    assert cancelled['status']=='Succeeded',cancelled
+    assert frappe.db.get_value('Stock Entry',entry_name,'docstatus')==2
+    assert {key:quantity(name) for key,name in warehouses.items()}==pre_bins
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if conversation:
+        proposal_names.extend(frappe.get_all(
+            'DS Operation Proposal',filters={'conversation':conversation},pluck='name'
+        ))
+    proposal_names=list(dict.fromkeys(filter(None,proposal_names)))
+    for proposal_id in proposal_names:
+        execution_names.extend(frappe.get_all(
+            'DS Execution Record',filters={'proposal':proposal_id},pluck='name'
+        ))
+    execution_names=list(dict.fromkeys(filter(None,execution_names)))
+    for execution_id in execution_names:
+        if frappe.db.exists('DS Execution Record',execution_id):
+            frappe.delete_doc('DS Execution Record',execution_id,ignore_permissions=True)
+    for proposal_id in proposal_names:
+        if frappe.db.exists('DS Operation Proposal',proposal_id):
+            frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
+    if stock_entry and frappe.db.exists('Stock Entry',stock_entry.name):
+        doc=frappe.get_doc('Stock Entry',stock_entry.name)
+        if doc.docstatus==1:doc.cancel()
+        from frappe.tests.utils import change_settings
+        with change_settings('Accounts Settings',{'delete_linked_ledger_entries':1}):
+            frappe.delete_doc('Stock Entry',doc.name,ignore_permissions=True)
+    if conversation and frappe.db.exists('DS Conversation',conversation):
+        frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
+    if frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+
+    os.chdir('/home/frappe/frappe-bench/sites')
+    frappe.init(site='dsherp-validation.localhost');frappe.connect()
+    try:
+        frappe.set_user('Administrator')
+        assert not frappe.db.exists('User',actor)
+        if stock_entry:assert not frappe.db.exists('Stock Entry',stock_entry.name)
+        assert all(not frappe.db.exists('DS Operation Proposal',name) for name in proposal_names)
+        assert all(not frappe.db.exists('DS Execution Record',name) for name in execution_names)
+        if stock_entry:
+            assert frappe.db.count('Stock Ledger Entry',{
+                'voucher_type':'Stock Entry','voucher_no':stock_entry.name,
+            })==0
+        if warehouses:
+            assert {key:quantity(name) for key,name in warehouses.items()}==pre_bins
+        if delete_linked_ledger_entries_before is not None:
+            assert int(frappe.db.get_single_value(
+                'Accounts Settings','delete_linked_ledger_entries'
+            ) or 0)==delete_linked_ledger_entries_before
+    finally:frappe.destroy()
+'''
+    result=subprocess.run([
+        'docker','exec','-i','dsherp-validation-backend-1',
+        '/home/frappe/frappe-bench/env/bin/python','-',
+    ],input=script,text=True,capture_output=True,timeout=120)
+    assert result.returncode==0,result.stderr
+
+
+def test_stock_impact_registry_matches_fixed_v15_rejected_stock_schema():
+    script=r'''
+import os,frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge.stock_impact import action_impact
+try:
+    frappe.set_user('Administrator')
+    company=frappe.get_all('Company',pluck='name')
+    assert len(company)==1,company
+    warehouses={}
+    for key,label in (
+        ('raw','DSHERP 制造测试合成原料仓'),
+        ('wip','DSHERP 制造测试合成在制仓'),
+        ('subcontracting','DSHERP 制造测试合成委外仓'),
+        ('finished','DSHERP 制造测试合成成品仓'),
+    ):
+        matches=frappe.get_all('Warehouse',filters={
+            'warehouse_name':label,'company':company[0],'is_group':0,
+        },pluck='name')
+        assert len(matches)==1,(key,matches)
+        warehouses[key]=matches[0]
+
+    pr_meta=frappe.get_meta('Purchase Receipt Item')
+    assert all(pr_meta.get_field(field) for field in (
+        'stock_qty','rejected_qty','conversion_factor','warehouse','rejected_warehouse'
+    ))
+    purchase_receipt=frappe.get_doc({
+        'doctype':'Purchase Receipt','company':company[0],'items':[{
+            'item_code':'DSHERP-MFG-SYN-RM','stock_qty':2,'stock_uom':'Nos',
+            'warehouse':warehouses['raw'],'rejected_qty':1,'conversion_factor':2,
+            'rejected_warehouse':warehouses['wip'],
+        }],
+    })
+    assert action_impact(purchase_receipt,'submit')=={'kind':'stock','entries':[
+        {'item_code':'DSHERP-MFG-SYN-RM','quantity':2,'uom':'Nos','warehouse':warehouses['raw']},
+        {'item_code':'DSHERP-MFG-SYN-RM','quantity':2,'uom':'Nos','warehouse':warehouses['wip']},
+    ]}
+
+    scr_item_meta=frappe.get_meta('Subcontracting Receipt Item')
+    scr_supplied_meta=frappe.get_meta('Subcontracting Receipt Supplied Item')
+    assert not scr_item_meta.get_field('stock_qty')
+    assert all(scr_item_meta.get_field(field) for field in (
+        'qty','conversion_factor','stock_uom','warehouse','rejected_qty','rejected_warehouse'
+    ))
+    assert all(scr_supplied_meta.get_field(field) for field in (
+        'rm_item_code','consumed_qty','stock_uom'
+    ))
+    assert not scr_supplied_meta.get_field('supplier_warehouse')
+    assert frappe.get_meta('Subcontracting Receipt').get_field('supplier_warehouse')
+    receipt=frappe.get_doc({
+        'doctype':'Subcontracting Receipt','company':company[0],
+        'supplier_warehouse':warehouses['subcontracting'],'items':[{
+            'item_code':'DSHERP-MFG-SYN-FG','qty':1,'conversion_factor':2,
+            'stock_uom':'Nos','warehouse':warehouses['finished'],'rejected_qty':1,
+            'rejected_warehouse':warehouses['wip'],
+        }],'supplied_items':[{
+            'rm_item_code':'DSHERP-MFG-SYN-RM','consumed_qty':3,'stock_uom':'Nos',
+        }],
+    })
+    assert action_impact(receipt,'submit')=={'kind':'stock','entries':[
+        {'item_code':'DSHERP-MFG-SYN-FG','quantity':2,'uom':'Nos','warehouse':warehouses['wip']},
+        {'item_code':'DSHERP-MFG-SYN-FG','quantity':2,'uom':'Nos','warehouse':warehouses['finished']},
+        {'item_code':'DSHERP-MFG-SYN-RM','quantity':-3,'uom':'Nos','warehouse':warehouses['subcontracting']},
+    ]}
+    try:
+        action_impact(frappe.get_doc({
+            'doctype':'Delivery Note','company':company[0],'items':[{
+                'item_code':'DSHERP-MFG-SYN-RM','stock_qty':1,'stock_uom':'Nos',
+            }],
+        }),'submit')
+        raise AssertionError('stock impact guessed a missing warehouse')
+    except frappe.ValidationError as error:
+        assert '库存影响无法确定' in str(error) and '仓库' in str(error),error
+finally:
+    frappe.db.rollback();frappe.destroy()
+'''
+    result=subprocess.run([
+        'docker','exec','-i','dsherp-validation-backend-1',
+        '/home/frappe/frappe-bench/env/bin/python','-',
+    ],input=script,text=True,capture_output=True,timeout=30)
     assert result.returncode==0,result.stderr

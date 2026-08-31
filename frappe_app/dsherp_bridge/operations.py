@@ -100,6 +100,8 @@ def confirm(proposal_id, digest, request_id):
                 frappe.throw('记录版本已变化，请重新提出操作')
             if action_diff(doc,payload['action'])!=payload['changes']:
                 frappe.throw('单据状态已变化，请重新提出操作')
+            if action_impact(doc,payload['action'])!=payload.get('impact'):
+                frappe.throw('库存影响已变化，请重新提出操作')
             if payload['action']=='submit':doc.submit()
             else:doc.cancel()
         else:
@@ -298,7 +300,8 @@ def propose_action(session_id,doctype,name,action,version,grant=None,model_run=N
     doc=frappe.get_doc(doctype,name)
     changes=action_diff(doc,action)
     if str(doc.modified)!=version:frappe.throw('记录版本已变化，请重新提出操作')
-    return _propose(session_id,doctype,name,action,changes,version,grant,model_run)
+    impact=action_impact(doc,action)
+    return _propose(session_id,doctype,name,action,changes,version,grant,model_run,impact=impact)
 
 
 def action_diff(doc,action):
@@ -313,7 +316,7 @@ def action_diff(doc,action):
     return [{'field':'docstatus','label':'单据状态','before':before,'after':after}]
 
 
-def _propose(session_id,doctype,name,action,changes,version,grant,model_run):
+def _propose(session_id,doctype,name,action,changes,version,grant,model_run,impact=None):
     user = _user()
     conversation = _conversation(session_id)
     if model_run:
@@ -322,8 +325,10 @@ def _propose(session_id,doctype,name,action,changes,version,grant,model_run):
             raise frappe.PermissionError('提案运行归属或状态不匹配')
     expires = add_to_date(now_datetime(), minutes=10)
     authorization = _authorization_revision(user, grant or frappe.session.data.get('dsherp_platform_grant'))
-    payload = _json({'site': frappe.local.site, 'actor': user, 'action': action, 'authorization_revision': authorization,
-        'doctype': doctype, 'name': name, 'version': version, 'changes': changes})
+    body={'site': frappe.local.site, 'actor': user, 'action': action, 'authorization_revision': authorization,
+        'doctype': doctype, 'name': name, 'version': version, 'changes': changes}
+    if impact is not None:body['impact']=impact
+    payload = _json(body)
     digest = hashlib.sha256(_json([conversation.name, payload, str(expires)]).encode()).hexdigest()
     proposal = frappe.get_doc({'doctype': 'DS Operation Proposal', 'conversation': conversation.name,'model_run':model_run,
         'payload': payload, 'digest': digest, 'expires_at': expires, 'status': 'Pending'}).insert(ignore_permissions=True)
@@ -349,6 +354,10 @@ def get_proposal(proposal_id):
     else:
         doc = frappe.get_doc(payload['doctype'], outcome['name'] if payload['action'] in ('create','make') else payload['name'])
     doc.check_permission('read')
+    if payload['action'] in ('submit','cancel'):
+        from dsherp_bridge.stock_impact import validate_frozen_impact,validate_impact_read_access
+        validate_frozen_impact(payload.get('impact'))
+        validate_impact_read_access(doc,user)
     if payload['action']=='make':
         public_target=_public_make_target(doc,payload['target'],user)
         if outcome and outcome['status']=='Succeeded':
@@ -376,6 +385,11 @@ def get_proposal(proposal_id):
     if outcome:
         result['execution'] = outcome
     return result
+
+
+def action_impact(doc,action):
+    from dsherp_bridge.stock_impact import action_impact as build
+    return build(doc,action)
 
 
 def update_diff(doc, values,include_unchanged=False,action='update'):

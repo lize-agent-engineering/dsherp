@@ -347,6 +347,7 @@ try:
         'doctype':'Purchase Order','name':purchase_order,'action':'submit',
         'version':str(po_read['modified']),
     })
+    assert po_submit['impact']=={'kind':'none','entries':[]},po_submit
     assert site_document_counts()==po_submit_counts
     assert frappe.db.get_value('Purchase Order',purchase_order,'docstatus')==0
     assert confirm_once(po_submit,po_submit_run)['status']=='Succeeded'
@@ -381,6 +382,7 @@ try:
         'doctype':'Subcontracting Order','name':subcontracting_order,'action':'submit',
         'version':str(sco_read['modified']),
     })
+    assert sco_submit['impact']=={'kind':'none','entries':[]},sco_submit
     assert site_document_counts()==sco_submit_counts
     assert confirm_once(sco_submit,sco_submit_run)['status']=='Succeeded'
 
@@ -411,6 +413,10 @@ try:
         'doctype':'Stock Entry','name':supply_stock_entry,'action':'submit',
         'version':str(supply_read['modified']),
     })
+    assert supply_submit['impact']=={'kind':'stock','entries':[
+        {'item_code':raw_item,'quantity':-required_raw_qty,'uom':'Nos','warehouse':warehouses['raw']},
+        {'item_code':raw_item,'quantity':required_raw_qty,'uom':'Nos','warehouse':warehouses['subcontracting']},
+    ]},supply_submit
     assert confirm_once(supply_submit,supply_submit_run)['status']=='Succeeded'
     after_supply=stock_snapshot()
     assert after_supply=={
@@ -461,6 +467,10 @@ try:
         'doctype':'Subcontracting Receipt','name':subcontracting_receipt,'action':'submit',
         'version':str(receipt_read['modified']),
     })
+    assert receipt_submit['impact']=={'kind':'stock','entries':[
+        {'item_code':finished_item,'quantity':purchase_qty,'uom':'Nos','warehouse':warehouses['finished']},
+        {'item_code':raw_item,'quantity':-required_raw_qty,'uom':'Nos','warehouse':warehouses['subcontracting']},
+    ]},receipt_submit
     assert confirm_once(receipt_submit,receipt_submit_run)['status']=='Succeeded'
     after_receipt=stock_snapshot()
     assert after_receipt=={

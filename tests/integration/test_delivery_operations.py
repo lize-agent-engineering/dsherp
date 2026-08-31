@@ -246,6 +246,7 @@ try:
         'doctype':'Sales Order','name':sales_order,'action':'submit',
         'version':str(order_read['modified']),
     })
+    assert submit_order['impact']=={'kind':'none','entries':[]},submit_order
     assert site_document_counts()==submit_counts
     assert frappe.db.get_value('Sales Order',sales_order,'docstatus')==0
     assert confirm_once(submit_order,submit_order_run)['status']=='Succeeded'
@@ -314,6 +315,9 @@ try:
         'doctype':'Delivery Note','name':delivery_note,'action':'submit',
         'version':str(note_read['modified']),
     })
+    assert submit_note['impact']=={'kind':'stock','entries':[
+        {'item_code':item_code,'quantity':-delivery_qty,'uom':'Nos','warehouse':warehouse},
+    ]},submit_note
     assert site_document_counts()==note_submit_counts
     assert frappe.db.get_value('Delivery Note',delivery_note,'docstatus')==0
     submitted_note=confirm_once(submit_note,submit_note_run)

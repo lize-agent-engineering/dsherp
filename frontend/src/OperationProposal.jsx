@@ -21,6 +21,18 @@ function Proposal({proposal, onConfirm,onApply=applyFormProposal,onVerify}) {
   const [verifying,setVerifying]=useState(false);
   const state = localState || proposal.execution;
   const expired = isExpired(proposal.expires_at);
+  const stockEntries=(['submit','cancel'].includes(proposal.action)
+    && proposal.impact?.kind==='stock'
+    && Array.isArray(proposal.impact.entries)
+    && proposal.impact.entries.length
+    && proposal.impact.entries.every(entry=>entry
+      && Object.keys(entry).length===4
+      && ['item_code','quantity','uom','warehouse'].every(key=>Object.hasOwn(entry,key))
+      && typeof entry.item_code==='string' && entry.item_code
+      && typeof entry.uom==='string' && entry.uom
+      && typeof entry.warehouse==='string' && entry.warehouse
+      && typeof entry.quantity==='number' && Number.isFinite(entry.quantity) && entry.quantity!==0))
+    ?proposal.impact.entries:[];
   async function verify(){
     if(verifying)return;
     setVerifying(true);
@@ -51,6 +63,12 @@ function Proposal({proposal, onConfirm,onApply=applyFormProposal,onVerify}) {
     {proposal.action==='cancel'&&<Typography.Text>取消将使此已提交订单失效，不会撤销已发生的其他业务。</Typography.Text>}
     <Table size="small" pagination={false} rowKey="field" dataSource={proposalRows(proposal.changes)}
       columns={[{title: '字段', dataIndex: 'label'}, {title: proposal.action==='fill'?'填入前（表单）':'原值', dataIndex: 'before', render: (value,change)=>displayChange(Object.hasOwn(change,'form_before')?change.form_before:value,change)}, {title: '修改后', dataIndex: 'after', render: displayChange}]}/>
+    {stockEntries.length>0&&<Space direction="vertical" size="small">
+      <Typography.Text strong>将变动库存：</Typography.Text>
+      {stockEntries.map(entry=><Typography.Text key={`${entry.item_code}:${entry.uom}:${entry.warehouse}`}>
+        {entry.item_code} × {entry.quantity>0?'+':''}{entry.quantity} {entry.uom} @ {entry.warehouse}
+      </Typography.Text>)}
+    </Space>}
     {expired && proposal.status==='Pending' && !state && <Alert type="warning" message="确认已过期，请重新提出操作"/>}
     {state?.status === 'Succeeded' && <Alert type="success" message="执行成功，已读取业务结果"/>}
     {state?.status==='Applied'&&<Alert type="success" message="已填入当前草稿，尚未保存或提交"/>}

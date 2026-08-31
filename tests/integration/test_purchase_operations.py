@@ -282,6 +282,7 @@ try:
         'doctype':'Purchase Order','name':purchase_order,'action':'submit',
         'version':str(purchase_order_read['modified']),
     })
+    assert purchase_order_submit['impact']=={'kind':'none','entries':[]},purchase_order_submit
     assert site_document_counts()==purchase_order_submit_documents_before
     assert frappe.db.get_value('Purchase Order',purchase_order,'docstatus')==0
     purchase_order_submitted=confirm_once(purchase_order_submit,purchase_order_submit_run)
@@ -345,6 +346,9 @@ try:
         'doctype':'Purchase Receipt','name':purchase_receipt,'action':'submit',
         'version':str(purchase_receipt_read['modified']),
     })
+    assert purchase_receipt_submit['impact']=={'kind':'stock','entries':[
+        {'item_code':item_code,'quantity':purchase_qty,'uom':'Nos','warehouse':warehouse},
+    ]},purchase_receipt_submit
     assert site_document_counts()==purchase_receipt_submit_documents_before
     assert frappe.db.get_value('Purchase Receipt',purchase_receipt,'docstatus')==0
     purchase_receipt_submitted=confirm_once(

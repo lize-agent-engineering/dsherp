@@ -28,6 +28,24 @@ it('销售订单状态操作显示业务含义和影响，不能只显示数字�
  expect(screen.getByText('已提交')).toBeTruthy();expect(screen.getByText('已取消')).toBeTruthy();
  expect(screen.getByText('取消将使此已提交订单失效，不会撤销已发生的其他业务。')).toBeTruthy();
 });
+it('库存状态提案在确认前展示服务端冻结的有符号库存影响',()=>{
+ render(<OperationProposal proposal={{...proposal,doctype:'Stock Entry',action:'submit',impact:{kind:'stock',entries:[
+  {item_code:'DSHERP-MFG-SYN-RM',quantity:-2,uom:'Nos',warehouse:'合成原料仓 - DSH'},
+  {item_code:'DSHERP-MFG-SYN-RM',quantity:2,uom:'Nos',warehouse:'合成在制仓 - DSH'},
+ ]},changes:[{field:'docstatus',label:'单据状态',before:0,after:1}]}} onConfirm={vi.fn()}/>);
+ expect(screen.getByText('将变动库存：')).toBeTruthy();
+ expect(screen.getByText('DSHERP-MFG-SYN-RM × -2 Nos @ 合成原料仓 - DSH')).toBeTruthy();
+ expect(screen.getByText('DSHERP-MFG-SYN-RM × +2 Nos @ 合成在制仓 - DSH')).toBeTruthy();
+ const summary=screen.getByText('将变动库存：').parentElement;
+ const button=screen.getByRole('button',{name:'确认执行'});
+ expect(summary.compareDocumentPosition(button)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+it('无库存行或未知 impact 不显示伪库存提示',()=>{
+ const view=render(<OperationProposal proposal={{...proposal,action:'submit',impact:{kind:'none',entries:[]}}} onConfirm={vi.fn()}/>);
+ expect(screen.queryByText('将变动库存：')).toBeNull();
+ view.rerender(<OperationProposal proposal={{...proposal,action:'submit',impact:{kind:'unknown',entries:[{item_code:'I'}]}}} onConfirm={vi.fn()}/>);
+ expect(screen.queryByText('将变动库存：')).toBeNull();
+});
 it('新建提案先展示新记录，成功后显示原生命名结果',async()=>{
  const confirm=vi.fn(async()=>({status:'Succeeded',doctype:'Customer',name:'C-NEW',version:'v2',values:{customer_name:'新客户'}}));
  render(<OperationProposal proposal={{...proposal,action:'create',doctype:'Customer',name:null,changes:[{field:'customer_name',label:'客户名称',before:null,after:'新客户'}]}} onConfirm={confirm}/>);
