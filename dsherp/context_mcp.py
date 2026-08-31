@@ -27,6 +27,15 @@ def post(client,method,**data):
     return body['message']
 
 
+def _forbid_extra_tool_arguments(server,name):
+    """FastMCP otherwise discards unknown keys before the tool function sees them."""
+    tool=server._tool_manager.get_tool(name)
+    model=tool.fn_metadata.arg_model
+    model.model_config['extra']='forbid'
+    model.model_rebuild(force=True)
+    tool.parameters=model.model_json_schema(by_alias=True)
+
+
 def create_server(client,run_id,capability,domain='query'):
     if domain not in ('query','operation','configuration'):raise ValueError('Unknown business domain')
     def invoke(tool,**arguments):
@@ -60,6 +69,12 @@ def create_server(client,run_id,capability,domain='query'):
         def erp_propose_fill(doctype: str,name: str,values: dict,version: str) -> dict:
             """Propose values for the current native form only. Existing child rows must retain their names and order; change only explicit editable columns. Requires a previously read record/version. Confirmation authorizes browser draft fill, never saves or submits ERP."""
             return invoke('erp_propose_fill',doctype=doctype,name=name,values=values,version=version)
+        @server.tool(annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=False,idempotentHint=False))
+        def erp_propose_make(source_doctype: str,source_name: str,source_version: str,route: str) -> dict:
+            """Propose a server-mapped target draft from an exact source record/version and enabled named route. Does not insert or submit the target; confirmation reruns and compares the mapper."""
+            return invoke('erp_propose_make',source_doctype=source_doctype,source_name=source_name,
+                          source_version=source_version,route=route)
+        _forbid_extra_tool_arguments(server,'erp_propose_make')
     return server
 
 

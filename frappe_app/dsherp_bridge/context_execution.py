@@ -170,10 +170,11 @@ def run_tool(run_id,capability,tool,arguments):
                 if latest[target]['configuration_revision']!=read_configuration(target)['configuration_revision']:
                     frappe.throw('配置来源版本已变化，请重新读取后提出配置')
             return propose_bundle(run.conversation,package,model_run=run.name)
-    if tool in ('erp_propose_update','erp_propose_create','erp_propose_action','erp_propose_fill'):
+    if tool in ('erp_propose_update','erp_propose_create','erp_propose_action','erp_propose_fill','erp_propose_make'):
         if run.domain!='operation':raise frappe.PermissionError('当前领域不能提出业务操作')
         if isinstance(arguments,str):arguments=json.loads(arguments)
-        keys=({'doctype','name','action','version'} if tool=='erp_propose_action'
+        keys=({'source_doctype','source_name','source_version','route'} if tool=='erp_propose_make'
+              else {'doctype','name','action','version'} if tool=='erp_propose_action'
               else {'doctype','values','version'}|({'name'} if tool in ('erp_propose_update','erp_propose_fill') else set()))
         if (not isinstance(arguments,dict) or set(arguments)!=keys
             or not all(isinstance(arguments[key],str) for key in keys-{'values'})
@@ -183,7 +184,14 @@ def run_tool(run_id,capability,tool,arguments):
             context_permissions.require_revision(run)
             sources=json.loads(run.sources or '[]')
             authorize_sources(sources)
-            if tool in ('erp_propose_update','erp_propose_action','erp_propose_fill'):
+            if tool=='erp_propose_make':
+                if not any(source['tool']=='erp_read_record'
+                           and source['arguments']=={'doctype':arguments['source_doctype'],'name':arguments['source_name']}
+                           and source.get('record_versions',{}).get(arguments['source_name'])==arguments['source_version']
+                           for source in sources):
+                    frappe.throw('请先读取确切来源及当前版本，再提出 make 操作')
+                from dsherp_bridge.operations import propose_make as propose
+            elif tool in ('erp_propose_update','erp_propose_action','erp_propose_fill'):
                 if not any(source['tool']=='erp_read_record' and source['arguments']=={'doctype':arguments['doctype'],'name':arguments['name']}
                            and source.get('record_versions',{}).get(arguments['name'])==arguments['version'] for source in sources):
                     frappe.throw('请先读取确切目标及当前版本，再提出操作')

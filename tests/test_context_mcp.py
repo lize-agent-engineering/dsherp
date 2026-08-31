@@ -31,16 +31,27 @@ def test_operation_domain_can_propose_but_cannot_confirm_business_writes():
     with httpx.Client(base_url='http://synthetic',transport=httpx.MockTransport(handler)) as client:
         server=context_mcp.create_server(client,'RUN-1','CAP-1',domain='operation')
         catalog=asyncio.run(server.list_tools())
-        assert {tool.name for tool in catalog}=={'erp_read_schema','erp_read_record','erp_search_records','erp_propose_update','erp_propose_create','erp_propose_action','erp_propose_fill'}
-        assert all(tool.inputSchema['properties']['doctype']=={'title':'Doctype','type':'string'} for tool in catalog)
+        assert {tool.name for tool in catalog}=={'erp_read_schema','erp_read_record','erp_search_records','erp_propose_update','erp_propose_create','erp_propose_action','erp_propose_fill','erp_propose_make'}
+        assert all(tool.inputSchema['properties']['doctype']=={'title':'Doctype','type':'string'}
+                   for tool in catalog if 'doctype' in tool.inputSchema['properties'])
         proposal=next(tool for tool in catalog if tool.name=='erp_propose_update')
         assert not {'session_id','user','site','grant','capability'} & set(proposal.inputSchema['properties'])
+        make=next(tool for tool in catalog if tool.name=='erp_propose_make')
+        assert set(make.inputSchema['properties'])=={'source_doctype','source_name','source_version','route'}
+        assert set(make.inputSchema['required'])=={'source_doctype','source_name','source_version','route'}
+        assert all(schema=={'title':field.replace('_',' ').title(),'type':'string'}
+                   for field,schema in make.inputSchema['properties'].items())
+        assert make.inputSchema['additionalProperties'] is False
         asyncio.run(server.call_tool('erp_propose_update',{'doctype':'Item','name':'I1','values':{'item_name':'New'},'version':'v1'}))
         asyncio.run(server.call_tool('erp_propose_create',{'doctype':'Item','values':{'item_name':'New'},'version':'schema-v1'}))
         asyncio.run(server.call_tool('erp_propose_action',{'doctype':'Sales Order','name':'SO1','action':'submit','version':'v2'}))
+        asyncio.run(server.call_tool('erp_propose_make',{'source_doctype':'Sales Order','source_name':'SO1','source_version':'v2','route':'sales_order_to_delivery_note'}))
+        with pytest.raises(Exception):
+            asyncio.run(server.call_tool('erp_propose_make',{'source_doctype':'Sales Order','source_name':'SO1','source_version':'v2','route':'sales_order_to_delivery_note','options':{}}))
     assert calls==[{'run_id':'RUN-1','capability':'CAP-1','tool':'erp_propose_update','arguments':{'doctype':'Item','name':'I1','values':{'item_name':'New'},'version':'v1'}},
                    {'run_id':'RUN-1','capability':'CAP-1','tool':'erp_propose_create','arguments':{'doctype':'Item','values':{'item_name':'New'},'version':'schema-v1'}},
-                   {'run_id':'RUN-1','capability':'CAP-1','tool':'erp_propose_action','arguments':{'doctype':'Sales Order','name':'SO1','action':'submit','version':'v2'}}]
+                   {'run_id':'RUN-1','capability':'CAP-1','tool':'erp_propose_action','arguments':{'doctype':'Sales Order','name':'SO1','action':'submit','version':'v2'}},
+                   {'run_id':'RUN-1','capability':'CAP-1','tool':'erp_propose_make','arguments':{'source_doctype':'Sales Order','source_name':'SO1','source_version':'v2','route':'sales_order_to_delivery_note'}}]
     with pytest.raises(ValueError,match='domain'):context_mcp.create_server(None,'R','C',domain='admin')
 
 

@@ -1,4 +1,6 @@
 """Server-owned DocType action policy; native ERP permissions remain final."""
+import re
+
 import frappe
 
 
@@ -37,6 +39,37 @@ def require_action(target_doctype, action):
         raise frappe.PermissionError('DS DocType 策略未启用：' + target_doctype)
     if not policy.get(field):
         raise frappe.PermissionError('DS DocType 策略未允许 ' + target_doctype + ' 的 ' + action + ' 操作')
+
+
+def resolve_route(source_doctype, route_name):
+    """Resolve one enabled, complete server-owned mapped-document route."""
+    require_policy_schema()
+    if not isinstance(source_doctype,str) or not source_doctype or not isinstance(route_name,str) or not route_name:
+        frappe.throw('make 路由参数无效')
+    policies=frappe.get_all('DS Doctype Policy',filters={'target_doctype':source_doctype},
+                            fields=['name','enabled'],limit_page_length=2)
+    if not policies:
+        raise frappe.PermissionError('缺少 DS DocType 策略：'+source_doctype)
+    if len(policies)!=1:
+        frappe.throw('DS DocType 策略配置存在歧义：'+source_doctype)
+    policy=policies[0]
+    if not policy.enabled:
+        raise frappe.PermissionError('DS DocType 策略未启用：'+source_doctype)
+    matches=frappe.get_all('DS Doctype Policy Route',filters={
+        'parent':policy.name,'parenttype':'DS Doctype Policy','parentfield':'routes','route_name':route_name,
+    },fields=['route_name','method_path','target_doctype'],order_by='idx asc,name asc')
+    if not matches:
+        frappe.throw('未配置启用的 make 路由：'+source_doctype+' / '+route_name)
+    if len(matches)!=1:
+        frappe.throw('make 路由配置重复或存在歧义：'+source_doctype+' / '+route_name)
+    resolved=dict(matches[0])
+    if (any(not isinstance(resolved.get(key),str) or not resolved[key].strip()
+            for key in ('route_name','method_path','target_doctype'))
+        or resolved['route_name']!=route_name
+        or not re.fullmatch(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+',resolved['method_path'])
+        or not frappe.db.exists('DocType',resolved['target_doctype'])):
+        frappe.throw('make 路由配置无效：'+source_doctype+' / '+route_name)
+    return resolved
 
 
 def policy_revision_material():

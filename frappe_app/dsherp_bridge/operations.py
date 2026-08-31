@@ -7,6 +7,10 @@ from zoneinfo import ZoneInfo
 from dsherp_bridge.context_api import _conversation, _user, _json
 
 
+_TRANSIENT_IDENTITY_FIELDS={'name','owner','creation','modified','modified_by','parent','parentfield','parenttype',
+                            '_user_tags','_comments','_assign','_liked_by'}
+
+
 def _authorization_revision(user, grant=None):
     from dsherp_bridge.context_permissions import revision
     identity = None
@@ -56,7 +60,21 @@ def confirm(proposal_id, digest, request_id):
         if payload['authorization_revision'] != _authorization_revision(user, grant):
             frappe.throw('权限或企业成员关系已变化，请重新提出操作')
         values = {change['field']: change['after'] for change in payload['changes']}
-        if payload['action'] in ('update','fill'):
+        if payload['action']=='make':
+            source=frappe.get_doc(payload['source_doctype'],payload['source_name'],for_update=True)
+            source.check_permission('read')
+            if str(source.modified)!=payload['source_version']:
+                frappe.throw('来源记录版本或 mapped 结果已变化，请重新提出操作')
+            from dsherp_bridge.doctype_policy import resolve_route
+            route=resolve_route(payload['source_doctype'],payload['route'])
+            if route!={'route_name':payload['route'],'method_path':payload['method_path'],
+                       'target_doctype':payload['target_doctype']}:
+                frappe.throw('make 路由已变化，请重新提出操作')
+            if _mapped_target(source.name,route,frozen=payload['target'])!=payload['target']:
+                frappe.throw('来源记录版本或 mapped 结果已变化，请重新提出操作')
+            doc=frappe.get_doc(json.loads(_json(payload['target'])))
+            doc.insert()
+        elif payload['action'] in ('update','fill'):
             doc = frappe.get_doc(payload['doctype'], payload['name'], for_update=True)
             if str(doc.modified) != payload['version']:
                 frappe.throw('记录版本已变化，请重新提出操作')
@@ -89,9 +107,12 @@ def confirm(proposal_id, digest, request_id):
         if payload['action']!='fill':
             saved = frappe.get_doc(doc.doctype, doc.name)
             saved.check_permission('read')
-            actual = _actual_values(saved,values)
-            if actual != values:
-                frappe.throw('保存后字段与确认内容不一致，已停止执行')
+            if payload['action']=='make':
+                actual=_public_make_target(saved,_canonicalize_mapped_target(saved),user)
+            else:
+                actual = _actual_values(saved,values)
+                if actual != values:
+                    frappe.throw('保存后字段与确认内容不一致，已停止执行')
             result = {'status': 'Succeeded', 'doctype': doc.doctype, 'name': doc.name,
                 'version': str(saved.modified), 'values': actual}
     except Exception as error:
@@ -128,7 +149,7 @@ def verify_execution(proposal_id):
     proposal=get_proposal(proposal_id)
     execution=proposal.get('execution')
     name=proposal['name']
-    if proposal['action']=='create':name=execution.get('name') if execution else None
+    if proposal['action'] in ('create','make'):name=execution.get('name') if execution else None
     result={'execution':execution,'observed':None,'matches_proposal':None,
             'note':'当前字段一致也不能单独证明本次执行成功；不会重试操作或改写执行记录。'}
     if not name:
@@ -136,6 +157,11 @@ def verify_execution(proposal_id):
         return result
     doc=frappe.get_doc(proposal['doctype'],name)
     doc.check_permission('read')
+    if proposal['action']=='make':
+        values=_public_make_target(doc,_canonicalize_mapped_target(doc),frappe.session.user)
+        result['observed']={'doctype':doc.doctype,'name':doc.name,'version':str(doc.modified),'values':values}
+        result['matches_proposal']=bool(execution and execution.get('status')=='Succeeded' and values==execution.get('values'))
+        return result
     values={};matches=True
     for change in proposal['changes']:
         field=change['field'];expected=change['after']
@@ -169,6 +195,84 @@ def propose_create(session_id, doctype, values, version, grant=None, model_run=N
     if str(frappe.get_meta(doctype).modified)!=version:
         frappe.throw('业务结构已变化，请重新读取后提出操作')
     return _propose(session_id,doctype,None,'create',changes,version,grant,model_run)
+
+
+def _canonicalize_mapped_target(target):
+    if hasattr(target,'as_dict'):target=target.as_dict()
+    if not isinstance(target,dict):frappe.throw('mapped 方法未返回目标单据')
+    def clean(value):
+        if isinstance(value,dict):
+            return {key:clean(item) for key,item in value.items()
+                    if key not in _TRANSIENT_IDENTITY_FIELDS and not key.startswith('__')}
+        if isinstance(value,list):return [clean(item) for item in value]
+        return value
+    return json.loads(_json(clean(target)))
+
+
+def _mapped_target(source_name,route,frozen=None):
+    try:method=frappe.get_attr(route['method_path'])
+    except (AttributeError,ImportError,ModuleNotFoundError):
+        frappe.throw('make 路由方法不可用：'+route['method_path'])
+    if not callable(method):frappe.throw('make 路由方法不可调用：'+route['method_path'])
+    target=_canonicalize_mapped_target(method(source_name))
+    if target.get('doctype')!=route['target_doctype']:
+        frappe.throw('make 路由目标与 mapped 结果不一致')
+    # ERPNext mapped stock documents default posting_time from the current
+    # clock even when set_posting_time is false. Preserve that complete frozen
+    # field on confirmation so elapsed milliseconds alone are not business drift.
+    if (frozen and not target.get('set_posting_time') and 'posting_time' in target
+        and frozen.get('doctype')==target.get('doctype') and 'posting_time' in frozen):
+        target['posting_time']=frozen['posting_time']
+    return target
+
+
+def _make_changes(target):
+    meta=frappe.get_meta(target['doctype'])
+    return [{'field':field,'label':meta.get_field(field).label,'before':None,'after':value}
+            for field,value in target.items() if meta.get_field(field)]
+
+
+def _public_make_target(doc,target,user):
+    doc.check_permission('read')
+    readable=set(doc.meta.get_permitted_fieldnames(user=user,permission_type='read'))
+    levels=doc.get_permlevel_access('read')
+    readable.update(field.fieldname for field in doc.meta.fields if field.fieldtype=='Table' and field.permlevel in levels)
+    public={key:value for key,value in target.items() if key in ('doctype','docstatus','idx')}
+    for field,value in target.items():
+        if field in ('doctype','docstatus','idx'):continue
+        definition=doc.meta.get_field(field)
+        if not definition or field not in readable:continue
+        if definition.fieldtype!='Table':
+            public[field]=value;continue
+        child_readable=set(frappe.get_meta(definition.options).get_permitted_fieldnames(
+            parenttype=doc.doctype,user=user,permission_type='read'))|{'doctype','docstatus','idx'}
+        public[field]=[{key:item for key,item in row.items() if key in child_readable} for row in value]
+    return public
+
+
+def propose_make(session_id,source_doctype,source_name,source_version,route,grant=None,model_run=None):
+    user=_user();conversation=_conversation(session_id)
+    if model_run:
+        origin=frappe.get_doc('DS Model Run',model_run)
+        if origin.owner!=user or origin.conversation!=conversation.name or origin.status!='Running':
+            raise frappe.PermissionError('提案运行归属或状态不匹配')
+    source=frappe.get_doc(source_doctype,source_name);source.check_permission('read')
+    if str(source.modified)!=source_version:frappe.throw('来源记录版本已变化，请重新读取后提出操作')
+    from dsherp_bridge.doctype_policy import resolve_route
+    resolved=resolve_route(source_doctype,route)
+    target=_mapped_target(source_name,resolved)
+    target_doc=frappe.get_doc(target);target_doc.check_permission('create');target_doc.check_permission('read')
+    expires=add_to_date(now_datetime(),minutes=10)
+    authorization=_authorization_revision(user,grant or frappe.session.data.get('dsherp_platform_grant'))
+    payload=_json({'site':frappe.local.site,'actor':user,'action':'make','proposal_type':'make',
+        'authorization_revision':authorization,'doctype':resolved['target_doctype'],'name':None,'version':source_version,
+        'source_doctype':source_doctype,'source_name':source_name,'source_version':source_version,
+        'route':resolved['route_name'],'method_path':resolved['method_path'],'target_doctype':resolved['target_doctype'],
+        'target':target,'changes':_make_changes(target)})
+    digest=hashlib.sha256(_json([conversation.name,payload,str(expires)]).encode()).hexdigest()
+    proposal=frappe.get_doc({'doctype':'DS Operation Proposal','conversation':conversation.name,'model_run':model_run,
+        'payload':payload,'digest':digest,'expires_at':expires,'status':'Pending'}).insert(ignore_permissions=True)
+    return get_proposal(proposal.name)
 
 
 def propose_fill(session_id,doctype,name,values,version,grant=None,model_run=None):
@@ -238,25 +342,33 @@ def get_proposal(proposal_id):
         raise frappe.PermissionError('操作提案身份不匹配')
     execution = frappe.db.get_value('DS Execution Record', {'proposal': proposal_id}, 'name')
     outcome=_execution_result(frappe.get_doc('DS Execution Record',execution)) if execution else None
-    if payload['action']=='create' and not (outcome and outcome['status']=='Succeeded'):
+    if payload['action']=='make' and not (outcome and outcome['status']=='Succeeded'):
+        doc=frappe.get_doc(payload['target'])
+    elif payload['action']=='create' and not (outcome and outcome['status']=='Succeeded'):
         doc=frappe.get_doc({'doctype':payload['doctype'],**json.loads(_json({change['field']:change['after'] for change in payload['changes']}))})
     else:
-        doc = frappe.get_doc(payload['doctype'], outcome['name'] if payload['action']=='create' else payload['name'])
+        doc = frappe.get_doc(payload['doctype'], outcome['name'] if payload['action'] in ('create','make') else payload['name'])
     doc.check_permission('read')
+    if payload['action']=='make':
+        public_target=_public_make_target(doc,payload['target'],user)
     # Recheck access before exposing saved before/after values, even after success.
     readable = set(doc.meta.get_permitted_fieldnames(user=user, permission_type='read'))
     read_levels=doc.get_permlevel_access('read')
     readable.update(field.fieldname for field in doc.meta.fields if field.fieldtype=='Table' and field.permlevel in read_levels)
     if payload['action'] in ('submit','cancel'):readable.add('docstatus')
-    if any(change['field'] not in readable for change in payload['changes']):
+    if payload['action']!='make' and any(change['field'] not in readable for change in payload['changes']):
         raise frappe.PermissionError('无权读取提案字段')
-    for change in payload['changes']:
+    for change in ([] if payload['action']=='make' else payload['changes']):
         definition=doc.meta.get_field(change['field'])
         if definition and definition.fieldtype=='Table':
-            child_readable=set(frappe.get_meta(definition.options).get_permitted_fieldnames(parenttype=doc.doctype,user=user,permission_type='read'))|{'name'}
+            child_readable=set(frappe.get_meta(definition.options).get_permitted_fieldnames(parenttype=doc.doctype,user=user,permission_type='read'))|{'name','doctype','docstatus','idx'}
             if any(key not in child_readable for rows in (change['before'],change['after'],change.get('form_before')) if rows for row in rows for key in row):
                 raise frappe.PermissionError('无权读取提案明细字段')
-    result = {**payload, 'id': proposal.name, 'digest': proposal.digest, 'model_run': proposal.model_run,
+    public_payload={**payload}
+    if payload['action']=='make':
+        public_payload['target']=public_target
+        public_payload['changes']=_make_changes(public_target)
+    result = {**public_payload, 'id': proposal.name, 'digest': proposal.digest, 'model_run': proposal.model_run,
         'expires_at': proposal.expires_at.replace(tzinfo=ZoneInfo(get_system_timezone())).isoformat(), 'status': proposal.status}
     result['execution_ready']=not proposal.model_run or frappe.db.get_value('DS Model Run',proposal.model_run,'status')=='Succeeded'
     if outcome:
