@@ -4,7 +4,7 @@
 
 ## 结论
 
-首批 50 行简体中文术语已通过 `dsherp_bridge/translations/zh.csv` 接入 Frappe 原生翻译链。新站点安装 App 并使用 `zh` 后自动加载；存量站点更新制品后逐站执行 `bench clear-cache`，再由用户硬刷新浏览器即可激活。没有新增运行时翻译代码、API、hook、worker、同步服务或企业词表 UI。
+两批共 59 行简体中文术语（首批 50 行 + 第二批 9 行）已通过 `dsherp_bridge/translations/zh.csv` 接入 Frappe 原生翻译链。新站点安装 App 并使用 `zh` 后自动加载；存量站点更新制品后逐站执行 `bench clear-cache`，再由用户硬刷新浏览器即可激活。没有新增运行时翻译代码、API、hook、worker、同步服务或企业词表 UI。
 
 Alpha、daily、beta 三个本地业务站点均已清理服务端缓存并回读新译文。Alpha 真实 Desk 管理员会话硬刷新后，四个高频页面可见标题为“生产工单”“采购入库单”“记账凭证”“科目余额表”。企业 `Translation` 记录仍以原生最高优先级覆盖平台 CSV。
 
@@ -82,7 +82,17 @@ docker compose -f infra/compose.validation.yml exec -T backend bench --site dshe
 
 Daily 现有会话识别为“日常合成操作员”，但该合成普通用户访问 `/app` 与 `/app/work-order` 均由原生权限返回 403；未切换身份或提升权限。此项是该用户的 Desk 权限事实，不作为翻译失败，也不冒称 daily 普通用户页面验收成功。
 
-## 同步 runbook
+## 第二批补充（2026-08-31）
+
+对 35 个候选高频词在 Alpha 真实站点逐一回读现状后，追加 9 个源串（均无 context）：
+
+- 语义级修正：`Lead → 线索`、`Opportunity → 商机`（上游 CRM 漏斗错档：Lead 误译“商机”、Opportunity 译“机会”）；`Outstanding Amount → 未清金额`（上游“未付金额”在应收方向语义相反）；`Write Off → 核销`。
+- 机翻与漏翻：`To Bill → 待开票`（上游“待开费用清单”）、`To Deliver → 待发货`、`To Deliver and Bill → 待发货和开票`（“出货”改大陆惯用）、`Stock Reposting → 库存重算`（上游漏翻）。
+- 规范字：`Period Closing Voucher → 期末结账凭证`。
+
+`To Deliver`/`To Bill` 系列为单据状态标签，不属于 Submit/Cancel 状态机动词红线范围，词表 note 已注明。候选词中其余 26 项（成本中心、会计科目表、科目、批次、计量单位等）上游翻译合格，未重复覆盖。
+
+红绿证据：先将单测行数断言 50→59 确认 **1 failed**；补词表并重新生成后单测 **7 passed**、集成 **3 passed**。按 `daily → beta → alpha` 逐站 `clear-cache` 后，三站回读 9 个新词条均返回预期译文。
 
 1. 只编辑 `config/terminology/glossary.csv`，逐项确认固定版本精确 msgid 与 context；不得手改生成文件。
 2. 生成翻译包：

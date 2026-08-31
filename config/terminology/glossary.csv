@@ -12,12 +12,15 @@ Material Request,,物料需求单,覆盖采购、调拨、生产等多种需求�
 Material Request Type,,物料需求类型,与“物料需求单”统一。
 Request for Quotation,,询价单,明确单据属性。
 Supplier Quotation,,供应商报价单,明确单据属性。
+Lead,,线索,修正 CRM 漏斗错档：Lead 是线索，上游误译为“商机”。
+Opportunity,,商机,与 Lead=线索 成对修正，上游“机会”不成体系。
 Stock Entry,,库存单据,覆盖入库、出库、调拨、生产等业务，不仅是手工移动。
 Stock Entry Type,,库存业务类型,表达 Stock Entry 的业务分类。
 Stock Entry Detail,,库存单据明细,与主单名称统一。
 Stock Reconciliation,,库存盘点单,明确单据属性。
 Stock Ledger,,库存台账,区分库存数量台账与财务总账，并使用现代“账”字。
 Stock Ledger Entry,,库存台账明细,表达库存台账逐笔明细。
+Stock Reposting,,库存重算,上游完全漏翻，库存设置页直接显示英文。
 Actual Qty,,实际库存,Bin 字段表示当前实存数量。
 Projected Qty,,预计库存,Bin 字段表示考虑供需后的预计库存。
 Valuation Rate,,估值单价,明确单位成本而非总额。
@@ -49,3 +52,9 @@ Accounts Receivable,,应收账款,使用现代规范字。
 Accounts Payable,,应付账款,使用现代规范字。
 Credit Note,,贷项通知单,修正错误业务含义。
 Bank Reconciliation,,银行对账,使用现代规范字。
+Outstanding Amount,,未清金额,上游“未付金额”在应收方向语义相反，“未清”双向通用。
+Write Off,,核销,上游“内部销账”不成词，采用大陆财务标准称谓。
+Period Closing Voucher,,期末结账凭证,修正旧字形“帐”为规范字“账”。
+To Deliver and Bill,,待发货和开票,单据状态标签，非 Submit/Cancel 状态机动词；“出货”改大陆惯用“发货”。
+To Deliver,,待发货,单据状态标签，同上改“发货”。
+To Bill,,待开票,单据状态标签，上游“待开费用清单”为明显机翻。

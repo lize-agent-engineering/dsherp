@@ -39,7 +39,7 @@ def test_repository_glossary_generates_valid_zh_pack_without_state_machine_actio
     assert outputs == (tmp_path / "frappe_app/dsherp_bridge/translations/zh.csv",)
     with outputs[0].open(encoding="utf-8", newline="") as handle:
         rows = list(csv.reader(handle))
-    assert len(rows) == 50
+    assert len(rows) == 59
     assert all(len(row) == 3 and row[0] and row[1] for row in rows)
     assert not {"Submit", "Cancel"}.intersection(row[0] for row in rows)
     assert [row[:3] for row in rows if row[0] == "General Ledger"] == [
