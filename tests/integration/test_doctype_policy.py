@@ -283,6 +283,43 @@ finally:
     assert result.returncode == 0, result.stderr
 
 
+def test_missing_policy_schema_has_one_explicit_error_for_queries_and_ordinary_boot():
+    script = r'''
+import os,frappe
+from unittest.mock import patch
+os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge.boot import boot_session
+from dsherp_bridge.doctype_policy import policy_revision_material,require_action
+
+EXPECTED='DS DocType 策略表未迁移至本站点'
+actual_table_exists=frappe.db.table_exists
+
+def injected_table_exists(table):
+    return False if table=='DS Doctype Policy' else actual_table_exists(table)
+
+def exact_permission_error(call):
+    try:call();return 'returned'
+    except frappe.PermissionError as error:return str(error)
+
+try:
+    frappe.set_user('dsherp-writer@example.invalid')
+    with patch.object(frappe.db,'table_exists',side_effect=injected_table_exists):
+        observed={
+            'require_action':exact_permission_error(lambda:require_action('Item','fill')),
+            'policy_revision_material':exact_permission_error(policy_revision_material),
+            'boot_session':exact_permission_error(lambda:boot_session(frappe._dict())),
+        }
+    assert observed=={key:EXPECTED for key in observed},observed
+finally:
+    frappe.db.rollback();frappe.destroy()
+'''
+    result = subprocess.run(
+        ['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],
+        input=script,text=True,capture_output=True,timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_policy_rows_gate_tool_doctypes():
     script = r'''
 import hashlib,json,os,uuid,frappe

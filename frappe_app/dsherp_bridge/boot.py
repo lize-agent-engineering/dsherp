@@ -5,9 +5,11 @@ import frappe
 def boot_session(bootinfo):
     """Expose context candidates, never an authorization grant."""
     user = frappe.session.user
-    if user in ('Guest', 'Administrator') or not frappe.db.table_exists('DS Doctype Policy'):
+    if user in ('Guest', 'Administrator'):
         bootinfo.dsherp_context_doctypes = []
         return
+    from dsherp_bridge.doctype_policy import require_policy_schema
+    require_policy_schema()
     doctypes = frappe.get_all(
         'DS Doctype Policy',
         filters={'enabled': 1, 'allow_read': 1},

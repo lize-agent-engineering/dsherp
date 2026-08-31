@@ -16,8 +16,15 @@ POLICY_FIELDS = (
 )
 
 
+def require_policy_schema():
+    """Fail explicitly when this Site has not migrated the policy schema."""
+    if not frappe.db.table_exists('DS Doctype Policy'):
+        raise frappe.PermissionError('DS DocType 策略表未迁移至本站点')
+
+
 def require_action(target_doctype, action):
     """Require one enabled policy row that explicitly allows the action."""
+    require_policy_schema()
     field = ACTION_FIELDS.get(action)
     if not field:
         frappe.throw('未知 DocType 策略动作：' + str(action))
@@ -34,6 +41,7 @@ def require_action(target_doctype, action):
 
 def policy_revision_material():
     """Return every policy identity/state and full enabled-policy material."""
+    require_policy_schema()
     policies = frappe.get_all(
         'DS Doctype Policy', fields=['name', *POLICY_FIELDS],
         order_by='target_doctype asc',

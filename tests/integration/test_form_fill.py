@@ -63,3 +63,49 @@ finally:
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)
     assert result.returncode==0,result.stderr
+
+
+def test_confirm_fill_records_failed_when_policy_schema_is_injected_missing():
+    script=r'''
+import os,uuid,frappe
+from unittest.mock import patch
+os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge.operations import propose_fill,confirm
+
+conversation=None
+try:
+    frappe.set_user('dsherp-writer@example.invalid')
+    doc=frappe.get_doc('Item','DSHERP-HITL-ITEM')
+    before=doc.item_name;version=str(doc.modified)
+    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Synthetic missing policy schema'}).insert(ignore_permissions=True).name
+    proposal=propose_fill(conversation,'Item',doc.name,{'item_name':'Must remain browser draft'},version)
+    frozen=frappe.db.get_value('DS Operation Proposal',proposal['id'],['payload','digest'],as_dict=True)
+    frappe.db.commit()
+
+    actual_table_exists=frappe.db.table_exists
+    def injected_table_exists(table):
+        return False if table=='DS Doctype Policy' else actual_table_exists(table)
+
+    with patch.object(frappe.db,'table_exists',side_effect=injected_table_exists):
+        result=confirm(proposal['id'],proposal['digest'],uuid.uuid4().hex)
+
+    assert result['status']=='Failed' and result['status']!='Unknown',result
+    execution=frappe.get_doc('DS Execution Record',result['execution_id'])
+    assert execution.status=='Failed'
+    assert frappe.db.count('DS Execution Record',{'proposal':proposal['id']})==1
+    assert frappe.db.count('DS Execution Record',{'proposal':proposal['id'],'status':'Unknown'})==0
+    stored=frappe.db.get_value('DS Operation Proposal',proposal['id'],['payload','digest','status'],as_dict=True)
+    assert stored.payload==frozen.payload and stored.digest==frozen.digest and stored.status=='Failed'
+    saved=frappe.get_doc(doc.doctype,doc.name)
+    assert saved.item_name==before and str(saved.modified)==version
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if conversation:
+        for proposal in frappe.get_all('DS Operation Proposal',filters={'conversation':conversation},pluck='name'):
+            for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal},pluck='name'):frappe.delete_doc('DS Execution Record',execution,ignore_permissions=True)
+            frappe.delete_doc('DS Operation Proposal',proposal,ignore_permissions=True)
+        frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)
+    assert result.returncode==0,result.stderr
