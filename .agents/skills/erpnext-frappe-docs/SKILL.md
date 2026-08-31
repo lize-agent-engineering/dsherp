@@ -16,17 +16,18 @@ description: Use when dsherp development needs official ERPNext or Frappe docume
 
 | 源 | 语言/版本 | 适用 |
 |---|---|---|
-| `docs.frappe.io/erpnext/user/manual/en/<slug>` | 英 / 最新 | ERPNext 业务模块用户手册（约 884 个平铺页面） |
-| `docs.frappe.io/framework/user/en/...` | 英 / 最新 | Frappe 框架开发：API、DocType、bench、教程 |
-| `docs.frappe.io/crm`、`/hr`、`/cloud` 等 | 英 / 最新 | Frappe 各应用文档 |
+| `docs.frappe.io/erpnext/user/manual/en/<slug>` | 英 / 最新主线 | ERPNext 业务模块用户手册（约 884 个平铺页面） |
+| `docs.frappe.io/framework/user/en/...` | 英 / 最新主线 | Frappe 框架开发：API、DocType、bench、教程 |
+| `docs.frappe.io/crm`、`/hr`、`/cloud` 等 | 英 / 最新主线 | Frappe 各应用文档 |
+| `frappe.io/...` | 英 / 动态 | 官方主站：版本发布页、The Frappe Times 月度动态、发布说明博客、handbook |
 | `erpnext.cc/docs/V14/...` | 中 / V14 | 中文概念与流程理解，仅 51 页 |
 | `erpnext.cc/best-practice/...` | 中 / 版本不一 | 社区实践文章（安装/开发/运维/财务实战），62 页，非官方规范 |
 
-注意：docs.frappe.io 的版本归档路径（`/erpnext/v14/`、`/framework/v15/` 等）虽在 sitemap 中，访问时一律被 301 合并到现行版页面（2026-08-31 实测）；该站不提供固定版本文档。需与安装版本严格对齐时，查 GitHub tag 源码（erpnext-integration 已固定 `v15.118.0` / `v15.119.3` 链接）。
+注意：docs.frappe.io 的版本归档路径（`/erpnext/v14/`、`/framework/v15/` 等）虽在 sitemap 中，访问时一律被 301 合并到现行版页面（2026-08-31 实测）；该站不提供固定版本文档。**现行主线已是 v16**（2026-08 起），而项目锁定 v15（仍在维护线每周二发版）——文档"最新"口径可能超前于项目版本。需与安装版本严格对齐时，查 GitHub tag 源码（erpnext-integration 已固定 `v15.118.0` / `v15.119.3` 链接）；版本动态与发布渠道见 [frappe-io-map.md](references/frappe-io-map.md)。
 
 ## 检索流程
 
-1. 先查本目录索引：[frappe-docs-map.md](references/frappe-docs-map.md)（docs.frappe.io 地图＋框架全页面清单）、[erpnext-cc-v14-index.md](references/erpnext-cc-v14-index.md)（中文 V14 全量索引）、[erpnext-cc-best-practice-index.md](references/erpnext-cc-best-practice-index.md)（中文社区实践 62 页全量索引）。
+1. 先查本目录索引：[frappe-docs-map.md](references/frappe-docs-map.md)（docs.frappe.io 地图＋框架全页面清单）、[frappe-io-map.md](references/frappe-io-map.md)（frappe.io 主站＋版本动态渠道）、[erpnext-cc-v14-index.md](references/erpnext-cc-v14-index.md)（中文 V14 全量索引）、[erpnext-cc-best-practice-index.md](references/erpnext-cc-best-practice-index.md)（中文社区实践 62 页全量索引）。
 2. 索引未列出的 ERPNext 手册页：slug 为英文术语 kebab-case（`sales-invoice`、`payment-entry`）；不确定就 grep 线上 sitemap 取准确 URL：
 
    ```bash
@@ -47,3 +48,4 @@ description: Use when dsherp development needs official ERPNext or Frappe docume
 | WebFetch erpnext.cc 不带尾斜杠 | 规范 URL 以 `/` 结尾 |
 | 用 erpnext.cc 译名覆盖项目术语 | `config/terminology/glossary.csv` 优先 |
 | 把 docs.frappe.io 的 vXX 归档 URL 当固定版依据 | 会 301 到现行版；固定版本行为查 GitHub tag 源码 |
+| 把 v16 主线的新特性/字段当项目事实 | 项目锁定 v15；v16 内容仅用于升级评估，渠道见 frappe-io-map |

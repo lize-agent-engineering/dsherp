@@ -10,7 +10,7 @@ curl -s https://docs.frappe.io/sitemap.xml | grep -o '<loc>[^<]*关键词[^<]*</
 
 | 空间 | 页数 | 入口 | 说明 |
 |---|---|---|---|
-| `erpnext` | 887（现行） | /erpnext/user/manual/en/introduction | ERPNext 用户手册（现行≈v15） |
+| `erpnext` | 887（现行） | /erpnext/user/manual/en/introduction | ERPNext 用户手册（现行=最新主线，2026-08 起为 v16；项目安装 v15，行为以 GitHub tag 为准） |
 | `framework` | 218（现行） | /framework/user/en/introduction | Frappe 框架开发文档 |
 | `cloud` | 183 | /cloud | Frappe Cloud 托管 |
 | `hr` | 148 | /hr | HR/Payroll（v15 起独立 app） |

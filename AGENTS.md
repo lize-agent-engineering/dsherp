@@ -36,6 +36,7 @@
 
 ## 官方资料入口
 
+- Frappe/ERPNext 官方主站与版本动态：https://frappe.io/ （发布页、The Frappe Times、发布说明）
 - DSH SDK：https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/sdk
 - DSH Python SDK：https://github.com/deepseek-ai/deepseek-harness/tree/master/python/sdk
 - DSH 架构：https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md
