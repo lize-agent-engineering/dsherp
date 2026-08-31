@@ -335,6 +335,36 @@ try:
     assert purchase_receipt_doc.docstatus==0 and purchase_receipt_doc.owner==actor
     assert purchase_receipt_doc.items[0].purchase_order==purchase_order
 
+    def reject_unsupported_receipt_shape(target,fieldname,value):
+        frappe.set_user('Administrator')
+        saved=target.get(fieldname)
+        target.db_set(fieldname,value,update_modified=False);frappe.db.commit()
+        try:
+            cap,_=new_run();frappe.set_user('Guest')
+            read=run_tool(**cap,tool='erp_read_record',arguments={
+                'doctype':'Purchase Receipt','name':purchase_receipt,
+            })
+            proposals_before=frappe.db.count('DS Operation Proposal',{'conversation':conversation})
+            sle_before=frappe.db.count('Stock Ledger Entry')
+            bin_before=quantity()
+            try:
+                run_tool(**cap,tool='erp_propose_action',arguments={
+                    'doctype':'Purchase Receipt','name':purchase_receipt,'action':'submit',
+                    'version':str(read['modified']),
+                })
+                raise AssertionError('unsupported Purchase Receipt impact was proposed')
+            except frappe.ValidationError as error:
+                assert '库存影响无法确定' in str(error) and '暂不支持' in str(error),error
+            assert frappe.db.count('DS Operation Proposal',{'conversation':conversation})==proposals_before
+            assert frappe.db.count('Stock Ledger Entry')==sle_before
+            assert quantity()==bin_before
+        finally:
+            frappe.set_user('Administrator')
+            target.db_set(fieldname,saved,update_modified=False);frappe.db.commit()
+
+    reject_unsupported_receipt_shape(purchase_receipt_doc.items[0],'from_warehouse',warehouse)
+    reject_unsupported_receipt_shape(purchase_receipt_doc,'is_return',1)
+
     # The receipt submit changes stock exactly once; duplicate confirm is idempotent.
     cap,purchase_receipt_submit_run=new_run()
     frappe.set_user('Guest')

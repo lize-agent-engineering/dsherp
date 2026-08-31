@@ -458,6 +458,30 @@ try:
     receipt_doc=frappe.get_doc('Subcontracting Receipt',subcontracting_receipt)
     assert receipt_doc.docstatus==0 and receipt_doc.owner==actor
 
+    frappe.set_user('Administrator')
+    receipt_doc.db_set('is_return',1,update_modified=False);frappe.db.commit()
+    try:
+        cap,_=new_run();frappe.set_user('Guest')
+        unsupported_read=run_tool(**cap,tool='erp_read_record',arguments={
+            'doctype':'Subcontracting Receipt','name':subcontracting_receipt,
+        })
+        proposals_before=frappe.db.count('DS Operation Proposal',{'conversation':conversation})
+        sle_before=frappe.db.count('Stock Ledger Entry');bins_before=stock_snapshot()
+        try:
+            run_tool(**cap,tool='erp_propose_action',arguments={
+                'doctype':'Subcontracting Receipt','name':subcontracting_receipt,'action':'submit',
+                'version':str(unsupported_read['modified']),
+            })
+            raise AssertionError('unsupported Subcontracting Receipt return impact was proposed')
+        except frappe.ValidationError as error:
+            assert '库存影响无法确定' in str(error) and '暂不支持' in str(error),error
+        assert frappe.db.count('DS Operation Proposal',{'conversation':conversation})==proposals_before
+        assert frappe.db.count('Stock Ledger Entry')==sle_before
+        assert stock_snapshot()==bins_before
+    finally:
+        frappe.set_user('Administrator')
+        receipt_doc.db_set('is_return',0,update_modified=False);frappe.db.commit()
+
     cap,receipt_submit_run=new_run()
     frappe.set_user('Guest')
     receipt_read=run_tool(**cap,tool='erp_read_record',arguments={

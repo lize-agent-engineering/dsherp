@@ -341,6 +341,22 @@ try:
     assert frappe.db.get_value('DS Operation Proposal',proposal['id'],'digest')==proposal['digest']
     frappe.db.commit()
 
+    # Historical frozen item/warehouse values are no longer readable after role revocation.
+    frappe.set_user('Administrator')
+    account=frappe.get_doc('User',actor)
+    account.set('roles',[row for row in account.roles if row.role!='Stock User'])
+    account.save();frappe.db.commit()
+    frappe.set_user(actor)
+    try:get_proposal(proposal['id']);raise AssertionError('revoked stock impact remained readable')
+    except frappe.PermissionError:pass
+    frappe.set_user('Administrator')
+    account=frappe.get_doc('User',actor)
+    account.append('roles',{'role':'Stock User'});account.save();frappe.db.commit()
+    frappe.set_user(actor)
+    assert get_proposal(proposal['id'])['impact']==expected
+    proposal=propose_action(conversation,'Stock Entry',entry_name,'submit',entry_version)
+    proposal_names.append(proposal['id']);frappe.db.commit()
+
     # A native source edit changes both version and movement; the frozen proposal cannot execute.
     changed=frappe.get_doc('Stock Entry',entry_name)
     changed.items[0].qty=2
@@ -508,6 +524,82 @@ try:
         {'item_code':'DSHERP-MFG-SYN-FG','quantity':2,'uom':'Nos','warehouse':warehouses['finished']},
         {'item_code':'DSHERP-MFG-SYN-RM','quantity':-3,'uom':'Nos','warehouse':warehouses['subcontracting']},
     ]}
+    stock_entry=frappe.get_doc({
+        'doctype':'Stock Entry','company':company[0],'items':[
+            {'item_code':'DSHERP-MFG-SYN-RM','transfer_qty':0.1,'stock_uom':'Nos',
+             's_warehouse':warehouses['raw'],'t_warehouse':warehouses['wip']},
+            {'item_code':'DSHERP-MFG-SYN-RM','transfer_qty':0.2,'stock_uom':'Nos',
+             's_warehouse':warehouses['raw'],'t_warehouse':warehouses['wip']},
+        ],
+    })
+    normalized={'kind':'stock','entries':[
+        {'item_code':'DSHERP-MFG-SYN-RM','quantity':-0.3,'uom':'Nos','warehouse':warehouses['raw']},
+        {'item_code':'DSHERP-MFG-SYN-RM','quantity':0.3,'uom':'Nos','warehouse':warehouses['wip']},
+    ]}
+    assert action_impact(stock_entry,'submit')==normalized
+    assert action_impact(stock_entry,'cancel')=={'kind':'stock','entries':[
+        {**entry,'quantity':-entry['quantity']} for entry in normalized['entries']
+    ]}
+    zero=frappe.get_doc({
+        'doctype':'Stock Entry','company':company[0],'items':[{
+            'item_code':'DSHERP-MFG-SYN-RM','transfer_qty':0.3,'stock_uom':'Nos',
+            's_warehouse':warehouses['raw'],'t_warehouse':warehouses['raw'],
+        }],
+    })
+    assert action_impact(zero,'submit')=={'kind':'none','entries':[]}
+
+    unsupported=[
+        frappe.get_doc({
+            'doctype':'Purchase Receipt','company':company[0],'items':[{
+                'item_code':'DSHERP-MFG-SYN-RM','stock_qty':1,'stock_uom':'Nos',
+                'warehouse':warehouses['wip'],'from_warehouse':warehouses['raw'],
+            }],
+        }),
+        frappe.get_doc({
+            'doctype':'Purchase Receipt','company':company[0],'is_return':1,'items':[{
+                'item_code':'DSHERP-MFG-SYN-RM','stock_qty':-1,'stock_uom':'Nos',
+                'warehouse':warehouses['raw'],
+            }],
+        }),
+        frappe.get_doc({
+            'doctype':'Delivery Note','company':company[0],'packed_items':[{
+                'item_code':'DSHERP-MFG-SYN-RM','qty':1,'warehouse':warehouses['raw'],
+            }],'items':[{
+                'item_code':'DSHERP-MFG-SYN-FG','stock_qty':1,'stock_uom':'Nos',
+                'warehouse':warehouses['finished'],
+            }],
+        }),
+        frappe.get_doc({
+            'doctype':'Delivery Note','company':company[0],'items':[{
+                'item_code':'DSHERP-MFG-SYN-RM','stock_qty':1,'stock_uom':'Nos',
+                'warehouse':warehouses['raw'],'target_warehouse':warehouses['wip'],
+            }],
+        }),
+        frappe.get_doc({
+            'doctype':'Delivery Note','company':company[0],'is_return':1,'items':[{
+                'item_code':'DSHERP-MFG-SYN-RM','stock_qty':-1,'stock_uom':'Nos',
+                'warehouse':warehouses['raw'],
+            }],
+        }),
+        frappe.get_doc({
+            'doctype':'Subcontracting Receipt','company':company[0],'is_return':1,
+            'supplier_warehouse':warehouses['subcontracting'],'items':[{
+                'item_code':'DSHERP-MFG-SYN-FG','qty':-1,'conversion_factor':1,
+                'stock_uom':'Nos','warehouse':warehouses['finished'],
+            }],
+        }),
+    ]
+    for document in unsupported:
+        try:action_impact(document,'submit');raise AssertionError(document.doctype+' unsupported shape accepted')
+        except frappe.ValidationError as error:
+            assert '库存影响无法确定' in str(error) and '暂不支持' in str(error),error
+
+    original_get_field=receipt.meta.get_field
+    receipt.meta.get_field=lambda fieldname:None if fieldname=='supplier_warehouse' else original_get_field(fieldname)
+    try:action_impact(receipt,'submit');raise AssertionError('missing SCR supplier_warehouse meta accepted')
+    except frappe.ValidationError as error:
+        assert '库存影响无法确定' in str(error) and 'supplier_warehouse' in str(error),error
+    finally:receipt.meta.get_field=original_get_field
     try:
         action_impact(frappe.get_doc({
             'doctype':'Delivery Note','company':company[0],'items':[{

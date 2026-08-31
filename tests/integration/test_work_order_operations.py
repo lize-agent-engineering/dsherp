@@ -330,6 +330,19 @@ try:
         'voucher_type':'Stock Entry','voucher_no':transfer_entry,
     })
     assert transfer_sle_after>transfer_sle_before
+    transfer_ledgers=frappe.get_all(
+        'Stock Ledger Entry',filters={
+            'voucher_type':'Stock Entry','voucher_no':transfer_entry,
+        },fields=['item_code','warehouse','actual_qty'],order_by='item_code asc,warehouse asc',
+    )
+    assert transfer_ledgers==[
+        {'item_code':raw_item,'warehouse':raw_warehouse,'actual_qty':-2},
+        {'item_code':raw_item,'warehouse':wip_warehouse,'actual_qty':2},
+    ],transfer_ledgers
+    assert transfer_submit['impact']['entries']==[
+        {'item_code':row.item_code,'quantity':flt(row.actual_qty),'uom':'Nos','warehouse':row.warehouse}
+        for row in transfer_ledgers
+    ]
     transfer_duplicate=confirm(transfer_submit['id'],transfer_submit['digest'],uuid.uuid4().hex)
     assert transfer_duplicate==transfer_submitted
     assert frappe.db.count('DS Execution Record',{'proposal':transfer_submit['id']})==1
@@ -374,6 +387,19 @@ try:
     assert site_document_counts()==manufacture_submit_documents_before
     manufacture_submitted=confirm_once(manufacture_submit,manufacture_submit_run)
     assert manufacture_submitted['status']=='Succeeded',manufacture_submitted
+    manufacture_ledgers=frappe.get_all(
+        'Stock Ledger Entry',filters={
+            'voucher_type':'Stock Entry','voucher_no':manufacture_entry,
+        },fields=['item_code','warehouse','actual_qty'],order_by='item_code asc,warehouse asc',
+    )
+    assert manufacture_ledgers==[
+        {'item_code':finished_item,'warehouse':fg_warehouse,'actual_qty':1},
+        {'item_code':raw_item,'warehouse':wip_warehouse,'actual_qty':-2},
+    ],manufacture_ledgers
+    assert manufacture_submit['impact']['entries']==[
+        {'item_code':row.item_code,'quantity':flt(row.actual_qty),'uom':'Nos','warehouse':row.warehouse}
+        for row in manufacture_ledgers
+    ]
 
     after_bins=stock_snapshot(raw_warehouse,wip_warehouse,fg_warehouse)
     assert after_bins['raw']==pre_bins['raw']-2,after_bins
@@ -385,12 +411,7 @@ try:
         fields=['voucher_no','item_code','warehouse','actual_qty'],
         order_by='voucher_no asc,creation asc,name asc',
     )
-    assert sum(flt(row.actual_qty) for row in ledger_rows
-               if row.item_code==raw_item and row.warehouse==raw_warehouse)==-2
-    assert sum(flt(row.actual_qty) for row in ledger_rows
-               if row.item_code==raw_item and row.warehouse==wip_warehouse)==0
-    assert sum(flt(row.actual_qty) for row in ledger_rows
-               if row.item_code==finished_item and row.warehouse==fg_warehouse)==1
+    assert len(ledger_rows)==4,ledger_rows
 
     # Read the actual Bin records and native Work Order outcome through run_tool.
     cap,outcome_run=new_run()

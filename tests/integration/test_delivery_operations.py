@@ -304,6 +304,62 @@ try:
     assert note_doc.docstatus==0 and note_doc.owner==actor
     assert note_doc.items[0].against_sales_order==sales_order
 
+    def reject_unsupported_note_shape(target,fieldname,value):
+        frappe.set_user('Administrator')
+        saved=target.get(fieldname)
+        target.db_set(fieldname,value,update_modified=False);frappe.db.commit()
+        try:
+            cap,_=new_run();frappe.set_user('Guest')
+            read=run_tool(**cap,tool='erp_read_record',arguments={
+                'doctype':'Delivery Note','name':delivery_note,
+            })
+            proposals_before=frappe.db.count('DS Operation Proposal',{'conversation':conversation})
+            sle_before=frappe.db.count('Stock Ledger Entry')
+            bin_before=quantity()
+            try:
+                run_tool(**cap,tool='erp_propose_action',arguments={
+                    'doctype':'Delivery Note','name':delivery_note,'action':'submit',
+                    'version':str(read['modified']),
+                })
+                raise AssertionError('unsupported Delivery Note impact was proposed')
+            except frappe.ValidationError as error:
+                assert '库存影响无法确定' in str(error) and '暂不支持' in str(error),error
+            assert frappe.db.count('DS Operation Proposal',{'conversation':conversation})==proposals_before
+            assert frappe.db.count('Stock Ledger Entry')==sle_before
+            assert quantity()==bin_before
+        finally:
+            frappe.set_user('Administrator')
+            target.db_set(fieldname,saved,update_modified=False);frappe.db.commit()
+
+    reject_unsupported_note_shape(note_doc.items[0],'target_warehouse',warehouse)
+    reject_unsupported_note_shape(note_doc,'is_return',1)
+    frappe.set_user('Administrator')
+    packed=note_doc.append('packed_items',{
+        'item_code':item_code,'qty':1,'warehouse':warehouse,'parent':note_doc.name,
+        'parenttype':'Delivery Note','parentfield':'packed_items',
+    })
+    packed.db_insert();frappe.db.commit()
+    try:
+        cap,_=new_run();frappe.set_user('Guest')
+        packed_read=run_tool(**cap,tool='erp_read_record',arguments={
+            'doctype':'Delivery Note','name':delivery_note,
+        })
+        proposals_before=frappe.db.count('DS Operation Proposal',{'conversation':conversation})
+        sle_before=frappe.db.count('Stock Ledger Entry');bin_before=quantity()
+        try:
+            run_tool(**cap,tool='erp_propose_action',arguments={
+                'doctype':'Delivery Note','name':delivery_note,'action':'submit',
+                'version':str(packed_read['modified']),
+            })
+            raise AssertionError('Delivery Note packed stock impact was proposed')
+        except frappe.ValidationError as error:
+            assert '库存影响无法确定' in str(error) and '暂不支持' in str(error),error
+        assert frappe.db.count('DS Operation Proposal',{'conversation':conversation})==proposals_before
+        assert frappe.db.count('Stock Ledger Entry')==sle_before and quantity()==bin_before
+    finally:
+        frappe.set_user('Administrator')
+        packed.delete(ignore_permissions=True);frappe.db.commit()
+
     # Submit changes stock once and updates the exact source order status.
     cap,submit_note_run=new_run()
     frappe.set_user('Guest')

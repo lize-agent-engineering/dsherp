@@ -32,10 +32,13 @@ it('库存状态提案在确认前展示服务端冻结的有符号库存影响'
  render(<OperationProposal proposal={{...proposal,doctype:'Stock Entry',action:'submit',impact:{kind:'stock',entries:[
   {item_code:'DSHERP-MFG-SYN-RM',quantity:-2,uom:'Nos',warehouse:'合成原料仓 - DSH'},
   {item_code:'DSHERP-MFG-SYN-RM',quantity:2,uom:'Nos',warehouse:'合成在制仓 - DSH'},
+  {item_code:'DSHERP-MFG-SYN-FG',quantity:0.3,uom:'Nos',warehouse:'合成成品仓 - DSH'},
  ]},changes:[{field:'docstatus',label:'单据状态',before:0,after:1}]}} onConfirm={vi.fn()}/>);
  expect(screen.getByText('将变动库存：')).toBeTruthy();
  expect(screen.getByText('DSHERP-MFG-SYN-RM × -2 Nos @ 合成原料仓 - DSH')).toBeTruthy();
  expect(screen.getByText('DSHERP-MFG-SYN-RM × +2 Nos @ 合成在制仓 - DSH')).toBeTruthy();
+ expect(screen.getByText('DSHERP-MFG-SYN-FG × +0.3 Nos @ 合成成品仓 - DSH')).toBeTruthy();
+ expect(screen.queryByText(/0\.30000000000000004/)).toBeNull();
  const summary=screen.getByText('将变动库存：').parentElement;
  const button=screen.getByRole('button',{name:'确认执行'});
  expect(summary.compareDocumentPosition(button)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
