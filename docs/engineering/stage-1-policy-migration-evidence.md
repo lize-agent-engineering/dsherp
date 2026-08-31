@@ -151,7 +151,7 @@ git diff --check
 
 | 证据层 | 本记录状态 | 精确边界 |
 | --- | --- | --- |
-| 代码 / 测试 | 已验证（分层） | `5a860fc` 代码树上的历史全量门为 Python 218/218、前端 20 files / 158 tests；当前 search 覆盖纠正在 `32f948c` 上验证 validator、focused 1/1 与目标文件 7/7。完整 Python/前端门待 controller fresh 执行，不用旧全量数字代替。 |
+| 代码 / 测试 | 已验证（fresh） | search 覆盖纠正提交 `32f948c` 已取得 validator GREEN、focused 1/1 与目标文件 7/7；随后 controller 在固定树 `adae4fc`（其后仅含 C1 证据与外部 skills/AGENTS 文档变化）fresh 执行完整门，Python 218/218、前端 20 files / 158 tests，结果与上方全量门段一致。 |
 | 真实 ERP Sites | 已验证 | 本地合成 alpha/beta/daily 真实 Site 只读回读；三站 schema、版本、策略行与零残留治理数据如上。不是生产企业数据。 |
 | 真实 Runtime | 已验证（本地） | 固定 DSH Runtime 的既有真实进程/容器回归包含在 218 项全量门中；模型响应测试可使用替身，本记录不把 Runtime 通过外推为真实模型通过。 |
 | 真实模型 | 未验证 | 本轮未调用真实模型；尤其禁止 operation-domain 真实模型运行。 |
