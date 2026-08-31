@@ -30,6 +30,7 @@
 ## 文档
 
 - [首版设计](docs/superpowers/specs/2026-08-28-dsherp-design.md)
+- [Agent 体系架构设计](docs/superpowers/specs/2026-08-31-agent-system-architecture-design.md)
 - [首次技术验证计划](docs/superpowers/plans/2026-08-28-foundation-validation.md)
 - [项目开发约定](AGENTS.md)
 - [准确版本与运行契约](docs/engineering/runtime-baseline.md)
