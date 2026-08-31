@@ -18,7 +18,8 @@
 ## 全局约束（每个任务隐含遵守）
 
 - 中文回复与提交说明按仓库现状；TDD 先写行为测试确认失败再最小实现；fastfail，配置缺失/权限不足明确报错，不静默降级。
-- 本计划 active 期间，计划外并行工作须累计到阶段边界再合入，或由明确指令排在计划提交序列之外；既有历史不改写。今后每项任务完成时，须在同一功能提交或紧随其后的任务收尾文档提交中同步勾选复选框。
+- controller-owned 提交不得混合计划文件与非计划文件；外部提交交错仅在核验文件集不相交并登记 ledger 索引后允许；不得 reset、rebase、squash 或以其他方式改写历史来隐藏交错。今后每项任务完成时，须在功能提交后由独立计划收尾提交同步勾选复选框。
+- **Checkpoint 1 已放行（2026-08-31）**：用户接受已登记的 C1.6 外部交错例外；阶段 1 技术门与三站点零 route 残留证据保持有效，阶段 2/3 可继续，但禁止 operation-domain 真实模型运行，阶段 3 必须先于阶段 4。
 - 固定 DSH SDK/Runtime `0.1.1rc1`（源码 ref `528c682e...`）不动；Frappe `15.118.0` / ERPNext `15.119.3`；从实际站点发现字段，不猜 schema，不凭记忆编造 API。
 - 模型仅 `deepseek-v4-flash`（`context_execution.py:122` 白名单），项目原模型授权内使用，不扩大生产写入。
 - 不新增常驻服务（无 worker/scheduler/websocket，现状为按需一次性容器）；不 fork/修改上游核心。
@@ -95,7 +96,7 @@ make 路由候选方法名（`make_delivery_note`、`make_stock_entry`、`make_p
 
 ## 阶段 2：制造 DocType 接入（每段先红后绿，段内 finally 先 cancel 再删清理）
 
-- [ ] **T2.1 make 提案机制**：`erp_propose_make` 工具、`proposal_type='make'`、确认时重跑比对（D3）。失败测试 `tests/integration/test_make_proposal.py::test_make_freezes_mapped_result_and_rejects_drift`：读源单 → make 提案 → 他人改源单 → confirm 拒绝；反例：未读源单版本直接 make 被拒。
+- [x] **T2.1 make 提案机制**：`erp_propose_make` 工具、`proposal_type='make'`、确认时重跑比对（D3）。失败测试 `tests/integration/test_make_proposal.py::test_make_freezes_mapped_result_and_rejects_drift`：读源单 → make 提案 → 他人改源单 → confirm 拒绝；反例：未读源单版本直接 make 被拒。
 - [ ] **T2.2 自制段**：Work Order/Stock Entry/BOM/Bin/Warehouse 策略行 + Work Order→Stock Entry 两条路由（领料 Material Transfer for Manufacture、完工 Manufacture）。失败测试 `tests/integration/test_work_order_operations.py::test_work_order_chain_updates_stock`：WO 创建确认 → submit 确认 → 领料 SE make+submit → 完工 SE make+submit → Bin 原料减、成品增回读；反例：options 带非法键被拒。
 - [ ] **T2.3 采购段**：Supplier/PO/PR 策略行 + `purchase_order_to_purchase_receipt` 路由。失败测试 `tests/integration/test_purchase_operations.py::test_purchase_order_to_receipt_updates_stock`：Supplier 创建确认 → PO 创建（Purchase User 角色）→ submit 确认 → make PR 草稿 → submit 确认 → Bin `actual_qty` 增、PO `per_received` 回读；同一 PR submit 提案二次 confirm 返回同一执行（去重断言）。
 - [ ] **T2.4 委外段（企业供料加工）**：`is_subcontracted` PO / SCO / SCR 策略行 + 三条路由（PO→SCO、SCO→供料 SE、SCO→SCR）。失败测试 `tests/integration/test_subcontracting_operations.py::test_supplied_material_subcontracting_chain`：委外 PO 提交 → make SCO → submit → make 供料 SE（Send to Subcontractor）→ submit → 委外仓 Bin 增 → make SCR → submit → 成品入库、供料消耗回读；反例：SCO 直接 propose_create 被策略拒。供料方法以 T0.2 发现的确切签名接入。
