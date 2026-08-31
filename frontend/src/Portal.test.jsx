@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 import React from 'react';
-import {afterEach,beforeAll,expect,it,vi} from 'vitest';
+import {afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import Portal from './Portal.jsx';
-beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
 afterEach(cleanup);
 const context={user:'member@example.invalid',enterprises:[{id:'alpha',label:'甲企业',status:'Ready'},{id:'beta',label:'乙企业',status:'Ready'}]};
 const done={id:'TASK',question:'旧查询',answer:'历史回答'};

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -9,23 +9,6 @@ import {
   within,
 } from "@testing-library/react";
 import App from "./App.jsx";
-beforeAll(() => {
-  window.matchMedia = vi.fn().mockImplementation((query) => ({
-    matches: false,
-    media: query,
-    addListener() {},
-    removeListener() {},
-    addEventListener() {},
-    removeEventListener() {},
-  }));
-  global.ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-  const real = window.getComputedStyle;
-  window.getComputedStyle = (element) => real(element);
-});
 afterEach(cleanup);
 const click = (name) =>
   fireEvent.click(screen.getByRole("button", { name, exact: true }));

@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 import React from 'react';
-import {it,expect,vi,afterEach,beforeAll} from 'vitest';
+import {it,expect,vi,afterEach} from 'vitest';
 import {render,screen,fireEvent,cleanup} from '@testing-library/react';
 import ConfigurationBundle from './ConfigurationBundle.jsx';
-beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
 afterEach(cleanup);
 const bundle={id:'B1',digest:'package-1',site:'preview.localhost',execution_ready:true,preview_available:true,changes:[{object:'Inspection',action:'新增 DocType',detail:'检查结果 / Data'}]};
 it('展示模型配置包，显式请求预览确认但不执行配置',async()=>{

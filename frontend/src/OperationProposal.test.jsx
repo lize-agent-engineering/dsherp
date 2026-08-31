@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 import React from 'react';
-import {beforeAll,afterEach,it,expect,vi} from 'vitest';
+import {afterEach,it,expect,vi} from 'vitest';
 import {render,screen,fireEvent,cleanup,act} from '@testing-library/react';
 import OperationProposal from './OperationProposal.jsx';
-beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
 afterEach(cleanup);
 const proposal={id:'P1',digest:'d1',action:'update',doctype:'Item',name:'I-1',version:'v1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{field:'item_name',label:'物料名称',before:'旧名称',after:'新名称'}]};
 it('结果不明时只核实当前业务事实，不重发执行或改成成功',async()=>{

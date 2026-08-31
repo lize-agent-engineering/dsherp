@@ -1,13 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { afterEach, beforeAll, expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import AgentRecords from './AgentRecords.jsx';
 
-beforeAll(() => {
-  window.matchMedia = () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} });
-  global.ResizeObserver = class { observe() {} disconnect() {} };
-});
 afterEach(cleanup);
 
 const empty = { title: '暂无配置记录', hint: '配置包属于发起配置的业务用户。' };

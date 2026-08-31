@@ -1,22 +1,28 @@
 // @vitest-environment jsdom
 import React from 'react';
-import {afterEach,beforeAll,expect,it,vi} from 'vitest';
+import {afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import ContextSidebar from './ContextSidebar.jsx';
-beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
-afterEach(cleanup);
+afterEach(()=>{vi.restoreAllMocks();cleanup();});
 const snapshot={schema_version:1,route:['Form','Item','I-1'],page_type:'form',doctype:'Item',name:'I-1',version:'v1',dirty:true};
 const session={id:'S-1',title:'查询物料',messages:[{id:'M-1',question:'旧问题',answer:'历史回答',status:'Succeeded',context:snapshot}],active_run:null};
 const open=()=>fireEvent.click(screen.getByRole('button',{name:'打开 Agent'}));
 const apiDefault=async(method)=>method==='list_sessions'?[{id:'S-1',title:'查询物料'}]:session;
 it('近期会话有更多记录时提供正式页面入口并定位当前会话',async()=>{
+ const errors=[];const capture=error=>errors.push(error.message);window._virtualConsole.on('jsdomError',capture);
  const api=async method=>method==='list_sessions'?{items:[{id:'S-1',title:'查询物料',archived:false}],has_more:true}:session;
- render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();await screen.findByText('历史回答');
- fireEvent.click(screen.getByRole('button',{name:'打开会话历史'}));
- const link=screen.getByRole('link',{name:'在页面中打开'});fireEvent.click(link);
- expect(link.getAttribute('href')).toMatch(/^\/app\/dsherp-agent\?session=S-1&handoff=[a-f0-9]{32}$/);
- const token=new URL(link.href).searchParams.get('handoff');
- expect(JSON.parse(sessionStorage.getItem(`dsherp-agent-handoff:${token}`))).toEqual(snapshot);
+ try{
+  render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();await screen.findByText('历史回答');
+  fireEvent.click(screen.getByRole('button',{name:'打开会话历史'}));
+  const link=screen.getByRole('link',{name:'在页面中打开'});
+  link.addEventListener('click',event=>event.preventDefault(),{once:true});
+  fireEvent.click(link);
+  expect(link.getAttribute('href')).toMatch(/^\/app\/dsherp-agent\?session=S-1&handoff=[a-f0-9]{32}$/);
+  const token=new URL(link.href).searchParams.get('handoff');
+  expect(JSON.parse(sessionStorage.getItem(`dsherp-agent-handoff:${token}`))).toEqual(snapshot);
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(errors).not.toContain('Not implemented: navigation to another Document');
+ }finally{window._virtualConsole.off('jsdomError',capture);}
 });
 it('配置包准备确认后按同一包恢复，不重复显示或自动执行',async()=>{
  const bundle={id:'B1',digest:'b1',site:'preview.localhost',preview_available:true,execution_ready:true,changes:[{object:'Inspection',action:'新增 DocType',detail:'配置字段说明'}]};
