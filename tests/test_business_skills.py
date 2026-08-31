@@ -81,3 +81,66 @@ def test_query_skill_plans_bom_then_batches_warehouse_scoped_bins():
     assert 'filters={"item_code":["in",["RM-A","RM-B"]],"warehouse":["in",["原料仓 - ACME"]]}' in content
     assert 'fields=["item_code","warehouse","actual_qty","projected_qty"]' in content
     assert all(argument not in content for argument in ('site=','user=','url=','grant='))
+
+
+def test_operation_skill_discovers_dynamic_capabilities_and_manufacturing_routes():
+    content=(ROOT/'business-skills/erp-operation/SKILL.md').read_text()
+    header=content.split('---',2)[1]
+    assert 'version: 2.0.0' in header
+    description=next(
+        line for line in header.splitlines() if line.startswith('description:')
+    )
+    assert '当前业务用户权限与服务端策略允许的业务对象' in description
+    assert all(name not in description for name in ('Item','Customer','Sales Order'))
+
+    assert '能力以 erp_read_schema、服务端启用的 DS DocType 策略及工具或路由返回为准' in content
+    assert '工具目录固定，但 doctype 由服务端策略动态裁决' in content
+    assert 'schema、动作和 make 路由错误是最终权威' in content
+    assert '不能凭旧清单判定某个 DocType 不支持' in content
+
+    prerequisites={
+        'create':'create 前先调用 erp_read_schema',
+        'update':'update 前先用 erp_read_record 读取确切记录与版本',
+        'fill':'fill 前先用 erp_read_record 读取确切记录与版本',
+        'action':'action 前先用 erp_read_record 读取确切记录与版本',
+        'make':'make 前先用 erp_read_record 读取确切源单与版本',
+    }
+    for step in prerequisites.values():
+        assert step in content
+    assert '只能使用服务端已启用策略返回或允许的精确 route' in content
+    assert '不传 options，不发明映射' in content
+    assert 'make 确认只保存映射后的草稿' in content
+    assert '提交或取消必须另起 action 提案并单独确认' in content
+    assert '草稿保存与提交不能合并为一次确认' in content
+
+    assert 'impact 是服务端冻结且只读' in content
+    assert '有符号的“物料 × 数量 @ 仓库”' in content
+    assert '模型不得编辑、重算或替换' in content
+    assert '采购收货内部调拨' in content
+    assert '交付 Product Bundle 或目标仓' in content
+    assert '退货' in content
+    assert '只如实转述 fastfail' in content
+
+    chains=[
+        'Work Order → Material Transfer for Manufacture Stock Entry → Manufacture Stock Entry',
+        'Purchase Order → Purchase Receipt',
+        'is_subcontracted Purchase Order → Subcontracting Order → Send to Subcontractor Stock Entry → Subcontracting Receipt',
+        'Sales Order → Delivery Note',
+    ]
+    for chain in chains:
+        assert chain in content
+    assert '每个 make 都只产生草稿' in content
+    assert '每次保存和提交分别产生自己的提案与侧栏确认' in content
+
+    assert 'Purchase Order 普通收货看 per_received' in content
+    assert '委外供料进度看明细 subcontracted_quantity' in content
+    assert 'Subcontracting Order 看 per_received 与 status' in content
+    assert 'Sales Order 完成交付但未开票时可为 To Bill' in content
+    assert '不能误报为业务失败' in content
+
+    for gap in ('供应商自带料委外','将直接采购成品包装成制造变体','BOM 创建','发票与付款'):
+        assert gap in content
+    assert '不能发明工具、路由，也不能用直接数据库或字段修改替代' in content
+    assert '结果不明先核实，不重跑' in content
+    assert '模型没有确认、保存、提交、取消或发布工具' in content
+    assert '当前工具支持 Item、Customer' not in content
