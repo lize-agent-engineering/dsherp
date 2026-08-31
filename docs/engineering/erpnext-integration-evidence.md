@@ -115,8 +115,8 @@ UI、生产发布、真实模型自主选择 ERP 工具、多企业 SaaS、Runti
 | 路由 | 安装的完整导入路径 | `inspect.signature` | 安装源码 |
 | --- | --- | --- | --- |
 | Sales Order → Delivery Note | `erpnext.selling.doctype.sales_order.sales_order.make_delivery_note` | `(source_name, target_doc=None, kwargs=None)` | `selling/doctype/sales_order/sales_order.py:960-1114` |
-| Work Order → Material Transfer for Manufacture Stock Entry | `erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry` | `(work_order_id: str, purpose: str, qty: float \| None = None, target_warehouse: str \| None = None, source_stock_entry: str \| None = None)` | `manufacturing/doctype/work_order/work_order.py:1578-1630` |
-| Work Order → Manufacture Stock Entry | 同一 `make_stock_entry` | 同上；由 `purpose` 区分 | 同上 |
+| Work Order → Material Transfer for Manufacture Stock Entry | `erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry` | `(work_order_id, purpose="Material Transfer for Manufacture", qty=None, target_warehouse=None, source_stock_entry=None)` | 安装源码 `work_order.js:734,966-975` 传入该字面量；`work_order.py:1578-1630` 接收并处理它 |
+| Work Order → Manufacture Stock Entry | 同一 `make_stock_entry` | `(work_order_id, purpose="Manufacture", qty=None, target_warehouse=None, source_stock_entry=None)` | 安装源码 `work_order.js:779,794,803,966-975` 传入该字面量；`work_order.py:1068-1070` 将两种 purpose 作为 Work Order Stock Entry 值处理 |
 | Purchase Order → Purchase Receipt | `erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_receipt` | `(source_name, target_doc=None, args=None)` | `buying/doctype/purchase_order/purchase_order.py:729-789` |
 | subcontracted Purchase Order → Subcontracting Order | `erpnext.buying.doctype.purchase_order.purchase_order.make_subcontracting_order` | `(source_name, target_doc=None, save=False, submit=False, notify=False)` | `buying/doctype/purchase_order/purchase_order.py:934-958` |
 | Subcontracting Order → Send to Subcontractor Stock Entry | `erpnext.controllers.subcontracting_controller.make_rm_stock_entry` | `(subcontract_order, rm_items=None, order_doctype='Subcontracting Order', target_doc=None)` | `controllers/subcontracting_controller.py:1279-1383` |
