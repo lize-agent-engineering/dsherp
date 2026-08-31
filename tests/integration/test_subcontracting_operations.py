@@ -16,6 +16,7 @@ frappe.connect()
 
 from dsherp_bridge.context_execution import run_tool
 from dsherp_bridge.context_permissions import run_revision
+from dsherp_bridge import operations
 from dsherp_bridge.operations import confirm,verify_execution
 from erpnext.subcontracting.doctype.subcontracting_order.subcontracting_order import SubcontractingOrder
 from erpnext.subcontracting.doctype.subcontracting_receipt.subcontracting_receipt import SubcontractingReceipt
@@ -66,6 +67,7 @@ sco_before_insert_local='before_insert' in SubcontractingOrder.__dict__
 sco_before_insert_original=getattr(SubcontractingOrder,'before_insert',None)
 scr_before_insert_local='before_insert' in SubcontractingReceipt.__dict__
 scr_before_insert_original=getattr(SubcontractingReceipt,'before_insert',None)
+generate_hash_original=frappe.generate_hash
 
 
 def restore_before_insert(target_class,was_local,original):
@@ -442,7 +444,7 @@ try:
     assert sco_supply['main_item_code']==finished_item,sco_supply
     assert flt(sco_supply['required_qty'])==required_raw_qty,sco_supply
     assert sco_supply['reserve_warehouse']==warehouses['raw'],sco_supply
-    assert sco_supply['reference_name'],sco_supply
+    assert len(sco_supply['reference_name'])==20,sco_supply
     sco_payload=json.loads(frappe.db.get_value(
         'DS Operation Proposal',sco_make['id'],'payload'
     ))
@@ -466,6 +468,175 @@ try:
     assert sco.supplied_items[0].reserve_warehouse==warehouses['raw']
     assert confirm(sco_make['id'],sco_make['digest'],uuid.uuid4().hex)==sco_created
     assert frappe.db.count('DS Execution Record',{'proposal':sco_make['id']})==1
+
+    # The pure proposal allocator must reject a duplicate from this proposal
+    # and an exact child-table collision before accepting the next candidate.
+    existing_item_reference=sco.items[0].name
+    repeated_reference='r'*20
+    unique_reference='u'*20
+    hash_lengths=[]
+    hash_candidates=iter([
+        repeated_reference,repeated_reference,existing_item_reference,unique_reference,
+    ])
+    series_before_reference_probe=frappe.get_all(
+        'Series',fields=['name','current'],order_by='name asc'
+    )
+    child_count_before_reference_probe=frappe.db.count('Subcontracting Order Item')
+    reference_probe=frappe.get_doc({
+        'doctype':'Subcontracting Order',
+        'items':[
+            {'doctype':'Subcontracting Order Item'},
+            {'doctype':'Subcontracting Order Item'},
+        ],
+    })
+    def sequenced_hash(length=10):
+        hash_lengths.append(length)
+        return next(hash_candidates)
+    frappe.generate_hash=sequenced_hash
+    try:
+        operations._subcontracting_item_references(reference_probe)
+    finally:
+        frappe.generate_hash=generate_hash_original
+    assert [row.name for row in reference_probe.items]==[
+        repeated_reference,unique_reference,
+    ]
+    assert hash_lengths==[20,20,20,20],hash_lengths
+    assert frappe.db.count('Subcontracting Order Item')==child_count_before_reference_probe
+    assert frappe.get_all('Series',fields=['name','current'],order_by='name asc') \
+        ==series_before_reference_probe
+
+    # The public proposal path performs the same exact-table collision check,
+    # exposes only the eventual frozen reference, and stays read-only.
+    public_hash_lengths=[]
+    public_hash_candidates=iter([existing_item_reference,'v'*20])
+    def public_sequenced_hash(length=10):
+        if length!=20:
+            return generate_hash_original(length=length)
+        public_hash_lengths.append(length)
+        return next(public_hash_candidates)
+    frappe.generate_hash=public_sequenced_hash
+    try:
+        unique_reference_proposal,unique_reference_run=propose_make_after_rejecting_options(
+            'Purchase Order',purchase_order,'po_to_sco'
+        )
+    finally:
+        frappe.generate_hash=generate_hash_original
+    unique_reference_rows=unique_reference_proposal['target']['supplied_items']
+    assert public_hash_lengths==[20,20],public_hash_lengths
+    assert len({row['reference_name'] for row in unique_reference_rows}) \
+        ==len(unique_reference_rows)
+    assert all(len(row['reference_name'])==20 for row in unique_reference_rows)
+    assert unique_reference_rows[0]['reference_name']=='v'*20
+    unique_reference_payload=json.loads(frappe.db.get_value(
+        'DS Operation Proposal',unique_reference_proposal['id'],'payload'
+    ))
+    assert unique_reference_payload['target']['supplied_items']==unique_reference_rows
+    assert unique_reference_payload['confirmation_target']['supplied_items']==unique_reference_rows
+
+    # A bounded allocator failure is explicit and still cannot consume Series
+    # or create either a proposal target or a proposal record.
+    exhausted_counts=site_document_counts()
+    exhausted_series=frappe.get_all('Series',fields=['name','current'],order_by='name asc')
+    exhausted_proposals=frappe.db.count(
+        'DS Operation Proposal',{'conversation':conversation}
+    )
+    exhausted_calls=[]
+    def exhausted_hash(length=10):
+        if length!=20:
+            return generate_hash_original(length=length)
+        exhausted_calls.append(length)
+        return existing_item_reference
+    frappe.generate_hash=exhausted_hash
+    try:
+        try:
+            propose_make_after_rejecting_options(
+                'Purchase Order',purchase_order,'po_to_sco'
+            )
+            raise AssertionError('exhausted references did not fast-fail')
+        except frappe.ValidationError as error:
+            assert str(error)=='无法生成唯一的委外供料行引用，请重新提出操作',error
+    finally:
+        frappe.generate_hash=generate_hash_original
+    assert exhausted_calls and len(exhausted_calls)<=10,exhausted_calls
+    assert all(length==20 for length in exhausted_calls),exhausted_calls
+    assert site_document_counts()==exhausted_counts
+    assert frappe.get_all('Series',fields=['name','current'],order_by='name asc') \
+        ==exhausted_series
+    assert frappe.db.count(
+        'DS Operation Proposal',{'conversation':conversation}
+    )==exhausted_proposals
+
+    # Occupying the frozen item reference after proposal but before confirmation
+    # must fail before target insert, never fall through to Unknown.
+    occupied_proposal,occupied_run=propose_make_after_rejecting_options(
+        'Purchase Order',purchase_order,'po_to_sco'
+    )
+    occupied_reference=occupied_proposal['target']['supplied_items'][0]['reference_name']
+    occupied_item=frappe.copy_doc(sco.items[0])
+    occupied_item.name=occupied_reference
+    occupied_item.parent=subcontracting_order
+    occupied_item.parenttype='Subcontracting Order'
+    occupied_item.parentfield='items'
+    occupied_item.idx=99
+    occupied_item.docstatus=0
+    frappe.set_user('Administrator')
+    occupied_item.db_insert()
+    frappe.db.commit()
+    occupied_target_count=frappe.db.count('Subcontracting Order')
+    try:
+        occupied_result=confirm_once(occupied_proposal,occupied_run)
+    finally:
+        frappe.set_user('Administrator')
+        if frappe.db.exists('Subcontracting Order Item',occupied_reference):
+            frappe.delete_doc(
+                'Subcontracting Order Item',occupied_reference,ignore_permissions=True
+            )
+            frappe.db.commit()
+        frappe.set_user(actor)
+    assert occupied_result['status']=='Failed',occupied_result
+    assert occupied_result['error']=='委外供料行引用已被占用，请重新提出操作',occupied_result
+    assert frappe.db.count('Subcontracting Order')==occupied_target_count
+    assert frappe.db.count(
+        'DS Execution Record',{'proposal':occupied_proposal['id']}
+    )==1
+
+    # A collision introduced by before_insert models the narrow race between
+    # the occupancy check and child insert. DuplicateEntry remains a known
+    # Failed outcome and the competing row and target draft both roll back.
+    race_proposal,race_run=propose_make_after_rejecting_options(
+        'Purchase Order',purchase_order,'po_to_sco'
+    )
+    race_reference=race_proposal['target']['supplied_items'][0]['reference_name']
+    race_target_count=frappe.db.count('Subcontracting Order')
+    def race_before_insert(self):
+        if sco_before_insert_original:
+            sco_before_insert_original(self)
+        competing_item=frappe.copy_doc(sco.items[0])
+        competing_item.name=self.items[0].name
+        competing_item.parent=subcontracting_order
+        competing_item.parenttype='Subcontracting Order'
+        competing_item.parentfield='items'
+        competing_item.idx=99
+        competing_item.docstatus=0
+        competing_item.db_insert()
+        raise frappe.DuplicateEntryError(
+            competing_item.doctype,competing_item.name,RuntimeError('insert race')
+        )
+    SubcontractingOrder.before_insert=race_before_insert
+    try:
+        race_result=confirm_once(race_proposal,race_run)
+    finally:
+        restore_before_insert(
+            SubcontractingOrder,sco_before_insert_local,sco_before_insert_original
+        )
+    assert race_result['status']=='Failed',race_result
+    assert race_result['error']=='委外供料行引用已被占用，请重新提出操作',race_result
+    assert frappe.db.count('Subcontracting Order')==race_target_count
+    assert not frappe.db.exists('Subcontracting Order Item',race_reference)
+    assert frappe.db.count(
+        'DS Execution Record',{'proposal':race_proposal['id']}
+    )==1
+
     supplied_row=sco.supplied_items[0]
     original_required_qty=flt(supplied_row.required_qty)
     frappe.set_user('Administrator')
@@ -570,7 +741,7 @@ try:
     assert flt(receipt_supply['required_qty'])==required_raw_qty
     assert flt(receipt_supply['consumed_qty'])==required_raw_qty
     assert receipt_supply['subcontracting_order']==subcontracting_order
-    assert receipt_supply['reference_name']
+    assert len(receipt_supply['reference_name'])==20,receipt_supply
     receipt_payload=json.loads(frappe.db.get_value(
         'DS Operation Proposal',receipt_make['id'],'payload'
     ))
@@ -704,6 +875,7 @@ try:
         'delete_linked_ledger_entries_before':delete_linked_ledger_entries_before,
     }
 finally:
+    frappe.generate_hash=generate_hash_original
     restore_before_insert(SubcontractingOrder,sco_before_insert_local,sco_before_insert_original)
     restore_before_insert(SubcontractingReceipt,scr_before_insert_local,scr_before_insert_original)
     frappe.db.rollback()
@@ -858,6 +1030,7 @@ finally:
         assert getattr(SubcontractingOrder,'before_insert',None) is sco_before_insert_original
         assert ('before_insert' in SubcontractingReceipt.__dict__)==scr_before_insert_local
         assert getattr(SubcontractingReceipt,'before_insert',None) is scr_before_insert_original
+        assert frappe.generate_hash is generate_hash_original
     finally:
         frappe.destroy()
 

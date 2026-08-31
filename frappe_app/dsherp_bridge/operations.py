@@ -36,13 +36,33 @@ _MAKE_AUTOMATIC_POSTING_DOCTYPES={'Delivery Note','Purchase Receipt','Stock Entr
 # Stock Entry insert normalizes only these mapped empty strings to None. They
 # remain present in the confirmation shape, so any non-empty warehouse drifts.
 _MAKE_EMPTY_NORMALIZED_FIELDS={'Stock Entry Detail':{'s_warehouse','t_warehouse'}}
+_SUBCONTRACTING_REFERENCE_LENGTH=20
+_SUBCONTRACTING_REFERENCE_ATTEMPTS=8
+_SUBCONTRACTING_ITEM_DOCTYPES={
+    'Subcontracting Order':'Subcontracting Order Item',
+    'Subcontracting Receipt':'Subcontracting Receipt Item',
+}
 
 
 def _subcontracting_item_references(doc,frozen=None,bind_naming=False):
     # supplied_items.reference_name points at the target item row. Allocate it
     # without touching Series, then reuse the frozen reference on mapper rerun.
     if frozen is None:
-        references=[frappe.generate_hash(length=10) for _row in doc.get('items')]
+        references=[]
+        used=set()
+        for row in doc.get('items'):
+            for _attempt in range(_SUBCONTRACTING_REFERENCE_ATTEMPTS):
+                candidate=frappe.generate_hash(length=_SUBCONTRACTING_REFERENCE_LENGTH)
+                if (not isinstance(candidate,str)
+                        or len(candidate)!=_SUBCONTRACTING_REFERENCE_LENGTH
+                        or candidate in used
+                        or frappe.db.exists(row.doctype,candidate)):
+                    continue
+                references.append(candidate)
+                used.add(candidate)
+                break
+            else:
+                frappe.throw('无法生成唯一的委外供料行引用，请重新提出操作')
     else:
         references=[]
         for row in frozen.get('supplied_items') or []:
@@ -51,6 +71,8 @@ def _subcontracting_item_references(doc,frozen=None,bind_naming=False):
         if len(references)!=len(doc.get('items')):
             frappe.throw('委外供料行引用已变化，请重新提出操作')
     for row,reference in zip(doc.get('items'),references):
+        if bind_naming and frappe.db.exists(row.doctype,reference):
+            frappe.throw('委外供料行引用已被占用，请重新提出操作')
         row.name=reference
         if bind_naming:
             # Frappe names children after before_insert. This exact instance
@@ -64,6 +86,18 @@ def _prepare_subcontracting_supplied_items(doc,frozen=None):
     SubcontractingController.set_items_conversion_factor(doc)
     _subcontracting_item_references(doc,frozen)
     SubcontractingController.create_raw_materials_supplied(doc)
+
+
+def _is_subcontracting_reference_duplicate(error,payload):
+    if not isinstance(error,frappe.DuplicateEntryError) or not isinstance(payload,dict):
+        return False
+    item_doctype=_SUBCONTRACTING_ITEM_DOCTYPES.get(payload.get('target_doctype'))
+    references={
+        row.get('reference_name') for row in payload.get('target',{}).get('supplied_items',[])
+        if row.get('reference_name')
+    }
+    return (payload.get('action')=='make' and len(error.args)>=2
+            and error.args[0]==item_doctype and error.args[1] in references)
 
 
 _MAKE_TARGET_PREPARERS={
@@ -110,6 +144,7 @@ def confirm(proposal_id, digest, request_id):
     # Durable intent precedes any business method. An interrupted invocation is
     # never retried automatically, even with a different HTTP request identifier.
     frappe.db.commit()
+    payload=None
     try:
         proposal = frappe.get_doc('DS Operation Proposal', proposal_id, for_update=True)
         _user()
@@ -190,9 +225,12 @@ def confirm(proposal_id, digest, request_id):
         # Native business validation failures are recorded, not HTTP-success
         # claims. Unexpected failures remain unknown; no blind replay.
         frappe.db.rollback()
-        known = isinstance(error, (frappe.ValidationError, frappe.PermissionError))
+        duplicate_reference=_is_subcontracting_reference_duplicate(error,payload)
+        known = isinstance(error, (frappe.ValidationError, frappe.PermissionError)) \
+            or duplicate_reference
         result = {'status': 'Failed' if known else 'Unknown',
             'error': ('当前用户无权执行该操作' if isinstance(error, frappe.PermissionError)
+                      else '委外供料行引用已被占用，请重新提出操作' if duplicate_reference
                       else str(error) if known else '执行结果尚未核实，请查看业务记录；不会自动重试')}
     execution = frappe.get_doc('DS Execution Record', execution.name, for_update=True)
     execution.status = result['status']
