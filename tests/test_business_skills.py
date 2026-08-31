@@ -144,3 +144,24 @@ def test_operation_skill_discovers_dynamic_capabilities_and_manufacturing_routes
     assert '结果不明先核实，不重跑' in content
     assert '模型没有确认、保存、提交、取消或发布工具' in content
     assert '当前工具支持 Item、Customer' not in content
+
+
+def test_operation_skill_supplies_exact_trusted_make_route_tokens():
+    content=(ROOT/'business-skills/erp-operation/SKILL.md').read_text()
+    mappings={
+        'work_order_material_transfer':'Work Order → Material Transfer for Manufacture Stock Entry',
+        'work_order_manufacture':'Work Order → Manufacture Stock Entry',
+        'purchase_order_to_purchase_receipt':'Purchase Order → Purchase Receipt',
+        'purchase_order_to_subcontracting_order':'is_subcontracted Purchase Order → Subcontracting Order',
+        'subcontracting_order_to_supply_stock_entry':'Subcontracting Order → Send to Subcontractor Stock Entry',
+        'subcontracting_order_to_subcontracting_receipt':'Subcontracting Order → Subcontracting Receipt',
+        'sales_order_to_delivery_note':'Sales Order → Delivery Note',
+    }
+    for token, mapping in mappings.items():
+        assert f'`{token}`：{mapping}' in content
+        assert content.count(f'`{token}`')==1
+    assert '当前发布版本可提交给 erp_propose_make 的精确 route token' in content
+    assert '这些 token 只是 make 调用词汇表，不是 DocType 能力白名单' in content
+    assert '服务端当前策略、用户权限和固定 adapter 仍是最终裁决' in content
+    assert '服务端拒绝时立即停止，不能尝试或发明其他 token' in content
+    assert 'route 内容变化会轮换权限版本，使在飞运行和提案失效' in content
