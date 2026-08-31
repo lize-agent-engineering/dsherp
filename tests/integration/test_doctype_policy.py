@@ -80,20 +80,34 @@ cases=json.loads(__CASES__)
 targets=('DS Doctype Policy','DS Doctype Policy Route');business='governance-zero-access-'+uuid.uuid4().hex+'@example.invalid'
 control='governance-control-access-'+uuid.uuid4().hex+'@example.invalid'
 conversations={};run_names=[];denied=[]
+probe_route={'route_name':'governance_read_probe','method_path':'dsherp_bridge.synthetic.governance_read_probe','target_doctype':'Item'}
+governance_name=None;routes_before=None
 try:
     frappe.set_user('Administrator')
     for target in targets:assert not frappe.db.exists('DS Doctype Policy',{'target_doctype':target})
     governance_name=frappe.db.get_value('DS Doctype Policy',{},'name')
     assert governance_name,'alpha policy fixture is required for proposal argument shape'
+    routes_before=frappe.get_all('DS Doctype Policy Route',filters={
+        'parent':governance_name,'parenttype':'DS Doctype Policy','parentfield':'routes'
+    },fields=['route_name','method_path','target_doctype'],order_by='idx asc,name asc')
     frappe.get_doc({'doctype':'User','email':business,'first_name':'Synthetic governance zero access','enabled':1,
                     'send_welcome_email':0,'roles':[{'role':'Item Manager'}]}).insert()
     frappe.get_doc({'doctype':'User','email':control,'first_name':'Synthetic governance control access','enabled':1,
                     'send_welcome_email':0,'roles':[{'role':'System Manager'}]}).insert()
+    policy=frappe.get_doc('DS Doctype Policy',governance_name)
+    policy.append('routes',probe_route)
+    policy.save()
     frappe.set_user(control)
     policy=frappe.get_doc('DS Doctype Policy',governance_name)
     policy.check_permission('read')
     policy.apply_fieldlevel_read_permissions()
     assert 'routes' in policy.as_dict()
+    assert any(
+        row.get('route_name')=='governance_read_probe'
+        and row.get('method_path')=='dsherp_bridge.synthetic.governance_read_probe'
+        and row.get('target_doctype')=='Item'
+        for row in policy.as_dict()['routes']
+    )
     route_fields=set(frappe.get_meta('DS Doctype Policy Route').get_permitted_fieldnames(
         parenttype='DS Doctype Policy',user=control,permission_type='read'
     ))
@@ -164,6 +178,15 @@ finally:
     assert all(not frappe.db.exists('DS Conversation',conversation.name) for conversation in conversations.values())
     assert all(not frappe.db.exists('DS Model Run',name) for name in run_names)
     frappe.destroy()
+    os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
+    try:
+        frappe.set_user('Administrator')
+        routes_after=frappe.get_all('DS Doctype Policy Route',filters={
+            'parent':governance_name,'parenttype':'DS Doctype Policy','parentfield':'routes'
+        },fields=['route_name','method_path','target_doctype'],order_by='idx asc,name asc')
+        assert routes_after==routes_before,(routes_before,routes_after)
+    finally:
+        frappe.destroy()
 '''.replace('__CASES__', repr(json.dumps(cases, ensure_ascii=False, sort_keys=True)))
     result = subprocess.run(
         ['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],
