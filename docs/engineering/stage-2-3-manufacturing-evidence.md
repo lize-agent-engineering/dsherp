@@ -2,7 +2,7 @@
 
 日期：2026-09-01  
 检查点 1 后基线：`9611f83`  
-本证据落档前功能 HEAD：`de1ecb2`
+本证据最终功能 HEAD：`c1ebb68`
 
 ## 结论边界
 
@@ -23,8 +23,10 @@
 | T3.1 查询技能 | `8f05065`、`1bc419f`、`91ca7b6`、`ac20325` | 受限 filters/fields、来源字段和匹配字段复核、erp-query 1.3.0 | PASS，Critical 0 / Important 0 |
 | T3.2/T3.3 操作技能 | `252ca20`、`073e1f2`、`05dce5b` | erp-operation 2.0.0、七个受信 route token、manifest 摘要 | PASS，Critical 0 / Important 0 |
 | 全量门清理 | `c53cb38`、`de1ecb2` | beta 配置测试正常/异常 finally 精确清理 | PASS，Critical 0 / Important 0 |
+| 宽审 make 落库绑定 | `4a996a3`、`e6d9c78`、`7ff4c23` | 独立 `confirmation_target`、insert hook 漂移回滚、verify 冻结基准 | PASS，Critical 0 / Important 0 |
+| 宽审未知库存影响 | `c1ebb68` | exact stock/no-stock registry、未知 DocType fastfail、字段权限优先 | PASS，Critical 0 / Important 0 |
 
-上述任务在仓库计划与外部权威计划中均已逐项勾选。Phase 2/3 范围 `9611f83..de1ecb2` 共 29 笔提交，未观察到计划外提交交错；自身提交均按功能文件集分类。没有重写历史。
+上述任务在仓库计划与外部权威计划中均已逐项勾选。证据落档前的 Phase 2/3 及检查点整改范围 `9611f83..c1ebb68` 共 34 笔提交，未观察到计划外提交交错；自身提交均按功能文件集分类。没有重写历史。
 
 ## TDD 与审查整改
 
@@ -33,24 +35,26 @@
 - T3.1 首轮审查发现 filters 或 title 参与匹配却未返回时，其字段没有进入历史来源复核。新增独立 `match_fields` 账本，filters keys、非空 query 的 name/可读 title 均被记录；撤销返回字段、filter-only 字段、query-title 字段三类权限都会拒绝历史来源。第二轮恢复了被误替换的既有返回字段撤权回归。
 - T3.2/T3.3 首轮审查发现公开工具要求模型传 route 字符串，但没有 route 枚举接口。技能补齐当前发布版本七个精确 token；它们只是调用词汇表，不是 DocType 能力白名单，实时策略、当前用户权限和固定 adapter 仍最终裁决。
 - 最终全仓第一次虽为 Python `243 passed`，但运行态发现 beta 三个配置测试遗留已提交的 Conversation/Bundle/Confirmation/Execution。三个既有 finally 已按精确 ID、依赖顺序补齐，并增加提前失败故障注入；正常与异常路径 `6 passed`，独立复审通过。该整改不修改产品代码。
+- 阶段宽审发现 make 仅在 insert 前比较 mapper，Frappe/ERPNext hook 仍可把保存后的确认字段改写；同时 verify 只会拿 actual 与 Execution 中同一份 actual 自证。最终实现将完整 mapper `target` 与摘要绑定的用户 `confirmation_target` 分离：公开 target、保存后精确比较和 verify 都以同一冻结确认投影为准；空值、来源链接、数量、仓库和子表结构均绑定，仅对四条真实链证明的原生派生字段做精确 DocType/child 注册。五类真实 insert hook 漂移均 Failed、目标草稿回滚，正常链与幂等保留。
+- 阶段宽审还发现任意未注册 DocType 会被静默标成无库存影响。现在只有 Sales Order、Work Order、Purchase Order、Subcontracting Order 进入精确 no-stock registry；四类库存单据先复核父/子字段权限再计算；其他 DocType 在提案形成前中文 fastfail，零 Proposal、Execution 和业务写。
 
 ## 最终全量门
 
-最终 HEAD `de1ecb2` fresh 执行：
+最终功能 HEAD `c1ebb68` fresh 执行：
 
 ```text
 PYTHONPATH=. .venv/bin/python -m pytest tests -q --tb=short
-246 passed in 758.72s (0:12:38)
+249 passed in 768.43s (0:12:48)
 ```
 
 ```text
 cd frontend && npm test
 Test Files  20 passed (20)
 Tests       160 passed (160)
-Duration    13.54s
+Duration    13.38s
 ```
 
-`git diff --check 9611f83..de1ecb2` 退出 0；最终功能树工作区干净。
+`git diff --check 9611f83..c1ebb68` 退出 0；最终功能树工作区干净。
 
 固定 DSH Runtime → stdio MCP → HTTP/Frappe → alpha ERP 的容器链在最终技能内容上以本地 SSE 模型替身通过：`1 passed in 87.01s`。全仓最终门也包含 Runtime/MCP/ERP 集成回归。没有使用真实 provider、真实模型或真实模型凭证。
 
@@ -76,6 +80,7 @@ Duration    13.54s
 - alpha、beta、daily 在 2026-09-01 新建的 DS Conversation、DS Model Run、DS Operation Proposal、DS Execution Record 均为 0。
 - beta 六个配置测试正常/故障注入标题对应的 Conversation、Bundle、Confirmation、Execution 均为空。
 - alpha 以 `impact-`、`work-order-`、`purchase-`、`subcontract-`、`delivery-` 开头的 Work Order、Stock Entry、Purchase Order、Purchase Receipt、Subcontracting Order、Subcontracting Receipt、Sales Order、Delivery Note 均为 0。
+- alpha 的 `make-`、`unknown-impact-`、`impact-permission-` 临时用户，`DS Unknown Impact *` 临时 DocType/策略，以及本轮 Delivery Note/Stock Entry 权限 Property Setter 均为 0。
 - alpha 合成制造库存恢复为：原料仓 RM `actual_qty=100`、`projected_qty=100`；成品仓 FG、在制仓 RM、委外仓 RM 均为 0。额外普通仓 RM 行也为 0。
 - 各制造用例在 finally 中对已提交单据先 cancel 再删；本轮技能替身链没有创建 ERP 业务单据。
 
@@ -94,6 +99,8 @@ T3.3 按计划取得两层证据：旧 1.5.0 对新行为测试为红；只改 S
 1. T3.1 开始前发现原 `erp_search_records` 只有模糊 query 且只返回 name/modified，无法真实执行计划要求的 BOM/Bin filters 批量读取。最小增加了受限、权限复核的 filters/fields 契约；否则发布查询技能会形成虚假能力声明。
 2. T3.2 审查发现没有模型可见的 route 枚举接口。在不新增服务端能力的任务边界内，选择在 2.0.0 技能列出当前七个受信 token，并保留服务端策略为最终裁决。
 3. 阶段边界全量门发现既有 beta 配置测试残留。按“每段 finally 清理”硬约束单独修复测试清理，没有混入制造或技能提交。
+4. 阶段宽审把 make 的“mapper 重算相等”扩展为“落库后用户确认投影仍相等”；完整 mapper target 继续用于插入，只有用户实际看到的稳定业务投影承担确认语义，原生派生/default 字段通过真实四段链逐项精确登记，不使用通用忽略。
+5. 阶段宽审把库存影响从“未注册即 none”收紧为 exact stock/no-stock registry；新增策略若没有相应影响实现会 fastfail，不能借动态策略静默绕过确认解释。
 
 ### Deferred，不阻塞本检查点
 
