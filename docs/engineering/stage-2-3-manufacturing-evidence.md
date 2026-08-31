@@ -4,7 +4,7 @@
 
 检查点 1 后基线：`9611f83`
 
-本证据当前功能 HEAD：`780bb33`；最近一次全仓门 HEAD 仍为 `c1ebb68`，`780bb33` 的全仓门由检查点控制器统一复跑。
+本证据当前功能 HEAD：`0a9f3a9`；最近一次全仓门 HEAD 仍为 `c1ebb68`，后续宽审整改的全仓门由检查点控制器统一复跑。
 
 ## 结论边界
 
@@ -25,10 +25,10 @@
 | T3.1 查询技能 | `8f05065`、`1bc419f`、`91ca7b6`、`ac20325` | 受限 filters/fields、来源字段和匹配字段复核、erp-query 1.3.0 | PASS，Critical 0 / Important 0 |
 | T3.2/T3.3 操作技能 | `252ca20`、`073e1f2`、`05dce5b` | erp-operation 2.0.0、七个受信 route token、manifest 摘要 | PASS，Critical 0 / Important 0 |
 | 全量门清理 | `c53cb38`、`de1ecb2` | beta 配置测试正常/异常 finally 精确清理 | PASS，Critical 0 / Important 0 |
-| 宽审 make 落库绑定 | `4a996a3`、`e6d9c78`、`7ff4c23`、`780bb33` | 独立 `confirmation_target`、委外供料预生成与完整子表冻结、insert hook 漂移回滚、verify 冻结基准 | 上轮 0 Critical / 1 Important；整改完成待复审 |
+| 宽审 make 落库绑定 | `4a996a3`、`e6d9c78`、`7ff4c23`、`780bb33`、`0a9f3a9` | 独立 `confirmation_target`、委外供料预生成、完整子表冻结与唯一引用、insert hook 漂移回滚、verify 冻结基准 | 上轮 0 Critical / 1 Important；整改完成待复审 |
 | 宽审未知库存影响 | `c1ebb68` | exact stock/no-stock registry、未知 DocType fastfail、字段权限优先 | PASS，Critical 0 / Important 0 |
 
-上述任务在仓库计划与外部权威计划中均已逐项勾选。当前 Phase 2/3 及检查点整改范围 `9611f83..780bb33` 共 37 笔提交；`c1ebb68` 的库存影响修复与 `a810f88` / `3cadae5` 的证据提交位于本次供料修复前，文件集与 `780bb33` 的功能文件不相交，历史保持原样。自身提交均按功能文件集分类，没有重写历史。
+上述任务在仓库计划与外部权威计划中均已逐项勾选。当前 Phase 2/3 及检查点整改范围 `9611f83..0a9f3a9` 共 39 笔提交；`c1ebb68` 的库存影响修复与 `a810f88` / `3cadae5` 的证据提交位于本次供料修复前，文件集与 `780bb33` / `0a9f3a9` 的功能文件不相交，历史保持原样。自身提交均按功能文件集分类，没有重写历史。
 
 ## TDD 与审查整改
 
@@ -39,6 +39,7 @@
 - 最终全仓第一次虽为 Python `243 passed`，但运行态发现 beta 三个配置测试遗留已提交的 Conversation/Bundle/Confirmation/Execution。三个既有 finally 已按精确 ID、依赖顺序补齐，并增加提前失败故障注入；正常与异常路径 `6 passed`，独立复审通过。该整改不修改产品代码。
 - 阶段宽审发现 make 仅在 insert 前比较 mapper，Frappe/ERPNext hook 仍可把保存后的确认字段改写；同时 verify 只会拿 actual 与 Execution 中同一份 actual 自证。最终实现将完整 mapper `target` 与摘要绑定的用户 `confirmation_target` 分离：公开 target、保存后精确比较和 verify 都以同一冻结确认投影为准；空值、来源链接、数量、仓库和子表结构均绑定，仅对四条真实链证明的原生派生字段做精确 DocType/child 注册。Delivery Note 五类真实 insert hook 漂移均 Failed、目标草稿回滚，正常链与幂等保留。
 - 后续复核发现 SCO/SCR 的 `supplied_items` 曾被按父表整表排除，这会遗漏企业供料的原料、required/consumed qty、reserve/supplier warehouse 与 reference/source links。`780bb33` 在 propose 与 confirm 共用的 mapper 路径上，对精确 SCO/SCR target 纯内存调用 ERPNext v15 `SubcontractingController.create_raw_materials_supplied()`；提案分配且 confirm/insert 复用唯一子行引用，不消费 Series、不插入或提交目标单据。公开 `target`、raw mapper `target` 与 `confirmation_target` 现在都有供料表；父表不再整表排除，仅对 SCR supplied child 真实 insert 派生的 amount、available qty、cost/current/default account 字段做精确登记。SCO/SCR 各自以 before_insert hook 覆盖行数、rm item、qty、warehouse 漂移，均 Failed、草稿回滚、唯一 Execution；管理员外改 required/consumed qty 后 verify 为 false。
+- 唯一引用复审进一步指出随机引用没有证明本提案内及数据库内唯一。`0a9f3a9` 将引用扩为 20 位：propose 对 used 集合与每行 exact child DocType 做至多 8 次碰撞检查，耗尽中文 fastfail；confirm 在绑定 naming 前按冻结引用与 exact child DocType 复查占用。只有错误携带的 child DocType 和 name 同时命中本 make 冻结引用时，`DuplicateEntryError` 才按明确 `Failed` 处理，其他重复错误仍保持 Unknown。可控 hash 序列锁定同提案重复、现存 child 碰撞、最终唯一值及 Series/目标/来源不变；确认前占用和 before_insert 插入竞争均回滚目标草稿、唯一 Execution，且不是 Unknown。
 - 阶段宽审还发现任意未注册 DocType 会被静默标成无库存影响。现在只有 Sales Order、Work Order、Purchase Order、Subcontracting Order 进入精确 no-stock registry；四类库存单据先复核父/子字段权限再计算；其他 DocType 在提案形成前中文 fastfail，零 Proposal、Execution 和业务写。
 
 ## 最终全量门
@@ -62,6 +63,8 @@ Duration    13.38s
 固定 DSH Runtime → stdio MCP → HTTP/Frappe → alpha ERP 的容器链在最终技能内容上以本地 SSE 模型替身通过：`1 passed in 87.01s`。全仓最终门也包含 Runtime/MCP/ERP 集成回归。没有使用真实 provider、真实模型或真实模型凭证。
 
 `780bb33` 的 fresh 聚焦验证没有冒充全仓门：旧实现公开 SCO target 缺 `supplied_items`，真实 RED 为 `1 failed` / `KeyError: supplied_items`；修复后 make 专项与四段真实链 `7 passed in 90.47s`，operations 聚焦门 `28 passed in 155.15s`，最终委外专项 `1 passed in 31.01s`，`git diff --check` 与 `py_compile` 退出 0。alpha fresh 回读中 `subcontract-*` User、Conversation、PO、SCO、Stock Entry、SCR 均为 0；测试内还逐次锁定目标 DocType 名称集合、全量 Series、来源单 docstatus/modified/status 在提案前后不变。
+
+`0a9f3a9` 的唯一引用 RED 在旧实现首先命中公开引用仍为 10 位（委外专项 `1 failed`），从而阻止后续碰撞断言；最小实现后，委外链 + make 专项 `3 passed in 52.28s`，最终 operations 聚焦门 `18 passed in 126.47s`，`py_compile` 与 `git diff --check` 退出 0。该门保留 SCO/SCR 八类供料 hook、四段正常链、幂等、verify 反例与 fresh 清理，并新增 hash monkey 与 before_insert hook 的 finally 恢复断言。
 
 ## 三站策略与 route 回读
 
