@@ -4,7 +4,7 @@
 
 检查点 1 后基线：`9611f83`
 
-本证据当前功能 HEAD：`0a9f3a9`；最近一次全仓门 HEAD 仍为 `c1ebb68`，后续宽审整改的全仓门由检查点控制器统一复跑。
+本证据当前功能 HEAD：`0a9f3a9`；fresh 全仓门 HEAD：`e8afb97`（相对功能 HEAD 只新增证据文档）。
 
 ## 结论边界
 
@@ -25,7 +25,7 @@
 | T3.1 查询技能 | `8f05065`、`1bc419f`、`91ca7b6`、`ac20325` | 受限 filters/fields、来源字段和匹配字段复核、erp-query 1.3.0 | PASS，Critical 0 / Important 0 |
 | T3.2/T3.3 操作技能 | `252ca20`、`073e1f2`、`05dce5b` | erp-operation 2.0.0、七个受信 route token、manifest 摘要 | PASS，Critical 0 / Important 0 |
 | 全量门清理 | `c53cb38`、`de1ecb2` | beta 配置测试正常/异常 finally 精确清理 | PASS，Critical 0 / Important 0 |
-| 宽审 make 落库绑定 | `4a996a3`、`e6d9c78`、`7ff4c23`、`780bb33`、`0a9f3a9` | 独立 `confirmation_target`、委外供料预生成、完整子表冻结与唯一引用、insert hook 漂移回滚、verify 冻结基准 | 上轮 0 Critical / 1 Important；整改完成待复审 |
+| 宽审 make 落库绑定 | `4a996a3`、`e6d9c78`、`7ff4c23`、`780bb33`、`0a9f3a9` | 独立 `confirmation_target`、委外供料预生成、完整子表冻结与唯一引用、insert hook 漂移回滚、verify 冻结基准 | PASS，Critical 0 / Important 0 |
 | 宽审未知库存影响 | `c1ebb68` | exact stock/no-stock registry、未知 DocType fastfail、字段权限优先 | PASS，Critical 0 / Important 0 |
 
 上述任务在仓库计划与外部权威计划中均已逐项勾选。当前 Phase 2/3 及检查点整改范围 `9611f83..0a9f3a9` 共 39 笔提交；`c1ebb68` 的库存影响修复与 `a810f88` / `3cadae5` 的证据提交位于本次供料修复前，文件集与 `780bb33` / `0a9f3a9` 的功能文件不相交，历史保持原样。自身提交均按功能文件集分类，没有重写历史。
@@ -44,21 +44,21 @@
 
 ## 最终全量门
 
-最终功能 HEAD `c1ebb68` fresh 执行：
+全仓门 HEAD `e8afb97` fresh 执行：
 
 ```text
 PYTHONPATH=. .venv/bin/python -m pytest tests -q --tb=short
-249 passed in 768.43s (0:12:48)
+249 passed in 778.10s (0:12:58)
 ```
 
 ```text
 cd frontend && npm test
 Test Files  20 passed (20)
 Tests       160 passed (160)
-Duration    13.38s
+Duration    13.56s
 ```
 
-`git diff --check 9611f83..c1ebb68` 退出 0；最终功能树工作区干净。
+`git diff --check 9611f83..e8afb97` 退出 0；全仓门执行时工作区干净。
 
 固定 DSH Runtime → stdio MCP → HTTP/Frappe → alpha ERP 的容器链在最终技能内容上以本地 SSE 模型替身通过：`1 passed in 87.01s`。全仓最终门也包含 Runtime/MCP/ERP 集成回归。没有使用真实 provider、真实模型或真实模型凭证。
 
