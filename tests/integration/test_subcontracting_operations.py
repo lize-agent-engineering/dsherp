@@ -67,6 +67,8 @@ sco_before_insert_local='before_insert' in SubcontractingOrder.__dict__
 sco_before_insert_original=getattr(SubcontractingOrder,'before_insert',None)
 scr_before_insert_local='before_insert' in SubcontractingReceipt.__dict__
 scr_before_insert_original=getattr(SubcontractingReceipt,'before_insert',None)
+scr_validate_local='validate' in SubcontractingReceipt.__dict__
+scr_validate_original=getattr(SubcontractingReceipt,'validate',None)
 generate_hash_original=frappe.generate_hash
 
 
@@ -75,6 +77,13 @@ def restore_before_insert(target_class,was_local,original):
         target_class.before_insert=original
     elif 'before_insert' in target_class.__dict__:
         delattr(target_class,'before_insert')
+
+
+def restore_scr_validate():
+    if scr_validate_local:
+        SubcontractingReceipt.validate=scr_validate_original
+    elif 'validate' in SubcontractingReceipt.__dict__:
+        delattr(SubcontractingReceipt,'validate')
 
 
 def exactly_one(values,label):
@@ -699,7 +708,8 @@ try:
         {'item_code':raw_item,'quantity':-required_raw_qty,'uom':'Nos','warehouse':warehouses['raw']},
         {'item_code':raw_item,'quantity':required_raw_qty,'uom':'Nos','warehouse':warehouses['subcontracting']},
     ]},supply_submit
-    assert confirm_once(supply_submit,supply_submit_run)['status']=='Succeeded'
+    supply_submitted=confirm_once(supply_submit,supply_submit_run)
+    assert supply_submitted['status']=='Succeeded',supply_submitted
     after_supply=stock_snapshot()
     assert after_supply=={
         'raw_at_source':pre_bins['raw_at_source']-required_raw_qty,
@@ -800,6 +810,43 @@ try:
         frappe.set_user('Administrator')
         receipt_doc.db_set('is_return',0,update_modified=False);frappe.db.commit()
 
+    # Each confirmation is its own committed business step. A native SCR
+    # validation failure must not undo or replay the already-succeeded supply SE.
+    cap,failed_receipt_run=new_run()
+    frappe.set_user('Guest')
+    failed_receipt_read=run_tool(**cap,tool='erp_read_record',arguments={
+        'doctype':'Subcontracting Receipt','name':subcontracting_receipt,
+    })
+    failed_receipt_submit=run_tool(**cap,tool='erp_propose_action',arguments={
+        'doctype':'Subcontracting Receipt','name':subcontracting_receipt,'action':'submit',
+        'version':str(failed_receipt_read['modified']),
+    })
+    validation_calls=[]
+    def reject_receipt_validation(self):
+        validation_calls.append(self.name)
+        raise frappe.ValidationError('合成委外收货提交校验失败')
+    SubcontractingReceipt.validate=reject_receipt_validation
+    try:
+        failed_receipt=confirm_once(failed_receipt_submit,failed_receipt_run)
+    finally:
+        restore_scr_validate()
+    assert failed_receipt['status']=='Failed',failed_receipt
+    assert '合成委外收货提交校验失败' in failed_receipt['error'],failed_receipt
+    assert validation_calls==[subcontracting_receipt],validation_calls
+    assert frappe.db.get_value('DS Execution Record',supply_submitted['execution_id'],'status')=='Succeeded'
+    assert frappe.get_doc('Stock Entry',supply_stock_entry).docstatus==1
+    assert frappe.get_doc('Subcontracting Receipt',subcontracting_receipt).docstatus==0
+    assert stock_snapshot()==after_supply
+    assert not frappe.db.exists('Stock Ledger Entry',{
+        'voucher_type':'Subcontracting Receipt','voucher_no':subcontracting_receipt,
+    })
+    repeated_failure=confirm(
+        failed_receipt_submit['id'],failed_receipt_submit['digest'],uuid.uuid4().hex
+    )
+    assert repeated_failure==failed_receipt
+    assert validation_calls==[subcontracting_receipt],'failed SCR was automatically retried'
+    assert frappe.db.count('DS Execution Record',{'proposal':failed_receipt_submit['id']})==1
+
     cap,receipt_submit_run=new_run()
     frappe.set_user('Guest')
     receipt_read=run_tool(**cap,tool='erp_read_record',arguments={
@@ -876,6 +923,7 @@ try:
     }
 finally:
     frappe.generate_hash=generate_hash_original
+    restore_scr_validate()
     restore_before_insert(SubcontractingOrder,sco_before_insert_local,sco_before_insert_original)
     restore_before_insert(SubcontractingReceipt,scr_before_insert_local,scr_before_insert_original)
     frappe.db.rollback()
