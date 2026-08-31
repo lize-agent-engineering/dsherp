@@ -4,6 +4,7 @@ import frappe
 from dsherp_bridge.context_api import _user,_json
 
 FIELD_COLUMNS=('fieldname','label','fieldtype','options','reqd','in_list_view','permlevel')
+GOVERNANCE_TARGETS=frozenset(('DS Doctype Policy','DS Doctype Policy Route'))
 
 
 def _require_columns(doc,doctype,columns):
@@ -17,7 +18,7 @@ def read_configuration(doctype):
     _user()
     if not isinstance(doctype,str) or not doctype.strip() or len(doctype)>140:
         frappe.throw('请提供确切配置DocType名称')
-    if doctype == 'DS Doctype Policy':
+    if doctype in GOVERNANCE_TARGETS:
         from dsherp_bridge.doctype_policy import require_action
         require_action(doctype, 'read')
     frappe.has_permission('DocType','read',throw=True)
