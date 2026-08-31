@@ -87,4 +87,4 @@
 
 ## 站点其他栏目（未收录）
 
-同站还有 `best-practice`（62 页）、`business-finance-all-in-one`（48 页）、`docs/V13`（11 页，含 api）、`resource-center` 等栏目，非本索引范围；需要时 grep 站点 sitemap。
+`best-practice`（62 页）已另建索引，见 [erpnext-cc-best-practice-index.md](erpnext-cc-best-practice-index.md)。同站其余栏目 `business-finance-all-in-one`（48 页）、`docs/V13`（11 页，含 api）、`resource-center` 等未收录；需要时 grep 站点 sitemap。

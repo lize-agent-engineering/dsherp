@@ -20,12 +20,13 @@ description: Use when dsherp development needs official ERPNext or Frappe docume
 | `docs.frappe.io/framework/user/en/...` | 英 / 最新 | Frappe 框架开发：API、DocType、bench、教程 |
 | `docs.frappe.io/crm`、`/hr`、`/cloud` 等 | 英 / 最新 | Frappe 各应用文档 |
 | `erpnext.cc/docs/V14/...` | 中 / V14 | 中文概念与流程理解，仅 51 页 |
+| `erpnext.cc/best-practice/...` | 中 / 版本不一 | 社区实践文章（安装/开发/运维/财务实战），62 页，非官方规范 |
 
 注意：docs.frappe.io 的版本归档路径（`/erpnext/v14/`、`/framework/v15/` 等）虽在 sitemap 中，访问时一律被 301 合并到现行版页面（2026-08-31 实测）；该站不提供固定版本文档。需与安装版本严格对齐时，查 GitHub tag 源码（erpnext-integration 已固定 `v15.118.0` / `v15.119.3` 链接）。
 
 ## 检索流程
 
-1. 先查本目录索引：[frappe-docs-map.md](references/frappe-docs-map.md)（docs.frappe.io 地图＋框架全页面清单）、[erpnext-cc-v14-index.md](references/erpnext-cc-v14-index.md)（中文 V14 全量索引）。
+1. 先查本目录索引：[frappe-docs-map.md](references/frappe-docs-map.md)（docs.frappe.io 地图＋框架全页面清单）、[erpnext-cc-v14-index.md](references/erpnext-cc-v14-index.md)（中文 V14 全量索引）、[erpnext-cc-best-practice-index.md](references/erpnext-cc-best-practice-index.md)（中文社区实践 62 页全量索引）。
 2. 索引未列出的 ERPNext 手册页：slug 为英文术语 kebab-case（`sales-invoice`、`payment-entry`）；不确定就 grep 线上 sitemap 取准确 URL：
 
    ```bash
