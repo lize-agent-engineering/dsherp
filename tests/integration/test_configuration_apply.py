@@ -51,6 +51,7 @@ try:
         raise SystemExit(0)
     assert result['status']=='Succeeded',result
     assert result['steps'][0]['status']=='Succeeded'
+    assert result['steps'][0]['step_id']=='["DocType","'+name+'"]'
     assert frappe.get_doc('DocType',name).custom==1
     native=frappe.get_doc({'doctype':name,'result':'Synthetic initial'}).insert()
     native.result='Synthetic changed';native.save();frappe.db.commit()

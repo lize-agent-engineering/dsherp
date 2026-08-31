@@ -113,9 +113,25 @@ def _matches(actual,expected):
     return actual==expected
 
 
+def _document_name(expected):
+    return expected['dt']+'-'+expected['fieldname'] if expected['doctype']=='Custom Field' else expected['name']
+
+
+def _step_id(expected):
+    return _json([expected['doctype'],_document_name(expected)])
+
+
 def _result(execution):
+    steps=json.loads(execution.steps)
+    payload=json.loads(frappe.db.get_value('DS Configuration Confirmation',execution.confirmation,'payload'))
+    documents=payload['documents']
+    if len(steps)>len(documents):frappe.throw('配置执行步骤与确认内容不一致')
+    for index,step in enumerate(steps):
+        expected_id=_step_id(documents[index])
+        if step.get('step_id') not in (None,expected_id):frappe.throw('配置执行步骤标识与确认内容不一致')
+        step['step_id']=expected_id
     return {'execution_id':execution.name,'status':'Unknown' if execution.status=='Running' else execution.status,
-        'steps':json.loads(execution.steps),'error':execution.error or ('执行已开始，尚未核实；不会重复执行' if execution.status=='Running' else None)}
+        'steps':steps,'error':execution.error or ('执行已开始，尚未核实；不会重复执行' if execution.status=='Running' else None)}
 
 
 @frappe.whitelist(methods=['GET'])
@@ -130,7 +146,7 @@ def verify_execution(proposal_id):
     for index,wanted in enumerate(expected):
         step=steps[index] if index<len(steps) else {}
         doctype=step.get('doctype') or wanted['doctype']
-        name=step.get('name') or (wanted.get('name') if wanted['doctype']!='Custom Field' else wanted['dt']+'-'+wanted['fieldname'])
+        name=step.get('name') or _document_name(wanted)
         observation={'object':step.get('object') or wanted.get('name') or wanted.get('dt','')+'.'+wanted.get('fieldname',''),'doctype':doctype,'name':name}
         if not name or not frappe.db.exists(doctype,name):
             observation['state']='Missing'
@@ -188,7 +204,7 @@ def _confirm(proposal_id,digest,request_id,purpose):
         frappe.db.commit()  # Durable intent, before native DDL can commit itself.
         steps=[]
         for expected in documents:
-            step={'object':expected.get('name') or expected['dt']+'.'+expected['fieldname'],'status':'Running'}
+            step={'step_id':_step_id(expected),'object':expected.get('name') or expected['dt']+'.'+expected['fieldname'],'status':'Running'}
             steps.append(step);execution.steps=_json(steps);execution.save(ignore_permissions=True);frappe.db.commit()
             started=False
             try:

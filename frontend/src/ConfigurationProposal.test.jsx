@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
-import {it,expect,vi,afterEach,beforeAll} from 'vitest';
+import {it,expect,vi,afterEach} from 'vitest';
 import {render,screen,fireEvent,cleanup} from '@testing-library/react';
 import ConfigurationProposal from './ConfigurationProposal.jsx';
-beforeAll(()=>{window.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});global.ResizeObserver=class{observe(){}disconnect(){}};const get=window.getComputedStyle;window.getComputedStyle=e=>get(e);});
-afterEach(cleanup);
+afterEach(()=>{vi.restoreAllMocks();cleanup();});
 it('来源运行未成功时展示提案但不能执行，成功后恢复确认',()=>{
  const confirm=vi.fn();const view=render(<ConfigurationProposal proposal={{...proposal,execution_ready:false}} onConfirm={confirm}/>);
  expect(screen.getByRole('button',{name:'确认应用到隔离预览'}).disabled).toBe(true);
@@ -14,6 +13,16 @@ it('来源运行未成功时展示提案但不能执行，成功后恢复确认'
  expect(screen.getByRole('button',{name:'确认应用到隔离预览'}).disabled).toBe(false);
 });
 const proposal={id:'C1',digest:'immutable-1',purpose:'preview',target:'preview.localhost',baseline:'baseline-1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{object:'Quality Check',action:'新增 DocType',detail:'检查结果 / Select / 合格、不合格'}]};
+it('执行步骤使用服务端稳定标识作为行键，业务对象重名也不会产生重复键',()=>{
+ const error=vi.spyOn(console,'error');
+ render(<ConfigurationProposal proposal={{...proposal,status:'Partial',execution:{status:'Partial',steps:[
+  {step_id:'["DocType","New"]',object:'New',status:'Succeeded'},
+  {step_id:'["Workflow State","New"]',object:'New',status:'Succeeded'},
+ ]}}} onConfirm={vi.fn()}/>);
+ expect(screen.getAllByText('Succeeded')).toHaveLength(2);
+ expect(error.mock.calls.flat().join(' ')).not.toContain('`index` parameter of `rowKey` function is deprecated');
+ expect(error.mock.calls.flat().join(' ')).not.toContain('Encountered two children with the same key');
+});
 it('展示配置目标与具体内容，预览只确认本次冻结提案，不自动发布',async()=>{
  const confirm=vi.fn(async()=>({status:'Succeeded',steps:[{object:'Quality Check',status:'Succeeded'}]}));
  render(<ConfigurationProposal proposal={proposal} onConfirm={confirm}/>);

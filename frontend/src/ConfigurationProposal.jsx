@@ -39,7 +39,7 @@ function Confirmation({proposal,onConfirm,onVerify}){
   {result?.status==='Succeeded'&&<Alert type="success" message={preview?'隔离预览配置已应用；目标站点尚未发布':'目标配置已发布并读取结果'}/>}
   {incomplete&&<Alert type="warning" message={`${preview?'预览应用':'发布'}未全部完成，请核实逐项结果；已发生的配置变更不保证回滚`}/>}
   {result?.error&&<Typography.Text type="danger">{result.error}</Typography.Text>}
-  {result?.steps&&<Table size="small" pagination={false} rowKey={(row,index)=>`${index}:${row.object}`} dataSource={result.steps}
+  {result?.steps&&<Table size="small" pagination={false} rowKey="step_id" dataSource={result.steps}
    columns={[{title:'配置对象',dataIndex:'object'},{title:'执行结果',dataIndex:'status'}]}/>}
   {incomplete&&onVerify&&<Button onClick={verify} loading={verifying}>核实当前配置</Button>}
   {verification?.note&&<Typography.Text>{verification.note}</Typography.Text>}
