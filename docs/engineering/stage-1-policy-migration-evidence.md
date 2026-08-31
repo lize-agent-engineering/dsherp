@@ -29,7 +29,7 @@
 | C1.2 | `f68860feceae4dc7569abe9129e9660efd3ff950` — `策略表缺失时显式失败并保留填表目标` |
 | C1.3 | `c94a437e17ba85949d796582e2e672c225a7da7a` — `fix: 阻断治理子表配置工具访问`；`2e4953fe8596f3ad6b29ff0858677e39e1985c7b` — `test: 补强治理子表原生读取证据`；`194454d07536748fa53d87d1d0c4eaa23218c7ea` — `test: 验证治理子表真实读取回滚`；`5a860fc72ef7fec9525b701a8330960c732b1ef8` — `test: 保留治理路由早期失败`；`32f948cf68b11999eb6d3f543a874984e8ddcbe6` — `test: 完整枚举治理DocType搜索工具` |
 
-从 C1 基线 `774d7619c2b4b52c11cbd9220de462e28df9b0f7` 之后，`git log --reverse 774d761..32f948c` 的结果恰好依次为 `a3d2089`、`f68860f`、`c94a437`、`2e4953f`、`194454d`、`5a860fc`、`4ba089d`、`32f948c`。其中 `4ba089d` 是前一轮 C1 证据收尾，`32f948c` 是整轮审查发现遗漏后的 search 覆盖纠正；序列连续，无其他任务插入，未 rebase、squash、改写或 push。
+从 C1 基线 `774d7619c2b4b52c11cbd9220de462e28df9b0f7` 到 search 覆盖提交 `32f948c`，`git log --reverse 774d761..32f948c` 恰好依次为 `a3d2089`、`f68860f`、`c94a437`、`2e4953f`、`194454d`、`5a860fc`、`4ba089d`、`32f948c`，这一段连续。随后外部 skills 任务在 `32f948c` 与证据修正 `c580293` 之间写入 `cc848953`，并在其后写入 `adae4fc`；因此当前完整 C1 收尾历史不再满足 C1.6 的无交错要求。该事实不通过 rebase、squash 或 reset 隐藏，作为检查点 1 的待用户裁定例外保留；全部提交均未 push。
 
 ### 计划外 terminology / skill 提交
 
@@ -43,6 +43,8 @@
 - `efa75e52255ce14c929dd53ab57065f786a3e548` — `feat(terminology): add second batch of Chinese term fixes`
 - `4b3b824766d7c41d70d6fde780241d6dd11f4dc3` — `feat(skills): 新增 ERPNext/Frappe 官方文档检索技能`
 - `774d7619c2b4b52c11cbd9220de462e28df9b0f7` — `fix(skills): 文档技能补充中文来源误区并经二轮评测`
+- `cc848953be3018acab5fa49836a22a41dc8fd981` — `feat(skills): 文档技能收录erpnext.cc最佳实践索引`（外部任务在 C1 search 测试与证据修正之间插入）
+- `adae4fcb8297c78282469d1f00858f1af7af00e8` — `feat(skills): 收录frappe.io官方主站与版本动态渠道`（外部任务后续提交）
 
 ## TDD RED/GREEN 索引
 
@@ -62,7 +64,7 @@ Task 8 当时的 22-case 报告是当时真实历史事实：query 4、operation
 
 ## 全量门禁
 
-以下数字均在 C1 最终代码树 `5a860fc` 上于本记录写入前重新运行，不复制旧的 205/158 结果。
+以下数字在当前固定提交树 `adae4fc` 上重新运行；C1 最终代码提交为 `32f948c`，其后的 `c580293` 与两笔外部 skills 提交均未修改 C1 生产代码或测试。这里不复制旧的 205/158 或整轮审查前的 218/158 结果。
 
 ```sh
 PYTHONPATH=. .venv/bin/python -m pytest
@@ -70,7 +72,7 @@ PYTHONPATH=. .venv/bin/python -m pytest
 
 ```text
 collected 218 items
-======================= 218 passed in 565.12s (0:09:25) ========================
+======================= 218 passed in 546.42s (0:09:06) ========================
 ```
 
 ```sh
@@ -80,14 +82,14 @@ cd frontend && npm test
 ```text
 Test Files  20 passed (20)
 Tests       158 passed (158)
-Duration    14.48s
+Duration    14.53s
 ```
 
 ```sh
 git diff --check
 ```
 
-退出码 0，无输出。文档编辑完成后还须再次运行同一检查，结果记录在 Task 9 报告。
+退出码 0，无输出。此处证据更正提交完成后由 controller 再次运行同一检查并在检查点报告中贴出结果。
 
 ## 三站点只读回读
 
@@ -131,7 +133,7 @@ git diff --check
 - **configuration-domain 父治理例外**：配置元数据路径原本绕过业务 policy gate，导致非 Administrator System Manager 可经 Agent 读取父治理 schema；`4ab11ad` 对精确父目标复用现有 `require_action(read)`，不存在 self-policy 因而拒绝，原生 Desk 控制面权限保留。
 - **configuration-domain 子治理例外**：同类路径仍允许 `DS Doctype Policy Route`；`c94a437` 将固定治理目标扩为父表和子表，二者共用同一 generic gate，不新增第二套授权系统。
 - **transaction-only 子表读取探针**：仅凭 child meta/空 routes 不能证明真实子表值可经父文档读出。C1.3 获准在 alpha 隔离测试事务内临时 append 一条字面 route，以非 Administrator System Manager 读取真实值，随后 rollback，并用 fresh connection 对比测试前快照；最终三站 route 总行数仍为 0。
-- **terminology/skill 插入与 C1.6 串行规则**：既往计划任务之间出现的 terminology/skill 提交全部保留并单独索引，不重写历史。从 C1 基线 `774d761` 起，C1 功能与修复提交严格连续。今后本计划 active 期间，计划外工作累计到阶段边界，或经明确指令排在计划提交序列之外；任务复选框在同一功能提交或紧随其后的收尾文档提交更新。
+- **terminology/skill 插入与 C1.6 串行规则**：既往计划任务之间出现的 terminology/skill 提交全部保留并单独索引，不重写历史。C1 从基线 `774d761` 到 `32f948c` 连续；随后外部 `cc848953` 插入 `32f948c` 与 `c580293` 之间，`adae4fc` 又在其后落盘，构成 C1.6 的真实流程例外。controller 已停止把“完整 C1 严格连续”作为通过项，不改写历史，并在检查点 1 请求用户裁定。今后本计划 active 期间，计划外工作仍须累计到阶段边界，或经明确指令排在计划提交序列之外；任务复选框在同一功能提交或紧随其后的收尾文档提交更新。
 
 ## 延后非阻塞项
 
