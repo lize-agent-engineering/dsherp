@@ -178,15 +178,16 @@ finally:
     assert all(not frappe.db.exists('DS Conversation',conversation.name) for conversation in conversations.values())
     assert all(not frappe.db.exists('DS Model Run',name) for name in run_names)
     frappe.destroy()
-    os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
-    try:
-        frappe.set_user('Administrator')
-        routes_after=frappe.get_all('DS Doctype Policy Route',filters={
-            'parent':governance_name,'parenttype':'DS Doctype Policy','parentfield':'routes'
-        },fields=['route_name','method_path','target_doctype'],order_by='idx asc,name asc')
-        assert routes_after==routes_before,(routes_before,routes_after)
-    finally:
-        frappe.destroy()
+    if governance_name is not None and routes_before is not None:
+        os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
+        try:
+            frappe.set_user('Administrator')
+            routes_after=frappe.get_all('DS Doctype Policy Route',filters={
+                'parent':governance_name,'parenttype':'DS Doctype Policy','parentfield':'routes'
+            },fields=['route_name','method_path','target_doctype'],order_by='idx asc,name asc')
+            assert routes_after==routes_before,(routes_before,routes_after)
+        finally:
+            frappe.destroy()
 '''.replace('__CASES__', repr(json.dumps(cases, ensure_ascii=False, sort_keys=True)))
     result = subprocess.run(
         ['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],
