@@ -107,3 +107,23 @@ docker compose -f infra/compose.validation.yml up -d
 UI、生产发布、真实模型自主选择 ERP 工具、多企业 SaaS、Runtime 容器级租户隔离、企业开通流程、制造库存/账务链都未完成。开发 skills 只核验了固定 API、路径及对应运行测试，没有宣称经过独立 Agent 压力测试。
 
 官方依据：[Frappe v15.118.0 API](https://github.com/frappe/frappe/blob/v15.118.0/frappe/api/v2.py)、[字段权限](https://github.com/frappe/frappe/blob/v15.118.0/frappe/model/meta.py)、[MCP Python v1.26.0](https://github.com/modelcontextprotocol/python-sdk/tree/v1.26.0)、[DSH 固定 bridge](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/mcp/mcp-client/README.md)。
+
+## 附录：2026-08-31 T0.2 make 方法与企业供料委外链发现
+
+本次只在既有 `dsherp-validation` alpha Site 中导入已安装 callable、读取签名/源码，并做一次受控的 mapper dry-run。运行时 `bench version` 为 ERPNext `15.119.3`、Frappe `15.118.0`。这里区分已导入的接口、实际 dry-run 和已提交业务交易；本节**不**证明任何制造链已经运行。
+
+| 路由 | 安装的完整导入路径 | `inspect.signature` | 安装源码 |
+| --- | --- | --- | --- |
+| Sales Order → Delivery Note | `erpnext.selling.doctype.sales_order.sales_order.make_delivery_note` | `(source_name, target_doc=None, kwargs=None)` | `selling/doctype/sales_order/sales_order.py:960-1114` |
+| Work Order → Material Transfer for Manufacture Stock Entry | `erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry` | `(work_order_id: str, purpose: str, qty: float \| None = None, target_warehouse: str \| None = None, source_stock_entry: str \| None = None)` | `manufacturing/doctype/work_order/work_order.py:1578-1630` |
+| Work Order → Manufacture Stock Entry | 同一 `make_stock_entry` | 同上；由 `purpose` 区分 | 同上 |
+| Purchase Order → Purchase Receipt | `erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_receipt` | `(source_name, target_doc=None, args=None)` | `buying/doctype/purchase_order/purchase_order.py:729-789` |
+| subcontracted Purchase Order → Subcontracting Order | `erpnext.buying.doctype.purchase_order.purchase_order.make_subcontracting_order` | `(source_name, target_doc=None, save=False, submit=False, notify=False)` | `buying/doctype/purchase_order/purchase_order.py:934-958` |
+| Subcontracting Order → Send to Subcontractor Stock Entry | `erpnext.controllers.subcontracting_controller.make_rm_stock_entry` | `(subcontract_order, rm_items=None, order_doctype='Subcontracting Order', target_doc=None)` | `controllers/subcontracting_controller.py:1279-1383` |
+| Subcontracting Order → Subcontracting Receipt | `erpnext.subcontracting.doctype.subcontracting_order.subcontracting_order.make_subcontracting_receipt` | `(source_name, target_doc=None)` | `subcontracting/doctype/subcontracting_order/subcontracting_order.py:325-326` |
+
+安装源码给出的企业供料加工序列是：已提交且 `is_subcontracted=1` 的 Purchase Order 经 `make_subcontracting_order(..., save=False, submit=False, notify=False)` 生成 Subcontracting Order；再以 `make_rm_stock_entry(sco_name, rm_items=None, order_doctype='Subcontracting Order', target_doc=None)` 生成 `purpose='Send to Subcontractor'` 的供料 Stock Entry；最后以 `make_subcontracting_receipt(source_name, target_doc=None)` 生成 Subcontracting Receipt。方法返回的草稿不是保存或提交；上述链条没有在本次任务中执行。
+
+唯一 dry-run 实际调用安装的 Sales Order → Delivery Note mapper，源单为已有但未输出名称的草稿 Sales Order（`docstatus=0`）。输出为确定性 `ValidationError`：源 Sales Order 是草稿而 mapper 要求 `docstatus=1`。因此**没有生成成功草稿**，更没有写入、提交或取消任何单据。临时脚本在 `finally` 执行数据库 rollback；`Delivery Note`、`Stock Entry`、`Purchase Receipt`、`Subcontracting Order`、`Subcontracting Receipt` 的计数在调用前和 rollback 后均为 `0`，`zero_residual_writes=true`。
+
+剩余边界：T0.2 没有成功 mapped-doc 输出、没有提交 Sales Order/Work Order/Purchase Order/Subcontracting Order，也没有运行库存、供料、委外收货或账务；成功草稿和完整企业供料链留待后续 Phase 2 集成验证。
