@@ -31,7 +31,7 @@ def _provision(site, *arguments):
     return json.loads(result.stdout)
 
 
-def _read_policy_rows(site, service, targets=None):
+def _read_policy_rows(site, service):
     script = r'''
 import json, os, frappe
 os.chdir('/home/frappe/frappe-bench/sites')
@@ -40,7 +40,6 @@ frappe.connect()
 try:
     rows = frappe.get_all(
         'DS Doctype Policy',
-        filters={'target_doctype': ['in', __TARGETS__]} if __TARGETS__ else {},
         fields=['target_doctype', 'enabled', 'allow_read', 'allow_create', 'allow_update',
                 'allow_submit', 'allow_cancel', 'allow_fill', 'company_scope'],
         order_by='target_doctype asc',
@@ -55,7 +54,7 @@ try:
     print(json.dumps(rows, ensure_ascii=False, sort_keys=True))
 finally:
     frappe.destroy()
-'''.replace('__SITE__', repr(site)).replace('__TARGETS__', repr(targets or []))
+'''.replace('__SITE__', repr(site))
     result = subprocess.run(
         [*COMPOSE, "exec", "-T", service, "/home/frappe/frappe-bench/env/bin/python", "-"],
         cwd=ROOT,
@@ -181,40 +180,113 @@ EXPECTED_MANUFACTURING_ROWS = [
     },
 ]
 
-BASE_TARGETS = ["Customer", "Item", "Sales Order"]
-MANUFACTURING_TARGETS = ["BOM", "Warehouse", "Bin", "Work Order", "Stock Entry"]
 EXPECTED_ALL_ROWS = sorted(
     [*EXPECTED_ROWS, *EXPECTED_MANUFACTURING_ROWS],
     key=lambda row: row["target_doctype"].casefold(),
 )
 
 
+def test_policy_readback_does_not_hide_an_unexpected_extra_row():
+    site = "dsherp-beta.localhost"
+    service = "beta-backend"
+    _provision(site)
+    create_script = r'''
+import os, frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-beta.localhost')
+frappe.connect()
+try:
+    assert not frappe.db.exists('DS Doctype Policy', 'BOM')
+    frappe.get_doc({
+        'doctype': 'DS Doctype Policy',
+        'target_doctype': 'BOM',
+        'enabled': 1,
+        'allow_read': 1,
+        'allow_create': 0,
+        'allow_update': 0,
+        'allow_submit': 0,
+        'allow_cancel': 0,
+        'allow_fill': 0,
+        'company_scope': None,
+        'routes': [],
+    }).insert(ignore_permissions=True)
+    frappe.db.commit()
+finally:
+    frappe.destroy()
+'''
+    delete_script = r'''
+import os, frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-beta.localhost')
+frappe.connect()
+try:
+    if frappe.db.exists('DS Doctype Policy', 'BOM'):
+        frappe.delete_doc('DS Doctype Policy', 'BOM', ignore_permissions=True)
+        frappe.db.commit()
+finally:
+    frappe.destroy()
+'''
+    create = subprocess.run(
+        [*COMPOSE, "exec", "-T", service, "/home/frappe/frappe-bench/env/bin/python", "-"],
+        cwd=ROOT,
+        input=create_script,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert create.returncode == 0, create.stderr
+    try:
+        assert _read_policy_rows(site, service) == sorted(
+            [*EXPECTED_ROWS, EXPECTED_MANUFACTURING_ROWS[0]],
+            key=lambda row: row["target_doctype"].casefold(),
+        )
+    finally:
+        delete = subprocess.run(
+            [*COMPOSE, "exec", "-T", service, "/home/frappe/frappe-bench/env/bin/python", "-"],
+            cwd=ROOT,
+            input=delete_script,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        assert delete.returncode == 0, delete.stderr
+
+
 @pytest.mark.parametrize(("site", "service"), SITES)
 def test_policy_seed_creates_or_verifies_exact_legacy_rows(site, service):
     result = _provision(site)
+    expected_rows = (
+        EXPECTED_ALL_ROWS if site == "dsherp-validation.localhost" else EXPECTED_ROWS
+    )
 
     assert result == {
         "site": site,
         "policies": EXPECTED_ROWS,
     }
-    assert _read_policy_rows(site, service, BASE_TARGETS) == EXPECTED_ROWS
+    assert _read_policy_rows(site, service) == expected_rows
 
 
 @pytest.mark.parametrize(("site", "service"), SITES)
 def test_policy_seed_second_run_is_idempotent(site, service):
     first_result = _provision(site)
-    before = _read_policy_rows(site, service, BASE_TARGETS)
+    expected_rows = (
+        EXPECTED_ALL_ROWS if site == "dsherp-validation.localhost" else EXPECTED_ROWS
+    )
+    before = _read_policy_rows(site, service)
     second_result = _provision(site)
-    after = _read_policy_rows(site, service, BASE_TARGETS)
+    after = _read_policy_rows(site, service)
 
     assert first_result == second_result
-    assert before == after == EXPECTED_ROWS
+    assert before == after == expected_rows
 
 
 @pytest.mark.parametrize(("site", "service"), SITES)
 def test_policy_seed_fast_fails_on_conflicting_governance(site, service):
     _provision(site)
     result = _provision(site, "--verify-conflict")
+    expected_rows = (
+        EXPECTED_ALL_ROWS if site == "dsherp-validation.localhost" else EXPECTED_ROWS
+    )
 
     assert result == {
         "site": site,
@@ -222,7 +294,7 @@ def test_policy_seed_fast_fails_on_conflicting_governance(site, service):
         "conflict": "Item.allow_update",
         "baseline": EXPECTED_ROWS,
     }
-    assert _read_policy_rows(site, service, BASE_TARGETS) == EXPECTED_ROWS
+    assert _read_policy_rows(site, service) == expected_rows
 
 
 def test_manufacturing_policy_set_provisions_exact_alpha_rows_and_routes():

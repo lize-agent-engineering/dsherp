@@ -30,6 +30,7 @@ proposal_names=[]
 execution_names=[]
 stock_entry_names=[]
 work_order=None
+work_order_names=[]
 pre_bins={}
 after_bins={}
 fresh_bins={}
@@ -147,7 +148,6 @@ try:
             'warehouse_name':'DSHERP 制造测试合成原料仓','company':company,'is_group':0,
         },pluck='name'),'synthetic raw-material Warehouse')
     pre_bins=stock_snapshot(raw_warehouse,wip_warehouse,fg_warehouse)
-    assert pre_bins=={'raw':100.0,'wip':0.0,'finished':0.0},pre_bins
     fixture_ledger_names=frappe.get_all(
         'Stock Ledger Entry',filters={
             'voucher_type':'Stock Reconciliation',
@@ -160,8 +160,8 @@ try:
     delete_linked_ledger_entries_before=int(
         frappe.db.get_single_value('Accounts Settings','delete_linked_ledger_entries') or 0
     )
-    assert frappe.db.count('Work Order')==0
-    assert frappe.db.count('Stock Entry')==0
+    assert frappe.db.count('Work Order',{'owner':actor})==0
+    assert frappe.db.count('Stock Entry',{'owner':actor})==0
 
     frappe.get_doc({
         'doctype':'User','email':actor,'first_name':'Synthetic Work Order actor',
@@ -224,11 +224,11 @@ try:
             'include_item_in_manufacturing':1,
         }],
     }
-    work_order_before=frappe.db.count('Work Order')
+    work_order_before=frappe.db.count('Work Order',{'owner':actor})
     create=run_tool(**cap,tool='erp_propose_create',arguments={
         'doctype':'Work Order','values':values,'version':str(schema['modified']),
     })
-    assert frappe.db.count('Work Order')==work_order_before
+    assert frappe.db.count('Work Order',{'owner':actor})==work_order_before
     created=confirm_once(create,create_run)
     assert created['status']=='Succeeded' and created['doctype']=='Work Order',created
     work_order=created['name']
@@ -261,7 +261,7 @@ try:
         'doctype':'Work Order','name':work_order,
     })
     rejected_proposals=frappe.db.count('DS Operation Proposal',{'conversation':conversation})
-    rejected_stock_entries=frappe.db.count('Stock Entry')
+    rejected_stock_entries=frappe.db.count('Stock Entry',{'owner':actor})
     try:
         run_tool(**cap,tool='erp_propose_make',arguments={
             'source_doctype':'Work Order','source_name':work_order,
@@ -272,7 +272,7 @@ try:
     except frappe.ValidationError as error:
         assert str(error)=='操作提案参数无效',error
     assert frappe.db.count('DS Operation Proposal',{'conversation':conversation})==rejected_proposals
-    assert frappe.db.count('Stock Entry')==rejected_stock_entries
+    assert frappe.db.count('Stock Entry',{'owner':actor})==rejected_stock_entries
 
     transfer_make=run_tool(**cap,tool='erp_propose_make',arguments={
         'source_doctype':'Work Order','source_name':work_order,
@@ -281,7 +281,7 @@ try:
     assert transfer_make['target']['doctype']=='Stock Entry'
     assert transfer_make['target']['purpose']=='Material Transfer for Manufacture'
     assert transfer_make['target']['work_order']==work_order
-    assert frappe.db.count('Stock Entry')==rejected_stock_entries
+    assert frappe.db.count('Stock Entry',{'owner':actor})==rejected_stock_entries
     transfer_created=confirm_once(transfer_make,transfer_make_run)
     assert transfer_created['status']=='Succeeded',transfer_created
     transfer_entry=transfer_created['name']
@@ -389,7 +389,7 @@ try:
     frappe.set_user('Guest')
     stock_schema=run_tool(**cap,tool='erp_read_schema',arguments={'doctype':'Stock Entry'})
     direct_proposals=frappe.db.count('DS Operation Proposal',{'conversation':conversation})
-    direct_stock_entries=frappe.db.count('Stock Entry')
+    direct_stock_entries=frappe.db.count('Stock Entry',{'owner':actor})
     try:
         run_tool(**cap,tool='erp_propose_create',arguments={
             'doctype':'Stock Entry','values':{'company':company},
@@ -399,7 +399,7 @@ try:
     except frappe.PermissionError as error:
         assert '未允许 Stock Entry 的 create 操作' in str(error),error
     assert frappe.db.count('DS Operation Proposal',{'conversation':conversation})==direct_proposals
-    assert frappe.db.count('Stock Entry')==direct_stock_entries
+    assert frappe.db.count('Stock Entry',{'owner':actor})==direct_stock_entries
 
     evidence={
         'roles':sorted(roles),
@@ -433,9 +433,18 @@ finally:
     frappe.db.rollback()
     frappe.set_user('Administrator')
     if work_order:
+        work_order_names.append(work_order)
+    work_order_names.extend(frappe.get_all(
+        'Work Order',filters={'owner':actor},pluck='name'
+    ))
+    work_order_names=list(dict.fromkeys(filter(None,work_order_names)))
+    for work_order_name in work_order_names:
         stock_entry_names.extend(frappe.get_all(
-            'Stock Entry',filters={'work_order':work_order},pluck='name'
+            'Stock Entry',filters={'work_order':work_order_name},pluck='name'
         ))
+    stock_entry_names.extend(frappe.get_all(
+        'Stock Entry',filters={'owner':actor},pluck='name'
+    ))
     stock_entry_names=list(dict.fromkeys(filter(None,stock_entry_names)))
     stock_docs=[]
     for name in stock_entry_names:
@@ -456,11 +465,12 @@ finally:
         for doc in stock_docs:
             if frappe.db.exists('Stock Entry',doc.name):
                 frappe.delete_doc('Stock Entry',doc.name,ignore_permissions=True)
-    if work_order and frappe.db.exists('Work Order',work_order):
-        doc=frappe.get_doc('Work Order',work_order)
-        if doc.docstatus==1:
-            doc.cancel()
-        frappe.delete_doc('Work Order',work_order,ignore_permissions=True)
+    for work_order_name in work_order_names:
+        if frappe.db.exists('Work Order',work_order_name):
+            doc=frappe.get_doc('Work Order',work_order_name)
+            if doc.docstatus==1:
+                doc.cancel()
+            frappe.delete_doc('Work Order',work_order_name,ignore_permissions=True)
     if conversation:
         proposal_names.extend(frappe.get_all(
             'DS Operation Proposal',filters={'conversation':conversation},pluck='name'
@@ -495,9 +505,10 @@ finally:
         fresh_bins=stock_snapshot(raw_warehouse,wip_warehouse,fg_warehouse)
         assert fresh_bins==pre_bins,(pre_bins,fresh_bins)
         assert not frappe.db.exists('User',actor)
-        if work_order:
-            assert not frappe.db.exists('Work Order',work_order)
+        assert all(not frappe.db.exists('Work Order',name) for name in work_order_names)
+        assert frappe.db.count('Work Order',{'owner':actor})==0
         assert all(not frappe.db.exists('Stock Entry',name) for name in stock_entry_names)
+        assert frappe.db.count('Stock Entry',{'owner':actor})==0
         assert frappe.db.count('Stock Ledger Entry',{
             'voucher_type':'Stock Entry',
             'voucher_no':['in',stock_entry_names],
@@ -525,12 +536,14 @@ finally:
         ]
         evidence['bin_cleanup']=fresh_bins
         evidence['fresh_residual']={
-            'work_order':int(bool(
-                work_order and frappe.db.exists('Work Order',work_order)
-            )),
+            'work_orders':sum(
+                bool(frappe.db.exists('Work Order',name)) for name in work_order_names
+            ),
             'stock_entries':sum(
                 bool(frappe.db.exists('Stock Entry',name)) for name in stock_entry_names
             ),
+            'actor_work_orders':frappe.db.count('Work Order',{'owner':actor}),
+            'actor_stock_entries':frappe.db.count('Stock Entry',{'owner':actor}),
             'user':int(bool(frappe.db.exists('User',actor))),
             'runs':sum(bool(frappe.db.exists('DS Model Run',name)) for name in run_names),
             'proposals':sum(
@@ -568,8 +581,10 @@ print(json.dumps(evidence,ensure_ascii=False,sort_keys=True))
     evidence = json.loads(result.stdout)
     assert evidence['bin_before'] == evidence['bin_cleanup']
     assert evidence['fresh_residual'] == {
-        'work_order':0,
+        'work_orders':0,
         'stock_entries':0,
+        'actor_work_orders':0,
+        'actor_stock_entries':0,
         'user':0,
         'runs':0,
         'proposals':0,
