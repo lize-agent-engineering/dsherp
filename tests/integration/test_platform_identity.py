@@ -171,14 +171,24 @@ from dsherp_platform.api import read_record,read_schema
 actor='platform-supplier-'+uuid.uuid4().hex+'@example.invalid'
 try:
     frappe.set_user('Administrator')
-    assert not frappe.db.exists('DS Doctype Policy','Supplier')
+    policy=frappe.get_doc('DS Doctype Policy','Supplier')
+    assert {
+        'enabled':policy.enabled,
+        'allow_read':policy.allow_read,
+        'allow_create':policy.allow_create,
+        'allow_update':policy.allow_update,
+        'allow_submit':policy.allow_submit,
+        'allow_cancel':policy.allow_cancel,
+        'allow_fill':policy.allow_fill,
+        'routes':len(policy.routes),
+    }=={
+        'enabled':1,'allow_read':1,'allow_create':1,'allow_update':1,
+        'allow_submit':0,'allow_cancel':0,'allow_fill':0,'routes':0,
+    }
     native=frappe.db.get_value('DocPerm',{'parent':'Supplier','role':'Purchase Master Manager'},'read')
     assert native,'Supplier native read permission fixture is missing'
     frappe.get_doc({'doctype':'User','email':actor,'first_name':'Platform Supplier read','enabled':1,
         'send_welcome_email':0,'roles':[{'role':'Purchase Master Manager'}]}).insert()
-    policy=frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':'Supplier','enabled':1,
-        'allow_read':1,'allow_create':0,'allow_update':0,'allow_submit':0,'allow_cancel':0,
-        'allow_fill':0,'routes':[]}).insert()
     supplier=frappe.get_doc('Supplier','DSHERP 制造测试合成供应商')
     calls=[]
 
