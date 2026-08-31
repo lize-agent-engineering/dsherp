@@ -1,8 +1,10 @@
-"""Real alpha provisioning coverage for the fixed legacy DocType policies."""
+"""Real three-Site provisioning coverage for the fixed legacy DocType policies."""
 import json
 from pathlib import Path
 import subprocess
 import sys
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -10,9 +12,16 @@ COMPOSE = ["docker", "compose", "-f", "infra/compose.validation.yml"]
 PROVISIONER = ROOT / "infra" / "provision_alpha_doctype_policies.py"
 
 
-def _provision(*arguments):
+SITES = [
+    ("dsherp-validation.localhost", "backend"),
+    ("dsherp-beta.localhost", "beta-backend"),
+    ("dsherp-daily.localhost", "backend"),
+]
+
+
+def _provision(site, *arguments):
     result = subprocess.run(
-        [sys.executable, str(PROVISIONER), *arguments],
+        [sys.executable, str(PROVISIONER), "--site", site, *arguments],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -22,16 +31,15 @@ def _provision(*arguments):
     return json.loads(result.stdout)
 
 
-def _read_policy_rows():
+def _read_policy_rows(site, service):
     script = r'''
 import json, os, frappe
 os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost')
+frappe.init(site=__SITE__)
 frappe.connect()
 try:
     rows = frappe.get_all(
         'DS Doctype Policy',
-        filters={'target_doctype': ['in', ['Item', 'Customer', 'Sales Order']]},
         fields=['target_doctype', 'enabled', 'allow_read', 'allow_create', 'allow_update',
                 'allow_submit', 'allow_cancel', 'allow_fill', 'company_scope'],
         order_by='target_doctype asc',
@@ -46,9 +54,9 @@ try:
     print(json.dumps(rows, ensure_ascii=False, sort_keys=True))
 finally:
     frappe.destroy()
-'''
+'''.replace('__SITE__', repr(site))
     result = subprocess.run(
-        [*COMPOSE, "exec", "-T", "backend", "/home/frappe/frappe-bench/env/bin/python", "-"],
+        [*COMPOSE, "exec", "-T", service, "/home/frappe/frappe-bench/env/bin/python", "-"],
         cwd=ROOT,
         input=script,
         text=True,
@@ -99,34 +107,60 @@ EXPECTED_ROWS = [
 ]
 
 
-def test_alpha_policy_seed_creates_exact_legacy_rows():
-    result = _provision()
+@pytest.mark.parametrize(("site", "service"), SITES)
+def test_policy_seed_creates_or_verifies_exact_legacy_rows(site, service):
+    result = _provision(site)
 
     assert result == {
-        "site": "dsherp-validation.localhost",
+        "site": site,
         "policies": EXPECTED_ROWS,
     }
-    assert _read_policy_rows() == EXPECTED_ROWS
+    assert _read_policy_rows(site, service) == EXPECTED_ROWS
 
 
-def test_alpha_policy_seed_second_run_is_idempotent():
-    first_result = _provision()
-    before = _read_policy_rows()
-    second_result = _provision()
-    after = _read_policy_rows()
+@pytest.mark.parametrize(("site", "service"), SITES)
+def test_policy_seed_second_run_is_idempotent(site, service):
+    first_result = _provision(site)
+    before = _read_policy_rows(site, service)
+    second_result = _provision(site)
+    after = _read_policy_rows(site, service)
 
     assert first_result == second_result
     assert before == after == EXPECTED_ROWS
 
 
-def test_alpha_policy_seed_fast_fails_on_conflicting_governance():
-    _provision()
-    result = _provision("--verify-conflict")
+@pytest.mark.parametrize(("site", "service"), SITES)
+def test_policy_seed_fast_fails_on_conflicting_governance(site, service):
+    _provision(site)
+    result = _provision(site, "--verify-conflict")
 
     assert result == {
-        "site": "dsherp-validation.localhost",
+        "site": site,
         "mode": "conflict_rollback",
         "conflict": "Item.allow_update",
         "baseline": EXPECTED_ROWS,
     }
-    assert _read_policy_rows() == EXPECTED_ROWS
+    assert _read_policy_rows(site, service) == EXPECTED_ROWS
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--site", "dsherp-unknown.localhost"],
+        ["--site", "http://daily.localhost:18086"],
+        ["--service", "backend"],
+        ["--user", "Administrator"],
+        ["--method", "GET"],
+    ],
+)
+def test_policy_seed_rejects_non_allowlisted_control_plane_selectors(arguments):
+    result = subprocess.run(
+        [sys.executable, str(PROVISIONER), *arguments],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert result.stdout == ""

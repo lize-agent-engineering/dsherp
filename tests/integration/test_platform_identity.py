@@ -66,10 +66,10 @@ def test_membership_read_uses_distinct_business_users_and_sites():
             response=client.get('/api/method/dsherp_platform.api.read_record',params={'enterprise':enterprise,'doctype':'Item','name':name})
             assert response.status_code==200
             assert response.json()['message']['name']==name
-        # Daily policy/schema synchronization is explicitly deferred to T5.
         response=client.get('/api/method/dsherp_platform.api.read_record',params={
             'enterprise':'daily','doctype':'Item','name':'DAILY-AGENT-ITEM'})
-        assert response.status_code==403
+        assert response.status_code==200,response.text
+        assert response.json()['message']['name']=='DAILY-AGENT-ITEM'
         response=client.get('/api/method/dsherp_platform.api.read_record',params={'enterprise':'beta','doctype':'Item','name':'DSHERP-TEST-ITEM'})
         assert response.status_code!=200
 

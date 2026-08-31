@@ -1,4 +1,5 @@
-"""Provision the fixed legacy DocType policies on the synthetic alpha Site."""
+"""Provision the fixed legacy DocType policies on an allowlisted synthetic Site."""
+import argparse
 import json
 from pathlib import Path
 import subprocess
@@ -7,6 +8,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ["docker", "compose", "-f", "infra/compose.validation.yml"]
+SITE_SERVICES = {
+    "dsherp-validation.localhost": "backend",
+    "dsherp-beta.localhost": "beta-backend",
+    "dsherp-daily.localhost": "backend",
+}
 
 SITE_SCRIPT = r'''
 import json
@@ -15,7 +21,6 @@ import os
 import frappe
 
 
-SITE = 'dsherp-validation.localhost'
 RUN_MODE = globals().get('RUN_MODE', 'provision')
 POLICIES = [
     {
@@ -139,7 +144,7 @@ try:
         frappe.db.commit()
         result = {'site': SITE, 'policies': policies}
     else:
-        raise RuntimeError('Unsupported alpha policy provisioning mode: ' + RUN_MODE)
+        raise RuntimeError('Unsupported policy provisioning mode: ' + RUN_MODE)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
 except Exception:
     frappe.db.rollback()
@@ -150,17 +155,21 @@ finally:
 
 
 def main():
-    arguments = sys.argv[1:]
-    if not arguments:
-        mode = "provision"
-    elif arguments == ["--verify-conflict"]:
-        mode = "verify-conflict"
-    else:
-        raise SystemExit("Usage: provision_alpha_doctype_policies.py [--verify-conflict]")
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--site",
+        choices=tuple(SITE_SERVICES),
+        default="dsherp-validation.localhost",
+    )
+    parser.add_argument("--verify-conflict", action="store_true")
+    arguments = parser.parse_args()
+    site = arguments.site
+    service = SITE_SERVICES[site]
+    mode = "verify-conflict" if arguments.verify_conflict else "provision"
     result = subprocess.run(
-        [*COMPOSE, "exec", "-T", "backend", "/home/frappe/frappe-bench/env/bin/python", "-"],
+        [*COMPOSE, "exec", "-T", service, "/home/frappe/frappe-bench/env/bin/python", "-"],
         cwd=ROOT,
-        input=f"RUN_MODE = {mode!r}\n" + SITE_SCRIPT,
+        input=f"SITE = {site!r}\nRUN_MODE = {mode!r}\n" + SITE_SCRIPT,
         text=True,
         capture_output=True,
         timeout=60,
