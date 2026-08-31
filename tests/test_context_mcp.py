@@ -66,10 +66,39 @@ def test_tools_send_only_bound_run_capability_and_named_arguments():
         assert {t.name for t in tools}=={'erp_read_schema','erp_read_record','erp_search_records'}
         assert all(not {'user','site','url','capability'} & set(t.inputSchema['properties']) for t in tools)
         assert all(t.inputSchema['properties']['doctype']=={'title':'Doctype','type':'string'} for t in tools)
+        search=next(tool for tool in tools if tool.name=='erp_search_records')
+        assert set(search.inputSchema['properties'])=={'doctype','query','filters','fields'}
+        assert search.inputSchema['required']==['doctype']
+        assert search.inputSchema['additionalProperties'] is False
+        assert search.inputSchema['properties']['filters']['anyOf']==[
+            {'additionalProperties':True,'type':'object'}, {'type':'null'},
+        ]
+        assert search.inputSchema['properties']['fields']['anyOf']==[
+            {'items':{'type':'string'},'type':'array'}, {'type':'null'},
+        ]
         result=asyncio.run(server.call_tool('erp_read_record',{'doctype':'Item','name':'SYNTHETIC-ITEM'}))
         assert 'SYNTHETIC-ITEM' in str(result)
-    assert calls==[('/api/method/dsherp_bridge.context_execution.run_tool',{
-        'run_id':'RUN-1','capability':'CAP-1','tool':'erp_read_record','arguments':{'doctype':'Item','name':'SYNTHETIC-ITEM'}})]
+        asyncio.run(server.call_tool('erp_search_records',{
+            'doctype':'Bin',
+            'filters':{'item_code':['in',['DSHERP-MFG-SYN-RM']]},
+            'fields':['item_code','warehouse','actual_qty','projected_qty'],
+        }))
+        with pytest.raises(Exception):
+            asyncio.run(server.call_tool('erp_search_records',{
+                'doctype':'Bin','filters':{},'fields':[],'site':'forged',
+            }))
+    assert calls==[
+        ('/api/method/dsherp_bridge.context_execution.run_tool',{
+            'run_id':'RUN-1','capability':'CAP-1','tool':'erp_read_record',
+            'arguments':{'doctype':'Item','name':'SYNTHETIC-ITEM'}}),
+        ('/api/method/dsherp_bridge.context_execution.run_tool',{
+            'run_id':'RUN-1','capability':'CAP-1','tool':'erp_search_records',
+            'arguments':{
+                'doctype':'Bin','query':'',
+                'filters':{'item_code':['in',['DSHERP-MFG-SYN-RM']]},
+                'fields':['item_code','warehouse','actual_qty','projected_qty'],
+            }}),
+    ]
 
 
 @pytest.mark.parametrize('status',[403,409,500])

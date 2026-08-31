@@ -15,7 +15,7 @@ from dsherp_bridge import context_permissions
 
 TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
        'erp_read_record':(erp.read_record,{'doctype','name'}),
-       'erp_search_records':(erp.search_records,{'doctype','query'})}
+       'erp_search_records':(erp.search_records,{'doctype','query','filters','fields'})}
 
 
 @contextmanager
@@ -41,7 +41,9 @@ def authorize_sources(sources):
             continue
         args=source['arguments'];doctype=args['doctype']
         schema={f['fieldname']:f for f in erp.read_schema(doctype)['fields']}
-        visible=set(schema)
+        visible=set(schema)|{'name','modified'}
+        if frappe.get_meta(doctype).is_submittable:
+            visible.add('docstatus')
         if set(source['fields'])-visible:
             raise frappe.PermissionError('历史结果的字段权限已改变')
         for table,columns in source.get('child_fields',{}).items():
@@ -209,9 +211,15 @@ def run_tool(run_id,capability,tool,arguments):
             return propose(run.conversation,**arguments,grant=run.platform_grant,model_run=run.name)
     if tool not in TOOLS:frappe.throw('未知工具')
     if isinstance(arguments,str):arguments=json.loads(arguments)
-    if tool=='erp_search_records' and isinstance(arguments,dict):arguments={'query':'',**arguments}
+    if tool=='erp_search_records' and isinstance(arguments,dict):
+        if (not set(arguments)<={'doctype','query','filters','fields'}
+            or not isinstance(arguments.get('doctype'),str)
+            or ('query' in arguments and not isinstance(arguments['query'],str))):
+            frappe.throw('工具参数无效')
+        arguments={'query':'','filters':None,'fields':None,**arguments}
     function,keys=TOOLS[tool]
-    if not isinstance(arguments,dict) or set(arguments)!=keys or not all(isinstance(v,str) for v in arguments.values()):
+    if (not isinstance(arguments,dict) or set(arguments)!=keys
+        or (tool!='erp_search_records' and not all(isinstance(v,str) for v in arguments.values()))):
         frappe.throw('工具参数无效')
     with _actor(run):
         context_permissions.require_revision(run)
@@ -224,9 +232,13 @@ def run_tool(run_id,capability,tool,arguments):
             records=[result['name']]
         else:
             records=[r['name'] for r in result]
-            title=frappe.get_meta(arguments['doctype']).title_field
-            visible={f['fieldname'] for f in erp.read_schema(arguments['doctype'])['fields']}
-            if title in visible:fields=[title]
+            if result:
+                fields=list(result[0])
+            elif arguments['filters'] is not None:
+                fields=['name','modified',*(field for field in (arguments['fields'] or [])
+                    if field not in ('name','modified'))]
+            else:
+                fields=['name','modified']
         source={'tool':tool,'arguments':arguments,'fields':fields,'records':records}
         if tool=='erp_read_schema':
             source['child_fields']={field['fieldname']:[child['fieldname'] for child in field['fields']] for field in result['fields'] if 'fields' in field}

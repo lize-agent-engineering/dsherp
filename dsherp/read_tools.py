@@ -18,7 +18,13 @@ def create_read_server(invoke, name):
         return invoke('erp_read_record',doctype=doctype,name=name)
 
     @server.tool(annotations=annotations)
-    def erp_search_records(doctype: str,query: str='') -> list:
-        """Find up to 20 permitted record names; read records for details."""
-        return invoke('erp_search_records',doctype=doctype,query=query)
+    def erp_search_records(
+        doctype: str, query: str='', filters: dict | None=None,
+        fields: list[str] | None=None,
+    ) -> list:
+        """Search names, or batch-read up to 100 rows with restricted filters/fields."""
+        return invoke(
+            'erp_search_records',doctype=doctype,query=query,
+            filters=filters,fields=fields,
+        )
     return server

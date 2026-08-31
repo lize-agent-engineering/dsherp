@@ -1,5 +1,7 @@
 """Narrow read APIs. Frappe session identity and permissions remain authoritative."""
 
+import math
+
 import frappe
 
 
@@ -78,19 +80,82 @@ def read_record(doctype: str, name: str):
     }
 
 
+def _searchable_fields(meta):
+    permitted = _readable_fields(meta, frappe.session.user) | {'name', 'modified'}
+    if meta.is_submittable:
+        permitted.add('docstatus')
+    return permitted
+
+
+def _safe_filter_scalar(value):
+    return (value is None or type(value) in (str, int, bool)
+            or type(value) is float and math.isfinite(value))
+
+
+def _restricted_filters(filters, permitted):
+    if not isinstance(filters, dict) or not filters or len(filters) > 20:
+        frappe.throw('filters 必须是包含 1 至 20 个字段的对象')
+    if any(not isinstance(field, str) or field not in permitted for field in filters):
+        frappe.throw('filters 包含当前用户不可读的字段')
+    result = {}
+    for field, value in filters.items():
+        if _safe_filter_scalar(value):
+            result[field] = value
+            continue
+        if not isinstance(value, list) or len(value) != 2 or value[0] not in ('=', 'in'):
+            frappe.throw('filters 仅支持精确等于或 in')
+        operator, operand = value
+        if operator == '=':
+            if not _safe_filter_scalar(operand):
+                frappe.throw('等于筛选值必须是安全标量')
+        elif (not isinstance(operand, list) or not operand or len(operand) > 100
+              or not all(_safe_filter_scalar(item) for item in operand)):
+            frappe.throw('in 筛选必须包含 1 至 100 个安全标量')
+        result[field] = [operator, operand]
+    return result
+
+
+def _restricted_result_fields(fields, permitted):
+    if not isinstance(fields, list) or len(fields) > 20:
+        frappe.throw('fields 必须是最多 20 项的字段列表')
+    if (any(not isinstance(field, str) or field not in permitted for field in fields)
+            or len(set(fields)) != len(fields)):
+        frappe.throw('fields 包含重复项或当前用户不可读的字段')
+    return ['name', 'modified', *(
+        field for field in fields if field not in ('name', 'modified')
+    )]
+
+
 @frappe.whitelist(methods=["GET"])
-def search_records(doctype: str, query: str = ""):
+def search_records(doctype: str, query: str = "", filters=None, fields=None):
     _authorize(doctype)
     if not isinstance(query, str) or len(query) > 140:
-        frappe.throw("Search query must be at most 140 characters")
+        frappe.throw('query 必须是最多 140 个字符的文本')
     meta = frappe.get_meta(doctype)
+    permitted = _searchable_fields(meta)
+    if filters is not None:
+        if query:
+            frappe.throw('filters 批量读取不能同时使用 query')
+        restricted = _restricted_filters(filters, permitted)
+        selected = _restricted_result_fields([] if fields is None else fields, permitted)
+        return frappe.get_list(
+            doctype, filters=restricted, fields=selected,
+            order_by='name asc', page_length=100,
+        )
+    if fields is not None:
+        frappe.throw('fields 仅可与 filters 一起使用')
     title = meta.title_field
-    if not title or not meta.get_field(title):
-        frappe.throw("Business object has no valid title field")
-    permitted = set(meta.get_permitted_fieldnames(user=frappe.session.user, permission_type="read"))
-    filters = {"name": ["like", "%" + query + "%"]}
-    # Filtering unreadable fields would disclose their contents through matches.
-    if title in permitted:
-        filters[title] = ["like", "%" + query + "%"]
-    return frappe.get_list(doctype, or_filters=filters,
-                           fields=["name", "modified"], order_by="name asc", page_length=20)
+    if query:
+        if not title or not meta.get_field(title):
+            frappe.throw('业务对象没有可搜索的标题字段')
+        fuzzy = {'name':['like','%'+query+'%']}
+        # Filtering unreadable fields would disclose their contents through matches.
+        if title in permitted:
+            fuzzy[title]=['like','%'+query+'%']
+        return frappe.get_list(
+            doctype, or_filters=fuzzy, fields=['name','modified'],
+            order_by='name asc', page_length=20,
+        )
+    return frappe.get_list(
+        doctype, fields=['name','modified'], order_by='name asc', page_length=20,
+    )

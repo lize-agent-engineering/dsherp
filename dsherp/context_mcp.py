@@ -52,6 +52,7 @@ def create_server(client,run_id,capability,domain='query'):
             return invoke('erp_propose_configuration',package=package)
         return server
     server=create_read_server(invoke,'dsherp-context-'+domain)
+    _forbid_extra_tool_arguments(server,'erp_search_records')
     if domain=='operation':
         @server.tool(annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=False,idempotentHint=False))
         def erp_propose_update(doctype: str,name: str,values: dict,version: str) -> dict:
