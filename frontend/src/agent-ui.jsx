@@ -213,7 +213,7 @@ export function ToolChain({ events }) {
   const renderChain = () => (
     <div
       className="dsh-chain"
-      role="group"
+      role="dialog"
       aria-label="本轮 ERP 读取"
       tabIndex={-1}
       ref={chainRef}

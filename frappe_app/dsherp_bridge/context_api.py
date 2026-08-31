@@ -145,9 +145,11 @@ def _public(doc):
 
 def _summary(doc):
     # Reauthorize provenance before exposing even a title or timestamp.
-    _public(doc)
+    public=_public(doc)
+    pending_count=sum(item['status']=='Pending' for item in public['proposals']+public['configuration_confirmations'])
     return {'id':doc.name,'title':doc.title,'archived':bool(doc.archived),
-            'modified':str(doc.modified),'archived_at':str(doc.archived_at) if doc.archived_at else None}
+            'modified':str(doc.modified),'archived_at':str(doc.archived_at) if doc.archived_at else None,
+            'pending_count':pending_count}
 
 
 def _summaries(*, archived, query='', limit=None, offset=0):

@@ -85,6 +85,8 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
   const shell = useRef(null);
   const sending = useRef(false);
   const growing = useRef(false);
+  const railGeneration = useRef(0);
+  const sessionGeneration = useRef(0);
   // Async handlers must not read `selected`/`query` from a stale render
   // closure; the refs always carry the latest value.
   const selectedRef = useRef(initialSession);
@@ -108,51 +110,51 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
 
   // The rail lists live conversations only; archived ones live in Agent settings.
   async function loadSessions(nextPage = 1, nextQuery = query, append = false) {
+    const railTicket = append ? railGeneration.current : ++railGeneration.current;
     const result = await api("search_sessions", {
       query: nextQuery,
       page: nextPage,
       archived: 0,
     });
+    if (railTicket !== railGeneration.current) return;
     setSessions((old) =>
       append ? [...old, ...result.items.filter((item) => !old.some((row) => row.id === item.id))] : result.items,
     );
+    const counts = Object.fromEntries(result.items.map((item) => [item.id, item.pending_count ?? 0]));
+    setPendingBySession((old) => append ? { ...old, ...counts } : counts);
     setHasMore(Boolean(result.has_more));
     setPage(nextPage);
     if (append) return;
-    const target = selectedRef.current ?? result.items[0]?.id ?? null;
+    const current = selectedRef.current;
+    const target = result.items.some((item) => item.id === current)
+      ? current
+      : !nextQuery && current
+        ? current
+        : result.items[0]?.id ?? null;
     if (target) {
+      const sessionTicket = ++sessionGeneration.current;
       select(target);
-      setSession(await api("get_session", { session_id: target }));
-    } else setSession(null);
-  }
-  // Which sessions still hold something for the user is real server state, read
-  // from the existing pending endpoint rather than guessed from the open one.
-  async function countPending() {
-    const counts = {};
-    let next = 1;
-    let more = true;
-    while (more && next <= 5) {
-      const result = await api("list_pending", { page: next });
-      for (const item of result.items ?? []) counts[item.session_id] = (counts[item.session_id] ?? 0) + 1;
-      more = Boolean(result.has_more);
-      next += 1;
+      const loaded = await api("get_session", { session_id: target });
+      if (sessionTicket === sessionGeneration.current && selectedRef.current === target) setSession(loaded);
+    } else {
+      ++sessionGeneration.current;
+      setSession(null);
     }
-    return counts;
-  }
-  async function loadPending() {
-    setPendingBySession(await countPending());
   }
   // The rail's status dots advertise live server state, so the poll refreshes
   // them too: pending counts plus the first page of rows (later pages loaded
   // via "load more" are kept as they are). Returns an applier so the caller
   // can drop the result if the poll was cancelled meanwhile.
   async function refreshRail() {
-    const [counts, result] = await Promise.all([
-      countPending(),
-      api("search_sessions", { query: queryRef.current, page: 1, archived: 0 }),
-    ]);
+    const queryAtStart = queryRef.current;
+    const railTicket = railGeneration.current;
+    const result = await api("search_sessions", { query: queryAtStart, page: 1, archived: 0 });
     return () => {
-      setPendingBySession(counts);
+      if (railTicket !== railGeneration.current || queryAtStart !== queryRef.current) return;
+      setPendingBySession((old) => ({
+        ...old,
+        ...Object.fromEntries(result.items.map((item) => [item.id, item.pending_count ?? 0])),
+      }));
       setSessions((old) => [
         ...result.items,
         ...old.filter((row) => !result.items.some((item) => item.id === row.id)),
@@ -175,18 +177,14 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
     };
   }, [query]);
   useEffect(() => {
-    let live = true;
-    loadPending().catch((e) => live && setError(e.message));
-    return () => {
-      live = false;
-    };
-  }, [session?.id, api]);
-  useEffect(() => {
     if (!initialSession) return;
+    const ticket = ++sessionGeneration.current;
     select(initialSession);
     api("get_session", { session_id: initialSession })
-      .then(setSession)
-      .catch((e) => setError(e.message));
+      .then((loaded) => {
+        if (ticket === sessionGeneration.current && selectedRef.current === initialSession) setSession(loaded);
+      })
+      .catch((e) => ticket === sessionGeneration.current && setError(e.message));
   }, [initialSession]);
   useEffect(() => {
     if (!selected) return undefined;
@@ -240,11 +238,13 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
   }, []);
 
   async function choose(id) {
+    const ticket = ++sessionGeneration.current;
+    select(id);
     setBusy(true);
     setError("");
     try {
       const loaded = await api("get_session", { session_id: id });
-      select(id);
+      if (ticket !== sessionGeneration.current || selectedRef.current !== id) return;
       setSession(loaded);
       setMobileSessions(false);
       setAtBottom(true);
@@ -255,9 +255,9 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
         setSeen(next);
       }
     } catch (e) {
-      setError(e.message);
+      if (ticket === sessionGeneration.current) setError(e.message);
     } finally {
-      setBusy(false);
+      if (ticket === sessionGeneration.current) setBusy(false);
     }
   }
   async function growSessions() {
@@ -300,6 +300,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
     }
   }
   function fresh() {
+    ++sessionGeneration.current;
     select(null);
     setSession(null);
     setQuestion("");

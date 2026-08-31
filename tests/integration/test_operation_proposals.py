@@ -30,6 +30,11 @@ try:
     run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':item.name})
     proposal=run_tool(**cap,tool='erp_propose_update',arguments=args)
     assert proposal['status']=='Pending' and proposal['actor']==actor
+    from dsherp_bridge.context_api import search_sessions
+    frappe.set_user(actor)
+    summary=next(item for item in search_sessions(query='Tool proposals')['items'] if item['id']==conversation.name)
+    assert summary['pending_count']==1
+    frappe.set_user('Guest')
     assert frappe.db.get_value('Item',item.name,'item_name')==item.item_name
     assert 'confirm' not in proposal
     try:run_tool(**cap,tool='erp_propose_fill',arguments=args);raise AssertionError('non-form fill accepted')

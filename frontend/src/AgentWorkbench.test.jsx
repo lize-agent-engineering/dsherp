@@ -1,29 +1,21 @@
 // @vitest-environment jsdom
 import React from "react";
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import AgentWorkbench from "./AgentWorkbench.jsx";
 
-beforeAll(() => {
-  window.matchMedia = () => ({
-    matches: false,
-    addListener() {},
-    removeListener() {},
-    addEventListener() {},
-    removeEventListener() {},
-  });
-  global.ResizeObserver = class {
-    observe() {}
-    disconnect() {}
-  };
-});
 afterEach(() => {
+  vi.restoreAllMocks();
   cleanup();
   try {
     window.localStorage.clear();
   } catch {
     /* a jsdom without storage simply has nothing to clear */
   }
+});
+
+it("测试环境使用 jsdom 的页面 localStorage，不落到 Node 实验存储", () => {
+  expect(window.localStorage).toBeInstanceOf(window.Storage);
 });
 
 const context = {
@@ -136,10 +128,8 @@ it("待确认提案就地出现在产生它的那条消息下，标题右侧提�
   const api = apiFactory();
   api.mockImplementation(async (method, params) => {
     if (method === "search_sessions")
-      return { items: [{ id: "S-1", title: active.title, modified: "2026-08-29" }], has_more: false };
+      return { items: [{ id: "S-1", title: active.title, modified: "2026-08-29", pending_count: 1 }], has_more: false };
     if (method === "get_session") return { ...active, proposals: [proposal] };
-    if (method === "list_pending")
-      return { items: [{ id: "P-1", session_id: "S-1", kind: "operation", title: "销售订单 · submit", status: "Pending" }] };
     return { items: [] };
   });
   render(<AgentWorkbench api={api} initialSession="S-1" />);
@@ -457,7 +447,7 @@ it("工具链入口可访问名称包含可见文本，弹层可聚焦并能用 
   expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
   fireEvent.click(trigger);
-  const chain = await screen.findByRole("group", { name: "本轮 ERP 读取" });
+  const chain = await screen.findByRole("dialog", { name: "本轮 ERP 读取" });
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
   await waitFor(() => expect(document.activeElement).toBe(chain));
   fireEvent.keyDown(chain, { key: "Escape" });
@@ -521,6 +511,68 @@ it("切换会话后，上一会话在途的轮询响应不会覆盖新会话", a
   expect(screen.getByText("客户已核对")).toBeTruthy();
 });
 
+it("连续选择会话时，较慢的旧选择不会覆盖最后一次选择", async () => {
+  let releaseSlow;
+  let delayOther = false;
+  const slowOther = new Promise((resolve) => { releaseSlow = resolve; });
+  const api = vi.fn(async (method, params) => {
+    if (method === "search_sessions")
+      return {
+        items: [
+          { id: "S-1", title: active.title, modified: "2026-08-29 10:00:00" },
+          { id: "S-9", title: other.title, modified: "2026-08-28 10:00:00" },
+        ],
+        has_more: false,
+      };
+    if (method === "get_session") {
+      if (params.session_id === "S-9" && delayOther) return slowOther;
+      return params.session_id === "S-9" ? other : active;
+    }
+    return { items: [], has_more: false };
+  });
+  render(<AgentWorkbench api={api} />);
+  await screen.findByText("已核对");
+  delayOther = true;
+  fireEvent.click(within(rail()).getByRole("button", { name: "客户核对" }));
+  fireEvent.click(within(rail()).getByRole("button", { name: "今天的物料核对" }));
+  await waitFor(() =>
+    expect(api.mock.calls.filter((call) => call[0] === "get_session" && call[1].session_id === "S-1").length).toBeGreaterThan(1),
+  );
+  releaseSlow(other);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.getByText("已核对")).toBeTruthy();
+  expect(screen.queryByText("客户已核对")).toBeNull();
+});
+
+it("搜索请求乱序返回时，只展示最后一次搜索选中的会话", async () => {
+  let releaseSlow;
+  const slowSession = new Promise((resolve) => { releaseSlow = resolve; });
+  const api = vi.fn(async (method, params) => {
+    if (method === "search_sessions") {
+      if (params.query === "旧") return { items: [{ id: "S-old", title: "旧搜索" }], has_more: false };
+      if (params.query === "新") return { items: [{ id: "S-9", title: other.title }], has_more: false };
+      return { items: [{ id: "S-1", title: active.title }], has_more: false };
+    }
+    if (method === "get_session") {
+      if (params.session_id === "S-old") return slowSession;
+      return params.session_id === "S-9" ? other : active;
+    }
+    return { items: [], has_more: false };
+  });
+  render(<AgentWorkbench api={api} />);
+  await screen.findByText("已核对");
+  fireEvent.click(within(rail()).getByRole("button", { name: "新建会话" }));
+  const search = screen.getByRole("searchbox", { name: "搜索会话" });
+  fireEvent.change(search, { target: { value: "旧" } });
+  await waitFor(() => expect(api).toHaveBeenCalledWith("get_session", { session_id: "S-old" }));
+  fireEvent.change(search, { target: { value: "新" } });
+  expect(await screen.findByText("客户已核对")).toBeTruthy();
+  releaseSlow({ ...active, id: "S-old", messages: [{ ...active.messages[0], answer: "陈旧搜索结果" }] });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.queryByText("陈旧搜索结果")).toBeNull();
+  expect(screen.getByText("客户已核对")).toBeTruthy();
+});
+
 it("归档当前会话后不会把它重新打开，而是落到剩下的会话", async () => {
   let archivedNow = false;
   const api = vi.fn(async (method, params) => {
@@ -581,18 +633,17 @@ it("其他会话新出现的待确认在轮询后点亮橙点，不用切换会�
     if (method === "search_sessions")
       return {
         items: [
-          { id: "S-1", title: active.title, modified: "2026-08-29 10:00:00" },
-          { id: "S-9", title: other.title, modified: "2026-08-28 10:00:00" },
+          { id: "S-1", title: active.title, modified: "2026-08-29 10:00:00", pending_count: 0 },
+          { id: "S-9", title: other.title, modified: "2026-08-28 10:00:00", pending_count: pendingReady ? 1 : 0 },
         ],
         has_more: false,
       };
     if (method === "get_session") return active;
-    if (method === "list_pending")
-      return pendingReady ? { items: [{ session_id: "S-9" }], has_more: false } : { items: [], has_more: false };
     return { items: [], has_more: false };
   });
   render(<AgentWorkbench api={api} initialSession="S-1" pollInterval={40} />);
   await screen.findByText("已核对");
   pendingReady = true;
   expect(await within(rail()).findByRole("button", { name: "客户核对（需要确认）" })).toBeTruthy();
+  expect(api.mock.calls.some((call) => call[0] === "list_pending")).toBe(false);
 });
