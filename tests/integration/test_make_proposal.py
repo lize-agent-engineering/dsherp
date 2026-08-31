@@ -47,6 +47,7 @@ os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.
 from dsherp_bridge.context_execution import run_tool
 from dsherp_bridge.context_permissions import run_revision
 from dsherp_bridge.operations import confirm,get_proposal,verify_execution
+from erpnext.stock.doctype.delivery_note import delivery_note as delivery_note_module
 
 tag=uuid.uuid4().hex
 actor='make-'+tag+'@example.invalid'
@@ -54,6 +55,15 @@ route_name='sales_order_to_delivery_note'
 method_path='erpnext.selling.doctype.sales_order.sales_order.make_delivery_note'
 policy_name=None;routes_before=None;delivery_count_before=None;permission_setter=None
 order_name=None;conversation_names=[];run_names=[];proposal_names=[];target_names=[]
+delivery_note_class=delivery_note_module.DeliveryNote
+before_insert_was_local='before_insert' in delivery_note_class.__dict__
+before_insert_original=getattr(delivery_note_class,'before_insert',None)
+
+def restore_before_insert():
+    if before_insert_was_local:
+        delivery_note_class.before_insert=before_insert_original
+    elif 'before_insert' in delivery_note_class.__dict__:
+        delattr(delivery_note_class,'before_insert')
 
 def new_run():
     frappe.set_user(actor)
@@ -137,12 +147,47 @@ try:
     assert frappe.db.count('Delivery Note')==delivery_count_before
     assert failed['status']!='Unknown'
 
+    # Native insert lifecycle hooks run after the mapper was compared. A hook
+    # changing either a frozen scalar or frozen child value must roll back the
+    # target draft and record one deterministic failure.
+    def confirm_with_insert_drift(kind):
+        cap,hook_run=new_run();frappe.set_user('Guest')
+        read=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Sales Order','name':order_name})
+        hooked=run_tool(**cap,tool='erp_propose_make',arguments=make_arguments(str(read['modified'])))
+        proposal_names.append(hooked['id'])
+        assert hooked['target']['po_no']==changed.po_no
+        assert hooked['target']['items'][0]['description']
+        frappe.db.set_value('DS Model Run',hook_run,'status','Succeeded');frappe.db.commit()
+
+        def drift_after_mapper(self):
+            if before_insert_original is not None:before_insert_original(self)
+            if kind=='scalar':self.po_no='DSHERP-HOOK-SCALAR-'+tag
+            elif kind=='qty':self.items[0].qty=self.items[0].qty+1
+            else:self.items[0].warehouse='DSHERP 制造测试合成成品仓 - DVT'
+
+        delivery_note_class.before_insert=drift_after_mapper
+        try:
+            frappe.set_user(actor)
+            rejected=confirm(hooked['id'],hooked['digest'],uuid.uuid4().hex)
+        finally:
+            restore_before_insert()
+        assert rejected['status']=='Failed' and '保存后' in rejected['error'],rejected
+        assert rejected['status']!='Unknown'
+        assert frappe.db.count('DS Execution Record',{'proposal':hooked['id']})==1
+        assert frappe.db.count('Delivery Note')==delivery_count_before
+
+    confirm_with_insert_drift('scalar')
+    confirm_with_insert_drift('qty')
+    confirm_with_insert_drift('warehouse')
+
     # A fresh source read creates a control proposal whose frozen target is
     # inserted once under the mapped business user.
     cap,control_run=new_run();frappe.set_user('Guest')
     read=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Sales Order','name':order_name})
     control=run_tool(**cap,tool='erp_propose_make',arguments=make_arguments(str(read['modified'])))
     proposal_names.append(control['id'])
+    assert control['target']['installation_status'] is None
+    assert control['target']['title'] is None
     assert frappe.db.count('Delivery Note')==delivery_count_before
     frappe.db.set_value('DS Model Run',control_run,'status','Succeeded');frappe.db.commit()
     frappe.set_user(actor)
@@ -162,6 +207,15 @@ try:
     assert verified['execution']==succeeded and verified['observed']['name']==succeeded['name']
     assert verified['matches_proposal'] is True
     assert succeeded['values']['po_no']==changed.po_no
+    assert succeeded['values']['installation_status']=='Not Installed',succeeded['values']['installation_status']
+    assert succeeded['values']['title']==template.customer,succeeded['values']['title']
+
+    # Verification is measured against the frozen public proposal target. A
+    # later legitimate native edit is observable but no longer matches it.
+    saved.po_no='DSHERP-EXTERNAL-EDIT-'+tag;saved.save();frappe.db.commit()
+    externally_changed=verify_execution(control['id'])
+    assert externally_changed['observed']['values']['po_no']=='DSHERP-EXTERNAL-EDIT-'+tag
+    assert externally_changed['matches_proposal'] is False,externally_changed
 
     # Historical execution readback must be filtered again after native field
     # permission changes; immutable stored evidence itself is not rewritten.
@@ -184,7 +238,7 @@ try:
     stored_result=json.loads(frappe.db.get_value('DS Execution Record',{'proposal':control['id']},'result'))
     assert stored_result['values']['po_no']==changed.po_no,'immutable execution evidence was rewritten'
 finally:
-    frappe.db.rollback();frappe.set_user('Administrator')
+    restore_before_insert();frappe.db.rollback();frappe.set_user('Administrator')
     if permission_setter and frappe.db.exists('Property Setter',permission_setter):
         frappe.delete_doc('Property Setter',permission_setter,ignore_permissions=True)
         frappe.clear_cache(doctype='Delivery Note')
@@ -222,6 +276,8 @@ finally:
             assert not any(frappe.db.exists('Sales Order',name) for name in [order_name] if name)
             assert all(not frappe.db.exists('DS Conversation',name) for name in conversation_names)
             assert all(not frappe.db.exists('DS Model Run',name) for name in run_names)
+            assert ('before_insert' in delivery_note_class.__dict__)==before_insert_was_local
+            assert getattr(delivery_note_class,'before_insert',None) is before_insert_original
             if permission_setter:assert not frappe.db.exists('Property Setter',permission_setter)
         finally:frappe.destroy()
 '''

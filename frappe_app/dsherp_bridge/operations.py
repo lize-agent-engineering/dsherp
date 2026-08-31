@@ -110,7 +110,9 @@ def confirm(proposal_id, digest, request_id):
             saved = frappe.get_doc(doc.doctype, doc.name)
             saved.check_permission('read')
             if payload['action']=='make':
-                actual=_public_make_target(saved,_canonicalize_mapped_target(saved),user)
+                actual,matches=_make_target_values(saved,payload['target'],user)
+                if not matches:
+                    frappe.throw('保存后内容与确认内容不一致，已停止执行')
             else:
                 actual = _actual_values(saved,values)
                 if actual != values:
@@ -160,9 +162,9 @@ def verify_execution(proposal_id):
     doc=frappe.get_doc(proposal['doctype'],name)
     doc.check_permission('read')
     if proposal['action']=='make':
-        values=_public_make_target(doc,_canonicalize_mapped_target(doc),frappe.session.user)
+        values,matches=_make_target_values(doc,proposal['target'],frappe.session.user)
         result['observed']={'doctype':doc.doctype,'name':doc.name,'version':str(doc.modified),'values':values}
-        result['matches_proposal']=bool(execution and execution.get('status')=='Succeeded' and values==execution.get('values'))
+        result['matches_proposal']=bool(execution and execution.get('status')=='Succeeded' and matches)
         return result
     values={};matches=True
     for change in proposal['changes']:
@@ -250,6 +252,80 @@ def _public_make_target(doc,target,user):
             parenttype=doc.doctype,user=user,permission_type='read'))|{'doctype','docstatus','idx'}
         public[field]=[{key:item for key,item in row.items() if key in child_readable} for row in value]
     return public
+
+
+def _project_frozen_shape(current,frozen):
+    """Return current values in the frozen public shape and whether they match."""
+    if isinstance(frozen,dict):
+        if not isinstance(current,dict):return None,False
+        projected={};matches=True
+        for key,expected in frozen.items():
+            if key not in current:
+                projected[key]=None;matches=False;continue
+            value,exact=_project_frozen_shape(current[key],expected)
+            projected[key]=value;matches=matches and exact
+        return projected,matches
+    if isinstance(frozen,list):
+        if not isinstance(current,list):return [],False
+        matches=len(current)==len(frozen);projected=[]
+        for index,expected in enumerate(frozen):
+            if index>=len(current):
+                projected.append(None);matches=False;continue
+            value,exact=_project_frozen_shape(current[index],expected)
+            projected.append(value);matches=matches and exact
+        return projected,matches
+    value=json.loads(_json(current))
+    expected=json.loads(_json(frozen))
+    return value,_json(value)==_json(expected)
+
+
+def _make_confirmation_target(doc,target,user):
+    """Project fields the user could control; displayed native defaults are evidence only."""
+    def unset(value):
+        return value is None or value=='' or value==[]
+
+    def automatic(meta,container,fieldname):
+        control='set_'+fieldname+'_manually'
+        return bool(meta.get_field(control)) and not container.get(control)
+
+    writable=set(doc.meta.get_permitted_fieldnames(user=user,permission_type='write'))
+    levels=doc.get_permlevel_access('write')
+    writable.update(field.fieldname for field in doc.meta.fields
+                    if field.fieldtype=='Table' and field.permlevel in levels)
+    projected={key:value for key,value in target.items() if key in ('doctype','docstatus','idx')}
+    automatic_posting=not target.get('set_posting_time')
+    for field,value in target.items():
+        if field in ('doctype','docstatus','idx'):continue
+        definition=doc.meta.get_field(field)
+        if (unset(value) or not definition or field not in writable or definition.read_only or definition.hidden
+            or automatic(doc.meta,target,field)
+            or (automatic_posting and field in ('posting_date','posting_time'))):
+            continue
+        if definition.fieldtype!='Table':
+            projected[field]=value;continue
+        child=frappe.get_meta(definition.options)
+        child_writable=set(child.get_permitted_fieldnames(
+            parenttype=doc.doctype,user=user,permission_type='write'))
+        projected[field]=[]
+        for row in value:
+            public_row={key:item for key,item in row.items() if key in ('doctype','docstatus','idx')}
+            for key,item in row.items():
+                child_field=child.get_field(key)
+                if (not unset(item) and key in child_writable and child_field and not child_field.read_only
+                    and not automatic(child,row,key)
+                    and not child_field.hidden):
+                    public_row[key]=item
+            projected[field].append(public_row)
+    return projected
+
+
+def _make_target_values(doc,frozen,user):
+    expected=_public_make_target(doc,frozen,user)
+    current=_public_make_target(doc,_canonicalize_mapped_target(doc),user)
+    expected_confirmation=_make_confirmation_target(doc,expected,user)
+    current_confirmation=_make_confirmation_target(doc,current,user)
+    _,matches=_project_frozen_shape(current_confirmation,expected_confirmation)
+    return current,matches
 
 
 def propose_make(session_id,source_doctype,source_name,source_version,route,grant=None,model_run=None):
