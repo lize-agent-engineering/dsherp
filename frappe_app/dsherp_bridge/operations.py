@@ -23,17 +23,53 @@ _MAKE_INSERT_DERIVED_FIELDS={
         'amount','basic_amount','basic_rate','description','expense_account','item_group','item_name',
         'valuation_rate',
     },
-    'Subcontracting Order':{'supplied_items'},
     'Subcontracting Order Item':{'conversion_factor'},
-    'Subcontracting Receipt':{'represents_company','supplied_items','title'},
+    'Subcontracting Receipt':{'represents_company','title'},
     'Subcontracting Receipt Item':{
         'expense_account','received_qty','rm_cost_per_qty','rm_supp_cost','service_expense_account',
+    },
+    'Subcontracting Receipt Supplied Item':{
+        'amount','available_qty_for_consumption','cost_center','current_stock','expense_account',
     },
 }
 _MAKE_AUTOMATIC_POSTING_DOCTYPES={'Delivery Note','Purchase Receipt','Stock Entry','Subcontracting Receipt'}
 # Stock Entry insert normalizes only these mapped empty strings to None. They
 # remain present in the confirmation shape, so any non-empty warehouse drifts.
 _MAKE_EMPTY_NORMALIZED_FIELDS={'Stock Entry Detail':{'s_warehouse','t_warehouse'}}
+
+
+def _subcontracting_item_references(doc,frozen=None,bind_naming=False):
+    # supplied_items.reference_name points at the target item row. Allocate it
+    # without touching Series, then reuse the frozen reference on mapper rerun.
+    if frozen is None:
+        references=[frappe.generate_hash(length=10) for _row in doc.get('items')]
+    else:
+        references=[]
+        for row in frozen.get('supplied_items') or []:
+            reference=row.get('reference_name')
+            if reference and reference not in references:references.append(reference)
+        if len(references)!=len(doc.get('items')):
+            frappe.throw('委外供料行引用已变化，请重新提出操作')
+    for row,reference in zip(doc.get('items'),references):
+        row.name=reference
+        if bind_naming:
+            # Frappe names children after before_insert. This exact instance
+            # autoname keeps the frozen internal link without publishing name.
+            def keep_reference(row=row,reference=reference):row.name=reference
+            row.autoname=keep_reference
+
+
+def _prepare_subcontracting_supplied_items(doc,frozen=None):
+    from erpnext.controllers.subcontracting_controller import SubcontractingController
+    SubcontractingController.set_items_conversion_factor(doc)
+    _subcontracting_item_references(doc,frozen)
+    SubcontractingController.create_raw_materials_supplied(doc)
+
+
+_MAKE_TARGET_PREPARERS={
+    'Subcontracting Order':_prepare_subcontracting_supplied_items,
+    'Subcontracting Receipt':_prepare_subcontracting_supplied_items,
+}
 
 
 def _authorization_revision(user, grant=None):
@@ -100,6 +136,8 @@ def confirm(proposal_id, digest, request_id):
             if _mapped_target(source.name,route,frozen=payload['target'])!=payload['target']:
                 frappe.throw('来源记录版本或 mapped 结果已变化，请重新提出操作')
             doc=frappe.get_doc(json.loads(_json(payload['target'])))
+            if doc.doctype in _MAKE_TARGET_PREPARERS:
+                _subcontracting_item_references(doc,payload['target'],bind_naming=True)
             doc.insert()
         elif payload['action'] in ('update','fill'):
             doc = frappe.get_doc(payload['doctype'], payload['name'], for_update=True)
@@ -254,6 +292,11 @@ def _mapped_target(source_name,route,frozen=None):
     target=_canonicalize_mapped_target(adapter(source_name))
     if target.get('doctype')!=route['target_doctype']:
         frappe.throw('make 路由目标与 mapped 结果不一致')
+    prepare=_MAKE_TARGET_PREPARERS.get(target['doctype'])
+    if prepare:
+        target_doc=frappe.get_doc(target)
+        prepare(target_doc,frozen)
+        target=_canonicalize_mapped_target(target_doc)
     # ERPNext mapped stock documents default posting_time from the current
     # clock even when set_posting_time is false. Preserve that complete frozen
     # field on confirmation so elapsed milliseconds alone are not business drift.

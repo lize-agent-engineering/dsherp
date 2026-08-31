@@ -73,11 +73,13 @@ assert operations._MAKE_INSERT_DERIVED_FIELDS=={
         'amount','basic_amount','basic_rate','description','expense_account','item_group','item_name',
         'valuation_rate',
     },
-    'Subcontracting Order':{'supplied_items'},
     'Subcontracting Order Item':{'conversion_factor'},
-    'Subcontracting Receipt':{'represents_company','supplied_items','title'},
+    'Subcontracting Receipt':{'represents_company','title'},
     'Subcontracting Receipt Item':{
         'expense_account','received_qty','rm_cost_per_qty','rm_supp_cost','service_expense_account',
+    },
+    'Subcontracting Receipt Supplied Item':{
+        'amount','available_qty_for_consumption','cost_center','current_stock','expense_account',
     },
 }
 assert operations._MAKE_AUTOMATIC_POSTING_DOCTYPES=={

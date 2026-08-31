@@ -16,7 +16,9 @@ frappe.connect()
 
 from dsherp_bridge.context_execution import run_tool
 from dsherp_bridge.context_permissions import run_revision
-from dsherp_bridge.operations import confirm
+from dsherp_bridge.operations import confirm,verify_execution
+from erpnext.subcontracting.doctype.subcontracting_order.subcontracting_order import SubcontractingOrder
+from erpnext.subcontracting.doctype.subcontracting_receipt.subcontracting_receipt import SubcontractingReceipt
 
 tag=uuid.uuid4().hex
 actor='subcontract-'+tag+'@example.invalid'
@@ -60,6 +62,17 @@ warehouses={}
 pre_bins={}
 delete_linked_ledger_entries_before=None
 evidence={}
+sco_before_insert_local='before_insert' in SubcontractingOrder.__dict__
+sco_before_insert_original=getattr(SubcontractingOrder,'before_insert',None)
+scr_before_insert_local='before_insert' in SubcontractingReceipt.__dict__
+scr_before_insert_original=getattr(SubcontractingReceipt,'before_insert',None)
+
+
+def restore_before_insert(target_class,was_local,original):
+    if was_local:
+        target_class.before_insert=original
+    elif 'before_insert' in target_class.__dict__:
+        delattr(target_class,'before_insert')
 
 
 def exactly_one(values,label):
@@ -129,6 +142,12 @@ def propose_make_after_rejecting_options(source_doctype,source_name,route_key):
         'doctype':source_doctype,'name':source_name,
     })
     before_counts=site_document_counts()
+    target_doctype=routes[route_key][2]
+    target_names=frappe.get_all(target_doctype,pluck='name',order_by='name asc')
+    naming_series=frappe.get_all('Series',fields=['name','current'],order_by='name asc')
+    source_state=frappe.db.get_value(
+        source_doctype,source_name,['docstatus','modified','status'],as_dict=True
+    )
     before_proposals=frappe.db.count('DS Operation Proposal',{'conversation':conversation})
     try:
         run_tool(**cap,tool='erp_propose_make',arguments={
@@ -148,7 +167,65 @@ def propose_make_after_rejecting_options(source_doctype,source_name,route_key):
         'source_version':str(source['modified']),'route':routes[route_key][0],
     })
     assert site_document_counts()==before_counts
+    assert frappe.get_all(target_doctype,pluck='name',order_by='name asc')==target_names
+    assert frappe.get_all('Series',fields=['name','current'],order_by='name asc')==naming_series
+    assert frappe.db.get_value(
+        source_doctype,source_name,['docstatus','modified','status'],as_dict=True
+    )==source_state
+    assert 'name' not in proposal['target']
     return proposal,run_name
+
+
+def reject_supplied_item_insert_drift(source_doctype,source_name,route_key,kind):
+    proposal,run_name=propose_make_after_rejecting_options(
+        source_doctype,source_name,route_key
+    )
+    target_doctype=routes[route_key][2]
+    assert target_doctype in ('Subcontracting Order','Subcontracting Receipt')
+    assert len(proposal['target']['supplied_items'])==1,proposal['target']
+    target_class=(SubcontractingOrder if target_doctype=='Subcontracting Order'
+                  else SubcontractingReceipt)
+    was_local=(sco_before_insert_local if target_class is SubcontractingOrder
+               else scr_before_insert_local)
+    original=(sco_before_insert_original if target_class is SubcontractingOrder
+              else scr_before_insert_original)
+    target_count=frappe.db.count(target_doctype)
+
+    def drift_after_generation(self):
+        if original is not None:
+            original(self)
+        generate=self.create_raw_materials_supplied
+
+        def generate_then_drift(raw_material_table='supplied_items'):
+            generate(raw_material_table)
+            rows=self.get('supplied_items')
+            assert len(rows)==1,rows
+            if kind=='rows':
+                duplicate={key:value for key,value in rows[0].as_dict().items()
+                           if key not in ('name','parent','parentfield','parenttype')}
+                self.append('supplied_items',duplicate)
+            elif kind=='rm_item':
+                rows[0].rm_item_code=finished_item
+            elif kind=='qty':
+                field=('required_qty' if target_doctype=='Subcontracting Order'
+                       else 'consumed_qty')
+                rows[0].set(field,flt(rows[0].get(field))+1)
+            elif target_doctype=='Subcontracting Order':
+                rows[0].reserve_warehouse=warehouses['finished']
+            else:
+                self.supplier_warehouse=warehouses['raw']
+
+        self.create_raw_materials_supplied=generate_then_drift
+
+    target_class.before_insert=drift_after_generation
+    try:
+        rejected=confirm_once(proposal,run_name)
+    finally:
+        restore_before_insert(target_class,was_local,original)
+    assert rejected['status']=='Failed' and '保存后内容与确认内容不一致' in rejected['error'],rejected
+    assert rejected['status']!='Unknown'
+    assert frappe.db.count('DS Execution Record',{'proposal':proposal['id']})==1
+    assert frappe.db.count(target_doctype)==target_count
 
 
 def assert_direct_create_denied(doctype):
@@ -359,6 +436,22 @@ try:
     assert sco_make['target']['doctype']=='Subcontracting Order'
     assert sco_make['target']['purchase_order']==purchase_order
     assert sco_make['target']['supplier_warehouse']==warehouses['subcontracting']
+    assert len(sco_make['target']['supplied_items'])==1
+    sco_supply=sco_make['target']['supplied_items'][0]
+    assert sco_supply['rm_item_code']==raw_item,sco_supply
+    assert sco_supply['main_item_code']==finished_item,sco_supply
+    assert flt(sco_supply['required_qty'])==required_raw_qty,sco_supply
+    assert sco_supply['reserve_warehouse']==warehouses['raw'],sco_supply
+    assert sco_supply['reference_name'],sco_supply
+    sco_payload=json.loads(frappe.db.get_value(
+        'DS Operation Proposal',sco_make['id'],'payload'
+    ))
+    assert len(sco_payload['target']['supplied_items'])==1
+    assert sco_payload['confirmation_target']['supplied_items']==sco_make['target']['supplied_items']
+    for drift_kind in ('rows','rm_item','qty','warehouse'):
+        reject_supplied_item_insert_drift(
+            'Purchase Order',purchase_order,'po_to_sco',drift_kind
+        )
     sco_created=confirm_once(sco_make,sco_make_run)
     assert sco_created['status']=='Succeeded',sco_created
     subcontracting_order=sco_created['name']
@@ -371,6 +464,24 @@ try:
     assert sco.supplied_items[0].rm_item_code==raw_item
     assert flt(sco.supplied_items[0].required_qty)==required_raw_qty
     assert sco.supplied_items[0].reserve_warehouse==warehouses['raw']
+    assert confirm(sco_make['id'],sco_make['digest'],uuid.uuid4().hex)==sco_created
+    assert frappe.db.count('DS Execution Record',{'proposal':sco_make['id']})==1
+    supplied_row=sco.supplied_items[0]
+    original_required_qty=flt(supplied_row.required_qty)
+    frappe.set_user('Administrator')
+    frappe.db.set_value('Subcontracting Order Supplied Item',supplied_row.name,
+                        'required_qty',original_required_qty+1,update_modified=False)
+    frappe.db.commit();frappe.set_user(actor)
+    sco_verify=verify_execution(sco_make['id'])
+    assert flt(
+        sco_verify['observed']['values']['supplied_items'][0]['required_qty']
+    )==original_required_qty+1
+    assert sco_verify['matches_proposal'] is False
+    frappe.set_user('Administrator')
+    frappe.db.set_value('Subcontracting Order Supplied Item',supplied_row.name,
+                        'required_qty',original_required_qty,update_modified=False)
+    frappe.db.commit();frappe.set_user(actor)
+    sco=frappe.get_doc('Subcontracting Order',subcontracting_order)
 
     cap,sco_submit_run=new_run()
     frappe.set_user('Guest')
@@ -448,15 +559,51 @@ try:
     )
     assert receipt_make['target']['doctype']=='Subcontracting Receipt'
     assert receipt_make['target']['supplier']==supplier
+    assert receipt_make['target']['supplier_warehouse']==warehouses['subcontracting']
     assert len(receipt_make['target']['items'])==1
     assert receipt_make['target']['items'][0]['subcontracting_order']==subcontracting_order
     assert receipt_make['target']['items'][0]['item_code']==finished_item
+    assert len(receipt_make['target']['supplied_items'])==1
+    receipt_supply=receipt_make['target']['supplied_items'][0]
+    assert receipt_supply['rm_item_code']==raw_item
+    assert receipt_supply['main_item_code']==finished_item
+    assert flt(receipt_supply['required_qty'])==required_raw_qty
+    assert flt(receipt_supply['consumed_qty'])==required_raw_qty
+    assert receipt_supply['subcontracting_order']==subcontracting_order
+    assert receipt_supply['reference_name']
+    receipt_payload=json.loads(frappe.db.get_value(
+        'DS Operation Proposal',receipt_make['id'],'payload'
+    ))
+    assert len(receipt_payload['target']['supplied_items'])==1
+    assert receipt_payload['confirmation_target']['supplied_items']==receipt_make['target']['supplied_items']
+    for drift_kind in ('rows','rm_item','qty','warehouse'):
+        reject_supplied_item_insert_drift(
+            'Subcontracting Order',subcontracting_order,'sco_to_receipt',drift_kind
+        )
     receipt_created=confirm_once(receipt_make,receipt_make_run)
     assert receipt_created['status']=='Succeeded',receipt_created
     subcontracting_receipt=receipt_created['name']
     receipt_names.append(subcontracting_receipt)
     receipt_doc=frappe.get_doc('Subcontracting Receipt',subcontracting_receipt)
     assert receipt_doc.docstatus==0 and receipt_doc.owner==actor
+    assert confirm(receipt_make['id'],receipt_make['digest'],uuid.uuid4().hex)==receipt_created
+    assert frappe.db.count('DS Execution Record',{'proposal':receipt_make['id']})==1
+    receipt_supplied_row=receipt_doc.supplied_items[0]
+    original_consumed_qty=flt(receipt_supplied_row.consumed_qty)
+    frappe.set_user('Administrator')
+    frappe.db.set_value('Subcontracting Receipt Supplied Item',receipt_supplied_row.name,
+                        'consumed_qty',original_consumed_qty+1,update_modified=False)
+    frappe.db.commit();frappe.set_user(actor)
+    receipt_verify=verify_execution(receipt_make['id'])
+    assert flt(
+        receipt_verify['observed']['values']['supplied_items'][0]['consumed_qty']
+    )==original_consumed_qty+1
+    assert receipt_verify['matches_proposal'] is False
+    frappe.set_user('Administrator')
+    frappe.db.set_value('Subcontracting Receipt Supplied Item',receipt_supplied_row.name,
+                        'consumed_qty',original_consumed_qty,update_modified=False)
+    frappe.db.commit();frappe.set_user(actor)
+    receipt_doc=frappe.get_doc('Subcontracting Receipt',subcontracting_receipt)
 
     frappe.set_user('Administrator')
     receipt_doc.db_set('is_return',1,update_modified=False);frappe.db.commit()
@@ -557,6 +704,8 @@ try:
         'delete_linked_ledger_entries_before':delete_linked_ledger_entries_before,
     }
 finally:
+    restore_before_insert(SubcontractingOrder,sco_before_insert_local,sco_before_insert_original)
+    restore_before_insert(SubcontractingReceipt,scr_before_insert_local,scr_before_insert_original)
     frappe.db.rollback()
     frappe.set_user('Administrator')
     purchase_order_names.extend(frappe.get_all(
@@ -705,6 +854,10 @@ finally:
                     'Accounts Settings','delete_linked_ledger_entries'
                 ) or 0),
             }
+        assert ('before_insert' in SubcontractingOrder.__dict__)==sco_before_insert_local
+        assert getattr(SubcontractingOrder,'before_insert',None) is sco_before_insert_original
+        assert ('before_insert' in SubcontractingReceipt.__dict__)==scr_before_insert_local
+        assert getattr(SubcontractingReceipt,'before_insert',None) is scr_before_insert_original
     finally:
         frappe.destroy()
 
