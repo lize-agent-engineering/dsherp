@@ -86,6 +86,51 @@ finally:
     assert result.returncode == 0, result.stderr
 
 
+def test_boot_context_doctypes_derive_from_policy_and_stale_snapshot_cannot_authorize():
+    script = r'''
+import os,uuid,frappe
+os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge.boot import boot_session
+from dsherp_bridge.context_api import _context
+assert 'dsherp_bridge.boot.boot_session' in frappe.get_hooks('boot_session')
+
+actor='context-policy-'+uuid.uuid4().hex+'@example.invalid'
+try:
+    frappe.set_user('Administrator')
+    assert not frappe.db.exists('DS Doctype Policy','Supplier')
+    frappe.get_doc({'doctype':'User','email':actor,'first_name':'Context policy','enabled':1,
+        'send_welcome_email':0,'roles':[{'role':'Purchase Master Manager'}]}).insert()
+    frappe.set_user(actor);before=frappe._dict();boot_session(before)
+    assert 'Supplier' not in before.dsherp_context_doctypes
+    assert 'Custom Field' not in before.dsherp_context_doctypes
+
+    frappe.set_user('Administrator')
+    policy=frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':'Supplier','enabled':1,
+        'allow_read':1,'allow_create':0,'allow_update':0,'allow_submit':0,'allow_cancel':0,
+        'allow_fill':0,'routes':[]}).insert()
+    frappe.set_user(actor);enabled=frappe._dict();boot_session(enabled)
+    assert 'Supplier' in enabled.dsherp_context_doctypes
+    assert 'Custom Field' not in enabled.dsherp_context_doctypes
+    stale=list(enabled.dsherp_context_doctypes)
+
+    frappe.set_user('Administrator');policy.enabled=0;policy.save();frappe.set_user(actor)
+    disabled=frappe._dict();boot_session(disabled)
+    assert 'Supplier' not in disabled.dsherp_context_doctypes
+    assert 'Supplier' in stale
+    context={'schema_version':1,'route':['Form','Supplier','DSHERP 制造测试合成供应商'],
+        'page_type':'form','doctype':'Supplier','name':'DSHERP 制造测试合成供应商','version':None,'dirty':False}
+    try:_context(context);raise AssertionError('stale client context bypassed disabled Supplier policy')
+    except frappe.PermissionError as error:assert 'DS DocType 策略未启用' in str(error),error
+finally:
+    frappe.db.rollback();frappe.destroy()
+'''
+    result = subprocess.run(
+        ['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],
+        input=script,text=True,capture_output=True,timeout=40,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_policy_rows_gate_tool_doctypes():
     script = r'''
 import hashlib,json,os,uuid,frappe

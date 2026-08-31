@@ -3,7 +3,7 @@ import React from 'react';
 import {afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import ContextSidebar from './ContextSidebar.jsx';
-afterEach(()=>{vi.restoreAllMocks();cleanup();});
+afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();cleanup();});
 const snapshot={schema_version:1,route:['Form','Item','I-1'],page_type:'form',doctype:'Item',name:'I-1',version:'v1',dirty:true};
 const session={id:'S-1',title:'查询物料',messages:[{id:'M-1',question:'旧问题',answer:'历史回答',status:'Succeeded',context:snapshot}],active_run:null};
 const open=()=>fireEvent.click(screen.getByRole('button',{name:'打开 Agent'}));
@@ -125,6 +125,20 @@ it('发送绑定点击时页面，关闭再打开保留输入且不保存原生�
  fireEvent.click(screen.getByRole('button',{name:'发送问题'}));
  await waitFor(()=>expect(api.mock.calls.some(c=>c[0]==='send_message')).toBe(true));
  expect(api.mock.calls.find(c=>c[0]==='send_message')[1]).toEqual({session_id:'S-1',question:'新问题',context:page,domain:'query',request_id:expect.any(String)});
+});
+it('配置页自动上下文依服务端策略保持 unknown，不阻断普通提问',async()=>{
+ vi.stubGlobal('frappe',{get_route:()=>['Form','Custom Field','Item-ds_note'],boot:{dsherp_context_doctypes:['Supplier']}});
+ vi.stubGlobal('cur_frm',{doctype:'Custom Field',doc:{doctype:'Custom Field',name:'Item-ds_note',modified:'v1'},is_dirty:()=>false});
+ const created={id:'S-new',title:'配置页提问',messages:[],active_run:'R-new',proposals:[],configuration_bundles:[],configuration_confirmations:[]};
+ const api=vi.fn(async method=>method==='list_sessions'?[]:method==='send_message'?created:null);
+ render(<ContextSidebar api={api}/>);open();await screen.findByText('今天需要我做些什么？');
+ expect(screen.getByRole('region',{name:'当前页面上下文'}).textContent).toContain('当前页面未纳入业务上下文策略');
+ fireEvent.change(screen.getByRole('textbox',{name:'业务问题'}),{target:{value:'解释这个配置页'}});
+ fireEvent.click(screen.getByRole('button',{name:'发送问题'}));
+ await waitFor(()=>expect(api.mock.calls.some(call=>call[0]==='send_message')).toBe(true));
+ expect(api.mock.calls.find(call=>call[0]==='send_message')[1].context).toEqual({
+  schema_version:1,route:['Form','Custom Field','Item-ds_note'],page_type:'unknown',reason:'当前页面未纳入业务上下文策略。',
+ });
 });
 it('新建会话不携带旧对象，迟到结果不能回灌新会话',async()=>{
  let finish;const api=async method=>method==='send_message'?new Promise(resolve=>finish=resolve):apiDefault(method);
