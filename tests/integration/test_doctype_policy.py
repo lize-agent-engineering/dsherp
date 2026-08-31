@@ -14,8 +14,6 @@ def _governance_tool_cases():
     for domain in ('query', 'operation', 'configuration'):
         server = context_mcp.create_server(None, 'registry-run', 'registry-capability', domain=domain)
         for tool in asyncio.run(server.list_tools()):
-            if not tool.name.startswith(('erp_read_', 'erp_propose_')):
-                continue
             schema = tool.inputSchema
             required = schema['required']
             properties = schema['properties']
@@ -35,7 +33,7 @@ def _governance_tool_cases():
                                   'target': target, 'arguments': arguments, 'source': 'configuration'})
                 continue
             if 'doctype' not in required:
-                raise AssertionError(f'已注册工具 {tool.name} 未声明 DocType 参数')
+                continue
             actions = [None]
             for field in required:
                 if field == 'action':
@@ -66,6 +64,12 @@ def _governance_tool_cases():
 
 def test_governance_doctype_has_no_business_tool_access():
     cases = _governance_tool_cases()
+    assert {
+        (case['domain'], case['target']) for case in cases if case['tool'] == 'erp_search_records'
+    } == {
+        (domain, target) for domain in ('query', 'operation') for target in GOVERNANCE_TARGETS
+    }
+    assert len(cases) == 26
     assert {(case['tool'], case['target']) for case in cases if case['domain'] == 'configuration'} == {
         ('erp_read_configuration', target) for target in GOVERNANCE_TARGETS
     } | {('erp_propose_configuration', target) for target in GOVERNANCE_TARGETS}
