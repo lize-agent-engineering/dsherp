@@ -10,6 +10,31 @@ from dsherp_bridge.context_api import _conversation, _user, _json
 _TRANSIENT_IDENTITY_FIELDS={'name','owner','creation','modified','modified_by','parent','parentfield','parenttype',
                             '_user_tags','_comments','_assign','_liked_by'}
 
+# Native insert behavior verified by the four supported make chains. These are
+# intentionally exact DocType registrations: adding another excluded field or
+# target type requires a real mapper -> insert regression proving the derivation.
+_MAKE_INSERT_DERIVED_FIELDS={
+    'Delivery Note':{'installation_status','title'},
+    'Delivery Note Item':{'incoming_rate','stock_uom_rate'},
+    'Purchase Receipt':{'represents_company','title'},
+    'Purchase Receipt Item':{'received_qty','stock_uom_rate','valuation_rate'},
+    'Stock Entry':{'total_amount','total_incoming_value','total_outgoing_value'},
+    'Stock Entry Detail':{
+        'amount','basic_amount','basic_rate','description','expense_account','item_group','item_name',
+        'valuation_rate',
+    },
+    'Subcontracting Order':{'supplied_items'},
+    'Subcontracting Order Item':{'conversion_factor'},
+    'Subcontracting Receipt':{'represents_company','supplied_items','title'},
+    'Subcontracting Receipt Item':{
+        'expense_account','received_qty','rm_cost_per_qty','rm_supp_cost','service_expense_account',
+    },
+}
+_MAKE_AUTOMATIC_POSTING_DOCTYPES={'Delivery Note','Purchase Receipt','Stock Entry','Subcontracting Receipt'}
+# Stock Entry insert normalizes only these mapped empty strings to None. They
+# remain present in the confirmation shape, so any non-empty warehouse drifts.
+_MAKE_EMPTY_NORMALIZED_FIELDS={'Stock Entry Detail':{'s_warehouse','t_warehouse'}}
+
 
 def _authorization_revision(user, grant=None):
     from dsherp_bridge.context_permissions import revision
@@ -61,6 +86,8 @@ def confirm(proposal_id, digest, request_id):
             frappe.throw('权限或企业成员关系已变化，请重新提出操作')
         values = {change['field']: change['after'] for change in payload['changes']}
         if payload['action']=='make':
+            if 'confirmation_target' not in payload:
+                frappe.throw('旧版 make 提案缺少确认内容，请重新提出操作')
             source=frappe.get_doc(payload['source_doctype'],payload['source_name'],for_update=True)
             source.check_permission('read')
             if str(source.modified)!=payload['source_version']:
@@ -110,9 +137,11 @@ def confirm(proposal_id, digest, request_id):
             saved = frappe.get_doc(doc.doctype, doc.name)
             saved.check_permission('read')
             if payload['action']=='make':
-                actual,matches=_make_target_values(saved,payload['target'],user)
+                actual,matches=_make_target_values(saved,payload['confirmation_target'],user)
                 if not matches:
-                    frappe.throw('保存后内容与确认内容不一致，已停止执行')
+                    current=_canonicalize_mapped_target(saved)
+                    path=_shape_mismatch_path(current,payload['confirmation_target'])
+                    frappe.throw('保存后内容与确认内容不一致，已停止执行'+('：'+path if path else ''))
             else:
                 actual = _actual_values(saved,values)
                 if actual != values:
@@ -162,7 +191,11 @@ def verify_execution(proposal_id):
     doc=frappe.get_doc(proposal['doctype'],name)
     doc.check_permission('read')
     if proposal['action']=='make':
-        values,matches=_make_target_values(doc,proposal['target'],frappe.session.user)
+        stored=json.loads(frappe.get_doc('DS Operation Proposal',proposal_id).payload)
+        if 'confirmation_target' not in stored:
+            frappe.throw('旧版 make 提案缺少确认内容，请重新提出操作')
+        values,matches=_make_target_values(doc,stored['confirmation_target'],frappe.session.user,
+                                           current_read_filter=True)
         result['observed']={'doctype':doc.doctype,'name':doc.name,'version':str(doc.modified),'values':values}
         result['matches_proposal']=bool(execution and execution.get('status')=='Succeeded' and matches)
         return result
@@ -279,52 +312,46 @@ def _project_frozen_shape(current,frozen):
     return value,_json(value)==_json(expected)
 
 
-def _make_confirmation_target(doc,target,user):
-    """Project fields the user could control; displayed native defaults are evidence only."""
-    def unset(value):
-        return value is None or value=='' or value==[]
-
-    def automatic(meta,container,fieldname):
-        control='set_'+fieldname+'_manually'
-        return bool(meta.get_field(control)) and not container.get(control)
-
-    writable=set(doc.meta.get_permitted_fieldnames(user=user,permission_type='write'))
-    levels=doc.get_permlevel_access('write')
-    writable.update(field.fieldname for field in doc.meta.fields
-                    if field.fieldtype=='Table' and field.permlevel in levels)
-    projected={key:value for key,value in target.items() if key in ('doctype','docstatus','idx')}
-    automatic_posting=not target.get('set_posting_time')
-    for field,value in target.items():
-        if field in ('doctype','docstatus','idx'):continue
-        definition=doc.meta.get_field(field)
-        if (unset(value) or not definition or field not in writable or definition.read_only or definition.hidden
-            or automatic(doc.meta,target,field)
-            or (automatic_posting and field in ('posting_date','posting_time'))):
-            continue
-        if definition.fieldtype!='Table':
-            projected[field]=value;continue
-        child=frappe.get_meta(definition.options)
-        child_writable=set(child.get_permitted_fieldnames(
-            parenttype=doc.doctype,user=user,permission_type='write'))
-        projected[field]=[]
-        for row in value:
-            public_row={key:item for key,item in row.items() if key in ('doctype','docstatus','idx')}
-            for key,item in row.items():
-                child_field=child.get_field(key)
-                if (not unset(item) and key in child_writable and child_field and not child_field.read_only
-                    and not automatic(child,row,key)
-                    and not child_field.hidden):
-                    public_row[key]=item
-            projected[field].append(public_row)
-    return projected
+def _shape_mismatch_path(current,frozen,path='target'):
+    if isinstance(frozen,dict):
+        if not isinstance(current,dict):return path
+        for key,expected in frozen.items():
+            if key not in current:return path+'.'+key
+            mismatch=_shape_mismatch_path(current[key],expected,path+'.'+key)
+            if mismatch:return mismatch
+        return None
+    if isinstance(frozen,list):
+        if not isinstance(current,list) or len(current)!=len(frozen):return path
+        for index,(value,expected) in enumerate(zip(current,frozen)):
+            mismatch=_shape_mismatch_path(value,expected,f'{path}[{index}]')
+            if mismatch:return mismatch
+        return None
+    return None if _json(json.loads(_json(current)))==_json(json.loads(_json(frozen))) else path
 
 
-def _make_target_values(doc,frozen,user):
-    expected=_public_make_target(doc,frozen,user)
+def _make_confirmation_target(target):
+    """Freeze displayed business fields except exact, proven insert derivations."""
+    def project(container):
+        doctype=container.get('doctype')
+        excluded=_MAKE_INSERT_DERIVED_FIELDS.get(doctype,set())
+        automatic_posting=(doctype in _MAKE_AUTOMATIC_POSTING_DOCTYPES
+                           and not container.get('set_posting_time'))
+        result={}
+        for field,value in container.items():
+            if field in excluded or (automatic_posting and field in ('posting_date','posting_time')):
+                continue
+            if field in _MAKE_EMPTY_NORMALIZED_FIELDS.get(doctype,set()) and value=='':
+                result[field]=None;continue
+            if isinstance(value,list):result[field]=[project(row) for row in value]
+            else:result[field]=value
+        return result
+    return project(target)
+
+
+def _make_target_values(doc,frozen,user,current_read_filter=False):
     current=_public_make_target(doc,_canonicalize_mapped_target(doc),user)
-    expected_confirmation=_make_confirmation_target(doc,expected,user)
-    current_confirmation=_make_confirmation_target(doc,current,user)
-    _,matches=_project_frozen_shape(current_confirmation,expected_confirmation)
+    expected=_public_make_target(doc,frozen,user) if current_read_filter else frozen
+    _,matches=_project_frozen_shape(current,expected)
     return current,matches
 
 
@@ -340,13 +367,14 @@ def propose_make(session_id,source_doctype,source_name,source_version,route,gran
     resolved=resolve_route(source_doctype,route)
     target=_mapped_target(source_name,resolved)
     target_doc=frappe.get_doc(target);target_doc.check_permission('create');target_doc.check_permission('read')
+    confirmation_target=_public_make_target(target_doc,_make_confirmation_target(target),user)
     expires=add_to_date(now_datetime(),minutes=10)
     authorization=_authorization_revision(user,grant or frappe.session.data.get('dsherp_platform_grant'))
     payload=_json({'site':frappe.local.site,'actor':user,'action':'make','proposal_type':'make',
         'authorization_revision':authorization,'doctype':resolved['target_doctype'],'name':None,'version':source_version,
         'source_doctype':source_doctype,'source_name':source_name,'source_version':source_version,
         'route':resolved['route_name'],'method_path':resolved['method_path'],'target_doctype':resolved['target_doctype'],
-        'target':target,'changes':_make_changes(target)})
+        'target':target,'confirmation_target':confirmation_target,'changes':_make_changes(confirmation_target)})
     digest=hashlib.sha256(_json([conversation.name,payload,str(expires)]).encode()).hexdigest()
     proposal=frappe.get_doc({'doctype':'DS Operation Proposal','conversation':conversation.name,'model_run':model_run,
         'payload':payload,'digest':digest,'expires_at':expires,'status':'Pending'}).insert(ignore_permissions=True)
@@ -424,6 +452,8 @@ def get_proposal(proposal_id):
     execution = frappe.db.get_value('DS Execution Record', {'proposal': proposal_id}, 'name')
     outcome=_execution_result(frappe.get_doc('DS Execution Record',execution)) if execution else None
     if payload['action']=='make' and not (outcome and outcome['status']=='Succeeded'):
+        if 'confirmation_target' not in payload:
+            frappe.throw('旧版 make 提案缺少确认内容，请重新提出操作')
         doc=frappe.get_doc(payload['target'])
     elif payload['action']=='create' and not (outcome and outcome['status']=='Succeeded'):
         doc=frappe.get_doc({'doctype':payload['doctype'],**json.loads(_json({change['field']:change['after'] for change in payload['changes']}))})
@@ -435,7 +465,7 @@ def get_proposal(proposal_id):
         validate_frozen_impact(payload.get('impact'))
         validate_impact_read_access(doc,user)
     if payload['action']=='make':
-        public_target=_public_make_target(doc,payload['target'],user)
+        public_target=_public_make_target(doc,payload['confirmation_target'],user)
         if outcome and outcome['status']=='Succeeded':
             outcome={**outcome,'values':_public_make_target(doc,outcome.get('values',{}),user)}
     # Recheck access before exposing saved before/after values, even after success.
@@ -455,6 +485,7 @@ def get_proposal(proposal_id):
     if payload['action']=='make':
         public_payload['target']=public_target
         public_payload['changes']=_make_changes(public_target)
+        public_payload.pop('confirmation_target',None)
     result = {**public_payload, 'id': proposal.name, 'digest': proposal.digest, 'model_run': proposal.model_run,
         'expires_at': proposal.expires_at.replace(tzinfo=ZoneInfo(get_system_timezone())).isoformat(), 'status': proposal.status}
     result['execution_ready']=not proposal.model_run or frappe.db.get_value('DS Model Run',proposal.model_run,'status')=='Succeeded'

@@ -46,6 +46,7 @@ from frappe.utils import add_to_date,now_datetime
 os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
 from dsherp_bridge.context_execution import run_tool
 from dsherp_bridge.context_permissions import run_revision
+from dsherp_bridge import operations
 from dsherp_bridge.operations import confirm,get_proposal,verify_execution
 from erpnext.stock.doctype.delivery_note import delivery_note as delivery_note_module
 
@@ -53,11 +54,38 @@ tag=uuid.uuid4().hex
 actor='make-'+tag+'@example.invalid'
 route_name='sales_order_to_delivery_note'
 method_path='erpnext.selling.doctype.sales_order.sales_order.make_delivery_note'
-policy_name=None;routes_before=None;delivery_count_before=None;permission_setter=None
+policy_name=None;routes_before=None;delivery_count_before=None;permission_setter=None;write_setter=None
 order_name=None;conversation_names=[];run_names=[];proposal_names=[];target_names=[]
 delivery_note_class=delivery_note_module.DeliveryNote
 before_insert_was_local='before_insert' in delivery_note_class.__dict__
 before_insert_original=getattr(delivery_note_class,'before_insert',None)
+
+# The exclusion contract is deliberately closed and DocType-specific. This
+# catches a future wildcard or generic metadata exclusion even if a happy-path
+# make happens not to exercise the newly skipped business field.
+assert operations._MAKE_INSERT_DERIVED_FIELDS=={
+    'Delivery Note':{'installation_status','title'},
+    'Delivery Note Item':{'incoming_rate','stock_uom_rate'},
+    'Purchase Receipt':{'represents_company','title'},
+    'Purchase Receipt Item':{'received_qty','stock_uom_rate','valuation_rate'},
+    'Stock Entry':{'total_amount','total_incoming_value','total_outgoing_value'},
+    'Stock Entry Detail':{
+        'amount','basic_amount','basic_rate','description','expense_account','item_group','item_name',
+        'valuation_rate',
+    },
+    'Subcontracting Order':{'supplied_items'},
+    'Subcontracting Order Item':{'conversion_factor'},
+    'Subcontracting Receipt':{'represents_company','supplied_items','title'},
+    'Subcontracting Receipt Item':{
+        'expense_account','received_qty','rm_cost_per_qty','rm_supp_cost','service_expense_account',
+    },
+}
+assert operations._MAKE_AUTOMATIC_POSTING_DOCTYPES=={
+    'Delivery Note','Purchase Receipt','Stock Entry','Subcontracting Receipt',
+}
+assert operations._MAKE_EMPTY_NORMALIZED_FIELDS=={
+    'Stock Entry Detail':{'s_warehouse','t_warehouse'},
+}
 
 def restore_before_insert():
     if before_insert_was_local:
@@ -130,11 +158,20 @@ try:
     assert proposal['route']==route_name and proposal['method_path']==method_path
     assert proposal['target_doctype']=='Delivery Note'
     assert proposal['target']['doctype']=='Delivery Note' and proposal['target']['customer']==template.customer
+    assert proposal['target']['lr_no'] is None
+    assert 'posting_date' not in proposal['target'] and 'posting_time' not in proposal['target']
+    assert 'confirmation_target' not in proposal
+    assert not {'posting_date','posting_time'}&{change['field'] for change in proposal['changes']}
+    assert next(change for change in proposal['changes'] if change['field']=='lr_no')['after'] is None
     assert proposal['target']['items'] and proposal['target']['items'][0]['against_sales_order']==order_name
     assert 'name' not in proposal['target'] and 'name' not in proposal['target']['items'][0]
     stored=json.loads(frappe.db.get_value('DS Operation Proposal',proposal['id'],'payload'))
+    assert stored['target']['posting_date'] and stored['target']['posting_time']
+    assert stored['confirmation_target']['lr_no'] is None
+    assert stored['confirmation_target']['items'][0]['against_sales_order']==order_name
+    assert 'posting_date' not in stored['confirmation_target'] and 'posting_time' not in stored['confirmation_target']
     assert stored['proposal_type']=='make' and stored['target']['ignore_pricing_rule']==0
-    assert all(stored['target'][key]==value for key,value in proposal['target'].items())
+    assert stored['confirmation_target']==proposal['target']
     assert frappe.db.count('Delivery Note')==delivery_count_before
     frappe.db.set_value('DS Model Run',drift_run,'status','Succeeded');frappe.db.commit()
 
@@ -163,6 +200,8 @@ try:
             if before_insert_original is not None:before_insert_original(self)
             if kind=='scalar':self.po_no='DSHERP-HOOK-SCALAR-'+tag
             elif kind=='qty':self.items[0].qty=self.items[0].qty+1
+            elif kind=='empty':self.lr_no='DSHERP-HOOK-LR-'+tag
+            elif kind=='source':self.items[0].against_sales_order=template.name
             else:self.items[0].warehouse='DSHERP 制造测试合成成品仓 - DVT'
 
         delivery_note_class.before_insert=drift_after_mapper
@@ -178,7 +217,23 @@ try:
 
     confirm_with_insert_drift('scalar')
     confirm_with_insert_drift('qty')
+    confirm_with_insert_drift('empty')
+    confirm_with_insert_drift('source')
     confirm_with_insert_drift('warehouse')
+
+    # Pending make proposals from before confirmation_target existed cannot be
+    # interpreted under the new contract and must require a fresh proposal.
+    cap,legacy_run=new_run();frappe.set_user('Guest')
+    read=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Sales Order','name':order_name})
+    legacy=run_tool(**cap,tool='erp_propose_make',arguments=make_arguments(str(read['modified'])))
+    proposal_names.append(legacy['id'])
+    legacy_payload=json.loads(frappe.db.get_value('DS Operation Proposal',legacy['id'],'payload'))
+    del legacy_payload['confirmation_target']
+    frappe.db.set_value('DS Operation Proposal',legacy['id'],'payload',json.dumps(legacy_payload,sort_keys=True,separators=(',',':')))
+    frappe.db.set_value('DS Model Run',legacy_run,'status','Succeeded');frappe.db.commit();frappe.set_user(actor)
+    try:confirm(legacy['id'],legacy['digest'],uuid.uuid4().hex);raise AssertionError('legacy make proposal accepted')
+    except frappe.ValidationError as error:assert '重新提出' in str(error),error
+    assert frappe.db.count('Delivery Note')==delivery_count_before
 
     # A fresh source read creates a control proposal whose frozen target is
     # inserted once under the mapped business user.
@@ -186,8 +241,8 @@ try:
     read=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Sales Order','name':order_name})
     control=run_tool(**cap,tool='erp_propose_make',arguments=make_arguments(str(read['modified'])))
     proposal_names.append(control['id'])
-    assert control['target']['installation_status'] is None
-    assert control['target']['title'] is None
+    assert 'installation_status' not in control['target']
+    assert 'title' not in control['target']
     assert frappe.db.count('Delivery Note')==delivery_count_before
     frappe.db.set_value('DS Model Run',control_run,'status','Succeeded');frappe.db.commit()
     frappe.set_user(actor)
@@ -213,7 +268,19 @@ try:
     # Verification is measured against the frozen public proposal target. A
     # later legitimate native edit is observable but no longer matches it.
     saved.po_no='DSHERP-EXTERNAL-EDIT-'+tag;saved.save();frappe.db.commit()
+    frappe.set_user('Administrator')
+    setter=frappe.get_doc({'doctype':'Property Setter','doctype_or_field':'DocField',
+        'doc_type':'Delivery Note','field_name':'po_no','property':'read_only',
+        'property_type':'Check','value':'1'}).insert();write_setter=setter.name
+    frappe.clear_cache(doctype='Delivery Note');frappe.db.commit();frappe.set_user(actor)
+    assert frappe.get_meta('Delivery Note').get_field('po_no').read_only
     externally_changed=verify_execution(control['id'])
+    assert externally_changed['execution']==succeeded
+    assert externally_changed['observed']['values']['po_no']=='DSHERP-EXTERNAL-EDIT-'+tag
+    assert externally_changed['matches_proposal'] is False,externally_changed
+    assert get_proposal(control['id'])['target']['po_no']==changed.po_no
+    frappe.set_user('Administrator');frappe.delete_doc('Property Setter',write_setter,ignore_permissions=True)
+    write_setter=None;frappe.clear_cache(doctype='Delivery Note');frappe.db.commit();frappe.set_user(actor)
     assert externally_changed['observed']['values']['po_no']=='DSHERP-EXTERNAL-EDIT-'+tag
     assert externally_changed['matches_proposal'] is False,externally_changed
 
@@ -239,6 +306,9 @@ try:
     assert stored_result['values']['po_no']==changed.po_no,'immutable execution evidence was rewritten'
 finally:
     restore_before_insert();frappe.db.rollback();frappe.set_user('Administrator')
+    if write_setter and frappe.db.exists('Property Setter',write_setter):
+        frappe.delete_doc('Property Setter',write_setter,ignore_permissions=True)
+        frappe.clear_cache(doctype='Delivery Note')
     if permission_setter and frappe.db.exists('Property Setter',permission_setter):
         frappe.delete_doc('Property Setter',permission_setter,ignore_permissions=True)
         frappe.clear_cache(doctype='Delivery Note')
