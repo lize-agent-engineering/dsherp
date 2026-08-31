@@ -9,13 +9,60 @@ COMPOSE = ["docker", "compose", "-f", "infra/compose.validation.yml"]
 PROVISIONER = ROOT / "infra" / "provision_manufacturing_fixture.py"
 
 
-def _provision():
+def _provision(*arguments):
     result = subprocess.run(
-        [sys.executable, str(PROVISIONER)],
+        [sys.executable, str(PROVISIONER), *arguments],
         cwd=ROOT,
         text=True,
         capture_output=True,
         timeout=180,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def _read_probe_state():
+    script = r'''
+import json, os, frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost')
+frappe.connect()
+try:
+    names = {
+        'warehouses': [
+            'DSHERP 制造测试瞬时合成仓库 - DVT',
+            'DSHERP 制造测试瞬时合成原料仓 - DVT',
+            'DSHERP 制造测试瞬时合成在制仓 - DVT',
+            'DSHERP 制造测试瞬时合成成品仓 - DVT',
+            'DSHERP 制造测试瞬时合成委外仓 - DVT',
+        ],
+        'suppliers': ['DSHERP 制造测试瞬时合成供应商', 'DSHERP-MFG-SYN-SUPPLIER-CONFLICT'],
+        'items': ['DSHERP-MFG-FRESH-FG', 'DSHERP-MFG-FRESH-RM'],
+        'boms': ['BOM-DSHERP-MFG-FRESH-FG-001', 'BOM-DSHERP-MFG-SYN-FG-CONFLICT'],
+        'reconciliations': ['DSHERP-MFG-FRESH-OPENING-STOCK'],
+    }
+    print(json.dumps({
+        'warehouses': frappe.db.count('Warehouse', {'name': ['in', names['warehouses']]}),
+        'suppliers': frappe.db.count('Supplier', {'name': ['in', names['suppliers']]}),
+        'items': frappe.db.count('Item', {'name': ['in', names['items']]}),
+        'boms': frappe.db.count('BOM', {'name': ['in', names['boms']]}),
+        'reconciliations': frappe.db.count(
+            'Stock Reconciliation', {'name': ['in', names['reconciliations']]}
+        ),
+        'stock_ledger_entries': frappe.db.count(
+            'Stock Ledger Entry', {'item_code': 'DSHERP-MFG-FRESH-RM'}
+        ),
+    }, sort_keys=True))
+finally:
+    frappe.destroy()
+'''
+    result = subprocess.run(
+        [*COMPOSE, "exec", "-T", "backend", "/home/frappe/frappe-bench/env/bin/python", "-"],
+        cwd=ROOT,
+        input=script,
+        text=True,
+        capture_output=True,
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
@@ -178,3 +225,52 @@ def test_repeat_provisioning_returns_the_same_fixture_without_new_posting():
 
     assert second_result == first_result
     assert after == before
+
+
+# Production break caught: persistent alpha state hides a broken first-creation path on later test runs.
+def test_fresh_rollback_mode_really_creates_then_removes_a_transient_fixture():
+    empty = {
+        "boms": 0,
+        "items": 0,
+        "reconciliations": 0,
+        "stock_ledger_entries": 0,
+        "suppliers": 0,
+        "warehouses": 0,
+    }
+    assert _read_probe_state() == empty
+
+    result = _provision("--verify-fresh")
+
+    assert result == {
+        "bom": "BOM-DSHERP-MFG-FRESH-FG-001",
+        "created_counts": {
+            "boms": 1,
+            "items": 2,
+            "reconciliations": 1,
+            "stock_ledger_entries": 1,
+            "suppliers": 1,
+            "warehouses": 5,
+        },
+        "mode": "fresh_rollback",
+        "opening_qty": 100.0,
+        "reconciliation": "DSHERP-MFG-FRESH-OPENING-STOCK",
+        "site": "dsherp-validation.localhost",
+    }
+    assert _read_probe_state() == empty
+
+
+# Production break caught: fixed Supplier/BOM records mask additional records for the same logical fixture.
+def test_conflict_verification_rejects_duplicate_supplier_name_and_finished_good_bom():
+    before = _read_probe_state()
+
+    result = _provision("--verify-conflicts")
+
+    assert result == {
+        "mode": "conflict_rollback",
+        "rejected": {
+            "bom": ["BOM-DSHERP-MFG-SYN-FG-001", "BOM-DSHERP-MFG-SYN-FG-CONFLICT"],
+            "supplier": ["DSHERP 制造测试合成供应商", "DSHERP-MFG-SYN-SUPPLIER-CONFLICT"],
+        },
+        "site": "dsherp-validation.localhost",
+    }
+    assert _read_probe_state() == before

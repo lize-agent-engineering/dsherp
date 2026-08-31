@@ -17,6 +17,7 @@ import frappe
 from frappe.utils import flt
 
 
+RUN_MODE = globals().get('RUN_MODE', 'provision')
 SITE = 'dsherp-validation.localhost'
 ERP_VERSION = '15.119.3'
 FRAPPE_VERSION = '15.118.0'
@@ -36,6 +37,22 @@ OPENING_DATE = '2026-01-01'
 OPENING_QTY = 100.0
 VALUATION_RATE = 10.0
 REQUIRED_RAW_QTY = 2.0
+
+if RUN_MODE == 'verify-fresh':
+    WAREHOUSE_LABELS = {
+        'group': 'DSHERP 制造测试瞬时合成仓库',
+        'raw': 'DSHERP 制造测试瞬时合成原料仓',
+        'work_in_process': 'DSHERP 制造测试瞬时合成在制仓',
+        'finished_goods': 'DSHERP 制造测试瞬时合成成品仓',
+        'subcontracting': 'DSHERP 制造测试瞬时合成委外仓',
+    }
+    SUPPLIER = 'DSHERP 制造测试瞬时合成供应商'
+    FINISHED_GOOD = 'DSHERP-MFG-FRESH-FG'
+    RAW_MATERIAL = 'DSHERP-MFG-FRESH-RM'
+    BOM = 'BOM-DSHERP-MFG-FRESH-FG-001'
+    RECONCILIATION = 'DSHERP-MFG-FRESH-OPENING-STOCK'
+elif RUN_MODE not in ('provision', 'verify-conflicts'):
+    raise RuntimeError(f'Unsupported manufacturing fixture mode: {RUN_MODE}')
 
 
 def require(condition, message):
@@ -92,11 +109,12 @@ def ensure_supplier(supplier_group, country):
         'country': country,
         'disabled': 0,
     }
+    matches = sorted(frappe.get_all('Supplier', filters={'supplier_name': SUPPLIER}, pluck='name'))
     if frappe.db.exists('Supplier', SUPPLIER):
+        require(matches == [SUPPLIER], f'Synthetic Supplier name collision: {matches}')
         doc = frappe.get_doc('Supplier', SUPPLIER)
         require_values(doc, expected, SUPPLIER)
         return doc
-    matches = frappe.get_all('Supplier', filters={'supplier_name': SUPPLIER}, pluck='name')
     require(not matches, f'Synthetic Supplier name collision: {matches}')
     doc = frappe.get_doc({'doctype': 'Supplier', **expected})
     doc.insert(set_name=SUPPLIER)
@@ -127,11 +145,12 @@ def ensure_item(item_code, item_name, item_group, stock_uom):
 
 
 def ensure_bom(company, currency, stock_uom):
+    matches = sorted(frappe.get_all('BOM', filters={'item': FINISHED_GOOD}, pluck='name'))
     if frappe.db.exists('BOM', BOM):
+        require(matches == [BOM], f'Synthetic finished good BOM collision: {matches}')
         doc = frappe.get_doc('BOM', BOM)
     else:
-        conflicting = frappe.get_all('BOM', filters={'item': FINISHED_GOOD}, pluck='name')
-        require(not conflicting, f'Synthetic finished good already has another BOM: {conflicting}')
+        require(not matches, f'Synthetic finished good already has another BOM: {matches}')
         doc = frappe.get_doc({
             'doctype': 'BOM',
             'item': FINISHED_GOOD,
@@ -246,6 +265,81 @@ def ensure_opening_stock(company, raw_warehouse, opening_account, cost_center):
     return doc, flt(actual_qty)
 
 
+def fixture_counts(abbreviation):
+    warehouse_names = [warehouse_name(label, abbreviation) for label in WAREHOUSE_LABELS.values()]
+    return {
+        'warehouses': frappe.db.count('Warehouse', {'name': ['in', warehouse_names]}),
+        'suppliers': frappe.db.count('Supplier', {'name': SUPPLIER}),
+        'items': frappe.db.count('Item', {'name': ['in', [FINISHED_GOOD, RAW_MATERIAL]]}),
+        'boms': frappe.db.count('BOM', {'name': BOM}),
+        'reconciliations': frappe.db.count('Stock Reconciliation', {'name': RECONCILIATION}),
+        'stock_ledger_entries': frappe.db.count('Stock Ledger Entry', {'item_code': RAW_MATERIAL}),
+    }
+
+
+def require_runtime_error(operation, label):
+    try:
+        operation()
+    except RuntimeError:
+        return
+    raise RuntimeError(f'{label} conflict was not rejected')
+
+
+def verify_conflicts(company, supplier_group, stock_uom):
+    expected = {
+        'warehouses': 5, 'suppliers': 1, 'items': 2, 'boms': 1,
+        'reconciliations': 1, 'stock_ledger_entries': 1,
+    }
+    require(fixture_counts(company.abbr) == expected, 'Persistent synthetic fixture baseline differs')
+    supplier_conflict = 'DSHERP-MFG-SYN-SUPPLIER-CONFLICT'
+    bom_conflict = 'BOM-DSHERP-MFG-SYN-FG-CONFLICT'
+    require(not frappe.db.exists('Supplier', supplier_conflict), 'Transient Supplier conflict already exists')
+    require(not frappe.db.exists('BOM', bom_conflict), 'Transient BOM conflict already exists')
+    frappe.get_doc({
+        'doctype': 'Supplier',
+        'supplier_name': SUPPLIER,
+        'supplier_group': supplier_group,
+        'supplier_type': 'Company',
+        'country': company.country,
+        'disabled': 0,
+    }).insert(set_name=supplier_conflict)
+    frappe.get_doc({
+        'doctype': 'BOM',
+        'item': FINISHED_GOOD,
+        'company': company.name,
+        'quantity': 1,
+        'currency': company.default_currency,
+        'conversion_rate': 1,
+        'rm_cost_as_per': 'Valuation Rate',
+        'is_active': 1,
+        'is_default': 0,
+        'with_operations': 0,
+        'items': [{
+            'item_code': RAW_MATERIAL,
+            'qty': REQUIRED_RAW_QTY,
+            'uom': stock_uom,
+            'rate': VALUATION_RATE,
+        }],
+    }).insert(set_name=bom_conflict)
+    require_runtime_error(
+        lambda: ensure_supplier(supplier_group, company.country), 'Synthetic Supplier name'
+    )
+    require_runtime_error(
+        lambda: ensure_bom(company.name, company.default_currency, stock_uom),
+        'Synthetic finished good BOM',
+    )
+    frappe.db.rollback()
+    require(fixture_counts(company.abbr) == expected, 'Conflict verification rollback changed fixture')
+    return {
+        'site': SITE,
+        'mode': 'conflict_rollback',
+        'rejected': {
+            'supplier': [SUPPLIER, supplier_conflict],
+            'bom': [BOM, bom_conflict],
+        },
+    }
+
+
 os.chdir('/home/frappe/frappe-bench/sites')
 frappe.init(site=SITE)
 frappe.connect()
@@ -312,36 +406,63 @@ try:
         'temporary opening Account',
     )
 
-    group = ensure_warehouse(WAREHOUSE_LABELS['group'], company.abbr, company.name, root_warehouse, 1)
-    warehouses = {
-        key: ensure_warehouse(label, company.abbr, company.name, group.name, 0).name
-        for key, label in WAREHOUSE_LABELS.items()
-        if key != 'group'
-    }
-    supplier = ensure_supplier(supplier_group, company.country)
-    finished_good = ensure_item(
-        FINISHED_GOOD, 'DSHERP 制造测试合成成品', finished_group, stock_uom
-    )
-    raw_material = ensure_item(
-        RAW_MATERIAL, 'DSHERP 制造测试合成原料', raw_group, stock_uom
-    )
-    bom = ensure_bom(company.name, company.default_currency, stock_uom)
-    reconciliation, actual_qty = ensure_opening_stock(
-        company.name, warehouses['raw'], opening_account, company.cost_center
-    )
-    frappe.db.commit()
-    print(json.dumps({
-        'site': SITE,
-        'company': company.name,
-        'warehouse_group': group.name,
-        'warehouses': warehouses,
-        'supplier': supplier.name,
-        'finished_good': finished_good.name,
-        'raw_material': raw_material.name,
-        'bom': bom.name,
-        'reconciliation': reconciliation.name,
-        'opening_qty': actual_qty,
-    }, ensure_ascii=False, sort_keys=True))
+    if RUN_MODE == 'verify-conflicts':
+        result = verify_conflicts(company, supplier_group, stock_uom)
+    else:
+        empty_counts = {
+            'warehouses': 0, 'suppliers': 0, 'items': 0, 'boms': 0,
+            'reconciliations': 0, 'stock_ledger_entries': 0,
+        }
+        if RUN_MODE == 'verify-fresh':
+            require(fixture_counts(company.abbr) == empty_counts, 'Transient fixture baseline is not empty')
+        group = ensure_warehouse(WAREHOUSE_LABELS['group'], company.abbr, company.name, root_warehouse, 1)
+        warehouses = {
+            key: ensure_warehouse(label, company.abbr, company.name, group.name, 0).name
+            for key, label in WAREHOUSE_LABELS.items()
+            if key != 'group'
+        }
+        supplier = ensure_supplier(supplier_group, company.country)
+        finished_good = ensure_item(
+            FINISHED_GOOD, 'DSHERP 制造测试合成成品', finished_group, stock_uom
+        )
+        raw_material = ensure_item(
+            RAW_MATERIAL, 'DSHERP 制造测试合成原料', raw_group, stock_uom
+        )
+        bom = ensure_bom(company.name, company.default_currency, stock_uom)
+        reconciliation, actual_qty = ensure_opening_stock(
+            company.name, warehouses['raw'], opening_account, company.cost_center
+        )
+        if RUN_MODE == 'verify-fresh':
+            created_counts = fixture_counts(company.abbr)
+            require(created_counts == {
+                'warehouses': 5, 'suppliers': 1, 'items': 2, 'boms': 1,
+                'reconciliations': 1, 'stock_ledger_entries': 1,
+            }, f'Transient fixture creation counts differ: {created_counts}')
+            frappe.db.rollback()
+            require(fixture_counts(company.abbr) == empty_counts, 'Transient fixture rollback left records')
+            result = {
+                'site': SITE,
+                'mode': 'fresh_rollback',
+                'bom': bom.name,
+                'reconciliation': reconciliation.name,
+                'opening_qty': actual_qty,
+                'created_counts': created_counts,
+            }
+        else:
+            frappe.db.commit()
+            result = {
+                'site': SITE,
+                'company': company.name,
+                'warehouse_group': group.name,
+                'warehouses': warehouses,
+                'supplier': supplier.name,
+                'finished_good': finished_good.name,
+                'raw_material': raw_material.name,
+                'bom': bom.name,
+                'reconciliation': reconciliation.name,
+                'opening_qty': actual_qty,
+            }
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
 except Exception:
     frappe.db.rollback()
     raise
@@ -351,10 +472,19 @@ finally:
 
 
 def main():
+    arguments = sys.argv[1:]
+    if not arguments:
+        mode = "provision"
+    elif arguments == ["--verify-fresh"]:
+        mode = "verify-fresh"
+    elif arguments == ["--verify-conflicts"]:
+        mode = "verify-conflicts"
+    else:
+        raise SystemExit("Usage: provision_manufacturing_fixture.py [--verify-fresh|--verify-conflicts]")
     result = subprocess.run(
         [*COMPOSE, "exec", "-T", "backend", "/home/frappe/frappe-bench/env/bin/python", "-"],
         cwd=ROOT,
-        input=SITE_SCRIPT,
+        input=f"RUN_MODE = {mode!r}\n" + SITE_SCRIPT,
         text=True,
         capture_output=True,
         timeout=180,
