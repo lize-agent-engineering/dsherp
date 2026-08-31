@@ -61,6 +61,16 @@ BASE_POLICIES = [
         'routes': [],
     },
 ]
+ALPHA_SALES_ORDER_POLICY = {
+    **BASE_POLICIES[2],
+    'routes': [
+        {
+            'route_name': 'sales_order_to_delivery_note',
+            'method_path': 'erpnext.selling.doctype.sales_order.sales_order.make_delivery_note',
+            'target_doctype': 'Delivery Note',
+        },
+    ],
+}
 MANUFACTURING_POLICIES = [
     {
         'target_doctype': 'BOM',
@@ -215,8 +225,24 @@ MANUFACTURING_POLICIES = [
         'company_scope': None,
         'routes': [],
     },
+    {
+        'target_doctype': 'Delivery Note',
+        'enabled': 1,
+        'allow_read': 1,
+        'allow_create': 0,
+        'allow_update': 0,
+        'allow_submit': 1,
+        'allow_cancel': 1,
+        'allow_fill': 0,
+        'company_scope': None,
+        'routes': [],
+    },
 ]
-POLICIES = BASE_POLICIES + (MANUFACTURING_POLICIES if POLICY_SET == 'manufacturing' else [])
+POLICIES = (
+    [*BASE_POLICIES[:2], ALPHA_SALES_ORDER_POLICY, *MANUFACTURING_POLICIES]
+    if POLICY_SET == 'manufacturing'
+    else BASE_POLICIES
+)
 SCALAR_FIELDS = (
     'target_doctype', 'enabled', 'allow_read', 'allow_create', 'allow_update',
     'allow_submit', 'allow_cancel', 'allow_fill', 'company_scope',
@@ -250,6 +276,20 @@ def ensure_policy(expected):
     if name:
         doc = frappe.get_doc('DS Doctype Policy', name)
         actual = {**policy_values(doc), 'routes': policy_routes(doc)}
+        if (
+            SITE == 'dsherp-validation.localhost'
+            and expected == BASE_POLICIES[2]
+            and actual == ALPHA_SALES_ORDER_POLICY
+        ):
+            return expected
+        if (
+            SITE == 'dsherp-validation.localhost'
+            and expected == ALPHA_SALES_ORDER_POLICY
+            and actual == BASE_POLICIES[2]
+        ):
+            doc.set('routes', [dict(route) for route in expected['routes']])
+            doc.save()
+            actual = {**policy_values(doc), 'routes': policy_routes(doc)}
         require(
             actual == expected,
             'DS DocType policy conflict for ' + expected['target_doctype'],

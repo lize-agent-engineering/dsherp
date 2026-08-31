@@ -260,10 +260,33 @@ EXPECTED_MANUFACTURING_ROWS = [
         "company_scope": None,
         "routes": [],
     },
+    {
+        "target_doctype": "Delivery Note",
+        "enabled": 1,
+        "allow_read": 1,
+        "allow_create": 0,
+        "allow_update": 0,
+        "allow_submit": 1,
+        "allow_cancel": 1,
+        "allow_fill": 0,
+        "company_scope": None,
+        "routes": [],
+    },
 ]
 
+EXPECTED_ALPHA_SALES_ORDER = {
+    **EXPECTED_ROWS[2],
+    "routes": [
+        {
+            "route_name": "sales_order_to_delivery_note",
+            "method_path": "erpnext.selling.doctype.sales_order.sales_order.make_delivery_note",
+            "target_doctype": "Delivery Note",
+        },
+    ],
+}
+
 EXPECTED_ALL_ROWS = sorted(
-    [*EXPECTED_ROWS, *EXPECTED_MANUFACTURING_ROWS],
+    [*EXPECTED_ROWS[:2], EXPECTED_ALPHA_SALES_ORDER, *EXPECTED_MANUFACTURING_ROWS],
     key=lambda row: row["target_doctype"].casefold(),
 )
 
@@ -389,7 +412,11 @@ def test_manufacturing_policy_set_provisions_exact_alpha_rows_and_routes():
     assert result == {
         "site": "dsherp-validation.localhost",
         "policy_set": "manufacturing",
-        "policies": [*EXPECTED_ROWS, *EXPECTED_MANUFACTURING_ROWS],
+        "policies": [
+            *EXPECTED_ROWS[:2],
+            EXPECTED_ALPHA_SALES_ORDER,
+            *EXPECTED_MANUFACTURING_ROWS,
+        ],
     }
     assert _read_policy_rows(
         "dsherp-validation.localhost",
@@ -415,6 +442,62 @@ def test_manufacturing_policy_set_second_run_is_idempotent():
     assert before == after == EXPECTED_ALL_ROWS
 
 
+def test_manufacturing_policy_set_migrates_exact_pre_delivery_sales_order_route():
+    site = "dsherp-validation.localhost"
+    service = "backend"
+    _provision(site, "--policy-set", "manufacturing")
+    set_routes_script = r'''
+import json, os, frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost')
+frappe.connect()
+try:
+    frappe.set_user('Administrator')
+    policy=frappe.get_doc('DS Doctype Policy','Sales Order')
+    policy.set('routes',json.loads(__ROUTES__))
+    policy.save()
+    frappe.db.commit()
+finally:
+    frappe.destroy()
+'''
+
+    def set_routes(routes):
+        script = set_routes_script.replace("__ROUTES__", repr(json.dumps(routes)))
+        result = subprocess.run(
+            [
+                *COMPOSE,
+                "exec",
+                "-T",
+                service,
+                "/home/frappe/frappe-bench/env/bin/python",
+                "-",
+            ],
+            cwd=ROOT,
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+
+    set_routes([])
+    try:
+        downgraded = next(
+            row
+            for row in _read_policy_rows(site, service)
+            if row["target_doctype"] == "Sales Order"
+        )
+        assert downgraded == EXPECTED_ROWS[2]
+        result = _provision(site, "--policy-set", "manufacturing")
+        assert result["policies"][2] == EXPECTED_ALPHA_SALES_ORDER
+        assert _read_policy_rows(site, service) == EXPECTED_ALL_ROWS
+    finally:
+        rows = _read_policy_rows(site, service)
+        sales_order = next(row for row in rows if row["target_doctype"] == "Sales Order")
+        if sales_order != EXPECTED_ALPHA_SALES_ORDER:
+            set_routes(EXPECTED_ALPHA_SALES_ORDER["routes"])
+
+
 def test_manufacturing_policy_set_fast_fails_and_rolls_back_conflict():
     _provision("dsherp-validation.localhost", "--policy-set", "manufacturing")
     result = _provision(
@@ -429,7 +512,11 @@ def test_manufacturing_policy_set_fast_fails_and_rolls_back_conflict():
         "policy_set": "manufacturing",
         "mode": "conflict_rollback",
         "conflict": "Work Order.allow_update",
-        "baseline": [*EXPECTED_ROWS, *EXPECTED_MANUFACTURING_ROWS],
+        "baseline": [
+            *EXPECTED_ROWS[:2],
+            EXPECTED_ALPHA_SALES_ORDER,
+            *EXPECTED_MANUFACTURING_ROWS,
+        ],
     }
     assert _read_policy_rows(
         "dsherp-validation.localhost",

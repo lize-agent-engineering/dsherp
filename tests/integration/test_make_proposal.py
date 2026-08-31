@@ -78,9 +78,11 @@ try:
     policy=frappe.get_doc('DS Doctype Policy',policy_name)
     assert policy.enabled and policy.allow_read
     routes_before=[{key:row.get(key) for key in ('route_name','method_path','target_doctype')} for row in policy.routes]
-    assert not any(row['route_name']==route_name for row in routes_before),routes_before
-    policy.append('routes',{'route_name':route_name,'method_path':method_path,'target_doctype':'Delivery Note'})
-    policy.save();frappe.db.commit()
+    assert routes_before==[{
+        'route_name':route_name,
+        'method_path':method_path,
+        'target_doctype':'Delivery Note',
+    }],routes_before
 
     frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic make actor','enabled':1,
         'send_welcome_email':0,'roles':[{'role':'Sales User'}]}).insert()
@@ -206,8 +208,6 @@ finally:
         doc=frappe.get_doc('Sales Order',order_name)
         if doc.docstatus==1:doc.cancel()
         frappe.delete_doc('Sales Order',order_name,ignore_permissions=True)
-    if policy_name and routes_before is not None and frappe.db.exists('DS Doctype Policy',policy_name):
-        policy=frappe.get_doc('DS Doctype Policy',policy_name);policy.set('routes',routes_before);policy.save()
     if frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
     if policy_name is not None and routes_before is not None and delivery_count_before is not None:
