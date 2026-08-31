@@ -39,6 +39,19 @@ it('列表只发送筛选及选中名称，不发送选中整份记录',()=>{
   filters[0][3]=1;
   expect(snap).toMatchObject({page_type:'list',doctype:'Item',filters:[['Item','disabled','=',0]],selected:['I-1','I-2']});
 });
+it('Supplier 表单由通用页面结构采集，不在客户端复制业务策略',()=>{
+  const frm={doctype:'Supplier',doc:{doctype:'Supplier',name:'SUP-1',modified:'v1'},is_dirty:()=>false};
+  expect(context.capturePageContext(desk(['Form','Supplier','SUP-1'],{cur_frm:frm}))).toMatchObject({
+    page_type:'form',doctype:'Supplier',name:'SUP-1',version:'v1',dirty:false,
+  });
+});
+it('Supplier 列表由通用页面结构采集，保留筛选与选中名称',()=>{
+  const filters=[['Supplier','disabled','=',0]];
+  const list={doctype:'Supplier',get_filters_for_args:()=>filters,get_checked_items:()=>['SUP-1']};
+  expect(context.capturePageContext(desk(['List','Supplier','List'],{cur_list:list}))).toMatchObject({
+    page_type:'list',doctype:'Supplier',filters,selected:['SUP-1'],
+  });
+});
 it('切页后未就绪的旧 cur_frm 不成为新页面上下文',()=>{
   const snap=context.capturePageContext(desk(['Form','Customer','C-2'],{cur_frm:form()}));
   expect(snap.page_type).toBe('unknown');
@@ -49,11 +62,6 @@ it('未知页面明确限制，不读取残留表单或 DOM',()=>{
   const snap=context.capturePageContext(desk(['query-report','Revenue'],{cur_frm:form()}));
   expect(snap).toMatchObject({page_type:'unknown',route:['query-report','Revenue']});
   expect(snap.doctype).toBeUndefined();
-});
-it('非业务DocType表单按未知页面发送，不把配置元数据冒充业务上下文',()=>{
- const frm=form();frm.doctype='Custom Field';frm.doc={doctype:'Custom Field',name:'Item-ds_note',modified:'v1',fieldname:'ds_note'};
- const snap=context.capturePageContext(desk(['Form','Custom Field','Item-ds_note'],{cur_frm:frm}));
- expect(snap).toEqual({schema_version:1,route:['Form','Custom Field','Item-ds_note'],page_type:'unknown',reason:'当前页面上下文能力有限；请明确说明业务对象。'});
 });
 it('超过快照预算明确拒绝，不静默截断子表',()=>{
   const frm=form(); frm.doc.customer='x'.repeat(40000);

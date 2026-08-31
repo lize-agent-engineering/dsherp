@@ -101,8 +101,6 @@ def desk_membership(enterprise: str):
 
 
 def _read(enterprise,doctype,method,name=None,query=None):
-    if doctype not in ('Item','Customer'):
-        raise frappe.PermissionError('Unsupported business object')
     with _business(enterprise) as (_,__,get):
         params={'doctype':doctype}
         if name is not None:params['name']=name

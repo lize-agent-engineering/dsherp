@@ -1,5 +1,6 @@
 """Real native platform sessions and server-owned enterprise bindings."""
 import httpx
+import subprocess
 from contextlib import contextmanager
 
 PLATFORM = 'http://127.0.0.1:18083'
@@ -156,3 +157,57 @@ def test_retired_platform_realtime_endpoint_stays_closed():
         params = {'EIO':4, 'transport':'polling'}
         headers = {'Origin':'http://platform.localhost:18083'}
         assert client.get('/socket.io/', params=params, headers=headers).status_code == 404
+
+
+def test_platform_supplier_reads_reach_real_policy_and_native_permission_gates():
+    script = r'''
+import os,uuid,frappe
+from contextlib import contextmanager
+from unittest.mock import patch
+os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import api as bridge_api
+from dsherp_platform.api import read_record,read_schema
+
+actor='platform-supplier-'+uuid.uuid4().hex+'@example.invalid'
+try:
+    frappe.set_user('Administrator')
+    assert not frappe.db.exists('DS Doctype Policy','Supplier')
+    native=frappe.db.get_value('DocPerm',{'parent':'Supplier','role':'Purchase Master Manager'},'read')
+    assert native,'Supplier native read permission fixture is missing'
+    frappe.get_doc({'doctype':'User','email':actor,'first_name':'Platform Supplier read','enabled':1,
+        'send_welcome_email':0,'roles':[{'role':'Purchase Master Manager'}]}).insert()
+    policy=frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':'Supplier','enabled':1,
+        'allow_read':1,'allow_create':0,'allow_update':0,'allow_submit':0,'allow_cancel':0,
+        'allow_fill':0,'routes':[]}).insert()
+    supplier=frappe.get_doc('Supplier','DSHERP 制造测试合成供应商')
+    calls=[]
+
+    @contextmanager
+    def business(_enterprise):
+        def get(path,params=None):
+            calls.append(path)
+            return getattr(bridge_api,path.rsplit('.',1)[-1])(**params)
+        yield None,None,get
+
+    frappe.set_user(actor)
+    with patch('dsherp_platform.api._business',business):
+        record=read_record('alpha','Supplier',supplier.name)
+        schema=read_schema('alpha','Supplier')
+        assert record['name']==supplier.name and schema['doctype']=='Supplier'
+        assert calls==['/api/method/dsherp_bridge.api.read_record','/api/method/dsherp_bridge.api.read_schema']
+
+        frappe.set_user('Administrator');policy.enabled=0;policy.save();frappe.set_user(actor)
+        try:read_schema('alpha','Supplier');raise AssertionError('disabled Supplier policy was allowed')
+        except frappe.PermissionError as error:assert 'DS DocType 策略未启用' in str(error),error
+
+        frappe.set_user('Administrator');frappe.delete_doc('DS Doctype Policy','Supplier');frappe.set_user(actor)
+        try:read_record('alpha','Supplier',supplier.name);raise AssertionError('missing Supplier policy was allowed')
+        except frappe.PermissionError as error:assert '缺少 DS DocType 策略' in str(error),error
+finally:
+    frappe.db.rollback();frappe.destroy()
+'''
+    result = subprocess.run(
+        ['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],
+        input=script,text=True,capture_output=True,timeout=40,
+    )
+    assert result.returncode == 0, result.stderr
