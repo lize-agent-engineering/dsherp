@@ -99,3 +99,15 @@ def test_build_is_sorted_utf8_and_idempotent(tmp_path):
         "Trial Balance,科目余额表,\n"
     ).encode()
     assert b"\\u" not in first
+
+
+def test_repository_translation_pack_matches_generated_output(tmp_path):
+    builder = load_builder()
+    glossary = tmp_path / "config/terminology/glossary.csv"
+    glossary.parent.mkdir(parents=True)
+    glossary.write_bytes((ROOT / "config/terminology/glossary.csv").read_bytes())
+    (generated,) = builder.build_translation_packs(tmp_path)
+    committed = ROOT / "frappe_app/dsherp_bridge/translations/zh.csv"
+
+    assert committed.exists(), "committed zh.csv is missing"
+    assert committed.read_bytes() == generated.read_bytes()
