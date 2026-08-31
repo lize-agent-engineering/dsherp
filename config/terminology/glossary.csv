@@ -1,0 +1,51 @@
+source,context,zh,note
+Item Name,,物料名称,消除“项目”歧义，与 Item=物料一致。
+Item Group,,物料组,采用大陆 ERP 常用主数据称谓。
+Item Tax Template,,物料税费模板,与物料主数据统一；“税费”覆盖 taxes and charges 语义。
+Include Item In Manufacturing,,纳入生产用料,表达复选项的实际业务含义。
+Quotation,,销售报价单,明确单据属性及销售方向。
+Delivery Note,,销售出库单,对齐库存出库单据语义。
+Sales Invoice,,销售发票,对齐财务单据标准称谓。
+Purchase Receipt,,采购入库单,明确收货会形成库存入库。
+Purchase Invoice,,采购发票,对齐财务单据标准称谓。
+Material Request,,物料需求单,覆盖采购、调拨、生产等多种需求目的。
+Material Request Type,,物料需求类型,与“物料需求单”统一。
+Request for Quotation,,询价单,明确单据属性。
+Supplier Quotation,,供应商报价单,明确单据属性。
+Stock Entry,,库存单据,覆盖入库、出库、调拨、生产等业务，不仅是手工移动。
+Stock Entry Type,,库存业务类型,表达 Stock Entry 的业务分类。
+Stock Entry Detail,,库存单据明细,与主单名称统一。
+Stock Reconciliation,,库存盘点单,明确单据属性。
+Stock Ledger,,库存台账,区分库存数量台账与财务总账，并使用现代“账”字。
+Stock Ledger Entry,,库存台账明细,表达库存台账逐笔明细。
+Actual Qty,,实际库存,Bin 字段表示当前实存数量。
+Projected Qty,,预计库存,Bin 字段表示考虑供需后的预计库存。
+Valuation Rate,,估值单价,明确单位成本而非总额。
+Incoming Rate,,入库单价,精简并明确单位价格。
+Material Transfer for Manufacture,,生产领料,对齐生产工单的领料动作。
+Material Receipt,,其他入库,作为 Stock Entry Purpose，与标准库存业务称谓一致。
+Material Transfer,,库存调拨,作为 Stock Entry Purpose，明确仓库间调拨。
+Send to Subcontractor,,委外发料,对齐企业供料委外流程。
+Pick List,,拣货单,对齐仓储拣货业务单据。
+Delivery Note Item,,销售出库单明细,与销售出库单统一。
+BOM,,物料清单,首次出现即可被大陆 ERP 用户直接理解。
+Bill of Materials,,物料清单,采用制造业标准称谓。
+Work Order,,生产工单,区分维护、服务等其他工单。
+Work Order Item,,生产工单明细,与生产工单统一。
+Job Card,,工序作业单,表达车间工序执行记录。
+Operation,,工序,制造模块中的标准术语。
+Routing,,工艺路线,消除网络术语歧义。
+Workstation,,工作中心,对齐制造资源与产能语义。
+Quality Inspection,,质量检验单,明确业务记录或单据属性。
+Subcontracting Order,,委外订单,与 ERPNext 委外业务链统一。
+Subcontracting Receipt,,委外入库单,Receipt 在此为委外成品收货入库，不是财务收据。
+Journal Entry,,记账凭证,对齐大陆财务软件标准称谓。
+Payment Entry,,收付款单,同一 DocType 同时覆盖收款与付款。
+General Ledger,,总账,使用大陆会计标准称谓与现代规范字。
+General Ledger,Warehouse,总账,覆盖仓库页 context 专用键，防止其遮蔽裸词条。
+Trial Balance,,科目余额表,对齐大陆财务软件高频报表称谓。
+Profit and Loss Statement,,利润表,对齐大陆会计报表法定称谓。
+Accounts Receivable,,应收账款,使用现代规范字。
+Accounts Payable,,应付账款,使用现代规范字。
+Credit Note,,贷项通知单,修正错误业务含义。
+Bank Reconciliation,,银行对账,使用现代规范字。
