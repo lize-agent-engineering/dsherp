@@ -1,0 +1,371 @@
+"""Provision the idempotent synthetic manufacturing fixture on the alpha Site."""
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parents[1]
+COMPOSE = ["docker", "compose", "-f", "infra/compose.validation.yml"]
+
+SITE_SCRIPT = r'''
+import json
+import os
+
+import erpnext
+import frappe
+from frappe.utils import flt
+
+
+SITE = 'dsherp-validation.localhost'
+ERP_VERSION = '15.119.3'
+FRAPPE_VERSION = '15.118.0'
+WAREHOUSE_LABELS = {
+    'group': 'DSHERP 制造测试合成仓库',
+    'raw': 'DSHERP 制造测试合成原料仓',
+    'work_in_process': 'DSHERP 制造测试合成在制仓',
+    'finished_goods': 'DSHERP 制造测试合成成品仓',
+    'subcontracting': 'DSHERP 制造测试合成委外仓',
+}
+SUPPLIER = 'DSHERP 制造测试合成供应商'
+FINISHED_GOOD = 'DSHERP-MFG-SYN-FG'
+RAW_MATERIAL = 'DSHERP-MFG-SYN-RM'
+BOM = 'BOM-DSHERP-MFG-SYN-FG-001'
+RECONCILIATION = 'DSHERP-MFG-SYN-OPENING-STOCK'
+OPENING_DATE = '2026-01-01'
+OPENING_QTY = 100.0
+VALUATION_RATE = 10.0
+REQUIRED_RAW_QTY = 2.0
+
+
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
+def exactly_one(values, label):
+    require(len(values) == 1, f'Expected exactly one {label}; found {len(values)}')
+    return values[0]
+
+
+def require_field(doctype, fieldname, fieldtype, options=None):
+    field = frappe.get_meta(doctype).get_field(fieldname)
+    require(field is not None, f'{doctype}.{fieldname} is missing from installed schema')
+    require(field.fieldtype == fieldtype, f'{doctype}.{fieldname} must be {fieldtype}')
+    if options is not None:
+        require(field.options == options, f'{doctype}.{fieldname} must link to {options}')
+
+
+def require_values(doc, expected, label):
+    for fieldname, value in expected.items():
+        actual = doc.get(fieldname)
+        require(actual == value, f'{label}.{fieldname} is {actual!r}; expected {value!r}')
+
+
+def warehouse_name(label, abbreviation):
+    return f'{label} - {abbreviation}'
+
+
+def ensure_warehouse(label, abbreviation, company, parent, is_group):
+    name = warehouse_name(label, abbreviation)
+    expected = {
+        'warehouse_name': label,
+        'company': company,
+        'parent_warehouse': parent,
+        'is_group': is_group,
+        'disabled': 0,
+    }
+    if frappe.db.exists('Warehouse', name):
+        doc = frappe.get_doc('Warehouse', name)
+        require_values(doc, expected, name)
+        return doc
+    doc = frappe.get_doc({'doctype': 'Warehouse', **expected})
+    doc.insert(set_name=name)
+    return doc
+
+
+def ensure_supplier(supplier_group, country):
+    expected = {
+        'supplier_name': SUPPLIER,
+        'supplier_group': supplier_group,
+        'supplier_type': 'Company',
+        'country': country,
+        'disabled': 0,
+    }
+    if frappe.db.exists('Supplier', SUPPLIER):
+        doc = frappe.get_doc('Supplier', SUPPLIER)
+        require_values(doc, expected, SUPPLIER)
+        return doc
+    matches = frappe.get_all('Supplier', filters={'supplier_name': SUPPLIER}, pluck='name')
+    require(not matches, f'Synthetic Supplier name collision: {matches}')
+    doc = frappe.get_doc({'doctype': 'Supplier', **expected})
+    doc.insert(set_name=SUPPLIER)
+    return doc
+
+
+def ensure_item(item_code, item_name, item_group, stock_uom):
+    expected = {
+        'item_code': item_code,
+        'item_name': item_name,
+        'item_group': item_group,
+        'stock_uom': stock_uom,
+        'is_stock_item': 1,
+        'disabled': 0,
+    }
+    if frappe.db.exists('Item', item_code):
+        doc = frappe.get_doc('Item', item_code)
+        require_values(doc, expected, item_code)
+        return doc
+    doc = frappe.get_doc({
+        'doctype': 'Item',
+        **expected,
+        'valuation_rate': VALUATION_RATE,
+        'description': f'{item_name}；仅用于隔离 alpha 验收。',
+    })
+    doc.insert(set_name=item_code)
+    return doc
+
+
+def ensure_bom(company, currency, stock_uom):
+    if frappe.db.exists('BOM', BOM):
+        doc = frappe.get_doc('BOM', BOM)
+    else:
+        conflicting = frappe.get_all('BOM', filters={'item': FINISHED_GOOD}, pluck='name')
+        require(not conflicting, f'Synthetic finished good already has another BOM: {conflicting}')
+        doc = frappe.get_doc({
+            'doctype': 'BOM',
+            'item': FINISHED_GOOD,
+            'company': company,
+            'quantity': 1,
+            'currency': currency,
+            'conversion_rate': 1,
+            'rm_cost_as_per': 'Valuation Rate',
+            'is_active': 1,
+            'is_default': 1,
+            'with_operations': 0,
+            'items': [{
+                'item_code': RAW_MATERIAL,
+                'qty': REQUIRED_RAW_QTY,
+                'uom': stock_uom,
+                'rate': VALUATION_RATE,
+            }],
+        })
+        doc.insert(set_name=BOM)
+        doc.submit()
+    require_values(doc, {
+        'item': FINISHED_GOOD,
+        'company': company,
+        'docstatus': 1,
+        'is_active': 1,
+        'is_default': 1,
+    }, BOM)
+    require(flt(doc.quantity) == 1, f'{BOM}.quantity must be 1')
+    require(len(doc.items) == 1, f'{BOM} must contain exactly one raw-material row')
+    item = doc.items[0]
+    require(item.item_code == RAW_MATERIAL, f'{BOM} raw material differs')
+    require(flt(item.qty) == REQUIRED_RAW_QTY, f'{BOM} raw-material quantity differs')
+    require(item.uom == stock_uom, f'{BOM} raw-material UOM differs')
+    return doc
+
+
+def ensure_opening_stock(company, raw_warehouse, opening_account, cost_center):
+    owned_rows = frappe.get_all(
+        'Stock Reconciliation Item',
+        filters={'item_code': RAW_MATERIAL, 'warehouse': raw_warehouse},
+        fields=['parent', 'qty', 'valuation_rate'],
+        order_by='parent',
+    )
+    if frappe.db.exists('Stock Reconciliation', RECONCILIATION):
+        doc = frappe.get_doc('Stock Reconciliation', RECONCILIATION)
+    else:
+        require(not owned_rows, 'Synthetic raw-material opening stock already belongs to another reconciliation')
+        require(
+            not frappe.db.exists('Stock Ledger Entry', {'item_code': RAW_MATERIAL}),
+            'Synthetic raw material already has stock ledger entries',
+        )
+        require(
+            not frappe.db.exists('Bin', {'item_code': RAW_MATERIAL, 'actual_qty': ['!=', 0]}),
+            'Synthetic raw material already has non-zero stock',
+        )
+        doc = frappe.get_doc({
+            'doctype': 'Stock Reconciliation',
+            'naming_series': 'MAT-RECO-.YYYY.-',
+            'company': company,
+            'purpose': 'Opening Stock',
+            'posting_date': OPENING_DATE,
+            'posting_time': '09:00:00',
+            'set_posting_time': 1,
+            'expense_account': opening_account,
+            'cost_center': cost_center,
+            'items': [{
+                'item_code': RAW_MATERIAL,
+                'warehouse': raw_warehouse,
+                'qty': OPENING_QTY,
+                'valuation_rate': VALUATION_RATE,
+            }],
+        })
+        doc.insert(set_name=RECONCILIATION)
+        doc.submit()
+    require_values(doc, {
+        'company': company,
+        'purpose': 'Opening Stock',
+        'docstatus': 1,
+        'expense_account': opening_account,
+        'cost_center': cost_center,
+    }, RECONCILIATION)
+    require(str(doc.posting_date) == OPENING_DATE, f'{RECONCILIATION} posting date differs')
+    require(len(doc.items) == 1, f'{RECONCILIATION} must contain exactly one item row')
+    item = doc.items[0]
+    require(item.item_code == RAW_MATERIAL, f'{RECONCILIATION} item differs')
+    require(item.warehouse == raw_warehouse, f'{RECONCILIATION} warehouse differs')
+    require(flt(item.qty) == OPENING_QTY, f'{RECONCILIATION} quantity differs')
+    require(flt(item.valuation_rate) == VALUATION_RATE, f'{RECONCILIATION} valuation rate differs')
+    owned_rows = frappe.get_all(
+        'Stock Reconciliation Item',
+        filters={'item_code': RAW_MATERIAL, 'warehouse': raw_warehouse},
+        fields=['parent'],
+    )
+    require([row.parent for row in owned_rows] == [RECONCILIATION], 'Synthetic opening reconciliation is not unique')
+    actual_qty = frappe.db.get_value(
+        'Bin', {'item_code': RAW_MATERIAL, 'warehouse': raw_warehouse}, 'actual_qty'
+    )
+    require(flt(actual_qty) == OPENING_QTY, f'Synthetic raw-material Bin quantity is {actual_qty!r}')
+    stock_entries = frappe.get_all(
+        'Stock Ledger Entry',
+        filters={
+            'item_code': RAW_MATERIAL,
+            'warehouse': raw_warehouse,
+            'voucher_type': 'Stock Reconciliation',
+        },
+        fields=['voucher_no'],
+    )
+    require(
+        [row.voucher_no for row in stock_entries] == [RECONCILIATION],
+        'Synthetic opening stock must have exactly one stock-ledger posting',
+    )
+    return doc, flt(actual_qty)
+
+
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site=SITE)
+frappe.connect()
+try:
+    require(frappe.local.site == SITE, f'Unexpected Site {frappe.local.site!r}')
+    require(erpnext.__version__ == ERP_VERSION, f'ERPNext version is {erpnext.__version__!r}')
+    require(frappe.__version__ == FRAPPE_VERSION, f'Frappe version is {frappe.__version__!r}')
+    frappe.set_user('Administrator')
+
+    require_field('Warehouse', 'parent_warehouse', 'Link', 'Warehouse')
+    require_field('BOM', 'items', 'Table', 'BOM Item')
+    require_field('BOM', 'is_active', 'Check')
+    require_field('BOM', 'is_default', 'Check')
+    require_field('Stock Reconciliation', 'items', 'Table', 'Stock Reconciliation Item')
+    purpose = frappe.get_meta('Stock Reconciliation').get_field('purpose')
+    require('Opening Stock' in (purpose.options or '').splitlines(), 'Opening Stock purpose is unavailable')
+    require(frappe.get_meta('BOM').is_submittable, 'BOM must be submittable')
+    require(frappe.get_meta('Stock Reconciliation').is_submittable, 'Stock Reconciliation must be submittable')
+
+    company = exactly_one(
+        frappe.get_all('Company', fields=['name', 'abbr', 'default_currency', 'country', 'cost_center']),
+        'alpha Company',
+    )
+    require(company.abbr, 'Alpha Company abbreviation is missing')
+    require(company.default_currency, 'Alpha Company currency is missing')
+    require(company.country and frappe.db.exists('Country', company.country), 'Alpha Company country is invalid')
+    require(company.cost_center and frappe.db.exists('Cost Center', company.cost_center), 'Alpha Company cost center is invalid')
+
+    stock_uom = frappe.db.get_single_value('Stock Settings', 'stock_uom')
+    require(stock_uom and frappe.db.get_value('UOM', stock_uom, 'enabled'), 'Stock Settings UOM is missing or disabled')
+    finished_group = exactly_one(
+        frappe.get_all('Item Group', filters={'name': '产品展示', 'is_group': 0}, pluck='name'),
+        'finished-good Item Group',
+    )
+    raw_group = exactly_one(
+        frappe.get_all('Item Group', filters={'name': '原材料', 'is_group': 0}, pluck='name'),
+        'raw-material Item Group',
+    )
+    supplier_group = exactly_one(
+        frappe.get_all('Supplier Group', filters={'name': '原材料', 'is_group': 0}, pluck='name'),
+        'raw-material Supplier Group',
+    )
+    require(
+        frappe.db.get_single_value('Buying Settings', 'supp_master_name') == 'Supplier Name',
+        'Supplier naming must use Supplier Name on alpha',
+    )
+    root_warehouse = exactly_one(
+        frappe.get_all(
+            'Warehouse',
+            filters={'company': company.name, 'is_group': 1, 'parent_warehouse': ['is', 'not set']},
+            pluck='name',
+        ),
+        'Company root Warehouse',
+    )
+    opening_account = exactly_one(
+        frappe.get_all(
+            'Account',
+            filters={
+                'company': company.name, 'account_type': 'Temporary', 'report_type': 'Balance Sheet',
+                'is_group': 0, 'disabled': 0,
+            },
+            pluck='name',
+        ),
+        'temporary opening Account',
+    )
+
+    group = ensure_warehouse(WAREHOUSE_LABELS['group'], company.abbr, company.name, root_warehouse, 1)
+    warehouses = {
+        key: ensure_warehouse(label, company.abbr, company.name, group.name, 0).name
+        for key, label in WAREHOUSE_LABELS.items()
+        if key != 'group'
+    }
+    supplier = ensure_supplier(supplier_group, company.country)
+    finished_good = ensure_item(
+        FINISHED_GOOD, 'DSHERP 制造测试合成成品', finished_group, stock_uom
+    )
+    raw_material = ensure_item(
+        RAW_MATERIAL, 'DSHERP 制造测试合成原料', raw_group, stock_uom
+    )
+    bom = ensure_bom(company.name, company.default_currency, stock_uom)
+    reconciliation, actual_qty = ensure_opening_stock(
+        company.name, warehouses['raw'], opening_account, company.cost_center
+    )
+    frappe.db.commit()
+    print(json.dumps({
+        'site': SITE,
+        'company': company.name,
+        'warehouse_group': group.name,
+        'warehouses': warehouses,
+        'supplier': supplier.name,
+        'finished_good': finished_good.name,
+        'raw_material': raw_material.name,
+        'bom': bom.name,
+        'reconciliation': reconciliation.name,
+        'opening_qty': actual_qty,
+    }, ensure_ascii=False, sort_keys=True))
+except Exception:
+    frappe.db.rollback()
+    raise
+finally:
+    frappe.destroy()
+'''
+
+
+def main():
+    result = subprocess.run(
+        [*COMPOSE, "exec", "-T", "backend", "/home/frappe/frappe-bench/env/bin/python", "-"],
+        cwd=ROOT,
+        input=SITE_SCRIPT,
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    if result.returncode:
+        sys.stderr.write(result.stderr)
+        return result.returncode
+    payload = json.loads(result.stdout)
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
