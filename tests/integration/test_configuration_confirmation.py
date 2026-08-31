@@ -86,7 +86,24 @@ try:
     fresh=execution.prepare_preview(bundle['id'],bundle['digest'])
     assert fresh['id']!=expired['id'] and fresh['status']=='Pending'
     assert not frappe.db.exists('DocType','DS Expired Configuration Test')
-finally:frappe.db.rollback();frappe.destroy()
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    confirmation_ids=[expired['id'],fresh['id']]
+    for row in frappe.get_all('DS Configuration Execution',filters={'confirmation':['in',confirmation_ids]},pluck='name'):
+        frappe.delete_doc('DS Configuration Execution',row,force=True)
+    for row in confirmation_ids:
+        if frappe.db.exists('DS Configuration Confirmation',row):frappe.delete_doc('DS Configuration Confirmation',row,force=True)
+    frappe.delete_doc('DS Configuration Bundle',bundle['id'],force=True)
+    frappe.delete_doc('DS Conversation',conversation.name,force=True)
+    frappe.db.commit()
+    residual={
+        'executions':frappe.db.count('DS Configuration Execution',{'confirmation':['in',confirmation_ids]}),
+        'confirmations':frappe.db.count('DS Configuration Confirmation',{'name':['in',confirmation_ids]}),
+        'bundles':frappe.db.count('DS Configuration Bundle',{'name':bundle['id']}),
+        'conversations':frappe.db.count('DS Conversation',{'name':conversation.name}),
+    }
+    assert residual=={'executions':0,'confirmations':0,'bundles':0,'conversations':0},residual
+    frappe.destroy()
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=40)
     assert result.returncode==0,result.stderr

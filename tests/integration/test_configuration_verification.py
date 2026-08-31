@@ -29,8 +29,20 @@ try:
     except frappe.PermissionError:pass
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
+    frappe.delete_doc('DS Configuration Execution',execution.name,force=True)
+    frappe.delete_doc('DS Configuration Confirmation',confirmation.name,force=True)
+    frappe.delete_doc('DS Configuration Bundle',bundle['id'],force=True)
+    frappe.delete_doc('DS Conversation',conversation.name,force=True)
     if frappe.db.exists('Custom Field','Item-ds_verification_only'):frappe.delete_doc('Custom Field','Item-ds_verification_only',force=True)
-    frappe.db.commit();frappe.destroy()
+    frappe.db.commit()
+    residual={
+        'executions':frappe.db.count('DS Configuration Execution',{'name':execution.name}),
+        'confirmations':frappe.db.count('DS Configuration Confirmation',{'name':confirmation.name}),
+        'bundles':frappe.db.count('DS Configuration Bundle',{'name':bundle['id']}),
+        'conversations':frappe.db.count('DS Conversation',{'name':conversation.name}),
+    }
+    assert residual=={'executions':0,'confirmations':0,'bundles':0,'conversations':0},residual
+    frappe.destroy()
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=45)
     assert result.returncode==0,result.stderr

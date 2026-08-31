@@ -115,10 +115,22 @@ try:
     assert frappe.db.count('DocType',{'name':name})==1
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
+    for row in frappe.get_all('DS Configuration Execution',filters={'confirmation':proposal['id']},pluck='name'):
+        frappe.delete_doc('DS Configuration Execution',row,force=True)
+    frappe.delete_doc('DS Configuration Confirmation',proposal['id'],force=True)
+    frappe.delete_doc('DS Configuration Bundle',bundle['id'],force=True)
+    frappe.delete_doc('DS Conversation',conversation.name,force=True)
     if frappe.db.exists('DocType',name):frappe.delete_doc('DocType',name,force=True)
     if frappe.db.exists('User',actor):frappe.delete_doc('User',actor,force=True)
     frappe.db.commit()
     if frappe.db.table_exists(name):frappe.db.sql_ddl('DROP TABLE `tabDS Concurrent Configuration Test`')
+    residual={
+        'executions':frappe.db.count('DS Configuration Execution',{'confirmation':proposal['id']}),
+        'confirmations':frappe.db.count('DS Configuration Confirmation',{'name':proposal['id']}),
+        'bundles':frappe.db.count('DS Configuration Bundle',{'name':bundle['id']}),
+        'conversations':frappe.db.count('DS Conversation',{'name':conversation.name}),
+    }
+    assert residual=={'executions':0,'confirmations':0,'bundles':0,'conversations':0},residual
     frappe.destroy()
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=70)
