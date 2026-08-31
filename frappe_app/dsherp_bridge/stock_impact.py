@@ -7,10 +7,20 @@ from frappe.utils import flt
 
 
 _ENTRY_KEYS = {'item_code', 'quantity', 'uom', 'warehouse'}
+_NO_STOCK_DOCTYPES = frozenset({
+    'Purchase Order',
+    'Sales Order',
+    'Subcontracting Order',
+    'Work Order',
+})
 
 
 def _fail(message):
     frappe.throw('库存影响无法确定：' + message)
+
+
+def _fail_unknown_doctype(doctype):
+    _fail(f'{doctype} 的库存影响尚未实现，不能安全确认')
 
 
 def _table(doc, fieldname, child_doctype):
@@ -237,7 +247,10 @@ def action_impact(doc, action):
         frappe.throw('库存影响只支持提交或取消操作')
     registered = _REGISTRY.get(doc.doctype)
     if not registered:
-        return {'kind': 'none', 'entries': []}
+        if doc.doctype in _NO_STOCK_DOCTYPES:
+            return {'kind': 'none', 'entries': []}
+        _fail_unknown_doctype(doc.doctype)
+    validate_impact_read_access(doc, frappe.session.user)
     movements = registered[0](doc)
     direction = -1 if action == 'cancel' else 1
     entries = [
@@ -282,7 +295,9 @@ def validate_impact_read_access(doc, user):
     """Recheck every source field before exposing its frozen derived value."""
     registered = _REGISTRY.get(doc.doctype)
     if not registered:
-        return
+        if doc.doctype in _NO_STOCK_DOCTYPES:
+            return
+        _fail_unknown_doctype(doc.doctype)
     parent_fields, child_fields = registered[1], registered[2]
     readable = set(doc.meta.get_permitted_fieldnames(user=user, permission_type='read'))
     levels = doc.get_permlevel_access('read')
