@@ -42,6 +42,7 @@ description: Use when dsherp development needs official ERPNext or Frappe docume
 | 凭记忆写 `docs.erpnext.com` 或凭空拼 URL | 旧域已废弃；一律先查索引或 sitemap |
 | 把 V14 中文文档的字段/行为当作 v15 事实 | 仅用于概念理解；字段从实际站点发现 |
 | 在 erpnext.cc 猜索引之外的路径 | 该站 V14 仅 51 页，索引即全集 |
+| 在 docs.frappe.io 猜 `/zh/` 路径或引社区仓库当中文资料 | 官方手册仅英文；中文来源用 erpnext.cc V14 索引 |
 | WebFetch erpnext.cc 不带尾斜杠 | 规范 URL 以 `/` 结尾 |
 | 用 erpnext.cc 译名覆盖项目术语 | `config/terminology/glossary.csv` 优先 |
 | 把 docs.frappe.io 的 vXX 归档 URL 当固定版依据 | 会 301 到现行版；固定版本行为查 GitHub tag 源码 |
