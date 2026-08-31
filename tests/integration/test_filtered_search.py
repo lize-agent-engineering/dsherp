@@ -183,12 +183,13 @@ try:
         except frappe.PermissionError:pass
         assert len(sources(operation_cap))==before
 
-    # Filter-only and title match fields remain authorization dependencies even
-    # though neither one is returned in fields.
+    # Returned fields and independent match fields both remain authorization
+    # dependencies after native field access changes.
     frappe.set_user('Administrator')
-    for doctype,field,source in (
-        ('Bin','projected_qty',filter_only_source),
-        ('Item','item_name',title_source),
+    for doctype,field,source,error_text in (
+        ('Bin','actual_qty',first_source,'历史结果的字段权限已改变'),
+        ('Bin','projected_qty',filter_only_source,'历史结果的匹配字段权限已改变'),
+        ('Item','item_name',title_source,'历史结果的匹配字段权限已改变'),
     ):
         field_permlevels_before[(doctype,field)]=frappe.db.get_value(
             'DocField',{'parent':doctype,'fieldname':field},'permlevel'
@@ -201,9 +202,9 @@ try:
         frappe.set_user(actor)
         try:
             authorize_sources([source])
-            raise AssertionError(('match field permission change preserved source',field))
+            raise AssertionError(('field permission change preserved source',field))
         except frappe.PermissionError as error:
-            assert '匹配字段权限已改变' in str(error),error
+            assert str(error)==error_text,error
         frappe.set_user('Administrator')
         frappe.db.set_value(
             'DocField',{'parent':doctype,'fieldname':field},
