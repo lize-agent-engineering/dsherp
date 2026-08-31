@@ -17,6 +17,11 @@ def _work_order_manufacture(source_name):
     return make_stock_entry(source_name, 'Manufacture')
 
 
+def _purchase_order_to_purchase_receipt(source_name):
+    from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_receipt
+    return make_purchase_receipt(source_name)
+
+
 _ADAPTERS={
     ('Sales Order','sales_order_to_delivery_note',
      'erpnext.selling.doctype.sales_order.sales_order.make_delivery_note','Delivery Note'):
@@ -27,6 +32,10 @@ _ADAPTERS={
     ('Work Order','work_order_manufacture',
      'erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry','Stock Entry'):
         _work_order_manufacture,
+    ('Purchase Order','purchase_order_to_purchase_receipt',
+     'erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_receipt',
+     'Purchase Receipt'):
+        _purchase_order_to_purchase_receipt,
 }
 
 

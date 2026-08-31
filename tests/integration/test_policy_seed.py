@@ -178,6 +178,48 @@ EXPECTED_MANUFACTURING_ROWS = [
         "company_scope": None,
         "routes": [],
     },
+    {
+        "target_doctype": "Supplier",
+        "enabled": 1,
+        "allow_read": 1,
+        "allow_create": 1,
+        "allow_update": 1,
+        "allow_submit": 0,
+        "allow_cancel": 0,
+        "allow_fill": 0,
+        "company_scope": None,
+        "routes": [],
+    },
+    {
+        "target_doctype": "Purchase Order",
+        "enabled": 1,
+        "allow_read": 1,
+        "allow_create": 1,
+        "allow_update": 1,
+        "allow_submit": 1,
+        "allow_cancel": 1,
+        "allow_fill": 0,
+        "company_scope": None,
+        "routes": [
+            {
+                "route_name": "purchase_order_to_purchase_receipt",
+                "method_path": "erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_receipt",
+                "target_doctype": "Purchase Receipt",
+            },
+        ],
+    },
+    {
+        "target_doctype": "Purchase Receipt",
+        "enabled": 1,
+        "allow_read": 1,
+        "allow_create": 0,
+        "allow_update": 0,
+        "allow_submit": 1,
+        "allow_cancel": 1,
+        "allow_fill": 0,
+        "company_scope": None,
+        "routes": [],
+    },
 ]
 
 EXPECTED_ALL_ROWS = sorted(

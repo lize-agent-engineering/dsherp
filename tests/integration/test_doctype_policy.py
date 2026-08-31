@@ -227,8 +227,9 @@ try:
     frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic Supplier policy','enabled':1,
         'send_welcome_email':0,'roles':[{'role':'Purchase Master Manager'}]}).insert()
 
-    existing=frappe.db.get_value('DS Doctype Policy',{'target_doctype':'Supplier'},'name')
-    assert not existing,'Supplier policy belongs to a later manufacturing segment'
+    existing=frappe.get_doc('DS Doctype Policy','Supplier')
+    assert existing.enabled and existing.allow_read and existing.allow_create
+    frappe.delete_doc('DS Doctype Policy','Supplier')
 
     def new_run():
         capability=uuid.uuid4().hex
@@ -302,7 +303,9 @@ assert 'dsherp_bridge.boot.boot_session' in frappe.get_hooks('boot_session')
 actor='context-policy-'+uuid.uuid4().hex+'@example.invalid'
 try:
     frappe.set_user('Administrator')
-    assert not frappe.db.exists('DS Doctype Policy','Supplier')
+    existing=frappe.get_doc('DS Doctype Policy','Supplier')
+    assert existing.enabled and existing.allow_read
+    frappe.delete_doc('DS Doctype Policy','Supplier')
     frappe.get_doc({'doctype':'User','email':actor,'first_name':'Context policy','enabled':1,
         'send_welcome_email':0,'roles':[{'role':'Purchase Master Manager'}]}).insert()
     frappe.set_user(actor);before=frappe._dict();boot_session(before)
@@ -522,6 +525,7 @@ from dsherp_bridge.operations import propose_update,confirm
 
 tag=uuid.uuid4().hex;actor='disabled-policy-'+tag+'@example.invalid';conversation=None;proposal_id=None
 item_name='DS-POLICY-'+tag
+disabled_target='Purchase Invoice'
 try:
     frappe.set_user('Administrator')
     frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic disabled policy revision','enabled':1,
@@ -530,7 +534,7 @@ try:
     item.item_code=item_name;item.item_name='Before disabled policy';item.insert()
     item_policy=frappe.get_doc('DS Doctype Policy','Item')
     assert item_policy.enabled and item_policy.allow_read and item_policy.allow_update
-    assert not frappe.db.exists('DS Doctype Policy','Supplier')
+    assert not frappe.db.exists('DS Doctype Policy',disabled_target)
     frappe.set_user(actor)
     conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Synthetic disabled policy revision'}).insert(ignore_permissions=True).name
     item=frappe.get_doc('Item',item_name)
@@ -539,7 +543,7 @@ try:
     proposal_id=proposal['id'];frappe.db.commit()
 
     frappe.set_user('Administrator')
-    policy=frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':'Supplier','enabled':0,
+    policy=frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':disabled_target,'enabled':0,
         'allow_read':0,'allow_create':0,'allow_update':0,'allow_submit':0,'allow_cancel':0,'allow_fill':0}).insert()
     frappe.db.commit();frappe.set_user(actor)
     after_revision=revision(actor)
@@ -557,8 +561,8 @@ finally:
             frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
     if conversation and frappe.db.exists('DS Conversation',conversation):
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
-    if frappe.db.exists('DS Doctype Policy','Supplier'):
-        frappe.delete_doc('DS Doctype Policy','Supplier')
+    if frappe.db.exists('DS Doctype Policy',disabled_target):
+        frappe.delete_doc('DS Doctype Policy',disabled_target)
     if frappe.db.exists('Item',item_name):frappe.delete_doc('Item',item_name,ignore_permissions=True)
     if frappe.db.exists('User',actor):frappe.delete_doc('User',actor)
     frappe.db.commit();frappe.destroy()

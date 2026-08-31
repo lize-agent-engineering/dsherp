@@ -133,6 +133,48 @@ MANUFACTURING_POLICIES = [
         'company_scope': None,
         'routes': [],
     },
+    {
+        'target_doctype': 'Supplier',
+        'enabled': 1,
+        'allow_read': 1,
+        'allow_create': 1,
+        'allow_update': 1,
+        'allow_submit': 0,
+        'allow_cancel': 0,
+        'allow_fill': 0,
+        'company_scope': None,
+        'routes': [],
+    },
+    {
+        'target_doctype': 'Purchase Order',
+        'enabled': 1,
+        'allow_read': 1,
+        'allow_create': 1,
+        'allow_update': 1,
+        'allow_submit': 1,
+        'allow_cancel': 1,
+        'allow_fill': 0,
+        'company_scope': None,
+        'routes': [
+            {
+                'route_name': 'purchase_order_to_purchase_receipt',
+                'method_path': 'erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_receipt',
+                'target_doctype': 'Purchase Receipt',
+            },
+        ],
+    },
+    {
+        'target_doctype': 'Purchase Receipt',
+        'enabled': 1,
+        'allow_read': 1,
+        'allow_create': 0,
+        'allow_update': 0,
+        'allow_submit': 1,
+        'allow_cancel': 1,
+        'allow_fill': 0,
+        'company_scope': None,
+        'routes': [],
+    },
 ]
 POLICIES = BASE_POLICIES + (MANUFACTURING_POLICIES if POLICY_SET == 'manufacturing' else [])
 SCALAR_FIELDS = (
@@ -190,7 +232,7 @@ try:
     require(POLICY_SET in ('base', 'manufacturing'), 'Unsupported policy set: ' + POLICY_SET)
     require(
         POLICY_SET != 'manufacturing' or SITE == 'dsherp-validation.localhost',
-        'Manufacturing policy set is alpha-only in T2.2',
+        'Manufacturing policy set is alpha-only in Phase 2',
     )
     require(frappe.db.exists('DocType', 'DS Doctype Policy'), 'DS Doctype Policy schema is missing')
     require(
@@ -258,7 +300,7 @@ def main():
     arguments = parser.parse_args()
     site = arguments.site
     if arguments.policy_set == "manufacturing" and site != "dsherp-validation.localhost":
-        parser.error("manufacturing policy set is alpha-only in T2.2")
+        parser.error("manufacturing policy set is alpha-only in Phase 2")
     service = SITE_SERVICES[site]
     mode = "verify-conflict" if arguments.verify_conflict else "provision"
     result = subprocess.run(
