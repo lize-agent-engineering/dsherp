@@ -280,7 +280,7 @@ try:
     assert externally_changed['matches_proposal'] is False,externally_changed
     assert get_proposal(control['id'])['target']['po_no']==changed.po_no
     frappe.set_user('Administrator');frappe.delete_doc('Property Setter',write_setter,ignore_permissions=True)
-    write_setter=None;frappe.clear_cache(doctype='Delivery Note');frappe.db.commit();frappe.set_user(actor)
+    frappe.clear_cache(doctype='Delivery Note');frappe.db.commit();write_setter=None;frappe.set_user(actor)
     assert externally_changed['observed']['values']['po_no']=='DSHERP-EXTERNAL-EDIT-'+tag
     assert externally_changed['matches_proposal'] is False,externally_changed
 
