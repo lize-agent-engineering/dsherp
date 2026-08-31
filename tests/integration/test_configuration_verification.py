@@ -1,15 +1,23 @@
 import subprocess
+import pytest
 
 
-def test_configuration_verification_reads_native_state_without_replay_or_audit_rewrite():
+@pytest.mark.parametrize('fail_early',[False,True],ids=['normal','early-failure'])
+def test_configuration_verification_reads_native_state_without_replay_or_audit_rewrite(fail_early):
     script=r'''
 import os,json,hashlib,frappe
 os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-beta.localhost');frappe.connect()
 from dsherp_bridge.configuration import propose_bundle
 from dsherp_bridge.configuration_execution import _documents,verify_execution
+fail_early=FAIL_EARLY
+conversation=bundle=confirmation=execution=native=None
 try:
     frappe.set_user('dsherp-preview@example.invalid')
-    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Configuration verification'}).insert(ignore_permissions=True)
+    title='Configuration verification cleanup fault' if fail_early else 'Configuration verification'
+    conversation=frappe.get_doc({'doctype':'DS Conversation','title':title}).insert(ignore_permissions=True)
+    if fail_early:
+        frappe.db.commit()
+        raise RuntimeError('EXPECTED_EARLY_FAILURE')
     package={'version':1,'doctypes':[],'extensions':[{'doctype':'Item','fields':[{'fieldname':'ds_verification_only','label':'Verification Only','fieldtype':'Data','insert_after':'item_name'}]}],'workflows':[]}
     bundle=propose_bundle(conversation.name,package)
     binding={'purpose':'preview','target':frappe.local.site,'bundle_digest':bundle['digest'],'package_digest':'p','baseline':bundle['baseline'],'documents':_documents(package)}
@@ -29,20 +37,31 @@ try:
     except frappe.PermissionError:pass
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
-    frappe.delete_doc('DS Configuration Execution',execution.name,force=True)
-    frappe.delete_doc('DS Configuration Confirmation',confirmation.name,force=True)
-    frappe.delete_doc('DS Configuration Bundle',bundle['id'],force=True)
-    frappe.delete_doc('DS Conversation',conversation.name,force=True)
+    execution_id=execution.name if execution else None
+    confirmation_id=confirmation.name if confirmation else None
+    bundle_id=bundle['id'] if bundle else None
+    conversation_id=conversation.name if conversation else None
+    if execution_id and frappe.db.exists('DS Configuration Execution',execution_id):frappe.delete_doc('DS Configuration Execution',execution_id,force=True)
+    if confirmation_id and frappe.db.exists('DS Configuration Confirmation',confirmation_id):frappe.delete_doc('DS Configuration Confirmation',confirmation_id,force=True)
+    if bundle_id and frappe.db.exists('DS Configuration Bundle',bundle_id):frappe.delete_doc('DS Configuration Bundle',bundle_id,force=True)
+    if conversation_id and frappe.db.exists('DS Conversation',conversation_id):frappe.delete_doc('DS Conversation',conversation_id,force=True)
     if frappe.db.exists('Custom Field','Item-ds_verification_only'):frappe.delete_doc('Custom Field','Item-ds_verification_only',force=True)
     frappe.db.commit()
     residual={
-        'executions':frappe.db.count('DS Configuration Execution',{'name':execution.name}),
-        'confirmations':frappe.db.count('DS Configuration Confirmation',{'name':confirmation.name}),
-        'bundles':frappe.db.count('DS Configuration Bundle',{'name':bundle['id']}),
-        'conversations':frappe.db.count('DS Conversation',{'name':conversation.name}),
+        'executions':frappe.db.count('DS Configuration Execution',{'name':execution_id}) if execution_id else 0,
+        'confirmations':frappe.db.count('DS Configuration Confirmation',{'name':confirmation_id}) if confirmation_id else 0,
+        'bundles':frappe.db.count('DS Configuration Bundle',{'name':bundle_id}) if bundle_id else 0,
+        'conversations':frappe.db.count('DS Conversation',{'name':conversation_id}) if conversation_id else 0,
     }
     assert residual=={'executions':0,'confirmations':0,'bundles':0,'conversations':0},residual
     frappe.destroy()
 '''
+    script=script.replace('FAIL_EARLY',str(fail_early))
     result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=45)
-    assert result.returncode==0,result.stderr
+    if fail_early:
+        assert result.returncode!=0
+        assert 'EXPECTED_EARLY_FAILURE' in result.stderr,result.stderr
+        assert 'NameError' not in result.stderr,result.stderr
+        assert result.stderr.rstrip().endswith('RuntimeError: EXPECTED_EARLY_FAILURE'),result.stderr
+    else:
+        assert result.returncode==0,result.stderr

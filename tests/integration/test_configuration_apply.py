@@ -88,7 +88,8 @@ finally:
     assert result.returncode==0,result.stderr
 
 
-def test_concurrent_preview_confirmations_create_one_execution_and_one_native_config():
+@pytest.mark.parametrize('fail_early',[False,True],ids=['normal','early-failure'])
+def test_concurrent_preview_confirmations_create_one_execution_and_one_native_config(fail_early):
     script=r'''
 import os,uuid,frappe,requests
 from concurrent.futures import ThreadPoolExecutor
@@ -96,12 +97,18 @@ os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-beta.localh
 from dsherp_bridge.configuration import propose_bundle
 from dsherp_bridge.configuration_execution import prepare_preview
 actor='dsherp-config-concurrency@example.invalid';name='DS Concurrent Configuration Test'
+fail_early=FAIL_EARLY
+conversation=bundle=proposal=None
 try:
     frappe.set_user('Administrator')
     user=frappe.get_doc({'doctype':'User','email':actor,'first_name':'Config concurrency','enabled':1,'send_welcome_email':0,'api_key':uuid.uuid4().hex})
     secret=uuid.uuid4().hex;user.api_secret=secret;user.insert();user.add_roles('System Manager');frappe.db.commit()
     frappe.set_user(actor)
-    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Concurrent configuration'}).insert(ignore_permissions=True)
+    title='Concurrent configuration cleanup fault' if fail_early else 'Concurrent configuration'
+    conversation=frappe.get_doc({'doctype':'DS Conversation','title':title}).insert(ignore_permissions=True)
+    if fail_early:
+        frappe.db.commit()
+        raise RuntimeError('EXPECTED_EARLY_FAILURE')
     package={'version':1,'doctypes':[{'name':name,'module':'DSHERP Bridge','fields':[{'fieldname':'result','label':'Result','fieldtype':'Data'}],'permissions':[{'role':'System Manager','read':1,'write':1,'create':1}]}],'extensions':[],'workflows':[]}
     bundle=propose_bundle(conversation.name,package);proposal=prepare_preview(bundle['id'],bundle['digest']);frappe.db.commit()
     headers={'X-Frappe-Site-Name':frappe.local.site,'Authorization':'token '+user.api_key+':'+secret}
@@ -115,23 +122,34 @@ try:
     assert frappe.db.count('DocType',{'name':name})==1
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
-    for row in frappe.get_all('DS Configuration Execution',filters={'confirmation':proposal['id']},pluck='name'):
-        frappe.delete_doc('DS Configuration Execution',row,force=True)
-    frappe.delete_doc('DS Configuration Confirmation',proposal['id'],force=True)
-    frappe.delete_doc('DS Configuration Bundle',bundle['id'],force=True)
-    frappe.delete_doc('DS Conversation',conversation.name,force=True)
+    proposal_id=proposal['id'] if proposal else None
+    bundle_id=bundle['id'] if bundle else None
+    conversation_id=conversation.name if conversation else None
+    if proposal_id:
+        for row in frappe.get_all('DS Configuration Execution',filters={'confirmation':proposal_id},pluck='name'):
+            frappe.delete_doc('DS Configuration Execution',row,force=True)
+        if frappe.db.exists('DS Configuration Confirmation',proposal_id):frappe.delete_doc('DS Configuration Confirmation',proposal_id,force=True)
+    if bundle_id and frappe.db.exists('DS Configuration Bundle',bundle_id):frappe.delete_doc('DS Configuration Bundle',bundle_id,force=True)
+    if conversation_id and frappe.db.exists('DS Conversation',conversation_id):frappe.delete_doc('DS Conversation',conversation_id,force=True)
     if frappe.db.exists('DocType',name):frappe.delete_doc('DocType',name,force=True)
     if frappe.db.exists('User',actor):frappe.delete_doc('User',actor,force=True)
     frappe.db.commit()
     if frappe.db.table_exists(name):frappe.db.sql_ddl('DROP TABLE `tabDS Concurrent Configuration Test`')
     residual={
-        'executions':frappe.db.count('DS Configuration Execution',{'confirmation':proposal['id']}),
-        'confirmations':frappe.db.count('DS Configuration Confirmation',{'name':proposal['id']}),
-        'bundles':frappe.db.count('DS Configuration Bundle',{'name':bundle['id']}),
-        'conversations':frappe.db.count('DS Conversation',{'name':conversation.name}),
+        'executions':frappe.db.count('DS Configuration Execution',{'confirmation':proposal_id}) if proposal_id else 0,
+        'confirmations':frappe.db.count('DS Configuration Confirmation',{'name':proposal_id}) if proposal_id else 0,
+        'bundles':frappe.db.count('DS Configuration Bundle',{'name':bundle_id}) if bundle_id else 0,
+        'conversations':frappe.db.count('DS Conversation',{'name':conversation_id}) if conversation_id else 0,
     }
     assert residual=={'executions':0,'confirmations':0,'bundles':0,'conversations':0},residual
     frappe.destroy()
 '''
+    script=script.replace('FAIL_EARLY',str(fail_early))
     result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=70)
-    assert result.returncode==0,result.stderr
+    if fail_early:
+        assert result.returncode!=0
+        assert 'EXPECTED_EARLY_FAILURE' in result.stderr,result.stderr
+        assert 'NameError' not in result.stderr,result.stderr
+        assert result.stderr.rstrip().endswith('RuntimeError: EXPECTED_EARLY_FAILURE'),result.stderr
+    else:
+        assert result.returncode==0,result.stderr
