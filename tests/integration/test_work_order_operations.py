@@ -58,6 +58,13 @@ def stock_snapshot(raw_warehouse,wip_warehouse,fg_warehouse):
     }
 
 
+def site_document_counts():
+    return {
+        'work_orders':frappe.db.count('Work Order'),
+        'stock_entries':frappe.db.count('Stock Entry'),
+    }
+
+
 def new_run():
     capability=uuid.uuid4().hex
     frappe.set_user(actor)
@@ -162,6 +169,7 @@ try:
     )
     assert frappe.db.count('Work Order',{'owner':actor})==0
     assert frappe.db.count('Stock Entry',{'owner':actor})==0
+    initial_document_counts=site_document_counts()
 
     frappe.get_doc({
         'doctype':'User','email':actor,'first_name':'Synthetic Work Order actor',
@@ -225,10 +233,12 @@ try:
         }],
     }
     work_order_before=frappe.db.count('Work Order',{'owner':actor})
+    create_documents_before=site_document_counts()
     create=run_tool(**cap,tool='erp_propose_create',arguments={
         'doctype':'Work Order','values':values,'version':str(schema['modified']),
     })
     assert frappe.db.count('Work Order',{'owner':actor})==work_order_before
+    assert site_document_counts()==create_documents_before
     created=confirm_once(create,create_run)
     assert created['status']=='Succeeded' and created['doctype']=='Work Order',created
     work_order=created['name']
@@ -245,10 +255,12 @@ try:
         'doctype':'Work Order','name':work_order,
     })
     assert draft_read['fields']['docstatus']==0
+    submit_work_order_documents_before=site_document_counts()
     submit_work_order=run_tool(**cap,tool='erp_propose_action',arguments={
         'doctype':'Work Order','name':work_order,'action':'submit',
         'version':str(draft_read['modified']),
     })
+    assert site_document_counts()==submit_work_order_documents_before
     assert frappe.db.get_value('Work Order',work_order,'docstatus')==0
     submitted=confirm_once(submit_work_order,submit_work_order_run)
     assert submitted['status']=='Succeeded',submitted
@@ -262,6 +274,7 @@ try:
     })
     rejected_proposals=frappe.db.count('DS Operation Proposal',{'conversation':conversation})
     rejected_stock_entries=frappe.db.count('Stock Entry',{'owner':actor})
+    transfer_make_documents_before=site_document_counts()
     try:
         run_tool(**cap,tool='erp_propose_make',arguments={
             'source_doctype':'Work Order','source_name':work_order,
@@ -273,6 +286,7 @@ try:
         assert str(error)=='操作提案参数无效',error
     assert frappe.db.count('DS Operation Proposal',{'conversation':conversation})==rejected_proposals
     assert frappe.db.count('Stock Entry',{'owner':actor})==rejected_stock_entries
+    assert site_document_counts()==transfer_make_documents_before
 
     transfer_make=run_tool(**cap,tool='erp_propose_make',arguments={
         'source_doctype':'Work Order','source_name':work_order,
@@ -282,6 +296,7 @@ try:
     assert transfer_make['target']['purpose']=='Material Transfer for Manufacture'
     assert transfer_make['target']['work_order']==work_order
     assert frappe.db.count('Stock Entry',{'owner':actor})==rejected_stock_entries
+    assert site_document_counts()==transfer_make_documents_before
     transfer_created=confirm_once(transfer_make,transfer_make_run)
     assert transfer_created['status']=='Succeeded',transfer_created
     transfer_entry=transfer_created['name']
@@ -294,10 +309,12 @@ try:
     transfer_read=run_tool(**cap,tool='erp_read_record',arguments={
         'doctype':'Stock Entry','name':transfer_entry,
     })
+    transfer_submit_documents_before=site_document_counts()
     transfer_submit=run_tool(**cap,tool='erp_propose_action',arguments={
         'doctype':'Stock Entry','name':transfer_entry,'action':'submit',
         'version':str(transfer_read['modified']),
     })
+    assert site_document_counts()==transfer_submit_documents_before
     assert frappe.db.get_value('Stock Entry',transfer_entry,'docstatus')==0
     transfer_sle_before=frappe.db.count('Stock Ledger Entry',{
         'voucher_type':'Stock Entry','voucher_no':transfer_entry,
@@ -320,10 +337,12 @@ try:
     transferred_work_order=run_tool(**cap,tool='erp_read_record',arguments={
         'doctype':'Work Order','name':work_order,
     })
+    manufacture_make_documents_before=site_document_counts()
     manufacture_make=run_tool(**cap,tool='erp_propose_make',arguments={
         'source_doctype':'Work Order','source_name':work_order,
         'source_version':str(transferred_work_order['modified']),'route':route_manufacture,
     })
+    assert site_document_counts()==manufacture_make_documents_before
     assert manufacture_make['target']['purpose']=='Manufacture'
     assert manufacture_make['target']['work_order']==work_order
     manufacture_created=confirm_once(manufacture_make,manufacture_make_run)
@@ -338,10 +357,12 @@ try:
     manufacture_read=run_tool(**cap,tool='erp_read_record',arguments={
         'doctype':'Stock Entry','name':manufacture_entry,
     })
+    manufacture_submit_documents_before=site_document_counts()
     manufacture_submit=run_tool(**cap,tool='erp_propose_action',arguments={
         'doctype':'Stock Entry','name':manufacture_entry,'action':'submit',
         'version':str(manufacture_read['modified']),
     })
+    assert site_document_counts()==manufacture_submit_documents_before
     manufacture_submitted=confirm_once(manufacture_submit,manufacture_submit_run)
     assert manufacture_submitted['status']=='Succeeded',manufacture_submitted
 
@@ -390,6 +411,7 @@ try:
     stock_schema=run_tool(**cap,tool='erp_read_schema',arguments={'doctype':'Stock Entry'})
     direct_proposals=frappe.db.count('DS Operation Proposal',{'conversation':conversation})
     direct_stock_entries=frappe.db.count('Stock Entry',{'owner':actor})
+    direct_create_documents_before=site_document_counts()
     try:
         run_tool(**cap,tool='erp_propose_create',arguments={
             'doctype':'Stock Entry','values':{'company':company},
@@ -400,9 +422,11 @@ try:
         assert '未允许 Stock Entry 的 create 操作' in str(error),error
     assert frappe.db.count('DS Operation Proposal',{'conversation':conversation})==direct_proposals
     assert frappe.db.count('Stock Entry',{'owner':actor})==direct_stock_entries
+    assert site_document_counts()==direct_create_documents_before
 
     evidence={
         'roles':sorted(roles),
+        'site_document_baseline':initial_document_counts,
         'work_order_schema_version':str(schema['modified']),
         'work_order_fields':sorted(values),
         'warehouses':{
