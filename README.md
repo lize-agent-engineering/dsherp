@@ -39,6 +39,7 @@
 - [当前前端优先与应用生成计划](docs/superpowers/plans/2026-08-28-frontend-agent-app-generation.md)
 - [已确认的平台身份实施计划](docs/superpowers/plans/2026-08-28-platform-identity.md)
 - [阶段 3 身份绑定参考](docs/superpowers/plans/2026-08-28-identity-bound-read-execution.md)
+- [制造业务闭环验证实施计划](docs/superpowers/plans/2026-08-31-manufacturing-loop-validation.md)
 
 ## 最小验证
 
