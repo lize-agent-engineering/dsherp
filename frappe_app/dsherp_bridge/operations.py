@@ -210,7 +210,7 @@ def confirm(proposal_id, digest, request_id):
             saved = frappe.get_doc(doc.doctype, doc.name)
             saved.check_permission('read')
             if payload['action']=='make':
-                actual,matches=_make_target_values(saved,payload['confirmation_target'],user)
+                actual,matches,_partial=_make_target_values(saved,payload['confirmation_target'],user)
                 if not matches:
                     current=_canonicalize_mapped_target(saved)
                     path=_shape_mismatch_path(current,payload['confirmation_target'])
@@ -270,10 +270,14 @@ def verify_execution(proposal_id):
         stored=json.loads(frappe.get_doc('DS Operation Proposal',proposal_id).payload)
         if 'confirmation_target' not in stored:
             frappe.throw('旧版 make 提案缺少确认内容，请重新提出操作')
-        values,matches=_make_target_values(doc,stored['confirmation_target'],frappe.session.user,
-                                           current_read_filter=True)
+        values,matches,partial=_make_target_values(doc,stored['confirmation_target'],frappe.session.user,
+                                                   current_read_filter=True)
         result['observed']={'doctype':doc.doctype,'name':doc.name,'version':str(doc.modified),'values':values}
-        result['matches_proposal']=bool(execution and execution.get('status')=='Succeeded' and matches)
+        if partial:
+            result['comparison_status']='部分字段不可比对'
+            result['note']='部分字段不可比对：当前读权限不足，不能报告完全一致；不会重试操作或改写执行记录。'
+        else:
+            result['matches_proposal']=bool(execution and execution.get('status')=='Succeeded' and matches)
         return result
     values={};matches=True
     for change in proposal['changes']:
@@ -368,31 +372,6 @@ def _public_make_target(doc,target,user):
     return public
 
 
-def _project_frozen_shape(current,frozen):
-    """Return current values in the frozen public shape and whether they match."""
-    if isinstance(frozen,dict):
-        if not isinstance(current,dict):return None,False
-        projected={};matches=True
-        for key,expected in frozen.items():
-            if key not in current:
-                projected[key]=None;matches=False;continue
-            value,exact=_project_frozen_shape(current[key],expected)
-            projected[key]=value;matches=matches and exact
-        return projected,matches
-    if isinstance(frozen,list):
-        if not isinstance(current,list):return [],False
-        matches=len(current)==len(frozen);projected=[]
-        for index,expected in enumerate(frozen):
-            if index>=len(current):
-                projected.append(None);matches=False;continue
-            value,exact=_project_frozen_shape(current[index],expected)
-            projected.append(value);matches=matches and exact
-        return projected,matches
-    value=json.loads(_json(current))
-    expected=json.loads(_json(frozen))
-    return value,_json(value)==_json(expected)
-
-
 def _shape_mismatch_path(current,frozen,path='target'):
     if isinstance(frozen,dict):
         if not isinstance(current,dict):return path
@@ -432,8 +411,9 @@ def _make_confirmation_target(target):
 def _make_target_values(doc,frozen,user,current_read_filter=False):
     current=_public_make_target(doc,_canonicalize_mapped_target(doc),user)
     expected=_public_make_target(doc,frozen,user) if current_read_filter else frozen
-    _,matches=_project_frozen_shape(current,expected)
-    return current,matches
+    partial=current_read_filter and _shape_mismatch_path(expected,frozen) is not None
+    matches=_shape_mismatch_path(current,expected) is None
+    return current,matches,partial
 
 
 def propose_make(session_id,source_doctype,source_name,source_version,route,grant=None,model_run=None):
@@ -444,8 +424,9 @@ def propose_make(session_id,source_doctype,source_name,source_version,route,gran
             raise frappe.PermissionError('提案运行归属或状态不匹配')
     source=frappe.get_doc(source_doctype,source_name);source.check_permission('read')
     if str(source.modified)!=source_version:frappe.throw('来源记录版本已变化，请重新读取后提出操作')
-    from dsherp_bridge.doctype_policy import resolve_route
+    from dsherp_bridge.doctype_policy import require_enabled,resolve_route
     resolved=resolve_route(source_doctype,route)
+    require_enabled(resolved['target_doctype'])
     target=_mapped_target(source_name,resolved)
     target_doc=frappe.get_doc(target);target_doc.check_permission('create');target_doc.check_permission('read')
     confirmation_target=_public_make_target(target_doc,_make_confirmation_target(target),user)

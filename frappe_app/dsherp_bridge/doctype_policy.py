@@ -41,6 +41,18 @@ def require_action(target_doctype, action):
         raise frappe.PermissionError('DS DocType 策略未允许 ' + target_doctype + ' 的 ' + action + ' 操作')
 
 
+def require_enabled(target_doctype):
+    """Require a policy row without granting any specific direct action."""
+    require_policy_schema()
+    policy = frappe.db.get_value(
+        'DS Doctype Policy', {'target_doctype': target_doctype}, ['name', 'enabled'], as_dict=True,
+    )
+    if not policy:
+        raise frappe.PermissionError('缺少 DS DocType 策略：' + target_doctype)
+    if not policy.enabled:
+        raise frappe.PermissionError('DS DocType 策略未启用：' + target_doctype)
+
+
 def resolve_route(source_doctype, route_name):
     """Resolve one enabled, complete server-owned mapped-document route."""
     require_policy_schema()

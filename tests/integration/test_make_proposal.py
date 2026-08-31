@@ -54,7 +54,8 @@ tag=uuid.uuid4().hex
 actor='make-'+tag+'@example.invalid'
 route_name='sales_order_to_delivery_note'
 method_path='erpnext.selling.doctype.sales_order.sales_order.make_delivery_note'
-policy_name=None;routes_before=None;delivery_count_before=None;permission_setter=None;write_setter=None
+policy_name=None;target_policy_name=None;target_policy_enabled=None
+routes_before=None;delivery_count_before=None;permission_setter=None;write_setter=None
 order_name=None;conversation_names=[];run_names=[];proposal_names=[];target_names=[]
 delivery_note_class=delivery_note_module.DeliveryNote
 before_insert_was_local='before_insert' in delivery_note_class.__dict__
@@ -123,6 +124,12 @@ try:
         'method_path':method_path,
         'target_doctype':'Delivery Note',
     }],routes_before
+    target_policy_name=frappe.db.get_value(
+        'DS Doctype Policy',{'target_doctype':'Delivery Note'},'name'
+    )
+    assert target_policy_name
+    target_policy_enabled=frappe.db.get_value('DS Doctype Policy',target_policy_name,'enabled')
+    assert target_policy_enabled
 
     frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic make actor','enabled':1,
         'send_welcome_email':0,'roles':[{'role':'Sales User'}]}).insert()
@@ -147,6 +154,22 @@ try:
     except frappe.ValidationError:pass
     assert frappe.db.count('DS Operation Proposal')==rejected_before
     assert frappe.db.count('Delivery Note')==delivery_count_before
+
+    # A route does not grant the target by itself. make-only targets need an
+    # existing enabled policy row, while allow_create deliberately stays false.
+    frappe.set_user('Administrator')
+    frappe.db.set_value('DS Doctype Policy',target_policy_name,'enabled',0);frappe.db.commit()
+    cap,_=new_run();frappe.set_user('Guest')
+    disabled_read=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Sales Order','name':order_name})
+    try:
+        run_tool(**cap,tool='erp_propose_make',arguments=make_arguments(str(disabled_read['modified'])))
+        raise AssertionError('disabled make target policy accepted')
+    except frappe.PermissionError as error:
+        assert '策略未启用：Delivery Note' in str(error),error
+    assert frappe.db.count('DS Operation Proposal')==rejected_before
+    assert frappe.db.count('Delivery Note')==delivery_count_before
+    frappe.set_user('Administrator')
+    frappe.db.set_value('DS Doctype Policy',target_policy_name,'enabled',target_policy_enabled);frappe.db.commit()
 
     # Freeze the full real mapped draft, including scalar fields and children,
     # without writing a Delivery Note.
@@ -304,10 +327,15 @@ try:
     reverified=verify_execution(control['id'])
     assert 'po_no' not in reverified['execution']['values']
     assert 'po_no' not in reverified['observed']['values']
+    assert reverified['matches_proposal'] is None,reverified
+    assert reverified['comparison_status']=='部分字段不可比对',reverified
+    assert '部分字段不可比对' in reverified['note'],reverified
     stored_result=json.loads(frappe.db.get_value('DS Execution Record',{'proposal':control['id']},'result'))
     assert stored_result['values']['po_no']==changed.po_no,'immutable execution evidence was rewritten'
 finally:
     restore_before_insert();frappe.db.rollback();frappe.set_user('Administrator')
+    if target_policy_name and target_policy_enabled is not None:
+        frappe.db.set_value('DS Doctype Policy',target_policy_name,'enabled',target_policy_enabled)
     if write_setter and frappe.db.exists('Property Setter',write_setter):
         frappe.delete_doc('Property Setter',write_setter,ignore_permissions=True)
         frappe.clear_cache(doctype='Delivery Note')
