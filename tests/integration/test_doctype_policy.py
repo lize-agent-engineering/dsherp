@@ -90,7 +90,14 @@ try:
     frappe.get_doc({'doctype':'User','email':control,'first_name':'Synthetic governance control access','enabled':1,
                     'send_welcome_email':0,'roles':[{'role':'System Manager'}]}).insert()
     frappe.set_user(control)
-    for target in targets:frappe.get_doc('DocType',target).check_permission('read')
+    policy=frappe.get_doc('DS Doctype Policy',governance_name)
+    policy.check_permission('read')
+    policy.apply_fieldlevel_read_permissions()
+    assert 'routes' in policy.as_dict()
+    route_fields=set(frappe.get_meta('DS Doctype Policy Route').get_permitted_fieldnames(
+        parenttype='DS Doctype Policy',user=control,permission_type='read'
+    ))
+    assert {'route_name','method_path','target_doctype'}<=route_fields,route_fields
     frappe.set_user(business)
     try:
         frappe.get_doc('DS Doctype Policy',governance_name).check_permission('read')
