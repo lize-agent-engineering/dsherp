@@ -32,7 +32,9 @@ def _governance_tool_cases():
                     cases.append({'domain': domain, 'owner': 'control', 'tool': tool.name,
                                   'target': target, 'arguments': arguments, 'source': 'configuration'})
                 continue
-            if 'doctype' not in required:
+            target_parameter=('doctype' if 'doctype' in required else
+                              'source_doctype' if 'source_doctype' in required else None)
+            if not target_parameter:
                 continue
             actions = [None]
             for field in required:
@@ -40,14 +42,14 @@ def _governance_tool_cases():
                     actions = properties[field].get('enum', [])
                     if not actions:
                         raise AssertionError(f'已注册工具 {tool.name} 未声明状态动作枚举')
-            source = 'record' if tool.name.startswith('erp_propose_') and 'name' in required else (
+            source = 'record' if tool.name.startswith('erp_propose_') and ({'name','source_name'}&set(required)) else (
                 'schema' if tool.name.startswith('erp_propose_') else None
             )
             owner = 'control' if domain == 'configuration' else 'business'
             for target in GOVERNANCE_TARGETS:
-                arguments = {'doctype': target}
+                arguments = {target_parameter: target}
                 for field in required:
-                    if field == 'doctype':
+                    if field == target_parameter:
                         continue
                     if field == 'values':
                         arguments[field] = {}
@@ -69,7 +71,10 @@ def test_governance_doctype_has_no_business_tool_access():
     } == {
         (domain, target) for domain in ('query', 'operation') for target in GOVERNANCE_TARGETS
     }
-    assert len(cases) == 26
+    assert {(case['domain'],case['target']) for case in cases if case['tool']=='erp_propose_make'}=={
+        ('operation',target) for target in GOVERNANCE_TARGETS
+    }
+    assert len(cases) == 28
     assert {(case['tool'], case['target']) for case in cases if case['domain'] == 'configuration'} == {
         ('erp_read_configuration', target) for target in GOVERNANCE_TARGETS
     } | {('erp_propose_configuration', target) for target in GOVERNANCE_TARGETS}
@@ -142,9 +147,11 @@ try:
         target=case['target']
         arguments=case['arguments']
         if arguments.get('name')=='governance-source-version':arguments['name']=governance_name
+        if arguments.get('source_name')=='governance-source-version':arguments['source_name']=governance_name
         if case['source']=='record':
+            version=arguments.get('version') or arguments.get('source_version')
             sources=[{'tool':'erp_read_record','arguments':{'doctype':target,'name':governance_name},'fields':[],
-                      'records':[],'record_versions':{governance_name:arguments['version']}}]
+                      'records':[],'record_versions':{governance_name:version}}]
         elif case['source']=='schema':
             sources=[{'tool':'erp_read_schema','arguments':{'doctype':target},'fields':[],'records':[],
                       'schema_version':arguments['version']}]

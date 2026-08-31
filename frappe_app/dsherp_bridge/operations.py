@@ -34,12 +34,12 @@ def confirm(proposal_id, digest, request_id):
     # (current) read rather than a repeatable-read lookup.
     frappe.db.rollback()
     proposal = frappe.get_doc('DS Operation Proposal', proposal_id, for_update=True)
-    get_proposal(proposal_id)
+    public=get_proposal(proposal_id)
     if not isinstance(digest, str) or digest != proposal.digest:
         frappe.throw('确认内容不匹配，请重新核对提案')
     existing = frappe.db.get_value('DS Execution Record', {'proposal': proposal_id}, 'name', for_update=True)
     if existing:
-        return _execution_result(frappe.get_doc('DS Execution Record', existing, for_update=True))
+        return public['execution']
     if proposal.model_run and frappe.db.get_value('DS Model Run',proposal.model_run,'status',for_update=True)!='Succeeded':
         frappe.throw('提案生成运行尚未成功结束，请核实运行记录')
     if proposal.status != 'Pending':
@@ -67,8 +67,8 @@ def confirm(proposal_id, digest, request_id):
                 frappe.throw('来源记录版本或 mapped 结果已变化，请重新提出操作')
             from dsherp_bridge.doctype_policy import resolve_route
             route=resolve_route(payload['source_doctype'],payload['route'])
-            if route!={'route_name':payload['route'],'method_path':payload['method_path'],
-                       'target_doctype':payload['target_doctype']}:
+            if any(route[key]!=payload[value] for key,value in (
+                    ('route_name','route'),('method_path','method_path'),('target_doctype','target_doctype'))):
                 frappe.throw('make 路由已变化，请重新提出操作')
             if _mapped_target(source.name,route,frozen=payload['target'])!=payload['target']:
                 frappe.throw('来源记录版本或 mapped 结果已变化，请重新提出操作')
@@ -210,11 +210,10 @@ def _canonicalize_mapped_target(target):
 
 
 def _mapped_target(source_name,route,frozen=None):
-    try:method=frappe.get_attr(route['method_path'])
-    except (AttributeError,ImportError,ModuleNotFoundError):
-        frappe.throw('make 路由方法不可用：'+route['method_path'])
-    if not callable(method):frappe.throw('make 路由方法不可调用：'+route['method_path'])
-    target=_canonicalize_mapped_target(method(source_name))
+    from dsherp_bridge.make_adapters import get_make_adapter
+    adapter=get_make_adapter(route.get('source_doctype'),route.get('route_name'),
+                             route.get('method_path'),route.get('target_doctype'))
+    target=_canonicalize_mapped_target(adapter(source_name))
     if target.get('doctype')!=route['target_doctype']:
         frappe.throw('make 路由目标与 mapped 结果不一致')
     # ERPNext mapped stock documents default posting_time from the current
@@ -351,6 +350,8 @@ def get_proposal(proposal_id):
     doc.check_permission('read')
     if payload['action']=='make':
         public_target=_public_make_target(doc,payload['target'],user)
+        if outcome and outcome['status']=='Succeeded':
+            outcome={**outcome,'values':_public_make_target(doc,outcome.get('values',{}),user)}
     # Recheck access before exposing saved before/after values, even after success.
     readable = set(doc.meta.get_permitted_fieldnames(user=user, permission_type='read'))
     read_levels=doc.get_permlevel_access('read')

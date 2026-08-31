@@ -2,6 +2,43 @@
 import subprocess
 
 
+def test_make_rejects_unregistered_callable_before_invocation():
+    script=r'''
+import os,frappe
+os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import operations
+before=frappe.db.count('ToDo');proposal_before=frappe.db.count('DS Operation Proposal')
+invoked=[]
+original=operations.frappe.get_attr
+def writing_callable(source_name):
+    invoked.append(source_name)
+    return frappe.get_doc({'doctype':'Delivery Note'})
+try:
+    operations.frappe.get_attr=lambda path:writing_callable
+    try:
+        operations._mapped_target('SYNTHETIC-SOURCE',{
+            'source_doctype':'Sales Order','route_name':'unsafe_probe',
+            'method_path':'frappe.desk.form.save.savedocs','target_doctype':'Delivery Note'})
+    except frappe.ValidationError:
+        pass
+    assert invoked==[],'unregistered callable was invoked before rejection'
+    assert frappe.db.count('ToDo')==before
+    assert frappe.db.count('DS Operation Proposal')==proposal_before
+finally:
+    operations.frappe.get_attr=original;frappe.db.rollback();frappe.destroy()
+    os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
+    try:
+        assert frappe.db.count('ToDo')==before
+        assert frappe.db.count('DS Operation Proposal')==proposal_before
+    finally:frappe.destroy()
+'''
+    result=subprocess.run(
+        ['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],
+        input=script,text=True,capture_output=True,timeout=30,
+    )
+    assert result.returncode==0,result.stderr
+
+
 def test_make_freezes_mapped_result_and_rejects_drift():
     script = r'''
 import hashlib,json,os,uuid,frappe
@@ -9,13 +46,13 @@ from frappe.utils import add_to_date,now_datetime
 os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()
 from dsherp_bridge.context_execution import run_tool
 from dsherp_bridge.context_permissions import run_revision
-from dsherp_bridge.operations import confirm,verify_execution
+from dsherp_bridge.operations import confirm,get_proposal,verify_execution
 
 tag=uuid.uuid4().hex
 actor='make-'+tag+'@example.invalid'
 route_name='sales_order_to_delivery_note'
 method_path='erpnext.selling.doctype.sales_order.sales_order.make_delivery_note'
-policy_name=None;routes_before=None;delivery_count_before=None
+policy_name=None;routes_before=None;delivery_count_before=None;permission_setter=None
 order_name=None;conversation_names=[];run_names=[];proposal_names=[];target_names=[]
 
 def new_run():
@@ -122,8 +159,33 @@ try:
     verified=verify_execution(control['id'])
     assert verified['execution']==succeeded and verified['observed']['name']==succeeded['name']
     assert verified['matches_proposal'] is True
+    assert succeeded['values']['po_no']==changed.po_no
+
+    # Historical execution readback must be filtered again after native field
+    # permission changes; immutable stored evidence itself is not rewritten.
+    frappe.set_user('Administrator')
+    setter=frappe.get_doc({'doctype':'Property Setter','doctype_or_field':'DocField',
+        'doc_type':'Delivery Note','field_name':'po_no','property':'permlevel',
+        'property_type':'Int','value':'1'}).insert();permission_setter=setter.name
+    frappe.clear_cache(doctype='Delivery Note');frappe.db.commit();frappe.set_user(actor)
+    exposed=frappe.get_meta('Delivery Note').get_permitted_fieldnames(user=actor,permission_type='read')
+    assert 'po_no' not in exposed,exposed
+    public=get_proposal(control['id'])
+    assert 'po_no' not in public['target']
+    assert 'po_no' not in public['execution']['values'],'historical execution leaked downgraded field'
+    repeated=confirm(control['id'],control['digest'],uuid.uuid4().hex)
+    assert repeated['execution_id']==succeeded['execution_id']
+    assert 'po_no' not in repeated['values'],'duplicate confirm leaked downgraded field'
+    reverified=verify_execution(control['id'])
+    assert 'po_no' not in reverified['execution']['values']
+    assert 'po_no' not in reverified['observed']['values']
+    stored_result=json.loads(frappe.db.get_value('DS Execution Record',{'proposal':control['id']},'result'))
+    assert stored_result['values']['po_no']==changed.po_no,'immutable execution evidence was rewritten'
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
+    if permission_setter and frappe.db.exists('Property Setter',permission_setter):
+        frappe.delete_doc('Property Setter',permission_setter,ignore_permissions=True)
+        frappe.clear_cache(doctype='Delivery Note')
     if order_name:
         target_names.extend(frappe.get_all('Delivery Note Item',filters={'against_sales_order':order_name},pluck='parent'))
     for name in sorted(set(filter(None,target_names))):
@@ -160,6 +222,7 @@ finally:
             assert not any(frappe.db.exists('Sales Order',name) for name in [order_name] if name)
             assert all(not frappe.db.exists('DS Conversation',name) for name in conversation_names)
             assert all(not frappe.db.exists('DS Model Run',name) for name in run_names)
+            if permission_setter:assert not frappe.db.exists('Property Setter',permission_setter)
         finally:frappe.destroy()
 '''
     result=subprocess.run(
