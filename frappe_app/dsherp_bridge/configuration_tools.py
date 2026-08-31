@@ -17,6 +17,9 @@ def read_configuration(doctype):
     _user()
     if not isinstance(doctype,str) or not doctype.strip() or len(doctype)>140:
         frappe.throw('请提供确切配置DocType名称')
+    if doctype == 'DS Doctype Policy':
+        from dsherp_bridge.doctype_policy import require_action
+        require_action(doctype, 'read')
     frappe.has_permission('DocType','read',throw=True)
     result={'doctype':doctype,'exists':bool(frappe.db.exists('DocType',doctype)),
         'modules':frappe.get_list('Module Def',pluck='name',order_by='name',limit_page_length=0),

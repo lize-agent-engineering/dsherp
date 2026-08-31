@@ -6,39 +6,59 @@ import subprocess
 from dsherp import context_mcp
 
 
-def _operation_tool_schemas():
-    server = context_mcp.create_server(None, 'registry-run', 'registry-capability', domain='operation')
-    return {
-        tool.name: tool.inputSchema
-        for tool in asyncio.run(server.list_tools())
-        if tool.name.startswith(('erp_read_', 'erp_propose_'))
-    }
-
-
-def _minimum_governance_arguments(name, schema):
-    required = schema['required']
-    properties = schema['properties']
-    if 'doctype' not in required:
-        raise AssertionError(f'已注册工具 {name} 未声明 DocType 参数')
-    arguments = {'doctype': 'DS Doctype Policy'}
-    action_values = [None]
-    for field in required:
-        if field == 'doctype':
-            continue
-        if field == 'values':
-            arguments[field] = {}
-        elif field == 'action':
-            action_values = properties[field].get('enum', [])
-            if not action_values:
-                raise AssertionError(f'已注册工具 {name} 未声明状态动作枚举')
-        else:
-            arguments[field] = 'governance-source-version'
-    return [{**arguments, **({'action': action} if action is not None else {})} for action in action_values]
+def _governance_tool_cases():
+    cases = []
+    for domain in ('query', 'operation', 'configuration'):
+        server = context_mcp.create_server(None, 'registry-run', 'registry-capability', domain=domain)
+        for tool in asyncio.run(server.list_tools()):
+            if not tool.name.startswith(('erp_read_', 'erp_propose_')):
+                continue
+            schema = tool.inputSchema
+            required = schema['required']
+            properties = schema['properties']
+            if tool.name == 'erp_propose_configuration':
+                if (domain != 'configuration' or set(required) != {'package'}
+                        or properties.get('package', {}).get('type') != 'object'):
+                    raise AssertionError(f'已注册配置提案工具 {tool.name} 的 schema 已变化')
+                arguments = {'package': {'version': 1, 'doctypes': [], 'extensions': [
+                    {'doctype': 'DS Doctype Policy', 'fields': [
+                        {'fieldname': 'ds_governance_probe', 'label': 'Governance Probe',
+                         'fieldtype': 'Data', 'insert_after': 'target_doctype'}
+                    ]}
+                ], 'workflows': []}}
+                cases.append({'domain': domain, 'owner': 'control', 'tool': tool.name,
+                              'arguments': arguments, 'source': 'configuration'})
+                continue
+            if 'doctype' not in required:
+                raise AssertionError(f'已注册工具 {tool.name} 未声明 DocType 参数')
+            arguments = {'doctype': 'DS Doctype Policy'}
+            actions = [None]
+            for field in required:
+                if field == 'doctype':
+                    continue
+                if field == 'values':
+                    arguments[field] = {}
+                elif field == 'action':
+                    actions = properties[field].get('enum', [])
+                    if not actions:
+                        raise AssertionError(f'已注册工具 {tool.name} 未声明状态动作枚举')
+                else:
+                    arguments[field] = 'governance-source-version'
+            source = 'record' if tool.name.startswith('erp_propose_') and 'name' in arguments else (
+                'schema' if tool.name.startswith('erp_propose_') else None
+            )
+            owner = 'control' if domain == 'configuration' else 'business'
+            for action in actions:
+                cases.append({'domain': domain, 'owner': owner, 'tool': tool.name,
+                              'arguments': {**arguments, **({'action': action} if action is not None else {})},
+                              'source': source})
+    if not cases:
+        raise AssertionError('未发现公开业务 MCP 工具')
+    return cases
 
 
 def test_governance_doctype_has_no_business_tool_access():
-    schemas = _operation_tool_schemas()
-    assert schemas
+    cases = _governance_tool_cases()
     script = r'''
 import hashlib,json,os,uuid,frappe
 from frappe.utils import add_to_date,now_datetime
@@ -46,88 +66,87 @@ os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.
 from dsherp_bridge.context_execution import run_tool
 from dsherp_bridge.context_permissions import run_revision
 
-schemas=json.loads(__TOOL_SCHEMAS__)
-target='DS Doctype Policy';actor='governance-zero-access-'+uuid.uuid4().hex+'@example.invalid'
-conversation=None;run_names=[];denied=[]
+cases=json.loads(__CASES__)
+target='DS Doctype Policy';business='governance-zero-access-'+uuid.uuid4().hex+'@example.invalid'
+control='governance-control-access-'+uuid.uuid4().hex+'@example.invalid'
+conversations={};run_names=[];denied=[]
 try:
     frappe.set_user('Administrator')
     assert not frappe.db.exists('DS Doctype Policy',{'target_doctype':target})
     governance_name=frappe.db.get_value('DS Doctype Policy',{},'name')
     assert governance_name,'alpha policy fixture is required for proposal argument shape'
-    frappe.get_doc('DS Doctype Policy',governance_name).check_permission('read')
-    frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic governance zero access','enabled':1,
+    frappe.get_doc({'doctype':'User','email':business,'first_name':'Synthetic governance zero access','enabled':1,
                     'send_welcome_email':0,'roles':[{'role':'Item Manager'}]}).insert()
-    proposal_count=frappe.db.count('DS Operation Proposal')
-    execution_count=frappe.db.count('DS Execution Record')
-    frappe.set_user(actor)
-    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Synthetic governance zero access'}).insert(ignore_permissions=True)
+    frappe.get_doc({'doctype':'User','email':control,'first_name':'Synthetic governance control access','enabled':1,
+                    'send_welcome_email':0,'roles':[{'role':'System Manager'}]}).insert()
+    frappe.set_user(control)
+    frappe.get_doc('DS Doctype Policy',governance_name).check_permission('read')
+    frappe.set_user(business)
     try:
         frappe.get_doc('DS Doctype Policy',governance_name).check_permission('read')
         raise AssertionError('business user read governance policy directly')
     except frappe.PermissionError:
         pass
+    for key,owner in {'business':business,'control':control}.items():
+        frappe.set_user(owner)
+        conversations[key]=frappe.get_doc({'doctype':'DS Conversation','title':'Synthetic governance zero access '+key}).insert(ignore_permissions=True)
 
-    def minimum_arguments(schema):
-        required=schema['required'];properties=schema['properties']
-        assert 'doctype' in required,schema
-        arguments={'doctype':target};actions=[None]
-        for field in required:
-            if field=='doctype':continue
-            if field=='values':arguments[field]={}
-            elif field=='action':
-                actions=properties[field].get('enum',[])
-                assert actions,schema
-            else:arguments[field]='governance-source-version'
-        return [{**arguments,**({'action':action} if action is not None else {})} for action in actions]
-
-    def new_run(sources):
+    def new_run(case,sources):
         capability=uuid.uuid4().hex
-        run=frappe.get_doc({'doctype':'DS Model Run','conversation':conversation.name,'domain':'operation',
+        owner={'business':business,'control':control}[case['owner']]
+        frappe.set_user(owner)
+        run=frappe.get_doc({'doctype':'DS Model Run','conversation':conversations[case['owner']].name,'domain':case['domain'],
             'status':'Running','page_context':json.dumps({'schema_version':1,'page_type':'unknown','route':[]}),
-            'permission_revision':run_revision(actor,'operation'),
+            'permission_revision':run_revision(owner,case['domain']),
             'capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
             'expires_at':add_to_date(now_datetime(),minutes=3),'sources':json.dumps(sources)}).insert(ignore_permissions=True)
         run_names.append(run.name)
         return {'run_id':run.name,'capability':capability}
 
-    for tool,schema in schemas.items():
-        for arguments in minimum_arguments(schema):
-            if tool.startswith('erp_propose_'):
-                source={'tool':'erp_read_record' if 'name' in arguments else 'erp_read_schema',
-                    'arguments':{'doctype':target},'fields':[],'records':[]}
-                if 'name' in arguments:
-                    arguments['name']=governance_name
-                    source['arguments']['name']=governance_name
-                    source['record_versions']={governance_name:arguments['version']}
-                else:
-                    source['schema_version']=arguments['version']
-                sources=[source]
-            else:
-                sources=[]
-            cap=new_run(sources)
-            frappe.set_user('Guest')
-            try:
-                run_tool(**cap,tool=tool,arguments=arguments)
-                raise AssertionError('governance tool access allowed: '+tool)
-            except frappe.PermissionError as error:
-                assert str(error)=='缺少 DS DocType 策略：DS Doctype Policy',error
-                denied.append((tool,arguments.get('action')))
-            finally:
-                frappe.set_user(actor)
-            assert frappe.db.get_value('DS Model Run',cap['run_id'],'sources')==json.dumps(sources)
-            assert not frappe.db.exists('DS Operation Proposal',{'conversation':conversation.name})
-            assert frappe.db.count('DS Operation Proposal')==proposal_count
-            assert frappe.db.count('DS Execution Record')==execution_count
-    assert {tool for tool,_ in denied}==set(schemas)
-    action_schema=schemas['erp_propose_action']['properties']['action']
-    assert {action for tool,action in denied if tool=='erp_propose_action'}==set(action_schema['enum'])
+    for case in cases:
+        arguments=case['arguments']
+        if arguments.get('name')=='governance-source-version':arguments['name']=governance_name
+        if case['source']=='record':
+            sources=[{'tool':'erp_read_record','arguments':{'doctype':target,'name':governance_name},'fields':[],
+                      'records':[],'record_versions':{governance_name:arguments['version']}}]
+        elif case['source']=='schema':
+            sources=[{'tool':'erp_read_schema','arguments':{'doctype':target},'fields':[],'records':[],
+                      'schema_version':arguments['version']}]
+        elif case['source']=='configuration':
+            sources=[{'tool':'erp_read_configuration','arguments':{'doctype':target},'modules':[],'roles':[],
+                      'exists':True,'version':'governance-source-version',
+                      'configuration_revision':'governance-source-revision'}]
+        else:sources=[]
+        cap=new_run(case,sources)
+        frappe.set_user('Guest')
+        try:
+            run_tool(**cap,tool=case['tool'],arguments=arguments)
+            raise AssertionError('governance tool access allowed: '+case['domain']+'/'+case['tool'])
+        except frappe.PermissionError as error:
+            assert str(error)=='缺少 DS DocType 策略：DS Doctype Policy',error
+            denied.append((case['domain'],case['tool'],arguments.get('action')))
+        finally:
+            frappe.set_user({'business':business,'control':control}[case['owner']])
+        assert frappe.db.get_value('DS Model Run',cap['run_id'],'sources')==json.dumps(sources)
+        proposal_ids=frappe.get_all('DS Operation Proposal',filters={'conversation':conversations[case['owner']].name},pluck='name')
+        assert proposal_ids==[]
+        execution_ids=(frappe.get_all('DS Execution Record',filters={'proposal':['in',proposal_ids]},pluck='name')
+                       if proposal_ids else [])
+        assert execution_ids==[]
+        configuration_bundle_ids=frappe.get_all('DS Configuration Bundle',filters={'conversation':conversations[case['owner']].name},pluck='name')
+        assert configuration_bundle_ids==[]
+    assert set(denied)=={(case['domain'],case['tool'],case['arguments'].get('action')) for case in cases}
+    other_case={'domain':'configuration','owner':'control'}
+    cap=new_run(other_case,[]);frappe.set_user('Guest')
+    other=run_tool(**cap,tool='erp_read_configuration',arguments={'doctype':'Item'})
+    assert other['doctype']=='Item' and other['exists']
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
-    assert not frappe.db.exists('User',actor)
-    assert not conversation or not frappe.db.exists('DS Conversation',conversation.name)
+    assert not frappe.db.exists('User',business) and not frappe.db.exists('User',control)
+    assert all(not frappe.db.exists('DS Conversation',conversation.name) for conversation in conversations.values())
     assert all(not frappe.db.exists('DS Model Run',name) for name in run_names)
     frappe.destroy()
-'''.replace('__TOOL_SCHEMAS__', repr(json.dumps(schemas, ensure_ascii=False, sort_keys=True)))
+'''.replace('__CASES__', repr(json.dumps(cases, ensure_ascii=False, sort_keys=True)))
     result = subprocess.run(
         ['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],
         input=script,text=True,capture_output=True,timeout=40,
