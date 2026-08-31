@@ -29,7 +29,8 @@ WAREHOUSE_LABELS = {
     'subcontracting': 'DSHERP 制造测试合成委外仓',
 }
 SUPPLIER = 'DSHERP 制造测试合成供应商'
-FINISHED_GOOD = 'DSHERP-MFG-SYN-FG'
+PERSISTENT_FINISHED_GOOD = 'DSHERP-MFG-SYN-FG'
+FINISHED_GOOD = PERSISTENT_FINISHED_GOOD
 RAW_MATERIAL = 'DSHERP-MFG-SYN-RM'
 SERVICE_ITEM = 'DSHERP-MFG-SYN-SERVICE'
 BOM = 'BOM-DSHERP-MFG-SYN-FG-001'
@@ -79,6 +80,10 @@ def require_values(doc, expected, label):
     for fieldname, value in expected.items():
         actual = doc.get(fieldname)
         require(actual == value, f'{label}.{fieldname} is {actual!r}; expected {value!r}')
+
+
+def values_match(doc, expected):
+    return all(doc.get(fieldname) == value for fieldname, value in expected.items())
 
 
 def warehouse_name(label, abbreviation):
@@ -139,6 +144,15 @@ def ensure_item(
     }
     if frappe.db.exists('Item', item_code):
         doc = frappe.get_doc('Item', item_code)
+        legacy_expected = {**expected, 'is_sub_contracted_item': 0}
+        if (
+            RUN_MODE == 'provision'
+            and item_code == PERSISTENT_FINISHED_GOOD
+            and is_sub_contracted_item == 1
+            and values_match(doc, legacy_expected)
+        ):
+            doc.is_sub_contracted_item = 1
+            doc.save()
         require_values(doc, expected, item_code)
         return doc
     doc = frappe.get_doc({
@@ -316,7 +330,7 @@ def fixture_state(abbreviation, raw_warehouse):
                 filters={'name': ['in', [FINISHED_GOOD, RAW_MATERIAL, SERVICE_ITEM]]},
                 fields=[
                     'name', 'item_name', 'item_group', 'stock_uom', 'is_stock_item',
-                    'is_purchase_item', 'is_sub_contracted_item',
+                    'is_purchase_item', 'is_sub_contracted_item', 'disabled',
                 ],
                 order_by='name',
             )
@@ -418,16 +432,25 @@ def require_runtime_error(operation, label):
     raise RuntimeError(f'{label} conflict was not rejected')
 
 
-def verify_conflicts(company, supplier_group, stock_uom):
+def verify_conflicts(company, supplier_group, finished_group, service_group, stock_uom):
     expected = {
         'warehouses': 5, 'suppliers': 1, 'items': 3, 'boms': 1,
         'reconciliations': 1, 'stock_ledger_entries': 1,
     }
-    require(fixture_counts(company.abbr) == expected, 'Persistent synthetic fixture baseline differs')
+    raw_warehouse = warehouse_name(WAREHOUSE_LABELS['raw'], company.abbr)
+    baseline = fixture_state(company.abbr, raw_warehouse)
+    require(baseline['counts'] == expected, 'Persistent synthetic fixture baseline differs')
     supplier_conflict = 'DSHERP-MFG-SYN-SUPPLIER-CONFLICT'
     bom_conflict = 'BOM-DSHERP-MFG-SYN-FG-CONFLICT'
     require(not frappe.db.exists('Supplier', supplier_conflict), 'Transient Supplier conflict already exists')
     require(not frappe.db.exists('BOM', bom_conflict), 'Transient BOM conflict already exists')
+    finished_good = frappe.get_doc('Item', FINISHED_GOOD)
+    finished_good.item_name = 'DSHERP 制造测试合成成品冲突'
+    finished_good.is_sub_contracted_item = 0
+    finished_good.save()
+    service_item = frappe.get_doc('Item', SERVICE_ITEM)
+    service_item.item_name = 'DSHERP 制造测试合成委外加工服务冲突'
+    service_item.save()
     frappe.get_doc({
         'doctype': 'Supplier',
         'supplier_name': SUPPLIER,
@@ -455,6 +478,20 @@ def verify_conflicts(company, supplier_group, stock_uom):
         }],
     }).insert(set_name=bom_conflict)
     require_runtime_error(
+        lambda: ensure_item(
+            FINISHED_GOOD, 'DSHERP 制造测试合成成品', finished_group, stock_uom,
+            is_stock_item=1, is_sub_contracted_item=1,
+        ),
+        'Synthetic finished-good Item',
+    )
+    require_runtime_error(
+        lambda: ensure_item(
+            SERVICE_ITEM, 'DSHERP 制造测试合成委外加工服务', service_group, stock_uom,
+            is_stock_item=0,
+        ),
+        'Synthetic subcontracting-service Item',
+    )
+    require_runtime_error(
         lambda: ensure_supplier(supplier_group, company.country), 'Synthetic Supplier name'
     )
     require_runtime_error(
@@ -462,11 +499,16 @@ def verify_conflicts(company, supplier_group, stock_uom):
         'Synthetic finished good BOM',
     )
     frappe.db.rollback()
-    require(fixture_counts(company.abbr) == expected, 'Conflict verification rollback changed fixture')
+    require(
+        fixture_state(company.abbr, raw_warehouse) == baseline,
+        'Conflict verification rollback changed fixture state',
+    )
     return {
         'site': SITE,
         'mode': 'conflict_rollback',
         'rejected': {
+            'finished_good': FINISHED_GOOD,
+            'service_item': SERVICE_ITEM,
             'supplier': [SUPPLIER, supplier_conflict],
             'bom': [BOM, bom_conflict],
         },
@@ -544,7 +586,9 @@ try:
     )
 
     if RUN_MODE == 'verify-conflicts':
-        result = verify_conflicts(company, supplier_group, stock_uom)
+        result = verify_conflicts(
+            company, supplier_group, finished_group, service_group, stock_uom
+        )
     else:
         empty_counts = {
             'warehouses': 0, 'suppliers': 0, 'items': 0, 'boms': 0,

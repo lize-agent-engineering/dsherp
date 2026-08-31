@@ -9,14 +9,18 @@ COMPOSE = ["docker", "compose", "-f", "infra/compose.validation.yml"]
 PROVISIONER = ROOT / "infra" / "provision_manufacturing_fixture.py"
 
 
-def _provision(*arguments):
-    result = subprocess.run(
+def _invoke_provisioner(*arguments):
+    return subprocess.run(
         [sys.executable, str(PROVISIONER), *arguments],
         cwd=ROOT,
         text=True,
         capture_output=True,
         timeout=180,
     )
+
+
+def _provision(*arguments):
+    result = _invoke_provisioner(*arguments)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
@@ -119,7 +123,7 @@ try:
             ]]},
             fields=[
                 'name', 'item_name', 'item_group', 'stock_uom', 'is_stock_item',
-                'is_purchase_item', 'is_sub_contracted_item',
+                'is_purchase_item', 'is_sub_contracted_item', 'disabled',
             ], order_by='name'
         ),
         'bom': {
@@ -182,6 +186,165 @@ finally:
     return json.loads(result.stdout)
 
 
+def _transition_persistent_fixture(mode):
+    script = rf'''
+import json, os, frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost')
+frappe.connect()
+try:
+    frappe.set_user('Administrator')
+    mode = {mode!r}
+    finished_good = 'DSHERP-MFG-SYN-FG'
+    service_item = 'DSHERP-MFG-SYN-SERVICE'
+    finished_expected = {{
+        'item_code': finished_good,
+        'item_name': 'DSHERP 制造测试合成成品',
+        'item_group': '产品展示',
+        'stock_uom': 'Nos',
+        'is_stock_item': 1,
+        'is_purchase_item': 1,
+        'disabled': 0,
+    }}
+    service_expected = {{
+        'item_code': service_item,
+        'item_name': 'DSHERP 制造测试合成委外加工服务',
+        'item_group': '服务',
+        'stock_uom': 'Nos',
+        'is_stock_item': 0,
+        'is_purchase_item': 1,
+        'is_sub_contracted_item': 0,
+        'disabled': 0,
+    }}
+
+    def require_values(doc, expected, label):
+        for fieldname, value in expected.items():
+            actual = doc.get(fieldname)
+            if actual != value:
+                raise RuntimeError(
+                    f'{{label}}.{{fieldname}} is {{actual!r}}; expected {{value!r}}'
+                )
+
+    finished = frappe.get_doc('Item', finished_good)
+    if mode in ('legacy', 'legacy-conflict'):
+        require_values(finished, finished_expected, finished_good)
+        if finished.is_sub_contracted_item != 1:
+            raise RuntimeError('Persistent finished good is not at the T2.4 baseline')
+        service = frappe.get_doc('Item', service_item)
+        require_values(service, service_expected, service_item)
+        frappe.delete_doc('Item', service_item, ignore_permissions=True)
+        finished.is_sub_contracted_item = 0
+        if mode == 'legacy-conflict':
+            finished.item_name = 'DSHERP 制造测试合成成品冲突'
+        finished.save(ignore_permissions=True)
+    elif mode == 'current':
+        if finished.item_name == 'DSHERP 制造测试合成成品冲突':
+            finished.item_name = finished_expected['item_name']
+        require_values(finished, finished_expected, finished_good)
+        if finished.is_sub_contracted_item not in (0, 1):
+            raise RuntimeError('Persistent finished-good flag has an unknown value')
+        if finished.is_sub_contracted_item == 0 or finished.has_value_changed('item_name'):
+            finished.is_sub_contracted_item = 1
+            finished.save(ignore_permissions=True)
+        if frappe.db.exists('Item', service_item):
+            service = frappe.get_doc('Item', service_item)
+            require_values(service, service_expected, service_item)
+        else:
+            frappe.get_doc({{
+                'doctype': 'Item',
+                **service_expected,
+                'valuation_rate': 10.0,
+                'description': 'DSHERP 制造测试合成委外加工服务；仅用于隔离 alpha 验收。',
+            }}).insert(ignore_permissions=True, set_name=service_item)
+    else:
+        raise RuntimeError(f'Unsupported fixture transition mode: {{mode}}')
+    frappe.db.commit()
+    print(json.dumps({{
+        'mode': mode,
+        'finished_good_flag': frappe.db.get_value(
+            'Item', finished_good, 'is_sub_contracted_item'
+        ),
+        'service_item_exists': bool(frappe.db.exists('Item', service_item)),
+    }}, sort_keys=True))
+except Exception:
+    frappe.db.rollback()
+    raise
+finally:
+    frappe.destroy()
+'''
+    result = subprocess.run(
+        [*COMPOSE, "exec", "-T", "backend", "/home/frappe/frappe-bench/env/bin/python", "-"],
+        cwd=ROOT,
+        input=script,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+# Production break caught: a valid T0.3 fixture cannot be replayed after T2.4 extends its Item contract.
+def test_provisioner_migrates_the_exact_legacy_fixture_then_remains_idempotent():
+    before = _read_fixture_state()
+    assert [item["name"] for item in before["items"]] == [
+        "DSHERP-MFG-SYN-FG",
+        "DSHERP-MFG-SYN-RM",
+        "DSHERP-MFG-SYN-SERVICE",
+    ]
+    assert before["items"][0]["is_sub_contracted_item"] == 1
+
+    transition = _transition_persistent_fixture("legacy")
+    assert transition == {
+        "finished_good_flag": 0,
+        "mode": "legacy",
+        "service_item_exists": False,
+    }
+    try:
+        first_result = _provision()
+        upgraded = _read_fixture_state()
+        second_result = _provision()
+        after_second = _read_fixture_state()
+
+        assert first_result == second_result
+        assert upgraded == after_second == before
+        assert upgraded["items"][0]["is_sub_contracted_item"] == 1
+        assert upgraded["items"][2] == before["items"][2]
+    finally:
+        restored = _transition_persistent_fixture("current")
+        assert restored == {
+            "finished_good_flag": 1,
+            "mode": "current",
+            "service_item_exists": True,
+        }
+
+
+# Production break caught: migration must not claim an unrelated same-name Item with field drift.
+def test_provisioner_rejects_a_legacy_fixture_with_any_other_owned_field_conflict():
+    before = _read_fixture_state()
+    transition = _transition_persistent_fixture("legacy-conflict")
+    assert transition == {
+        "finished_good_flag": 0,
+        "mode": "legacy-conflict",
+        "service_item_exists": False,
+    }
+    try:
+        result = _invoke_provisioner()
+        assert result.returncode != 0
+        assert (
+            "DSHERP-MFG-SYN-FG.item_name is "
+            "'DSHERP 制造测试合成成品冲突'; expected 'DSHERP 制造测试合成成品'"
+        ) in result.stderr
+    finally:
+        restored = _transition_persistent_fixture("current")
+        assert restored == {
+            "finished_good_flag": 1,
+            "mode": "current",
+            "service_item_exists": True,
+        }
+    assert _read_fixture_state() == before
+
+
 # Production break caught: a provisioned fixture is missing its real submitted BOM or opening Bin balance.
 def test_provisioner_creates_readable_bom_and_deterministic_opening_stock():
     result = _provision()
@@ -205,6 +368,7 @@ def test_provisioner_creates_readable_bom_and_deterministic_opening_stock():
             "is_stock_item": 1,
             "is_purchase_item": 1,
             "is_sub_contracted_item": 1,
+            "disabled": 0,
         },
         {
             "name": "DSHERP-MFG-SYN-RM",
@@ -214,6 +378,7 @@ def test_provisioner_creates_readable_bom_and_deterministic_opening_stock():
             "is_stock_item": 1,
             "is_purchase_item": 1,
             "is_sub_contracted_item": 0,
+            "disabled": 0,
         },
         {
             "name": "DSHERP-MFG-SYN-SERVICE",
@@ -223,6 +388,7 @@ def test_provisioner_creates_readable_bom_and_deterministic_opening_stock():
             "is_stock_item": 0,
             "is_purchase_item": 1,
             "is_sub_contracted_item": 0,
+            "disabled": 0,
         },
     ]
     assert state["bom"] == {
@@ -309,6 +475,38 @@ def test_fresh_rollback_mode_really_creates_then_removes_a_transient_fixture():
         "suppliers": 1,
         "warehouses": 5,
     }
+    assert state["items"] == [
+        {
+            "disabled": 0,
+            "is_purchase_item": 1,
+            "is_stock_item": 1,
+            "is_sub_contracted_item": 1,
+            "item_group": "产品展示",
+            "item_name": "DSHERP 制造测试合成成品",
+            "name": "DSHERP-MFG-FRESH-FG",
+            "stock_uom": "Nos",
+        },
+        {
+            "disabled": 0,
+            "is_purchase_item": 1,
+            "is_stock_item": 1,
+            "is_sub_contracted_item": 0,
+            "item_group": "原材料",
+            "item_name": "DSHERP 制造测试合成原料",
+            "name": "DSHERP-MFG-FRESH-RM",
+            "stock_uom": "Nos",
+        },
+        {
+            "disabled": 0,
+            "is_purchase_item": 1,
+            "is_stock_item": 0,
+            "is_sub_contracted_item": 0,
+            "item_group": "服务",
+            "item_name": "DSHERP 制造测试合成委外加工服务",
+            "name": "DSHERP-MFG-FRESH-SERVICE",
+            "stock_uom": "Nos",
+        },
+    ]
     assert state["bom"] == {
         "docstatus": 1,
         "is_active": 1,
@@ -342,8 +540,8 @@ def test_fresh_rollback_mode_really_creates_then_removes_a_transient_fixture():
     assert _read_probe_state() == empty
 
 
-# Production break caught: fixed Supplier/BOM records mask additional records for the same logical fixture.
-def test_conflict_verification_rejects_duplicate_supplier_name_and_finished_good_bom():
+# Production break caught: conflicts and their rollback must cover every T2.4 fixture Item too.
+def test_conflict_verification_rejects_owned_record_drift_and_rolls_back_full_fixture():
     before = _read_probe_state()
 
     result = _provision("--verify-conflicts")
@@ -352,6 +550,8 @@ def test_conflict_verification_rejects_duplicate_supplier_name_and_finished_good
         "mode": "conflict_rollback",
         "rejected": {
             "bom": ["BOM-DSHERP-MFG-SYN-FG-001", "BOM-DSHERP-MFG-SYN-FG-CONFLICT"],
+            "finished_good": "DSHERP-MFG-SYN-FG",
+            "service_item": "DSHERP-MFG-SYN-SERVICE",
             "supplier": ["DSHERP 制造测试合成供应商", "DSHERP-MFG-SYN-SUPPLIER-CONFLICT"],
         },
         "site": "dsherp-validation.localhost",
