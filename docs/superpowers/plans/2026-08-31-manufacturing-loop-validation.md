@@ -18,6 +18,7 @@
 ## 全局约束（每个任务隐含遵守）
 
 - 中文回复与提交说明按仓库现状；TDD 先写行为测试确认失败再最小实现；fastfail，配置缺失/权限不足明确报错，不静默降级。
+- 本计划 active 期间，计划外并行工作须累计到阶段边界再合入，或由明确指令排在计划提交序列之外；既有历史不改写。今后每项任务完成时，须在同一功能提交或紧随其后的任务收尾文档提交中同步勾选复选框。
 - 固定 DSH SDK/Runtime `0.1.1rc1`（源码 ref `528c682e...`）不动；Frappe `15.118.0` / ERPNext `15.119.3`；从实际站点发现字段，不猜 schema，不凭记忆编造 API。
 - 模型仅 `deepseek-v4-flash`（`context_execution.py:122` 白名单），项目原模型授权内使用，不扩大生产写入。
 - 不新增常驻服务（无 worker/scheduler/websocket，现状为按需一次性容器）；不 fork/修改上游核心。
@@ -82,15 +83,15 @@ make 路由候选方法名（`make_delivery_note`、`make_stock_entry`、`make_p
 
 ## 阶段 0：落盘与真实发现
 
-- [ ] **T0.1 计划落盘**：把本计划全文存为 `docs/superpowers/plans/2026-08-31-manufacturing-loop-validation.md`，`README.md` 文档清单加链接，单独提交（`docs:` 前缀）。
-- [ ] **T0.2 make 方法与委外链真实发现**：在 alpha 用只读脚本（`work/` 下，事后清理）核验 ERPNext v15 实际 mapped-doc 方法导入路径，以及"企业供料加工"链的确切单据序列（`is_subcontracted` 采购订单 → Subcontracting Order → Send to Subcontractor 供料 Stock Entry → Subcontracting Receipt）。确切签名与一次 dry-run 输出摘要记入 `docs/engineering/erpnext-integration-evidence.md` 附录。判据：每条路由有确切 import path；零遗留写入。
-- [ ] **T0.3 alpha 制造 fixture**：新建幂等脚本 `infra/provision_manufacturing_fixture.py`（数据命名明确标注合成）：仓库组（原料/在制/成品/委外仓）、Supplier、`is_stock_item=1` 的成品+原料、成品 BOM、期初库存（Stock Reconciliation）。先写失败测试 `tests/integration/test_manufacturing_fixture.py`（断言 BOM 可读、Bin 有期初量、重复执行幂等），确认红 → 实现 → 绿 → 提交。
+- [x] **T0.1 计划落盘**：把本计划全文存为 `docs/superpowers/plans/2026-08-31-manufacturing-loop-validation.md`，`README.md` 文档清单加链接，单独提交（`docs:` 前缀）。
+- [x] **T0.2 make 方法与委外链真实发现**：在 alpha 用只读脚本（`work/` 下，事后清理）核验 ERPNext v15 实际 mapped-doc 方法导入路径，以及"企业供料加工"链的确切单据序列（`is_subcontracted` 采购订单 → Subcontracting Order → Send to Subcontractor 供料 Stock Entry → Subcontracting Receipt）。确切签名与一次 dry-run 输出摘要记入 `docs/engineering/erpnext-integration-evidence.md` 附录。判据：每条路由有确切 import path；零遗留写入。
+- [x] **T0.3 alpha 制造 fixture**：新建幂等脚本 `infra/provision_manufacturing_fixture.py`（数据命名明确标注合成）：仓库组（原料/在制/成品/委外仓）、Supplier、`is_stock_item=1` 的成品+原料、成品 BOM、期初库存（Stock Reconciliation）。先写失败测试 `tests/integration/test_manufacturing_fixture.py`（断言 BOM 可读、Bin 有期初量、重复执行幂等），确认红 → 实现 → 绿 → 提交。
 
 ## 阶段 1：策略表机制与旧 DocType 迁移
 
-- [ ] **T1.1 DS Doctype Policy 落地**：按"设计定案"建 DocType 与子表；`context_permissions.revision()` 取样扩展为"全部启用策略行的 DocType + 策略行内容"。先写失败测试 `tests/integration/test_doctype_policy.py`：`test_policy_rows_gate_tool_doctypes`（未启用 DocType 的 read/propose 被拒，启用后放行）、`test_policy_change_rotates_revision`（改策略行 → revision 变化 → 在飞提案 confirm 被拒）。红 → 实现 → 绿 → 提交。
-- [ ] **T1.2 迁移与删除硬编码**：把 Item/Customer/Sales Order 三条策略行写入（迁移脚本或 fixture），随后逐点删除"关键现状事实"列出的 8+ 处白名单，全部改查策略表。安全网：既有全仓 Python 回归与前端 88+ 项必须全绿后才提交。分两个 commit：先接线（新旧并行读策略）、后删除。
-- [ ] **T1.3 治理零访问校验**：测试断言 `DS Doctype Policy` 自身对 `erp_read_*` / `erp_propose_*` 全部被拒（策略表里没有它自己的行即天然被拒，用测试锁死这一事实）。
+- [x] **T1.1 DS Doctype Policy 落地**：按"设计定案"建 DocType 与子表；`context_permissions.revision()` 取样扩展为"全部启用策略行的 DocType + 策略行内容"。先写失败测试 `tests/integration/test_doctype_policy.py`：`test_policy_rows_gate_tool_doctypes`（未启用 DocType 的 read/propose 被拒，启用后放行）、`test_policy_change_rotates_revision`（改策略行 → revision 变化 → 在飞提案 confirm 被拒）。红 → 实现 → 绿 → 提交。
+- [x] **T1.2 迁移与删除硬编码**：把 Item/Customer/Sales Order 三条策略行写入（迁移脚本或 fixture），随后逐点删除"关键现状事实"列出的 8+ 处白名单，全部改查策略表。安全网：既有全仓 Python 回归与前端 88+ 项必须全绿后才提交。分两个 commit：先接线（新旧并行读策略）、后删除。
+- [x] **T1.3 治理零访问校验**：测试断言 `DS Doctype Policy` 自身对 `erp_read_*` / `erp_propose_*` 全部被拒（策略表里没有它自己的行即天然被拒，用测试锁死这一事实）。
 
 ## 阶段 2：制造 DocType 接入（每段先红后绿，段内 finally 先 cancel 再删清理）
 
