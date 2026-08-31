@@ -4,7 +4,7 @@
 
 检查点 1 后基线：`9611f83`
 
-本证据最终功能 HEAD：`c1ebb68`
+本证据当前功能 HEAD：`780bb33`；最近一次全仓门 HEAD 仍为 `c1ebb68`，`780bb33` 的全仓门由检查点控制器统一复跑。
 
 ## 结论边界
 
@@ -25,10 +25,10 @@
 | T3.1 查询技能 | `8f05065`、`1bc419f`、`91ca7b6`、`ac20325` | 受限 filters/fields、来源字段和匹配字段复核、erp-query 1.3.0 | PASS，Critical 0 / Important 0 |
 | T3.2/T3.3 操作技能 | `252ca20`、`073e1f2`、`05dce5b` | erp-operation 2.0.0、七个受信 route token、manifest 摘要 | PASS，Critical 0 / Important 0 |
 | 全量门清理 | `c53cb38`、`de1ecb2` | beta 配置测试正常/异常 finally 精确清理 | PASS，Critical 0 / Important 0 |
-| 宽审 make 落库绑定 | `4a996a3`、`e6d9c78`、`7ff4c23` | 独立 `confirmation_target`、insert hook 漂移回滚、verify 冻结基准 | PASS，Critical 0 / Important 0 |
+| 宽审 make 落库绑定 | `4a996a3`、`e6d9c78`、`7ff4c23`、`780bb33` | 独立 `confirmation_target`、委外供料预生成与完整子表冻结、insert hook 漂移回滚、verify 冻结基准 | 上轮 0 Critical / 1 Important；整改完成待复审 |
 | 宽审未知库存影响 | `c1ebb68` | exact stock/no-stock registry、未知 DocType fastfail、字段权限优先 | PASS，Critical 0 / Important 0 |
 
-上述任务在仓库计划与外部权威计划中均已逐项勾选。证据落档前的 Phase 2/3 及检查点整改范围 `9611f83..c1ebb68` 共 34 笔提交，未观察到计划外提交交错；自身提交均按功能文件集分类。没有重写历史。
+上述任务在仓库计划与外部权威计划中均已逐项勾选。当前 Phase 2/3 及检查点整改范围 `9611f83..780bb33` 共 37 笔提交；`c1ebb68` 的库存影响修复与 `a810f88` / `3cadae5` 的证据提交位于本次供料修复前，文件集与 `780bb33` 的功能文件不相交，历史保持原样。自身提交均按功能文件集分类，没有重写历史。
 
 ## TDD 与审查整改
 
@@ -37,7 +37,8 @@
 - T3.1 首轮审查发现 filters 或 title 参与匹配却未返回时，其字段没有进入历史来源复核。新增独立 `match_fields` 账本，filters keys、非空 query 的 name/可读 title 均被记录；撤销返回字段、filter-only 字段、query-title 字段三类权限都会拒绝历史来源。第二轮恢复了被误替换的既有返回字段撤权回归。
 - T3.2/T3.3 首轮审查发现公开工具要求模型传 route 字符串，但没有 route 枚举接口。技能补齐当前发布版本七个精确 token；它们只是调用词汇表，不是 DocType 能力白名单，实时策略、当前用户权限和固定 adapter 仍最终裁决。
 - 最终全仓第一次虽为 Python `243 passed`，但运行态发现 beta 三个配置测试遗留已提交的 Conversation/Bundle/Confirmation/Execution。三个既有 finally 已按精确 ID、依赖顺序补齐，并增加提前失败故障注入；正常与异常路径 `6 passed`，独立复审通过。该整改不修改产品代码。
-- 阶段宽审发现 make 仅在 insert 前比较 mapper，Frappe/ERPNext hook 仍可把保存后的确认字段改写；同时 verify 只会拿 actual 与 Execution 中同一份 actual 自证。最终实现将完整 mapper `target` 与摘要绑定的用户 `confirmation_target` 分离：公开 target、保存后精确比较和 verify 都以同一冻结确认投影为准；空值、来源链接、数量、仓库和子表结构均绑定，仅对四条真实链证明的原生派生字段做精确 DocType/child 注册。五类真实 insert hook 漂移均 Failed、目标草稿回滚，正常链与幂等保留。
+- 阶段宽审发现 make 仅在 insert 前比较 mapper，Frappe/ERPNext hook 仍可把保存后的确认字段改写；同时 verify 只会拿 actual 与 Execution 中同一份 actual 自证。最终实现将完整 mapper `target` 与摘要绑定的用户 `confirmation_target` 分离：公开 target、保存后精确比较和 verify 都以同一冻结确认投影为准；空值、来源链接、数量、仓库和子表结构均绑定，仅对四条真实链证明的原生派生字段做精确 DocType/child 注册。Delivery Note 五类真实 insert hook 漂移均 Failed、目标草稿回滚，正常链与幂等保留。
+- 后续复核发现 SCO/SCR 的 `supplied_items` 曾被按父表整表排除，这会遗漏企业供料的原料、required/consumed qty、reserve/supplier warehouse 与 reference/source links。`780bb33` 在 propose 与 confirm 共用的 mapper 路径上，对精确 SCO/SCR target 纯内存调用 ERPNext v15 `SubcontractingController.create_raw_materials_supplied()`；提案分配且 confirm/insert 复用唯一子行引用，不消费 Series、不插入或提交目标单据。公开 `target`、raw mapper `target` 与 `confirmation_target` 现在都有供料表；父表不再整表排除，仅对 SCR supplied child 真实 insert 派生的 amount、available qty、cost/current/default account 字段做精确登记。SCO/SCR 各自以 before_insert hook 覆盖行数、rm item、qty、warehouse 漂移，均 Failed、草稿回滚、唯一 Execution；管理员外改 required/consumed qty 后 verify 为 false。
 - 阶段宽审还发现任意未注册 DocType 会被静默标成无库存影响。现在只有 Sales Order、Work Order、Purchase Order、Subcontracting Order 进入精确 no-stock registry；四类库存单据先复核父/子字段权限再计算；其他 DocType 在提案形成前中文 fastfail，零 Proposal、Execution 和业务写。
 
 ## 最终全量门
@@ -59,6 +60,8 @@ Duration    13.38s
 `git diff --check 9611f83..c1ebb68` 退出 0；最终功能树工作区干净。
 
 固定 DSH Runtime → stdio MCP → HTTP/Frappe → alpha ERP 的容器链在最终技能内容上以本地 SSE 模型替身通过：`1 passed in 87.01s`。全仓最终门也包含 Runtime/MCP/ERP 集成回归。没有使用真实 provider、真实模型或真实模型凭证。
+
+`780bb33` 的 fresh 聚焦验证没有冒充全仓门：旧实现公开 SCO target 缺 `supplied_items`，真实 RED 为 `1 failed` / `KeyError: supplied_items`；修复后 make 专项与四段真实链 `7 passed in 90.47s`，operations 聚焦门 `28 passed in 155.15s`，最终委外专项 `1 passed in 31.01s`，`git diff --check` 与 `py_compile` 退出 0。alpha fresh 回读中 `subcontract-*` User、Conversation、PO、SCO、Stock Entry、SCR 均为 0；测试内还逐次锁定目标 DocType 名称集合、全量 Series、来源单 docstatus/modified/status 在提案前后不变。
 
 ## 三站策略与 route 回读
 
@@ -101,7 +104,7 @@ T3.3 按计划取得两层证据：旧 1.5.0 对新行为测试为红；只改 S
 1. T3.1 开始前发现原 `erp_search_records` 只有模糊 query 且只返回 name/modified，无法真实执行计划要求的 BOM/Bin filters 批量读取。最小增加了受限、权限复核的 filters/fields 契约；否则发布查询技能会形成虚假能力声明。
 2. T3.2 审查发现没有模型可见的 route 枚举接口。在不新增服务端能力的任务边界内，选择在 2.0.0 技能列出当前七个受信 token，并保留服务端策略为最终裁决。
 3. 阶段边界全量门发现既有 beta 配置测试残留。按“每段 finally 清理”硬约束单独修复测试清理，没有混入制造或技能提交。
-4. 阶段宽审把 make 的“mapper 重算相等”扩展为“落库后用户确认投影仍相等”；完整 mapper target 继续用于插入，只有用户实际看到的稳定业务投影承担确认语义，原生派生/default 字段通过真实四段链逐项精确登记，不使用通用忽略。
+4. 阶段宽审把 make 的“mapper 重算相等”扩展为“落库后用户确认投影仍相等”；完整 mapper target 继续用于插入，只有用户实际看到的稳定业务投影承担确认语义，原生派生/default 字段通过真实四段链逐项精确登记，不使用通用忽略。复核后进一步禁止对 SCO/SCR `supplied_items` 整表排除：公共 ERPNext 方法在内存预生成供料表，供料核心字段与完整子表结构均进入冻结确认。
 5. 阶段宽审把库存影响从“未注册即 none”收紧为 exact stock/no-stock registry；新增策略若没有相应影响实现会 fastfail，不能借动态策略静默绕过确认解释。
 
 ### Deferred，不阻塞本检查点
