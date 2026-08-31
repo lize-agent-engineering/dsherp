@@ -1,0 +1,35 @@
+{
+  "doctype": "DocType",
+  "name": "DS Doctype Policy",
+  "module": "DSHERP Bridge",
+  "custom": 0,
+  "engine": "InnoDB",
+  "autoname": "field:target_doctype",
+  "field_order": [
+    "target_doctype",
+    "enabled",
+    "allow_read",
+    "allow_create",
+    "allow_update",
+    "allow_submit",
+    "allow_cancel",
+    "allow_fill",
+    "company_scope",
+    "routes"
+  ],
+  "fields": [
+    {"fieldname":"target_doctype","label":"Target DocType","fieldtype":"Data","reqd":1,"unique":1},
+    {"fieldname":"enabled","label":"Enabled","fieldtype":"Check"},
+    {"fieldname":"allow_read","label":"Allow Read","fieldtype":"Check"},
+    {"fieldname":"allow_create","label":"Allow Create","fieldtype":"Check"},
+    {"fieldname":"allow_update","label":"Allow Update","fieldtype":"Check"},
+    {"fieldname":"allow_submit","label":"Allow Submit","fieldtype":"Check"},
+    {"fieldname":"allow_cancel","label":"Allow Cancel","fieldtype":"Check"},
+    {"fieldname":"allow_fill","label":"Allow Fill","fieldtype":"Check"},
+    {"fieldname":"company_scope","label":"Company Scope","fieldtype":"Data"},
+    {"fieldname":"routes","label":"Routes","fieldtype":"Table","options":"DS Doctype Policy Route"}
+  ],
+  "permissions": [
+    {"role":"System Manager","read":1,"write":1,"create":1,"delete":1}
+  ]
+}

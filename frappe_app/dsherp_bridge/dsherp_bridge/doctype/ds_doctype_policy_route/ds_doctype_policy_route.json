@@ -1,0 +1,16 @@
+{
+  "doctype": "DocType",
+  "name": "DS Doctype Policy Route",
+  "module": "DSHERP Bridge",
+  "custom": 0,
+  "engine": "InnoDB",
+  "istable": 1,
+  "editable_grid": 1,
+  "field_order": ["route_name", "method_path", "target_doctype"],
+  "fields": [
+    {"fieldname":"route_name","label":"Route Name","fieldtype":"Data","reqd":1},
+    {"fieldname":"method_path","label":"Method Path","fieldtype":"Data","reqd":1},
+    {"fieldname":"target_doctype","label":"Target DocType","fieldtype":"Data","reqd":1}
+  ],
+  "permissions": []
+}

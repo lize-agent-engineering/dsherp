@@ -9,6 +9,9 @@ CONFIGURATION_DOCTYPES=['DocType','Custom Field','Workflow','Workflow State','Wo
 
 def revision(user,doctypes=None):
     doctypes=DOCTYPES if doctypes is None else list(doctypes)
+    from dsherp_bridge.doctype_policy import enabled_policy_material
+    policy_material=enabled_policy_material()
+    doctypes=sorted(set(doctypes)|{row['target_doctype'] for row in policy_material})
     schema_doctypes=sorted(set(doctypes)|{field.options for name in doctypes for field in frappe.get_meta(name).get_table_fields()})
     def rows(doctype,filters):
         return frappe.get_all(doctype,filters=filters,fields=['*'],order_by='name asc')
@@ -30,6 +33,7 @@ def revision(user,doctypes=None):
         'shares':frappe.get_all('DocShare',filters={'share_doctype':['in',doctypes]},
             or_filters={'user':user,'everyone':1},fields=['*'],order_by='name asc'),
         'strict_user_permissions':frappe.db.get_single_value('System Settings','apply_strict_user_permissions'),
+        'doctype_policies':policy_material,
     }
     return hashlib.sha256(json.dumps(state,sort_keys=True,separators=(',',':'),default=str).encode()).hexdigest()
 

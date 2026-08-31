@@ -61,7 +61,7 @@ def confirm(proposal_id, digest, request_id):
             if str(doc.modified) != payload['version']:
                 frappe.throw('记录版本已变化，请重新提出操作')
             frozen=[{key:value for key,value in change.items() if key!='form_before'} for change in payload['changes']]
-            if update_diff(doc, values,include_unchanged=payload['action']=='fill') != frozen:
+            if update_diff(doc, values,include_unchanged=payload['action']=='fill',action=payload['action']) != frozen:
                 frappe.throw('字段或权限已变化，请重新提出操作')
             if payload['action']=='fill':
                 result={'status':'Authorized','target':'browser-draft','doctype':doc.doctype,'name':doc.name,'version':str(doc.modified),'values':values}
@@ -173,7 +173,7 @@ def propose_create(session_id, doctype, values, version, grant=None, model_run=N
 
 def propose_fill(session_id,doctype,name,values,version,grant=None,model_run=None):
     doc=frappe.get_doc(doctype,name)
-    changes=update_diff(doc,values,include_unchanged=True)
+    changes=update_diff(doc,values,include_unchanged=True,action='fill')
     for change in changes:
         if isinstance(change['after'],list):
             if [row.get('name') for row in change['after']]!=[row['name'] for row in change['before']]:
@@ -200,6 +200,8 @@ def propose_action(session_id,doctype,name,action,version,grant=None,model_run=N
 def action_diff(doc,action):
     if doc.doctype!='Sales Order' or action not in ('submit','cancel'):
         raise frappe.PermissionError('当前领域不支持该状态操作')
+    from dsherp_bridge.doctype_policy import require_action
+    require_action(doc.doctype, action)
     doc.check_permission('read')
     doc.check_permission(action)
     before,after=(0,1) if action=='submit' else (1,2)
@@ -262,10 +264,12 @@ def get_proposal(proposal_id):
     return result
 
 
-def update_diff(doc, values,include_unchanged=False):
+def update_diff(doc, values,include_unchanged=False,action='update'):
     """Validate explicit scalar edits without mutating the document or database."""
     if doc.doctype not in ('Item', 'Customer', 'Sales Order'):
         raise frappe.PermissionError('当前操作领域不支持该业务对象')
+    from dsherp_bridge.doctype_policy import require_action
+    require_action(doc.doctype, action)
     doc.check_permission('read')
     doc.check_permission('write')
     if doc.docstatus != 0:
@@ -276,6 +280,8 @@ def update_diff(doc, values,include_unchanged=False):
 def create_diff(doctype,values):
     if doctype not in ('Item','Customer','Sales Order'):
         raise frappe.PermissionError('当前操作领域不支持该业务对象')
+    from dsherp_bridge.doctype_policy import require_action
+    require_action(doctype, 'create')
     doc=frappe.get_doc({'doctype':doctype})
     doc.check_permission('create')
     doc.check_permission('read')

@@ -6,6 +6,8 @@ import frappe
 def _authorize(doctype):
     if frappe.session.user in ("Guest", "Administrator") or doctype not in ("Customer", "Item", "Sales Order"):
         raise frappe.PermissionError("This read operation is not permitted")
+    from dsherp_bridge.doctype_policy import require_action
+    require_action(doctype, 'read')
     frappe.has_permission(doctype, "read", throw=True)
 
 
