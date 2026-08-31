@@ -226,13 +226,14 @@ try:
                 )
 
     finished = frappe.get_doc('Item', finished_good)
-    if mode in ('legacy', 'legacy-conflict'):
+    if mode in ('legacy', 'legacy-conflict', 'flag-drift'):
         require_values(finished, finished_expected, finished_good)
         if finished.is_sub_contracted_item != 1:
             raise RuntimeError('Persistent finished good is not at the T2.4 baseline')
         service = frappe.get_doc('Item', service_item)
         require_values(service, service_expected, service_item)
-        frappe.delete_doc('Item', service_item, ignore_permissions=True)
+        if mode != 'flag-drift':
+            frappe.delete_doc('Item', service_item, ignore_permissions=True)
         finished.is_sub_contracted_item = 0
         if mode == 'legacy-conflict':
             finished.item_name = 'DSHERP 制造测试合成成品冲突'
@@ -317,6 +318,29 @@ def test_provisioner_migrates_the_exact_legacy_fixture_then_remains_idempotent()
             "mode": "current",
             "service_item_exists": True,
         }
+
+
+# Production break caught: a T2.4 fixture with only its finished-good flag reverted is drift, not legacy.
+def test_provisioner_rejects_flag_drift_when_the_service_item_already_exists():
+    before = _read_fixture_state()
+    transition = _transition_persistent_fixture("flag-drift")
+    assert transition == {
+        "finished_good_flag": 0,
+        "mode": "flag-drift",
+        "service_item_exists": True,
+    }
+    try:
+        result = _invoke_provisioner()
+        assert result.returncode != 0
+        assert "DSHERP-MFG-SYN-FG.is_sub_contracted_item is 0; expected 1" in result.stderr
+    finally:
+        restored = _transition_persistent_fixture("current")
+        assert restored == {
+            "finished_good_flag": 1,
+            "mode": "current",
+            "service_item_exists": True,
+        }
+    assert _read_fixture_state() == before
 
 
 # Production break caught: migration must not claim an unrelated same-name Item with field drift.

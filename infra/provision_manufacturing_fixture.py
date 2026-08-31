@@ -149,6 +149,7 @@ def ensure_item(
             RUN_MODE == 'provision'
             and item_code == PERSISTENT_FINISHED_GOOD
             and is_sub_contracted_item == 1
+            and not frappe.db.exists('Item', SERVICE_ITEM)
             and values_match(doc, legacy_expected)
         ):
             doc.is_sub_contracted_item = 1
