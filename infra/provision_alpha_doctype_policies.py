@@ -22,7 +22,8 @@ import frappe
 
 
 RUN_MODE = globals().get('RUN_MODE', 'provision')
-POLICIES = [
+POLICY_SET = globals().get('POLICY_SET', 'base')
+BASE_POLICIES = [
     {
         'target_doctype': 'Customer',
         'enabled': 1,
@@ -60,6 +61,80 @@ POLICIES = [
         'routes': [],
     },
 ]
+MANUFACTURING_POLICIES = [
+    {
+        'target_doctype': 'BOM',
+        'enabled': 1,
+        'allow_read': 1,
+        'allow_create': 0,
+        'allow_update': 0,
+        'allow_submit': 0,
+        'allow_cancel': 0,
+        'allow_fill': 0,
+        'company_scope': None,
+        'routes': [],
+    },
+    {
+        'target_doctype': 'Warehouse',
+        'enabled': 1,
+        'allow_read': 1,
+        'allow_create': 0,
+        'allow_update': 0,
+        'allow_submit': 0,
+        'allow_cancel': 0,
+        'allow_fill': 0,
+        'company_scope': None,
+        'routes': [],
+    },
+    {
+        'target_doctype': 'Bin',
+        'enabled': 1,
+        'allow_read': 1,
+        'allow_create': 0,
+        'allow_update': 0,
+        'allow_submit': 0,
+        'allow_cancel': 0,
+        'allow_fill': 0,
+        'company_scope': None,
+        'routes': [],
+    },
+    {
+        'target_doctype': 'Work Order',
+        'enabled': 1,
+        'allow_read': 1,
+        'allow_create': 1,
+        'allow_update': 1,
+        'allow_submit': 1,
+        'allow_cancel': 1,
+        'allow_fill': 0,
+        'company_scope': None,
+        'routes': [
+            {
+                'route_name': 'work_order_material_transfer',
+                'method_path': 'erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry',
+                'target_doctype': 'Stock Entry',
+            },
+            {
+                'route_name': 'work_order_manufacture',
+                'method_path': 'erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry',
+                'target_doctype': 'Stock Entry',
+            },
+        ],
+    },
+    {
+        'target_doctype': 'Stock Entry',
+        'enabled': 1,
+        'allow_read': 1,
+        'allow_create': 0,
+        'allow_update': 0,
+        'allow_submit': 1,
+        'allow_cancel': 1,
+        'allow_fill': 0,
+        'company_scope': None,
+        'routes': [],
+    },
+]
+POLICIES = BASE_POLICIES + (MANUFACTURING_POLICIES if POLICY_SET == 'manufacturing' else [])
 SCALAR_FIELDS = (
     'target_doctype', 'enabled', 'allow_read', 'allow_create', 'allow_update',
     'allow_submit', 'allow_cancel', 'allow_fill', 'company_scope',
@@ -112,6 +187,11 @@ frappe.init(site=SITE)
 frappe.connect()
 try:
     require(frappe.local.site == SITE, 'Unexpected Site: ' + str(frappe.local.site))
+    require(POLICY_SET in ('base', 'manufacturing'), 'Unsupported policy set: ' + POLICY_SET)
+    require(
+        POLICY_SET != 'manufacturing' or SITE == 'dsherp-validation.localhost',
+        'Manufacturing policy set is alpha-only in T2.2',
+    )
     require(frappe.db.exists('DocType', 'DS Doctype Policy'), 'DS Doctype Policy schema is missing')
     require(
         frappe.db.exists('DocType', 'DS Doctype Policy Route'),
@@ -121,13 +201,17 @@ try:
     require('System Manager' in frappe.get_roles(), 'System Manager control-plane role is required')
     if RUN_MODE == 'verify-conflict':
         baseline = provision()
-        policy = frappe.get_doc('DS Doctype Policy', 'Item')
+        conflict_target = 'Work Order' if POLICY_SET == 'manufacturing' else 'Item'
+        policy = frappe.get_doc('DS Doctype Policy', conflict_target)
         policy.allow_update = 0
         policy.save()
         try:
             provision()
         except RuntimeError as error:
-            require(str(error) == 'DS DocType policy conflict for Item', 'Unexpected conflict error')
+            require(
+                str(error) == 'DS DocType policy conflict for ' + conflict_target,
+                'Unexpected conflict error',
+            )
         else:
             raise RuntimeError('Conflicting DS DocType policy was silently accepted')
         frappe.db.rollback()
@@ -136,13 +220,17 @@ try:
         result = {
             'site': SITE,
             'mode': 'conflict_rollback',
-            'conflict': 'Item.allow_update',
+            'conflict': conflict_target + '.allow_update',
             'baseline': baseline,
         }
+        if POLICY_SET == 'manufacturing':
+            result['policy_set'] = POLICY_SET
     elif RUN_MODE == 'provision':
         policies = provision()
         frappe.db.commit()
         result = {'site': SITE, 'policies': policies}
+        if POLICY_SET == 'manufacturing':
+            result['policy_set'] = POLICY_SET
     else:
         raise RuntimeError('Unsupported policy provisioning mode: ' + RUN_MODE)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
@@ -161,15 +249,27 @@ def main():
         choices=tuple(SITE_SERVICES),
         default="dsherp-validation.localhost",
     )
+    parser.add_argument(
+        "--policy-set",
+        choices=("base", "manufacturing"),
+        default="base",
+    )
     parser.add_argument("--verify-conflict", action="store_true")
     arguments = parser.parse_args()
     site = arguments.site
+    if arguments.policy_set == "manufacturing" and site != "dsherp-validation.localhost":
+        parser.error("manufacturing policy set is alpha-only in T2.2")
     service = SITE_SERVICES[site]
     mode = "verify-conflict" if arguments.verify_conflict else "provision"
     result = subprocess.run(
         [*COMPOSE, "exec", "-T", service, "/home/frappe/frappe-bench/env/bin/python", "-"],
         cwd=ROOT,
-        input=f"SITE = {site!r}\nRUN_MODE = {mode!r}\n" + SITE_SCRIPT,
+        input=(
+            f"SITE = {site!r}\n"
+            f"RUN_MODE = {mode!r}\n"
+            f"POLICY_SET = {arguments.policy_set!r}\n"
+            + SITE_SCRIPT
+        ),
         text=True,
         capture_output=True,
         timeout=60,

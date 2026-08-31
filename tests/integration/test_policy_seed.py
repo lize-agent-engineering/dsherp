@@ -31,7 +31,7 @@ def _provision(site, *arguments):
     return json.loads(result.stdout)
 
 
-def _read_policy_rows(site, service):
+def _read_policy_rows(site, service, targets=None):
     script = r'''
 import json, os, frappe
 os.chdir('/home/frappe/frappe-bench/sites')
@@ -40,6 +40,7 @@ frappe.connect()
 try:
     rows = frappe.get_all(
         'DS Doctype Policy',
+        filters={'target_doctype': ['in', __TARGETS__]} if __TARGETS__ else {},
         fields=['target_doctype', 'enabled', 'allow_read', 'allow_create', 'allow_update',
                 'allow_submit', 'allow_cancel', 'allow_fill', 'company_scope'],
         order_by='target_doctype asc',
@@ -54,7 +55,7 @@ try:
     print(json.dumps(rows, ensure_ascii=False, sort_keys=True))
 finally:
     frappe.destroy()
-'''.replace('__SITE__', repr(site))
+'''.replace('__SITE__', repr(site)).replace('__TARGETS__', repr(targets or []))
     result = subprocess.run(
         [*COMPOSE, "exec", "-T", service, "/home/frappe/frappe-bench/env/bin/python", "-"],
         cwd=ROOT,
@@ -106,6 +107,87 @@ EXPECTED_ROWS = [
     },
 ]
 
+EXPECTED_MANUFACTURING_ROWS = [
+    {
+        "target_doctype": "BOM",
+        "enabled": 1,
+        "allow_read": 1,
+        "allow_create": 0,
+        "allow_update": 0,
+        "allow_submit": 0,
+        "allow_cancel": 0,
+        "allow_fill": 0,
+        "company_scope": None,
+        "routes": [],
+    },
+    {
+        "target_doctype": "Warehouse",
+        "enabled": 1,
+        "allow_read": 1,
+        "allow_create": 0,
+        "allow_update": 0,
+        "allow_submit": 0,
+        "allow_cancel": 0,
+        "allow_fill": 0,
+        "company_scope": None,
+        "routes": [],
+    },
+    {
+        "target_doctype": "Bin",
+        "enabled": 1,
+        "allow_read": 1,
+        "allow_create": 0,
+        "allow_update": 0,
+        "allow_submit": 0,
+        "allow_cancel": 0,
+        "allow_fill": 0,
+        "company_scope": None,
+        "routes": [],
+    },
+    {
+        "target_doctype": "Work Order",
+        "enabled": 1,
+        "allow_read": 1,
+        "allow_create": 1,
+        "allow_update": 1,
+        "allow_submit": 1,
+        "allow_cancel": 1,
+        "allow_fill": 0,
+        "company_scope": None,
+        "routes": [
+            {
+                "route_name": "work_order_material_transfer",
+                "method_path": "erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry",
+                "target_doctype": "Stock Entry",
+            },
+            {
+                "route_name": "work_order_manufacture",
+                "method_path": "erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry",
+                "target_doctype": "Stock Entry",
+            },
+        ],
+    },
+    {
+        "target_doctype": "Stock Entry",
+        "enabled": 1,
+        "allow_read": 1,
+        "allow_create": 0,
+        "allow_update": 0,
+        "allow_submit": 1,
+        "allow_cancel": 1,
+        "allow_fill": 0,
+        "company_scope": None,
+        "routes": [],
+    },
+]
+
+BASE_TARGETS = ["Customer", "Item", "Sales Order"]
+MANUFACTURING_TARGETS = ["BOM", "Warehouse", "Bin", "Work Order", "Stock Entry"]
+EXPECTED_ALL_ROWS = sorted(
+    [*EXPECTED_ROWS, *EXPECTED_MANUFACTURING_ROWS],
+    key=lambda row: row["target_doctype"].casefold(),
+)
+
 
 @pytest.mark.parametrize(("site", "service"), SITES)
 def test_policy_seed_creates_or_verifies_exact_legacy_rows(site, service):
@@ -115,15 +197,15 @@ def test_policy_seed_creates_or_verifies_exact_legacy_rows(site, service):
         "site": site,
         "policies": EXPECTED_ROWS,
     }
-    assert _read_policy_rows(site, service) == EXPECTED_ROWS
+    assert _read_policy_rows(site, service, BASE_TARGETS) == EXPECTED_ROWS
 
 
 @pytest.mark.parametrize(("site", "service"), SITES)
 def test_policy_seed_second_run_is_idempotent(site, service):
     first_result = _provision(site)
-    before = _read_policy_rows(site, service)
+    before = _read_policy_rows(site, service, BASE_TARGETS)
     second_result = _provision(site)
-    after = _read_policy_rows(site, service)
+    after = _read_policy_rows(site, service, BASE_TARGETS)
 
     assert first_result == second_result
     assert before == after == EXPECTED_ROWS
@@ -140,7 +222,86 @@ def test_policy_seed_fast_fails_on_conflicting_governance(site, service):
         "conflict": "Item.allow_update",
         "baseline": EXPECTED_ROWS,
     }
-    assert _read_policy_rows(site, service) == EXPECTED_ROWS
+    assert _read_policy_rows(site, service, BASE_TARGETS) == EXPECTED_ROWS
+
+
+def test_manufacturing_policy_set_provisions_exact_alpha_rows_and_routes():
+    result = _provision(
+        "dsherp-validation.localhost",
+        "--policy-set",
+        "manufacturing",
+    )
+
+    assert result == {
+        "site": "dsherp-validation.localhost",
+        "policy_set": "manufacturing",
+        "policies": [*EXPECTED_ROWS, *EXPECTED_MANUFACTURING_ROWS],
+    }
+    assert _read_policy_rows(
+        "dsherp-validation.localhost",
+        "backend",
+    ) == EXPECTED_ALL_ROWS
+
+
+def test_manufacturing_policy_set_second_run_is_idempotent():
+    first_result = _provision(
+        "dsherp-validation.localhost",
+        "--policy-set",
+        "manufacturing",
+    )
+    before = _read_policy_rows("dsherp-validation.localhost", "backend")
+    second_result = _provision(
+        "dsherp-validation.localhost",
+        "--policy-set",
+        "manufacturing",
+    )
+    after = _read_policy_rows("dsherp-validation.localhost", "backend")
+
+    assert first_result == second_result
+    assert before == after == EXPECTED_ALL_ROWS
+
+
+def test_manufacturing_policy_set_fast_fails_and_rolls_back_conflict():
+    _provision("dsherp-validation.localhost", "--policy-set", "manufacturing")
+    result = _provision(
+        "dsherp-validation.localhost",
+        "--policy-set",
+        "manufacturing",
+        "--verify-conflict",
+    )
+
+    assert result == {
+        "site": "dsherp-validation.localhost",
+        "policy_set": "manufacturing",
+        "mode": "conflict_rollback",
+        "conflict": "Work Order.allow_update",
+        "baseline": [*EXPECTED_ROWS, *EXPECTED_MANUFACTURING_ROWS],
+    }
+    assert _read_policy_rows(
+        "dsherp-validation.localhost",
+        "backend",
+    ) == EXPECTED_ALL_ROWS
+
+
+def test_manufacturing_policy_set_is_not_available_for_beta_or_daily():
+    for site in ("dsherp-beta.localhost", "dsherp-daily.localhost"):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(PROVISIONER),
+                "--site",
+                site,
+                "--policy-set",
+                "manufacturing",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+
+        assert result.returncode != 0
+        assert result.stdout == ""
 
 
 @pytest.mark.parametrize(

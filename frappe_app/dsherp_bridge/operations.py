@@ -198,7 +198,8 @@ def propose_create(session_id, doctype, values, version, grant=None, model_run=N
 
 
 def _canonicalize_mapped_target(target):
-    if hasattr(target,'as_dict'):target=target.as_dict()
+    as_dict=getattr(target,'as_dict',None)
+    if callable(as_dict):target=as_dict()
     if not isinstance(target,dict):frappe.throw('mapped 方法未返回目标单据')
     def clean(value):
         if isinstance(value,dict):
