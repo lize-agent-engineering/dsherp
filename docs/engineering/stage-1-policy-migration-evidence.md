@@ -1,6 +1,6 @@
 # 阶段 1 策略迁移工程证据
 
-日期：2026-08-31。证据基线：`5a860fc72ef7fec9525b701a8330960c732b1ef8`。
+日期：2026-08-31。证据基线：`32f948cf68b11999eb6d3f543a874984e8ddcbe6`。
 
 ## 范围与检查点
 
@@ -27,9 +27,9 @@
 | --- | --- |
 | C1.1 | `a3d2089f1cbad0926e2e2aa41552f095633b0f2d` — `恢复日常站点策略读取并统一三站点开通` |
 | C1.2 | `f68860feceae4dc7569abe9129e9660efd3ff950` — `策略表缺失时显式失败并保留填表目标` |
-| C1.3 | `c94a437e17ba85949d796582e2e672c225a7da7a` — `fix: 阻断治理子表配置工具访问`；`2e4953fe8596f3ad6b29ff0858677e39e1985c7b` — `test: 补强治理子表原生读取证据`；`194454d07536748fa53d87d1d0c4eaa23218c7ea` — `test: 验证治理子表真实读取回滚`；`5a860fc72ef7fec9525b701a8330960c732b1ef8` — `test: 保留治理路由早期失败` |
+| C1.3 | `c94a437e17ba85949d796582e2e672c225a7da7a` — `fix: 阻断治理子表配置工具访问`；`2e4953fe8596f3ad6b29ff0858677e39e1985c7b` — `test: 补强治理子表原生读取证据`；`194454d07536748fa53d87d1d0c4eaa23218c7ea` — `test: 验证治理子表真实读取回滚`；`5a860fc72ef7fec9525b701a8330960c732b1ef8` — `test: 保留治理路由早期失败`；`32f948cf68b11999eb6d3f543a874984e8ddcbe6` — `test: 完整枚举治理DocType搜索工具` |
 
-从 C1 基线 `774d7619c2b4b52c11cbd9220de462e28df9b0f7` 之后，`git log --reverse 774d761..5a860fc` 的结果恰好依次为 `a3d2089`、`f68860f`、`c94a437`、`2e4953f`、`194454d`、`5a860fc`。C1 提交连续，无插入提交；未 rebase、squash、改写或 push。
+从 C1 基线 `774d7619c2b4b52c11cbd9220de462e28df9b0f7` 之后，`git log --reverse 774d761..32f948c` 的结果恰好依次为 `a3d2089`、`f68860f`、`c94a437`、`2e4953f`、`194454d`、`5a860fc`、`4ba089d`、`32f948c`。其中 `4ba089d` 是前一轮 C1 证据收尾，`32f948c` 是整轮审查发现遗漏后的 search 覆盖纠正；序列连续，无其他任务插入，未 rebase、squash、改写或 push。
 
 ### 计划外 terminology / skill 提交
 
@@ -56,6 +56,9 @@
 | C1.3 父子治理零工具访问 | 初始 RED 为 `governance tool access allowed: configuration/erp_read_configuration/DS Doctype Policy Route`，`1 failed`。 | 父/子目标共用既有 policy gate，相关回归 `18 passed in 19.86s`。 |
 | C1.3 原生父/子读证据 | Round 1 RED：普通 value-field 枚举不含 `routes`；Round 2 RED：真实父文档空 routes 不含 transaction-only probe；均为 `1 failed`。 | Round 1 focused `1 passed in 6.16s`；Round 2 focused `1 passed in 6.76s`，rollback 后 fresh connection 与原快照相同。 |
 | C1.3 teardown 早期失败 | 受控 RED 显示原始 `AssertionError('原始早期失败')` 被旧 teardown 的 `(None, [])` 比较覆盖。 | 前置快照未建立时不做二次比较；原始异常保留，focused `1 passed in 5.80s`，最终相关回归 `18 passed in 19.19s`。 |
+| C1.3 search 完整枚举 | 一次性 registry validator 报错 `missing governance search coverage`，精确列出 query/operation × parent/child 四个缺失组合，退出码 1。 | 改为按注册工具 schema 的必填 `doctype` 枚举后，同一 validator 输出 `registry validator passed: 26 cases including query/operation search coverage`；focused `1 passed in 9.92s`，目标文件 `7 passed in 24.05s`。 |
+
+Task 8 当时的 22-case 报告是当时真实历史事实：query 4、operation 14、configuration 4，本记录不改写该报告。整轮审查发现前缀白名单遗漏 `erp_search_records` 后补齐 4 条，C1.3 当前完整覆盖为 26 cases：按覆盖职责口径为 query/search 8（原 query 4 + 两个域的 parent/child search 4）、operation 14、configuration 4。按 case 中的原始 `domain` 字段统计则为 query 6、operation 16、configuration 4，因为 operation 域的 2 条 search 在该原始字段下；两种口径总数都是 26，覆盖集合相同。
 
 ## 全量门禁
 
@@ -146,7 +149,7 @@ git diff --check
 
 | 证据层 | 本记录状态 | 精确边界 |
 | --- | --- | --- |
-| 代码 / 测试 | 已验证 | 最终 C1 代码树上 Python 218/218、前端 20 files / 158 tests，编辑前 `git diff --check` 退出 0。 |
+| 代码 / 测试 | 已验证（分层） | `5a860fc` 代码树上的历史全量门为 Python 218/218、前端 20 files / 158 tests；当前 search 覆盖纠正在 `32f948c` 上验证 validator、focused 1/1 与目标文件 7/7。完整 Python/前端门待 controller fresh 执行，不用旧全量数字代替。 |
 | 真实 ERP Sites | 已验证 | 本地合成 alpha/beta/daily 真实 Site 只读回读；三站 schema、版本、策略行与零残留治理数据如上。不是生产企业数据。 |
 | 真实 Runtime | 已验证（本地） | 固定 DSH Runtime 的既有真实进程/容器回归包含在 218 项全量门中；模型响应测试可使用替身，本记录不把 Runtime 通过外推为真实模型通过。 |
 | 真实模型 | 未验证 | 本轮未调用真实模型；尤其禁止 operation-domain 真实模型运行。 |
