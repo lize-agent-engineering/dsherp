@@ -6,7 +6,7 @@
   config:
     thresholdRatio: 0.02
     retainTokens: 2048
-    maxTokens: 2048
+    maxTokens: !!js "process.env.DSHERP_DOMAIN === 'operation' ? 3072 : 2048"
     compactionRetries: 0
     auto: true
 - id: model-authorization
