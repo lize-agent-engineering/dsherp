@@ -51,17 +51,59 @@ docker compose -p dsherp-validation -f infra/compose.validation.yml exec -T back
 
 | 行 ID | 风险 | 脚本 / 命令 | 预期 | 实测 | 判定 | 阶段 2 关联任务 |
 | --- | --- | --- | --- | --- | --- | --- |
-| C1-R13 | bind-mount 装 app | 待 T1.1 | 两 app 可安装，hooks 与 boot 生效 | 待执行 | 待判定 | T2.1 / 部署重设计裁决 |
-| C1-R14 | agent-runtime venv | 待 T1.2 | Python 3.14 下锁文件可安装 | 待执行 | 待判定 | T2.9 |
-| C1-R1 | commit 语义 | 待 T1.3 | hook 内 no-op 可观测；业务链无 warning | 待执行 | 待判定 | 按红项追加 |
-| C1-R2-R3 | Desk / SSO | 待 T1.4 | `/desk` 与 OAuth 全链成立 | 待执行 | 待判定 | T2.2-T2.5 |
-| C1-R6 | mapper / 委外 | 待 T1.5 | 七条 route 与委外内部方法可用 | 待执行 | 待判定 | 按红项追加 |
-| C1-R4 | Page / sidebar | 待 T1.6 | Page、全局资源、Workspace 可加载 | 待执行 | 待判定 | T2.4 |
-| C1-R15 | 镜像入口 | 待 T1.7 | backend/worker/scheduler/websocket 路径有效 | 待执行 | 待判定 | T2.1 |
-| C1-R9-R11 | provision / boot | 待 T1.8 | 内部导入、参数与 boot 语义有效 | 待执行 | 待判定 | T2.8 |
-| C1-R5-R7-R10-R12-R17 | 其余框架边界 | 待 T1.9 | 排序、翻译、锁、CSRF、Python import 可用 | 待执行 | 待判定 | T2.6-T2.8 |
-| C1-API | API 面 | 待 T1.10 | v1、resource 与 v2 权限事实明确 | 待执行 | 待判定 | runtime-baseline |
+| C1-R13 | bind-mount 装 app | `t1_1_bind_mount.py` | 两 app 可安装，hooks 与 boot 生效 | fresh Site 安装四 app；原生 boot dispatch 与真实 doc_events 均执行 | **绿** | T2.1 保留 bind-mount 方案 |
+| C1-R14 | agent-runtime venv | `t1_2_agent_runtime.sh` | Python 3.14 下锁文件可安装 | `--require-hashes` 安装成功；`deepseek_harness`、`mcp` import 成功 | **绿** | T2.9 不触发，不改锁文件 |
+| C1-R1 | commit 语义 | `t1_3_commit.py`、`t1_3_configuration_chain.py` | hook 内 no-op 可观测；业务链无 warning | doc_events 内 commit warning+no-op；真实配置 `_confirm` 在 warning→error 下成功；SSO 在 commit 前因 R3 新红项停止 | **混合：框架与配置绿，SSO 红** | T2.12；operations 在 T2.13 后连同制造 fixture 复跑 |
+| C1-R2-R3 | Desk / SSO | `t1_4_sso_provision.py`、`t1_4_sso_http.py` | `/desk` 与 OAuth 全链成立 | `/app/home` 301→`/desk/home`；授权码和 Bearer Token 成功签发；原生 callback 在 `login_as` 因 `tabUser` 记录变化/savepoint 失败；OAuth Client 默认角色另有不兼容 | **红** | T2.2、T2.5、T2.11、T2.12 |
+| C1-R6 | mapper / 委外 | `t1_framework_contracts.py` | 七条 route 与委外内部方法可用 | 七个 mapper 可 import、签名保持；首个必要委外调用 fastfail：`create_raw_materials_supplied` 已移除，替代方法带 `raw_material_table` 参数 | **红** | T2.13；修复后必须跑 7 route + 10 类派生字段 + autoname fixture |
+| C1-R4 | Page / sidebar | `t1_http_contracts.py` + in-app Browser | Page、全局资源、Workspace 可加载 | 4 Page transport、6 个 app 资源、全局 JS/CSS 通过；正式工作台渲染且隐藏全局 Agent，Item 页显示 Agent；Workspace Sidebar 同时存在；fresh setup 后无侧栏冲突异常 | **绿** | T2.4 仅切 `/desk`、重建 dist；不另造侧栏系统 |
+| C1-R15 | 镜像入口 | compose `entrypoints` profile + logs | backend/worker/scheduler/websocket 路径有效 | `start.sh`、worker 三队列、scheduler、`apps/frappe/socketio.js`、`env/bin/python` 均实际运行；websocket 监听 9000 | **绿** | T2.1 按价值裁决 legacy profile，而非兼容性删除 |
+| C1-R9-R11 | provision / boot | `provision.py`、`t1_8_setup.py`、`t1_framework_contracts.py` | 内部导入、参数与 boot 语义有效 | new-site 参数、5 个内部导入、`setup_complete` 合成载荷、boot 属性、insert 前 `get_doc_before_save() is None` 均通过 | **绿** | T2.8 添加 `add_to_apps_screen` 与 boot 回归断言 |
+| C1-R5-R7-R10-R12-R17 | 其余框架边界 | framework、database、HTTP、compileall 探针 | 排序、翻译、锁、CSRF、Python import 可用 | runtime meta 默认 `creation DESC`；context 翻译为“总账”；MariaDB advisory lock 与 `tabUser FOR UPDATE` 执行；CSRF POST 200；Python 3.14 compileall 通过 | **绿** | T2.6、T2.7、T2.8；13 JSON 仍显式化排序 |
+| C1-API | API 面 | `t1_http_contracts.py` | v1、resource 与 v2 权限事实明确 | guest ping 200、guest v2 meta 拒绝；Administrator 的 resource/v2 meta 200；CSRF POST 200 | **绿** | T5.1 runtime-baseline |
+
+## 红项原始事实与阶段 2 转化
+
+### R3-A：OAuth Client 默认角色变化
+
+v16 新建 OAuth Client 自动写入 `allowed_roles = Desk User`；项目现有平台成员使用 `DSHERP Member` 自定义 Desk 角色。未显式绑定时，授权端返回 `Invalid client_id parameter value`，但数据库中的 `client_id` 完全一致。探针显式将 OAuth Client 允许角色设为专用成员角色后，授权码与 Bearer Token 均成功签发。
+
+- **T2.11**：`infra/provision_desk_oauth.py` 创建 OAuth Client 时显式写入 `allowed_roles = DSHERP Member`，先补 v16 行为测试；不得给成员扩成 `System Manager` 或共享管理员。
+
+### R3-B：callback 登录事务冲突
+
+原生全链达到业务 callback 后，`exchange()` 已取得平台身份；随后 `frappe.local.login_manager.login_as(user)` 报：
+
+```text
+MySQLdb.OperationalError: (1020, "Record has changed since last read in table 'tabUser'; try restarting transaction")
+MySQLdb.OperationalError: (1305, 'SAVEPOINT ... does not exist')
+```
+
+同一 Bearer Token 对 `desk_identity`、`desk_membership` 的独立请求均为 200，返回的企业、Site 和普通业务用户一致，因此失败点不是 OAuth 签发或成员绑定，而是业务 callback 的本地事务快照与 `login_as` 会话元数据更新相撞。
+
+- **T2.12**：先建立能稳定复现上述堆栈的 SSO HTTP 行为测试，再在 callback 中结束只读身份复核快照，保留 state 单次消费、成员二次校验、普通用户限制和 grant 加密；以完整授权码链路转绿为验收，不能吞掉数据库异常。
+
+### R6：委外内部方法更名
+
+未修改业务代码时，真实 import/call 边界为：
+
+```text
+AttributeError: SubcontractingController has no attribute create_raw_materials_supplied
+Did you mean: create_raw_materials_supplied_or_received?
+```
+
+v16 实际签名是 `create_raw_materials_supplied_or_received(self, raw_material_table='supplied_items')`；`set_items_conversion_factor(self)` 与七个 mapper 函数仍可 import，公开参数面未发生影响本项目的变化。按 fastfail，旧方法缺失后没有伪造“七链均已调用”的绿结论。
+
+- **T2.13**：先让委外 make 行为测试在 v16 因旧方法失败，再最小切换新方法并显式传 `supplied_items`；复跑 7 route、10 个 `_MAKE_INSERT_DERIVED_FIELDS` 目标/子表、实例 autoname、完整 operations `confirm()`，任何派生字段差异单独形成测试和修正。
+
+## 其余运行事实
+
+- v16 nginx entrypoint 会重建 `sites/assets` 软链接，因此 frontend 的 sites volume 必须可写；首次只读挂载报错后仅修正 probe compose，app 源码仍只读。
+- `frappe.sessions.get()` 的原生 boot path 确实触发 `dsherp_bridge.boot.boot_session`；无 request 的 CLI 探针显式设置 `frappe.local.request = None`，没有以直接函数调用代替原生 dispatch。
+- v16 runtime meta 对 11 个非子表自定义 DocType 都返回 `creation DESC`；另外 2 个 JSON 是子表。T2.6 仍对全部 13 个 JSON 显式写出排序，避免依赖未来默认值。
+- Browser fresh setup 后复跑：`#dsherp-context-root` 在 `/desk/dsherp-agent` 为 hidden，在 `/desk/item` 显示“Agent”；原生 `.layout-side-section` 只在普通业务页存在。Page 容器为 `page-dsherp-agent`，React 工作台可见。
+- probe frontend 未把 socket.io 接到 entrypoints profile，Desk console 的 `xhr poll error` 属于 probe 接线噪声；独立 websocket 容器已证明 v16 路径与 9000 监听有效，不能把该噪声当成产品兼容性结论。
 
 ## C1 资源清理
 
-未开始。C1 完成后必须同时满足：`docker compose -p dsherp-v16probe ps` 无容器，且 `docker volume ls` 无 `dsherp-v16probe` 卷。
+已销毁。`docker compose -p dsherp-v16probe ... ps --format json` 输出为空；`docker volume ls --format '{{.Name}}' | rg '^dsherp-v16probe'` 无命中。清理使用明确 project 与卷名，没有使用 prune 或通配；既有 `dsherp-validation` v15 backend、beta、platform、frontend、db、redis 仍保持运行。

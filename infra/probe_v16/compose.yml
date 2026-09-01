@@ -1,0 +1,152 @@
+name: dsherp-v16probe
+
+x-app: &app
+  image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+  pull_policy: never
+  environment:
+    PYTHONPATH: /opt/dsherp-frappe
+  volumes:
+    - sites:/home/frappe/frappe-bench/sites
+    - logs:/home/frappe/frappe-bench/logs
+    - ../../frappe_app:/opt/dsherp-frappe:ro
+    - .:/opt/dsherp-v16probe:ro
+  networks: [probe]
+
+services:
+  db:
+    image: mariadb@sha256:2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3
+    pull_policy: never
+    restart: "no"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DSHERP_V16_PROBE_DB_ROOT_PASSWORD:?set DSHERP_V16_PROBE_DB_ROOT_PASSWORD}
+      MARIADB_AUTO_UPGRADE: "1"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 5s
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes: [db:/var/lib/mysql]
+    networks: [probe]
+
+  redis:
+    image: redis@sha256:d0c875bdacfb5c4d2c2d9124de3f53cee1dc9ceff8936bd459fabc135cb33015
+    pull_policy: never
+    restart: "no"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    volumes: [redis:/data]
+    networks: [probe]
+
+  backend:
+    <<: *app
+    restart: "no"
+    command: ["start.sh"]
+    ports: ["127.0.0.1:28081:8000"]
+    environment:
+      PYTHONPATH: /opt/dsherp-frappe
+      GUNICORN_WORKERS: "1"
+      GUNICORN_THREADS: "2"
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_started}
+
+  frontend:
+    <<: *app
+    restart: "no"
+    command: ["nginx-entrypoint.sh"]
+    ports: ["127.0.0.1:28082:8080"]
+    environment:
+      BACKEND: backend:8000
+      SOCKETIO: backend:8000
+      FRAPPE_SITE_NAME_HEADER: dsherp-v16probe.localhost
+      UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: "120"
+      CLIENT_MAX_BODY_SIZE: 50m
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs:ro
+      - ../../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
+    depends_on: [backend]
+
+  platform-backend:
+    <<: *app
+    profiles: [sso]
+    restart: "no"
+    command: ["start.sh"]
+    environment:
+      PYTHONPATH: /opt/dsherp-frappe
+      GUNICORN_WORKERS: "1"
+      GUNICORN_THREADS: "2"
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_started}
+
+  platform-frontend:
+    <<: *app
+    profiles: [sso]
+    restart: "no"
+    command: ["nginx-entrypoint.sh"]
+    ports: ["127.0.0.1:28083:8080"]
+    environment:
+      BACKEND: platform-backend:8000
+      SOCKETIO: platform-backend:8000
+      FRAPPE_SITE_NAME_HEADER: dsherp-v16probe-platform.localhost
+      UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: "120"
+      CLIENT_MAX_BODY_SIZE: 50m
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs:ro
+      - ../../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
+    depends_on: [platform-backend]
+
+  control:
+    <<: *app
+    profiles: [control]
+    restart: "no"
+    entrypoint: ["python3", "/opt/dsherp-v16probe/provision.py"]
+    environment:
+      PYTHONPATH: /opt/dsherp-frappe
+      DSHERP_V16_PROBE_DB_ROOT_PASSWORD: ${DSHERP_V16_PROBE_DB_ROOT_PASSWORD:?set DSHERP_V16_PROBE_DB_ROOT_PASSWORD}
+      DSHERP_V16_PROBE_ADMIN_PASSWORD: ${DSHERP_V16_PROBE_ADMIN_PASSWORD:?set DSHERP_V16_PROBE_ADMIN_PASSWORD}
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_started}
+
+  websocket:
+    <<: *app
+    profiles: [entrypoints]
+    restart: "no"
+    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
+    depends_on: [redis]
+
+  worker:
+    <<: *app
+    profiles: [entrypoints]
+    restart: "no"
+    command: ["bench", "worker", "--queue", "short,default,long"]
+    depends_on: [db, redis]
+
+  scheduler:
+    <<: *app
+    profiles: [entrypoints]
+    restart: "no"
+    command: ["bench", "schedule"]
+    depends_on: [db, redis]
+
+networks:
+  probe:
+
+volumes:
+  db:
+  redis:
+  sites:
+  logs:
