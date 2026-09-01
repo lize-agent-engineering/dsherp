@@ -1,6 +1,9 @@
 import json
+import os
 import httpx
 import pytest
+from dsherp.context_mcp import BusinessRuntimeError
+import dsherp.context_worker as worker
 from dsherp.context_worker import profile_business,run_once
 SETTINGS={'DEEPSEEK_API_KEY':'synthetic','DSH_MODEL':'deepseek-v4-flash','DEEPSEEK_BASE_URL':'http://synthetic'}
 
@@ -65,3 +68,39 @@ def test_business_profile_requires_explicit_urls_and_site():
     for profile in ({'base_url':'http://127.0.0.1:18086','site':'dsherp-daily.localhost'},
                     {'base_url':'http://127.0.0.1:18086','business_url':'backend','site':'dsherp-daily.localhost'}):
         with pytest.raises(ValueError):profile_business(profile)
+
+
+def test_worker_poll_survives_transient_business_transport_and_server_failures(tmp_path, capsys):
+    attempts=[]
+    def handler(request):
+        attempts.append(request.url.path)
+        if len(attempts)==1:raise httpx.ReadError('synthetic connection reset')
+        if len(attempts)==2:return httpx.Response(500,json={'exc_type':'SyntheticFailure'})
+        return httpx.Response(200,json={})
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert worker.poll_once(client,SETTINGS,tmp_path) is False
+        assert worker.poll_once(client,SETTINGS,tmp_path) is False
+        assert worker.poll_once(client,SETTINGS,tmp_path) is False
+    assert len(attempts)==3
+    diagnostic=capsys.readouterr().err
+    assert 'ReadError' in diagnostic
+    assert 'BusinessRuntimeError' in diagnostic and '500' in diagnostic
+    assert 'synthetic connection reset' not in diagnostic
+
+
+def test_worker_poll_fast_fails_non_transient_business_rejection(tmp_path):
+    def handler(request):
+        return httpx.Response(417,json={'exc_type':'SyntheticRejected'})
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(BusinessRuntimeError) as caught:
+            worker.poll_once(client,SETTINGS,tmp_path)
+    assert caught.value.status_code==417
+
+
+def test_worker_pid_file_replaces_stale_value_and_is_removed_on_exit(tmp_path):
+    target=tmp_path/'worker.pid'
+    target.write_text('stale')
+    with worker.worker_pid(target):
+        assert target.read_text()==str(os.getpid())
+        assert target.stat().st_mode & 0o777==0o600
+    assert not target.exists()

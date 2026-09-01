@@ -1,5 +1,6 @@
 """Single business Site coordinator. Native Agent execution stays in containers."""
 import argparse
+from contextlib import contextmanager
 import fcntl
 import json
 import os
@@ -14,7 +15,7 @@ from urllib.parse import urlsplit
 import httpx
 from dsherp.runtime_host import ROOT,IMAGE,load_settings
 from dsherp.context_container import docker_command
-from dsherp.context_mcp import post
+from dsherp.context_mcp import BusinessRuntimeError,post
 from dsherp.runtime_revision import configuration_revision
 
 
@@ -75,6 +76,35 @@ def run_once(client,settings,state_root,*,business=None,execute=run_container):
     return True
 
 
+def poll_once(client,settings,state_root,*,business=None):
+    try:
+        return run_once(client,settings,state_root,business=business)
+    except httpx.TransportError as error:
+        print(json.dumps({'worker_error':type(error).__name__}),file=sys.stderr)
+        return False
+    except BusinessRuntimeError as error:
+        if error.status_code not in (500,502,503,504):raise
+        print(json.dumps({'worker_error':type(error).__name__,'status_code':error.status_code}),file=sys.stderr)
+        return False
+
+
+@contextmanager
+def worker_pid(path):
+    pid=str(os.getpid())
+    temporary=path.with_name(f'.{path.name}.{pid}')
+    fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    try:
+        with os.fdopen(fd,'w') as file:file.write(pid)
+        os.replace(temporary,path)
+        yield
+    finally:
+        temporary.unlink(missing_ok=True)
+        try:
+            if path.read_text()==pid:path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--profile',type=Path,required=True)
@@ -93,14 +123,18 @@ def main():
     # Shared with the old coordinator: only one paid runtime in the existing budget.
     with (ROOT/'.runtime'/'agent-worker.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        subprocess.run(['docker','image','inspect',IMAGE],check=True,stdout=subprocess.DEVNULL)
-        subprocess.run(['docker','volume','inspect','dsherp-v16-agent-runtime'],check=True,stdout=subprocess.DEVNULL)
-        with httpx.Client(base_url=profile['base_url'],headers={'X-Frappe-Site-Name':profile['site'],
-            'Authorization':'token '+profile['api_key']+':'+profile['api_secret']},timeout=25,trust_env=False,follow_redirects=False) as client:
-            while True:
-                run_once(client,load_settings(args.provider_env),state_root,business=business)
-                if args.once:return 0
-                time.sleep(3)
+        with worker_pid(ROOT/'.runtime'/'agent-worker.pid'):
+            subprocess.run(['docker','image','inspect',IMAGE],check=True,stdout=subprocess.DEVNULL)
+            subprocess.run(['docker','volume','inspect','dsherp-v16-agent-runtime'],check=True,stdout=subprocess.DEVNULL)
+            with httpx.Client(base_url=profile['base_url'],headers={'X-Frappe-Site-Name':profile['site'],
+                'Authorization':'token '+profile['api_key']+':'+profile['api_secret']},timeout=25,trust_env=False,follow_redirects=False) as client:
+                while True:
+                    settings=load_settings(args.provider_env)
+                    if args.once:
+                        run_once(client,settings,state_root,business=business)
+                        return 0
+                    poll_once(client,settings,state_root,business=business)
+                    time.sleep(3)
 
 
 if __name__=='__main__':raise SystemExit(main())
