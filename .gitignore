@@ -9,6 +9,9 @@ __pycache__/
 .ruff_cache/
 node_modules/
 dist/
+!frappe_app/dsherp_bridge/public/dist/
+!frappe_app/dsherp_bridge/public/dist/*.js
+!frappe_app/dsherp_bridge/public/dist/*.css
 coverage/
 work/
 .runtime/

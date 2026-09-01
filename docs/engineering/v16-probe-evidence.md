@@ -116,3 +116,16 @@ v16 实际签名是 `create_raw_materials_supplied_or_received(self, raw_materia
 - 价值裁决：仓库已证明 Context Agent 使用 HTTP 轮询且 `/socket.io` 明确返回 404，因此删除 `websocket`、`worker`、`platform-websocket` 三个退役 `legacy` 服务；保留有调度验收价值的 `scheduler` profile。
 - 指纹：新增 compose、镜像准备、Runtime 镜像及两处 agent-runtime 卷消费者，共 5 个部署控制文件。目标契约与相关运行测试 `14 passed`，`docker compose ... config --quiet` 退出码 0；非历史源码 v15 ERP/MariaDB digest 与旧 agent-runtime 卷名均为 0 命中。
 - 无运行切换：核验时 `docker compose ... ps` 仍显示原 v15 ERPNext digest 与 MariaDB digest，6 个既有服务保持运行。C3 前不会执行 down/up。
+
+### C2 前端制品
+
+`npm test` 为 21 个测试文件、162 项通过；`node build.mjs` 退出码 0。最新源码 mtime epoch 为 `1788247690`，六个制品 mtime 均为 `1788247710`。原通用 `dist/` 忽略规则会让 fresh checkout 缺少运行制品，现只对白名单 `frappe_app/dsherp_bridge/public/dist/*.{js,css}` 解除忽略。
+
+| 制品 | SHA-256 |
+| --- | --- |
+| `agent-workbench.css` | `a9fdbbe8bd561499baba2523c519ba460cd272b15abc2995d94ff3d50c754ca5` |
+| `agent-workbench.js` | `bd12ea075f698321e57d86926968475ec7aa4a08959dcaef023cfe0c67944643` |
+| `context-agent.css` | `e5c14ed556344925fe0927df8b9cf48b73ae87e2739806bd29bdeec13f7a084e` |
+| `context-agent.js` | `cdde0e4d2f58e518d47424fe63ac396a432bc47e0729b40062e701ad6d4d0ed1` |
+| `studio.css` | `211c3f60a6a5c892b7fb28217c4dddab6cbda217915f29b7c5b0edf7c81af1ed` |
+| `studio.js` | `4c4e6c7c637f98d9457039ba15c9c2bb70bd4bab2ff80c90a0243a1a6a879142` |
