@@ -111,12 +111,12 @@ make 路由候选方法名（`make_delivery_note`、`make_stock_entry`、`make_p
 
 ## 阶段 4：alpha 真实模型 + 浏览器 UI 分段验收（真实 deepseek-v4-flash，非替身）
 
-- [ ] **T4.1 缺料解释查询轮**：真实业务页侧栏问"这张销售订单缺什么料"，模型经 BOM+Bin 只读给出有来源的缺料依据。
-- [ ] **T4.2 自制链**、**T4.3 采购链**、**T4.4 委外+交付链**：各段模型提案 → 侧栏确认 → 原生回读。每段判据：执行记录唯一、零意外写入、预算未爆（爆则按 R1 处置）。证据逐段追加 `docs/engineering/context-agent-hitl-acceptance.md`。
+- [x] **T4.1 缺料解释查询轮**：真实业务页侧栏问"这张销售订单缺什么料"，模型经 BOM+Bin 只读给出有来源的缺料依据。
+- [x] **T4.2 自制链**、**T4.3 采购链**、**T4.4 委外+交付链**：各段模型提案 → 侧栏确认 → 原生回读。每段判据：执行记录唯一、零意外写入、预算未爆（爆则按 R1 处置）。证据逐段追加 `docs/engineering/context-agent-hitl-acceptance.md`。
 
 ## 阶段 5：daily 终验
 
-- [ ] **T5.1 daily 角色与 fixture**：先改 `tests/integration/test_daily_site.py:25-32`（数量断言改为包含制造 fixture 集合；角色断言加 Manufacturing/Purchase 类角色）确认红；再对 daily 执行 fixture 与角色扩充，转绿。变更前按既有惯例做 daily 备份。
+- [x] **T5.1 daily 角色与 fixture**：先改 `tests/integration/test_daily_site.py:25-32`（数量断言改为包含制造 fixture 集合；角色断言加 Manufacturing/Purchase 类角色）确认红；再对 daily 执行 fixture 与角色扩充，转绿。变更前按既有惯例做 daily 备份。
 - [ ] **T5.2 daily 端到端终验**：普通成员经平台 SSO 登录 daily，真实模型完整叙事：销售订单 → 缺料解释 → 用户聊天中选定方式（至少自制+采购+委外主变体各一次）→ 逐个确认 → 收货/入库 → 交付 → SO 状态回读。验收后四件套备份恢复比对，证据落档，按功能提交。判据：全仓 Python + 前端回归全绿、证据数字更新。
 
 ## 风险与显式决策

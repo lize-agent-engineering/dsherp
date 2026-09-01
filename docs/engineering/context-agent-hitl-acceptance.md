@@ -97,3 +97,11 @@
 - 原生结果：委外 PO `PUR-ORD-2026-00002` docstatus 1、is_subcontracted 1；SCO `SC-ORD-2026-00001` docstatus 1、Completed、per_received 100；供料 `MAT-STE-2026-00005` docstatus 1、purpose Send to Subcontractor；SCR `MAT-SCR-2026-00001` docstatus 1、Completed；fixture SO docstatus 1、To Bill、per_delivered 100；DN `MAT-DN-2026-00001` docstatus 1、To Bill。全部 modified_by 为普通 writer。
 - 库存分录与确认卡逐条一致：供料原料仓 `-40`/委外仓 `+40`，SCR 成品仓 `+20`/委外仓原料 `-40`，DN 成品仓 `-60`。结合 T4.2 的成品 40 与 T4.3 后原料 40，交付后原料、在制、委外、成品仓均为 `0/0`；没有发票、付款或计划外业务单据。因此成功段的执行唯一、零意外写入、预算未超三项通过。
 - Phase 4 finally 只对本轮精确命名的 11 张合成单据按依赖逆序处理；首次删除被原生 GL Link 阻止且事务回滚，无半清理。随后先 cancel 全部已提交单据，再在项目测试既有的短作用域 `delete_linked_ledger_entries=1` 内删除 DN/SCR/SE/PR 及其 ledger，退出后设置恢复为 0，再删除源单。最终 11 张单据及其 SLE 均为 0，制造 fixture 恢复为原料仓 `100/100`、成品/在制/委外仓 `0/0`；历史销售订单 `SAL-ORD-2026-00001/00002` 未进入清单且未修改。
+
+## Phase 5 / T5.1：daily 制造基线与可恢复性
+
+- 在任何 daily 业务变更前确认无 active run、无一次性恢复站点，原生 `bench --site dsherp-daily.localhost backup --with-files --compress` 生成 `20260901_100135-dsherp-daily_localhost` 四件套；恢复到固定一次性站点后源/恢复快照一致，随后原生 drop-site。备份只保留在 Site 私有目录，不入 Git、不输出配置内容。
+- 先把 daily 回归写死为 4 个 Item（原日常 Item + 3 个制造 Item）、5 个制造仓、提交态 BOM/期初盘点、原料 100、14 条策略/7 条 route，以及新增 `Manufacturing User`、`Purchase User`、`Purchase Master Manager`、`Stock User` 与制造采购原生权限；旧站点按预期红灯 **1 failed / 1.31s**。再将制造 fixture 开通器参数化为固定 alpha/daily allowlist，并由同一事务扩充各站固定普通操作员角色；策略开通器只新增 daily 制造集合支持，beta 仍 fastfail。
+- daily fixture 与制造策略各连续执行两次，返回完全相同；固定红测转绿 **1 passed / 4.02s**。只读回读为公司 `DSHERP 日常合成企业`、仓库后缀 `DSE`、BOM `BOM-DSHERP-MFG-SYN-FG-001`、期初盘点 `DSHERP-MFG-SYN-OPENING-STOCK`、原料 Bin `100`、业务单据全零。制造 fixture / 策略 / daily 组合回归最终 **33 passed / 179.36s**。
+- 恢复比对器扩展为同时比较 fixture 主从数据、角色、14/7 策略路由、8 类制造业务单据与 4 类 Agent 审计计数，并要求数据库、Site 配置、公有文件、私有文件四件均非空。首次深快照因执行台账 DocType 名写错而在源站 fastfail，未创建恢复站点；修正为真实 `DS Execution Record` 后，恢复数据库完成但 Redis 已达 `79.95/80 MiB`、`noeviction`，深快照明确 OOM。核对 active run 为 0 后只清空可重建的 validation Redis 缓存，以 `--resume-restored` 继续同一次恢复，`20260901_101001` 四件套源/恢复深快照完全一致并原生删除临时站点；没有为脚本添加重试或掩盖负载干扰。
+- 本段没有运行真实模型、没有新增业务操作单据，也没有改 alpha/beta 业务数据；daily 的既有 Agent 审计记录保留。T5.2 从这一固定基线开始。
