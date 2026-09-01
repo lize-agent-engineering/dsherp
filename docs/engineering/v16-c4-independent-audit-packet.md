@@ -6,20 +6,21 @@
 
 ## 1. 审计对象与边界
 
-- 原始执行证据提交：`d64a2f98156cdc77e004c734f2a7c32d10f2e8b7`；首轮 Claude 审计结论为 C4 BLOCKED。
-- 首轮整改代码/测试固定提交：`ccce8a1c3fd32418f1482ffefa2cb24429c3939c`。后续文档提交只记录审计与整改事实；若产品代码、测试或部署契约再变化，必须再次更新固定对象。
+- 原始执行证据提交：`d64a2f98156cdc77e004c734f2a7c32d10f2e8b7`；Claude 首轮和第二轮审计结论均为 C4 BLOCKED。
+- 第二轮整改代码/测试固定提交：`3eb72e569c120748054747bb7ebca86b4a09cdf9`。首轮五项 Important 已被第二轮审计确认修复；本轮继续修复共享队列、宿主 worker 启动契约和锁等待超时。后续文档提交只记录审计与整改事实；若产品代码、测试或部署契约再变化，必须再次更新固定对象。
 - 授权记录：`390438a03a754463b6cf2e3d4b9163564c054cd0`；OAuth 修复：`d94efcee002216ea7443b95e5ba71d4d7b3454a8`；浏览器证据：`28ea7624b53530d177d6106f05491eff3b4daf4f`；真实模型证据：`d64a2f98156cdc77e004c734f2a7c32d10f2e8b7`。
 - 审计环境仅为本机隔离合成四站，不是生产环境，不包含生产租户或真实企业数据。
-- 复审必须同时检查原始证据和 `d64a2f9..ccce8a1` 整改增量，不能只重跑绿灯而跳过首轮五项 Important 的根因与修复。
+- 复审必须同时检查原始证据、`d64a2f9..ccce8a1` 首轮整改和 `ccce8a1..3eb72e5` 第二轮整改，不能只重跑绿灯而跳过两轮审计根因与修复。
 - v15 卷、冷静期回滚材料和本地凭证均不得修改或删除。任何真实模型补跑都需要新的费用授权；本审计默认只读核对既有运行。
 
 先固定对象并确认工作副本：
 
 ```bash
 git status --short
-git show -s --format='%H %P %cI %s' ccce8a1 3f425b6 2a0af9a d510e5c d64a2f9
-git diff --check d64a2f9..ccce8a1
-git diff --stat d64a2f9..ccce8a1
+git show -s --format='%H %P %cI %s' \
+  3eb72e5 64a26f5 973879f 982011a 00f3ff3 ccce8a1 d64a2f9
+git diff --check d64a2f9..3eb72e5
+git diff --stat d64a2f9..3eb72e5
 ```
 
 审计应在独立 checkout/worktree 执行，不应在执行方当前工作副本上签发结论。
@@ -67,7 +68,7 @@ daily 重验不能把 alpha 结果复述为本站结果。审计方应在 `work/
 | --- | --- |
 | `dsherp-validation.localhost` | `dsherp-daily.localhost` |
 | `DSHERP 原生验收测试公司` | `DSHERP 日常合成企业` |
-| `Agent 合成客户` | `日常 Agent 合成客户` |
+| `DSHERP-TEST-CUSTOMER` | `日常 Agent 合成客户` |
 
 除这三项及临时文件路径外发生的任何修改都应中止审计，而不是扩展兜底。临时副本和 `pyc` 在取证后删除，不进入 Git。
 
@@ -150,13 +151,22 @@ dc3bbb504485a647a30d23c6239573a40ff1602a5259bb0097e5018e1f0d2ec5  t4.3-alpha-rea
 
 ## 6. 全量回归与构建
 
-全量集成会在隔离合成站点创建并 finally 删除大量记录，但 Frappe 的动态链接清理任务仍会进入默认队列。审计方在运行前必须确认三站活跃 Run 均为 0，bootout 常驻 worker，并确认队列任务只属于本轮合成测试后使用 Frappe 原生命令清理；不得在生产站或队列归属不明时执行：
+全量集成会在隔离合成站点创建并 finally 删除大量记录，但 Frappe 的动态链接清理任务仍会进入四站共用的 Redis 默认队列。审计方在运行前必须确认三业务站活跃 Run 均为 0，bootout 常驻 worker，并用 `get_jobs` 检查每个 Site 和方法。`infra.v16_integration_queue` 只接受四个固定合成 Site 与 `frappe.ping`、`create_contact`、`delete_dynamic_links` 三类可重建任务；遇到其他 Site/方法会在删除前 fastfail。不得在生产站或队列归属不明时执行：
 
 ```bash
 launchctl bootout "gui/$(id -u)/com.dsherp.agent-worker-v16"
 docker exec dsherp-validation-backend-1 \
-  bench purge-jobs --site dsherp-validation.localhost --queue default
+  bench --site dsherp-validation.localhost execute \
+  frappe.utils.background_jobs.get_jobs --kwargs '{"key":"method"}'
+PYTHONPATH=. .venv/bin/python -c \
+  'from infra.v16_integration_queue import purge_validation_jobs; print(purge_validation_jobs())'
+
+# 保留数据库卷，只冷重启 MariaDB 进程，避免多轮审计造成的累计内存替代单轮容量事实。
+docker compose -p dsherp-validation -f infra/compose.validation.yml restart db
+until docker exec dsherp-validation-db-1 mariadb-admin ping --silent; do sleep 1; done
 ```
+
+首次第二轮复跑前，数据库容器已连续运行约四小时并承受多套全量门，最终因 1 GiB cgroup 上限被 OOM kill；卷内数据库经 Aria/InnoDB crash recovery 完整恢复。冷重启后同一全量集成单轮通过，最终整改目标的 cgroup 峰值为 `433483776 / 1073741824` bytes，`max=0`、`oom=0`、`oom_kill=0`。因此不提高容量，而把冷启动作为独立审计可复现前置；数据库状态或卷不得删除。
 
 随后至少执行：
 
@@ -168,7 +178,14 @@ PYTHONPATH=. .venv/bin/python -m pytest tests --ignore=tests/integration -q --tb
 git diff --check
 ```
 
-无论测试成功或失败，都应再次用同一 Frappe 命令清理本轮合成任务，再从 `.runtime/com.dsherp.agent-worker-v16.plist` 恢复 LaunchAgent，并核对 `state=running`、keepalive、真实 PID 与 PID 文件。收集数量以固定提交实际结果为准；整改执行方结果为 integration 165、非集成 121、前端 162，不能直接采信。构建后应确认 `frappe_app/dsherp_bridge/public` 制品来自当前 `frontend/src` 且工作副本没有意外差异；不能只看命令退出码。
+集成 session fixture 无论测试成功或正常失败都会先分类、再精确清理四站任务；硬中断后仍须人工重跑同一检查/清理命令。恢复 worker 必须从受版本控制的生成器重建 LaunchAgent，不能依赖执行方手写的忽略文件：
+
+```bash
+.venv/bin/python infra/render_context_worker_launch_agent.py
+launchctl bootstrap "gui/$(id -u)" .runtime/com.dsherp.agent-worker-v16.plist
+```
+
+随后核对 `state=running`、`keepalive`、真实 PID 与 `0600` PID 文件。收集数量以固定提交实际结果为准；最终整改执行方结果为 integration 165、非集成 127、前端 162，不能直接采信。构建后应确认 `frappe_app/dsherp_bridge/public` 制品来自当前 `frontend/src` 且工作副本没有意外差异；不能只看命令退出码。
 
 ## 7. 审计裁决表
 

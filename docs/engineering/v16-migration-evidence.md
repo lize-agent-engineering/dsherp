@@ -155,9 +155,35 @@ Claude Code Opus 以只读审计方检查固定提交 `d64a2f9` 及执行方审�
 
 以上是执行方整改证据，**不是 Claude 复审通过**。整改改变了代码和测试，审计对象必须从 `d64a2f9` 更新为 `ccce8a1` 后重新复核；T4.2 真实浏览器矩阵仍需具备浏览器控制能力的独立审计方操作。
 
+## C4 第二轮独立审计与整改
+
+Claude Code Opus 第二轮只读复审确认首轮五项 Important 均已修复，但仍裁决 **C4 BLOCKED**：它在未清理 beta 旧任务的共享 Redis 上重跑全量集成，队列总量超过 Frappe 上限，出现 3 项失败；队列已满时，`finally` 中 Translation 删除又触发动态链接任务，导致一条 Translation 暂时残留。复审同时记录了审计包 daily 客户替换值错误、LaunchAgent 只存在于忽略文件、bootout 后 PID 陈旧、锁等待超时未收敛及浏览器未独立复验等问题。
+
+执行方先按 Site、方法和创建时间只读分类：beta 的 234 条均来自两轮审计窗口（210 条 `delete_dynamic_links`、21 条合成 User `create_contact`、3 条 `frappe.ping`），随后才在 beta 容器用 Frappe 原生命令精确清理。对剩余问题完成第二轮 Red-Green 整改：
+
+| 整改 | 行为证据 | 提交 |
+| --- | --- | --- |
+| 受版本控制的 LaunchAgent 生成器 | 新测试先因模块/运行时字段缺失而红；生成器使用直接 Python argv、`WorkingDirectory`、固定 PATH、`KeepAlive=true`、10 秒节流和 `0600` 原子 plist；真实 SIGTERM 后 PID `16133` 以退出码 0 自动拉起为 `16198`，PID 文件同步为 0600 | `00f3ff3`、`64a26f5` |
+| 四站共享队列隔离 | 新测试先因 helper 缺失而红；session fixture 在前后覆盖 alpha/daily/beta/platform 四站。后续再加“先读取任务归属、未知 Site/方法删除前 fastfail”；并覆盖 Frappe 空队列返回空 stdout 的实际行为 | `982011a`、`3eb72e5` |
+| 并发确认 QueryTimeout | 确定性注入 `QueryTimeoutError`，旧实现稳定红；与 deadlock 相同，回滚后复核冻结 digest，只回读唯一 durable Execution，不重放业务动作 | `973879f` |
+| 宿主/业务 Runtime 边界 | 首次全量门暴露宿主 LaunchAgent 文件误入隔离 Runtime revision，导致 2 项稳定失败；移出业务哈希清单后两个原生 Runtime 链聚焦用例 `2 passed` | `64a26f5` |
+| 审计包事实修正 | daily 客户由错误的 `Agent 合成客户` 改为真实 alpha 值 `DSHERP-TEST-CUSTOMER`；全量门改为四站检查/清理、冷启数据库、受控生成并恢复 LaunchAgent | 本文档提交 |
+
+数据库 OOM 另行按 `systematic-debugging` 取证：失败容器 `.State.OOMKilled=true`，但发生在数据库连续运行约四小时、承受多轮全量门之后。保留原卷冷重启并完成 crash recovery 后，第一次原代码冷单轮为 `165 passed`，峰值 `679788544 / 1073741824` bytes、零 OOM 事件；最终整改目标再次冷启后为：
+
+- 集成：`165 passed in 693.62s`；fixture 结束后四站 RQ 队列均为 0；
+- 非集成 Python：`127 passed in 48.14s`；
+- 前端：`21 files / 162 tests passed in 14.70s`；
+- 构建、`git diff --check` 退出 0，构建制品没有意外差异；
+- MariaDB cgroup 最终峰值 `433483776 / 1073741824` bytes，`max/oom/oom_kill` 均为 0；未提高内存上限；
+- alpha/daily 活跃 Run、七类制造单据、四类 Proposal/Execution 产物、Translation、`transcript-*` 用户均为 0；alpha/daily 原料仓分别以各自公司缩写回读为 `100/100`，在制/委外/成品仓均 `0/0`；beta Translation 和四类 Agent 产物为 0；
+- 未调用 DeepSeek，未修改 v15，scheduler 仍停止。
+
+以上仍是执行方整改证据。技术复审对象现为 `3eb72e569c120748054747bb7ebca86b4a09cdf9`，必须由 Claude 第三轮独立重跑；T4.2 仍需独立真实浏览器复验后才能裁决 C4。
+
 ## 当前待完成门槛
 
-1. **C4 复审与独立浏览器复验**：首轮 Claude 审计为 BLOCKED，整改和全量门已完成但仍待复审；Claude CLI 未能独立操作真实浏览器，T4.2 不能放行。执行方已更新 [`v16-c4-independent-audit-packet.md`](v16-c4-independent-audit-packet.md)，该入口不构成审计结论。
+1. **C4 第三轮复审与独立浏览器复验**：前两轮 Claude 审计均为 BLOCKED；第二轮整改和最终全量门已完成但仍待独立复审。此前 Claude CLI 未操作真实浏览器，T4.2 不能放行。执行方已更新 [`v16-c4-independent-audit-packet.md`](v16-c4-independent-audit-packet.md)，该入口不构成审计结论。
 2. **daily 冷静期**：目前只有 2026-09-01 一套备份基线，scheduler 已停止且没有跨日自动任务；审计放行后才开始若干天调度与备份正常证据积累。
 3. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 归档、dry-run、用户确认和逐名删除尚未执行。
 
