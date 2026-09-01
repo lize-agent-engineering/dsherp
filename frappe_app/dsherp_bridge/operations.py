@@ -2,7 +2,7 @@
 import hashlib
 import json
 import frappe
-from frappe.utils import add_to_date, now_datetime, get_system_timezone
+from frappe.utils import add_to_date, flt, now_datetime, get_system_timezone
 from zoneinfo import ZoneInfo
 from dsherp_bridge.context_api import _conversation, _user, _json
 
@@ -253,6 +253,44 @@ def _execution_result(execution):
     return {**result, 'execution_id': execution.name}
 
 
+def _submitted_stock_entry_ledger(doc,payload):
+    impact=payload.get('impact')
+    if (doc.doctype!='Stock Entry' or payload.get('action')!='submit'
+            or not isinstance(impact,dict) or impact.get('kind')!='stock'):
+        return None,None
+    rows=frappe.get_list(
+        'Stock Ledger Entry',
+        filters={
+            'voucher_type':'Stock Entry',
+            'voucher_no':doc.name,
+            'is_cancelled':0,
+        },
+        fields=['item_code','warehouse','actual_qty','stock_uom'],
+    )
+    grouped={}
+    for row in rows:
+        key=(row.item_code,row.warehouse,row.stock_uom)
+        grouped[key]=flt(grouped.get(key))+flt(row.actual_qty)
+    observed=[
+        {'item_code':item_code,'quantity':quantity,'uom':uom,'warehouse':warehouse}
+        for (item_code,warehouse,uom),quantity in sorted(grouped.items())
+        if quantity
+    ]
+    expected=sorted(
+        [
+            {
+                'item_code':entry['item_code'],
+                'quantity':flt(entry['quantity']),
+                'uom':entry['uom'],
+                'warehouse':entry['warehouse'],
+            }
+            for entry in impact.get('entries') or []
+        ],
+        key=lambda entry:(entry['item_code'],entry['warehouse'],entry['uom']),
+    )
+    return observed,observed==expected
+
+
 @frappe.whitelist(methods=['GET'])
 def verify_execution(proposal_id):
     proposal=get_proposal(proposal_id)
@@ -279,6 +317,7 @@ def verify_execution(proposal_id):
         else:
             result['matches_proposal']=bool(execution and execution.get('status')=='Succeeded' and matches)
         return result
+    stored=json.loads(frappe.get_doc('DS Operation Proposal',proposal_id).payload)
     values={};matches=True
     for change in proposal['changes']:
         field=change['field'];expected=change['after']
@@ -293,6 +332,11 @@ def verify_execution(proposal_id):
             values[field]=doc.get(field)
             matches=matches and json.loads(_json(values[field]))==expected
     result['observed']={'doctype':doc.doctype,'name':doc.name,'version':str(doc.modified),'values':json.loads(_json(values))}
+    ledger_entries,ledger_matches=_submitted_stock_entry_ledger(doc,stored)
+    if ledger_entries is not None:
+        result['observed']['stock_ledger_entries']=ledger_entries
+        matches=matches and ledger_matches
+        result['note']='已只读核对单据状态和库存分录；不会重试操作或改写执行记录。'
     result['matches_proposal']=matches
     if proposal['action']=='fill':result['note']='这里只核实服务器已保存内容，不能证明浏览器草稿是否已填入；不会重新填入。'
     return result

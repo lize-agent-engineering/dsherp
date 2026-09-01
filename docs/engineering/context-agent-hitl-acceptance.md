@@ -71,3 +71,11 @@
 - 普通 writer 在该销售订单原生表单侧栏新建查询会话 `hcadbl4q4h`，真实 `deepseek-v4-flash` 运行 `4e321463b8bebee30ba896b118e80237159aefc6434ca5c705eda959a0c7ee09` 为 `Succeeded`。模型按 Sales Order → BOM → Bin 顺序完成 7 次有来源 ERP 读取，页面明确给出需求 `60 × 2 = 120`、原料仓 `actual_qty/projected_qty = 100/100`、缺口 `20 Nos`，并说明没有修改记录。
 - 该运行正好使用 8 次模型调用、`412983` 输入字节、`16384` 预留输出 token，均未超过单运行上限；没有静默放松常量，也没有再次运行。把第 9 次预约的明确错误永久锁定为 `本轮模型调用预算已用尽`，`tests/integration/test_context_execution.py` 现场 **1 passed / 6.67s**。
 - 运行后会话内提案 0、执行记录 0（只读查询的预期形状），制造业务单据仍为 Work Order/Stock Entry/Purchase Order/Purchase Receipt/Subcontracting Order/Subcontracting Receipt/Delivery Note 各 0；销售订单仅新增上述 fixture 至总数 3。原料 Bin 仍 `100/100`、成品 Bin 仍 `0/0`。因此 T4.1 的唯一运行、零意外写入和预算未超三项通过；查询段不伪造一条 operation 执行记录。
+
+## Phase 4 / T4.2：自制链与 Stock Entry 响应中断核实
+
+- alpha 普通 writer 在原生 Work Order 列表的 operation 会话 `kco4tsmh13` 连续完成六个明确分开的真实模型运行：创建 40 Nos Work Order、提交 Work Order、make 领料 Stock Entry、提交领料 Stock Entry、make 完工 Stock Entry、提交完工 Stock Entry。对应运行依次为 `e63ab383…`、`ea3c7a6b…`、`176151b4…`、`06af5c34…`、`515c66c1…`、`835cc19c…`，均为 `Succeeded`；模型调用数依次 `5/3/4/3/3/3`，每轮输入和预留输出均低于 `524288/16384` 上限，没有预算放宽或失败重跑。
+- 六个 Pending 卡都在真实侧栏逐笔确认，形成 `MFG-WO-2026-00001`、领料 `MAT-STE-2026-00003`、完工 `MAT-STE-2026-00004`。六个提案 `l27vdurd09/lruen8bmjn/mko7aggjgi/o0lgv1vf5u/q9hcsuluqq/r2m8vjtjga` 各自恰有一条 `Succeeded` 的 `DS Execution Record`，无 Pending、Queued 或 Running 遗留。Work Order 原生回读为 `Completed`、qty/produced/material_transferred=`40/40/40`；两张 Stock Entry 均 docstatus 1。
+- 对领料 SE 的确认，浏览器在请求发出后 25ms 主动终止响应，实际观察为 `AbortError`；没有点击确认第二次，也没有重新调用 confirm。独立数据库只读核对发现唯一执行 `ocf82v7j4r` 已 `Succeeded`、Stock Entry docstatus 1，且恰有两条 Stock Ledger Entry：原料仓 `-80`、在制仓 `+80`。这证明本次是“响应丢失后核实”，不是盲目重放。
+- 首次调用 `verify_execution(o0lgv1vf5u)` 只回读 docstatus，未返回库存分录，不能满足验收矩阵。先在既有完整 Work Order 链加入 `stock_ledger_entries` 断言，确认红灯 `KeyError`；最小实现仅对 Stock Entry submit 的冻结 stock impact 用当前用户权限聚合读取未取消 Stock Ledger Entry，并纳入匹配。转绿 **1 passed / 15.96s**；相关 verify/make 回归 **3 passed / 21.08s**。重新加载后对上述真实中断提案只读核实返回 docstatus 1、两条 `-80/+80` 分录、`matches_proposal=true`，明确写明“不会重试操作或改写执行记录”。
+- 自制完成后的真实库存为：原料仓 `20/20`、在制仓 `0/0`、成品仓 `40/40`；四条 Stock Ledger Entry 与两张 SE 的冻结影响逐条一致。除预期一张 Work Order、两张 Stock Entry 及其四条库存分录外，没有 Purchase Order/Receipt、Subcontracting Order/Receipt、Delivery Note 或其他制造单据。因此 T4.2 的执行唯一、零意外写入、预算未超三项通过。

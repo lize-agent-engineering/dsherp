@@ -14,7 +14,7 @@ frappe.connect()
 
 from dsherp_bridge.context_execution import run_tool
 from dsherp_bridge.context_permissions import run_revision
-from dsherp_bridge.operations import confirm
+from dsherp_bridge.operations import confirm,verify_execution
 
 tag=uuid.uuid4().hex
 actor='work-order-'+tag+'@example.invalid'
@@ -343,6 +343,12 @@ try:
         {'item_code':row.item_code,'quantity':flt(row.actual_qty),'uom':'Nos','warehouse':row.warehouse}
         for row in transfer_ledgers
     ]
+    transfer_verified=verify_execution(transfer_submit['id'])
+    assert transfer_verified['matches_proposal'] is True,transfer_verified
+    assert transfer_verified['observed']['stock_ledger_entries']==[
+        {'item_code':raw_item,'quantity':-2,'uom':'Nos','warehouse':raw_warehouse},
+        {'item_code':raw_item,'quantity':2,'uom':'Nos','warehouse':wip_warehouse},
+    ],transfer_verified
     transfer_duplicate=confirm(transfer_submit['id'],transfer_submit['digest'],uuid.uuid4().hex)
     assert transfer_duplicate==transfer_submitted
     assert frappe.db.count('DS Execution Record',{'proposal':transfer_submit['id']})==1
