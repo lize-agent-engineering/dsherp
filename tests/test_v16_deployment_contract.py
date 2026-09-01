@@ -21,7 +21,7 @@ def test_all_deployment_entrypoints_use_only_the_pinned_v16_images():
     ]
     sources = [path.read_text() for path in paths]
     assert not [path.relative_to(ROOT).as_posix() for path, source in zip(paths, sources) if ERP_V15 in source]
-    assert sum(source.count(ERP_V16) for source in sources) == 9
+    assert sum(source.count(ERP_V16) for source in sources) == 10
     assert DB_V15 not in COMPOSE
     assert COMPOSE.count(DB_V16) == 1
 

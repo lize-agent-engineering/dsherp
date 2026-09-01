@@ -129,6 +129,27 @@ services:
     networks: [validation]
     logging: *logging
 
+  validation-provision:
+    profiles: [control]
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+    pull_policy: never
+    mem_limit: 640m
+    memswap_limit: 640m
+    cpus: 0.5
+    restart: "no"
+    entrypoint: []
+    command: ["/home/frappe/frappe-bench/env/bin/python", "/opt/provision_validation_site.py"]
+    environment: {PYTHONPATH: /opt/dsherp-frappe}
+    secrets: [db_root_password, validation_admin_password]
+    volumes:
+      - v16-sites:/home/frappe/frappe-bench/sites
+      - v16-logs:/home/frappe/frappe-bench/logs
+      - ../frappe_app:/opt/dsherp-frappe:ro
+      - ./provision_validation_site.py:/opt/provision_validation_site.py:ro
+    depends_on: [db, redis]
+    networks: [validation]
+    logging: *logging
+
   platform-backend:
     image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
     pull_policy: never
@@ -213,3 +234,5 @@ secrets:
     file: ../.runtime/control/db_root_password
   daily_admin_password:
     file: ../.runtime/control/daily_admin_password
+  validation_admin_password:
+    file: ../.runtime/control/admin_password
