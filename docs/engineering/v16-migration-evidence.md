@@ -199,20 +199,20 @@ Claude Code Opus 第三轮以 `3eb72e5` 为起点独立执行 T4.1、T4.2 真实
 
 修复目标冷启全量门为：集成 `165 passed in 702.09s`、非集成 `127 passed in 43.51s`、前端 `162 passed`、生产构建退出 0；四站队列和测试产物回到 0，正式 worker 恢复。Claude 第四轮独立比较修复前后代码，并重跑 11 项聚焦测试（`11 passed in 56.98s`），最终裁决 I-1、I-2 均为 FIXED，没有新的 Critical 或阻断级 Important，第三轮 C4 阻断解除。它记录的两个 Minor 均为 fail-closed 或测试覆盖粒度建议，不构成当前放行阻断。
 
-该结论只放行 C4 核心技术、浏览器与既有 provider 证据。随后为真实执行 Frappe 调度任务增加 `scheduler-worker` scheduled profile（提交 `1f1b46c`）；这是冷静期部署契约变化，仍须在跨日证据完成后连同当前 HEAD 做最终独立审计。
+该结论只放行 C4 核心技术、浏览器与既有 provider 证据。随后为真实执行 Frappe 调度任务增加 `scheduler-worker` scheduled profile（提交 `1f1b46c`）；Day 0 又根据实际 OOM 修正 scheduler 资源和两项服务的重启契约（提交 `867048f`）。这些冷静期部署变化仍须在跨日证据完成后连同当前 HEAD 做最终独立审计。
 
 ## daily 冷静期启动
 
 冷静期采用保守口径：不计 2026-09-01 当天剩余时段，以 2026-09-02、2026-09-03、2026-09-04 三个连续完整自然日为通过条件。`v16-daily` 心跳检查已启用，每日 22:30 只对隔离 daily 站执行调度回读、四件套备份和一次性恢复验证；禁止调用 DeepSeek、接触生产数据或修改 v15。
 
-Day 0 于 2026-09-01 22:48 启动 scheduled profile：alpha scheduler 明确 disabled，daily scheduler 明确 enabled，`scheduler-worker` 在线并监听 `short,default,long`。22:52 首个自然调度周期产生 18 条 `Scheduled Job Log`，时间范围为 22:52:15–22:53:56，全部 `Complete`；worker 对应日志均为 `Job OK`，队列随后排空。
+Day 0 于 2026-09-01 22:48 启动 scheduled profile：alpha scheduler 明确 disabled，daily scheduler 明确 enabled，`scheduler-worker` 在线并监听 `short,default,long`。22:52 首个自然调度周期产生 18 条 `Scheduled Job Log`，全部 `Complete`；但 scheduler 随后因原 128 MiB 上限 OOM 并以 137 退出，`restart: no` 使它没有恢复。执行方先以部署测试锁定 256 MiB 和 `unless-stopped` 契约、确认旧配置红，再做最小修改；部署测试 9 项、非集成 Python 128 项通过。22:57 重建后跨过 23:00 下一轮及原故障窗口连续运行 7 分钟，scheduler/worker 均无 OOM、重启计数 0，峰值分别为 `123973632` 和 `162099200` 字节；Day 0 最终累计 36 条日志全部 `Complete`，队列排空。
 
 同日备份前缀为 `20260901_224857-dsherp-daily_localhost`：database `1195439`、public files `10240`、private files `10240`、site config `483` 字节。第一次验证因误用系统 Python 缺少 `frappe` 而 fastfail，未创建恢复 Site；改用 control 容器内固定解释器后 `verify_daily_backup.py` 退出 0，源站与一次性恢复站快照一致，恢复 Site 随后删除。完整本地工作证据位于忽略提交的 `work/v16-cooldown/2026-09-01-day0.md`。
 
 ## 当前待完成门槛
 
-1. **daily 跨日冷静期**：Day 0 已通过；仍须取得 2026-09-02 至 2026-09-04 三个连续完整自然日的 scheduler/worker、无未解释失败、四件套备份和一次性恢复证据。
-2. **当前 HEAD 最终独立审计**：核心代码对象 `11d22ed` 已放行；冷静期 worker 契约 `1f1b46c` 及后续证据仍须在三天结束后独立复核。
+1. **daily 跨日冷静期**：Day 0 已完成并修复实际 OOM；仍须取得 2026-09-02 至 2026-09-04 三个连续完整自然日的 scheduler/worker、无未解释失败、四件套备份和一次性恢复证据。
+2. **当前 HEAD 最终独立审计**：核心代码对象 `11d22ed` 已放行；冷静期 worker 与持续运行契约 `1f1b46c`、`867048f` 及后续证据仍须在三天结束后独立复核。
 3. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 归档、dry-run、用户单独确认和逐名删除尚未执行。
 
 因此当前不得宣称 v16 迁移整体完成、用户可见上线或可删除 v15。
