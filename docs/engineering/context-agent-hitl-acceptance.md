@@ -1,6 +1,6 @@
 # 原生侧栏 HITL 真实验收
 
-范围：本机 alpha 合成 Site，不是生产上线。固定 DSH 0.1.1rc1，已授权 deepseek-v4-flash，仍为一次一个384MiB/.1CPU容器。
+范围：本机 alpha 与 daily 隔离合成 Site，不是生产上线。固定 DSH 0.1.1rc1，已授权 deepseek-v4-flash，仍为一次一个384MiB/.1CPU容器。
 
 ## 独立普通用户登录
 
@@ -105,3 +105,25 @@
 - daily fixture 与制造策略各连续执行两次，返回完全相同；固定红测转绿 **1 passed / 4.02s**。只读回读为公司 `DSHERP 日常合成企业`、仓库后缀 `DSE`、BOM `BOM-DSHERP-MFG-SYN-FG-001`、期初盘点 `DSHERP-MFG-SYN-OPENING-STOCK`、原料 Bin `100`、业务单据全零。制造 fixture / 策略 / daily 组合回归最终 **33 passed / 179.36s**。
 - 恢复比对器扩展为同时比较 fixture 主从数据、角色、14/7 策略路由、8 类制造业务单据与 4 类 Agent 审计计数，并要求数据库、Site 配置、公有文件、私有文件四件均非空。首次深快照因执行台账 DocType 名写错而在源站 fastfail，未创建恢复站点；修正为真实 `DS Execution Record` 后，恢复数据库完成但 Redis 已达 `79.95/80 MiB`、`noeviction`，深快照明确 OOM。核对 active run 为 0 后只清空可重建的 validation Redis 缓存，以 `--resume-restored` 继续同一次恢复，`20260901_101001` 四件套源/恢复深快照完全一致并原生删除临时站点；没有为脚本添加重试或掩盖负载干扰。
 - 本段没有运行真实模型、没有新增业务操作单据，也没有改 alpha/beta 业务数据；daily 的既有 Agent 审计记录保留。T5.2 从这一固定基线开始。
+
+## Phase 5 / T5.2：daily 普通成员端到端终验
+
+- 2026-09-01 由平台现有合成普通成员完成平台 → daily 原生 SSO，浏览器回读用户为“日常合成操作员”，全程没有使用 Administrator 发起 Agent 请求。以原生业务方法先建立唯一验收 Sales Order `SAL-ORD-2026-00001`（客户采购订单标记 `DSHERP-T5-DAILY-MFG-ACCEPTANCE`，成品 60），随后由普通成员在真实 Agent 工作台明确选择“自制 40 + 采购原料 20 + 企业供料委外 20”，逐项生成确认卡并点击确认。
+- 初始只读运行 `3c824958…` 为 Succeeded，5 次调用/`10240` 预留输出，正确读出 BOM 每件耗原料 2、总需求 120、现有 100、缺口 20，零提案、零业务写入。SO 提交、修正后的 Work Order 创建/提交、领料 SE make/submit、完工 SE make/submit、普通 PO 创建/提交、PR make/submit、委外 PO 创建/提交、SCO make/submit、供料 SE make/submit、SCR make/submit、DN make/submit 共 21 个最终路径提案，分别且仅有一条 Succeeded 执行记录。
+- 原生最终业务回读在清理前为：SO `docstatus=1`、`status=To Bill`、`per_delivered=100`；DN `MAT-DN-2026-00001` 已提交；原料仓、在制仓、委外仓、成品仓相关 Bin 的 `actual_qty/projected_qty` 均为 `0/0`。成功 DN 提交提案 `jqu1mp3j0i` 只有执行 `k5082ddshj` 一条。最长成功 operation 运行 `d906669d…` 使用 8 次调用/`24576` 预留输出，低于最终 operation 10 次/`30720`；没有在 T5.2 放松预算。
+- 跨租户具体化：独立数据库先确认 alpha 历史参考订单 `SAL-ORD-2026-00002` 存在且为 Cancelled，daily 同名记录计数为 0；没有修改该历史单据。daily 普通成员新会话 `qt2a9agvaf` 的真实模型只读运行 `1af3d771…` 为 Succeeded，5 次调用/`10240` 预留输出，精确 filters 返回 0 条并报告“本站点不存在”；运行提案 0、active run 0。Site 和身份由服务端会话绑定，模型没有 site 参数，因此没有把 alpha 内容带入 daily。
+
+### 明确失败与不重放
+
+- 第一版 Work Order 缺少原料 source warehouse，mapped 领料草稿落到普通仓；提交提案 `euecpablca` 的唯一执行 `f3jq6mnp1j` 被 ERPNext 原生库存校验标为 Failed，原料库存未变化。该分支没有自动回滚承诺或自动重试；取消一个尚未调用模型的后续运行后，只清理本轮错误 fixture，再以显式仓库重新建单。失败审计保留。
+- 首次普通 PO 请求把只读派生字段 `stock_uom` 放入创建差异，服务端 403 拒绝，运行 `efde9231…` 虽正常结束但没有提案或业务写入；下一次请求明确只给可写字段。首次 PO→SCO 运行 `8d255609…` 在会话压缩授权失败后为 Failed，提案 `30u9sfit7n` 无执行、无业务写入；新会话重新读取源单后才继续。
+- 首次 DN submit 运行 `c2c95338…` 恰逢 validation Compose 整体退出，0 次模型调用、0 提案，DN 保持草稿；只恢复本项目标准 db/redis/backend/frontend/platform/beta 服务并重新完成平台 SSO，没有恢复旧 worker/scheduler profile，也没有重放该运行。后续新请求 `c36ecbdf…` 重新读取草稿版本并成功确认。
+- 最终综合只读核实运行 `897b6fae…` 完成 4 次 ERP 读取后在 8 次调用/`16384` 预留处明确 `TimeoutExpired`，0 提案、0 写入；没有重跑。SO 与四仓最终状态改由独立数据库只读回读确认。上述失败都保留在审计中，不用成功段覆盖措辞。
+
+### finally、备份恢复与最终门
+
+- finally 对本轮 11 张业务单据按 DN → SCR → 供料 SE → PR → 完工 SE → 领料 SE → SCO → 两张 PO → WO → SO 的依赖逆序逐张先 cancel，再在测试既有的短作用域 `delete_linked_ledger_entries=1` 内删除；作用域退出后设置回到 0。11 张精确单据、相关 SLE/GL 均为 0，原料仓恢复 `100/100`，在制/委外/成品仓为 `0/0`。四类 Agent 审计数量在清理前后均保持 `Conversation=7 / Model Run=38 / Proposal=27 / Execution=26`，没有删除成功、失败或无执行提案证据。
+- 原生最终备份 `20260901_115141-dsherp-daily_localhost` 四件套分别为 Site 配置、`912.1 KiB` 数据库、非空 public/private 文件包。第一次控制容器命令用了系统 Python，在 import 阶段以 `ModuleNotFoundError: frappe` fastfail，未创建恢复站点；改用 bench 虚拟环境解释器后，同一备份恢复到固定一次性 Site，源/恢复的 App、fixture、角色、14/7 策略路由、空业务单据、原料 100 与上述四类审计计数完全一致，随后原生 drop-site。
+- 最终 fresh 全量门：`PYTHONPATH=. .venv/bin/python -m pytest tests -q --tb=short` 为 **251 passed in 772.82s**；`cd frontend && npm test` 为 **20 files / 160 tests passed in 12.83s**；`npm run build` 退出 0；`git diff --check` 退出 0。全量门没有复现 provision 超时。真实浏览器已关闭，`.playwright-cli` 与临时清理脚本均已删除；备份只留在 daily 私有备份目录，不入 Git。
+
+T5.2 在本机隔离合成环境完成，证明的是 daily 普通成员、真实 `deepseek-v4-flash`、原生 HITL/ERPNext、跨租户拒绝与备份恢复闭环；没有推送、部署或生产可用性声明。
