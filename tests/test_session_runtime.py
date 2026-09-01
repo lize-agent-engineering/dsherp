@@ -9,6 +9,13 @@ from deepseek_harness.errors import JsonRpcError
 from dsherp import session_runtime
 
 
+def test_operation_request_timeout_is_longer_without_expanding_other_domains():
+    assert session_runtime._request_timeout_seconds('operation')==120
+    assert session_runtime._request_timeout_seconds('query')==90
+    assert session_runtime._request_timeout_seconds('configuration')==90
+    assert session_runtime._request_timeout_seconds(None)==90
+
+
 def test_other_process_cannot_write_and_process_death_releases_lock(tmp_path):
     script="""
 from pathlib import Path
