@@ -62,10 +62,10 @@ def test_agent_workbench_uses_native_authenticated_loader(erp):
     assert '/assets/dsherp_bridge/dist/agent-workbench.js' in page['script']
     assert '/assets/dsherp_bridge/dist/agent-workbench.css' in page['script']
 
-    status, body = erp('reader', '/api/method/frappe.desk.desktop.get_workspace_sidebar_items')
+    status, body = erp('reader', '/api/method/frappe.apps.get_apps')
     assert status == 200
-    workspace = next(item for item in body['message']['pages'] if item['name'] == 'DSHERP')
-    assert workspace['public'] == 1
+    app = next(item for item in body['message'] if item['name'] == 'dsherp_bridge')
+    assert app['route'] == '/desk/dsherp-agent'
 
 
 def test_dsherp_browser_bundle_is_served_without_replacing_native_assets():

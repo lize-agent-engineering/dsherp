@@ -68,7 +68,8 @@ def test_real_native_oauth_code_exchange_logs_into_bound_business_user():
                 assert business.get('/api/method/dsherp_bridge.context_api.list_sessions').status_code==403
             finally:
                 assert operator.put(path,json={'enabled':1}).status_code==200
-        assert business.get('/api/method/logout').status_code==200
+        logout=business.post('/api/method/logout')
+        assert logout.status_code==200,logout.text
 
 
 def test_configured_native_oauth_start_uses_exact_business_callback():
