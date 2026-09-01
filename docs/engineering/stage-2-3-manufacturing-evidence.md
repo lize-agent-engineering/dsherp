@@ -4,7 +4,7 @@
 
 检查点 1 后基线：`9611f83`
 
-本证据当前功能 HEAD：`0a9f3a9`；fresh 全仓门 HEAD：`e8afb97`（相对功能 HEAD 只新增证据文档）。
+阶段 3 功能 HEAD：`0a9f3a9`；C2 功能 HEAD：`2c572b0`。C2 全仓门在该功能 HEAD 与本证据/计划/README 文档工作树上执行，文档不改变运行行为。
 
 ## 结论边界
 
@@ -124,3 +124,44 @@ T3.3 按计划取得两层证据：旧 1.5.0 对新行为测试为红；只改 S
 ## 下一检查点
 
 阶段 3 已结束，Phase 4 尚未开始。等待人工检查点明确放行后，才可在 alpha 使用计划指定的真实模型执行查询轮与 operation 领域分段 UI 验收。
+
+## C2 检查点整改（2026-09-01）
+
+- C2.1：对 `de1ecb2`、`780bb33`、`0a9f3a9`、`c1ebb68` 补做聚焦复审，并把 SDD 台账的 `review pending` 回写为 PASS。复审覆盖配置异常清理、委外供料冻结/唯一引用、未知库存影响 fastfail；聚焦测试 `16 passed in 118.38s`，静态核对为 Critical 0 / Important 0。原任务表的 PASS 结论自此与台账同步，不再超前。
+- C2.2：新增真实委外链故障注入。供料 Stock Entry 提交成功后，Subcontracting Receipt 原生 `validate` 抛出确定校验失败；断言供料执行仍为 Succeeded、Stock Entry 与库存分录保留，SCR 执行为 Failed、SCR 不提交且无库存分录，重复确认返回同一执行且校验只调用一次。当前实现的初始特征测试直接为绿；受控反向变异“Failed 执行允许再次进入确认”后测试为红，恢复去重逻辑后 `1 passed in 37.50s`。
+- C2.3：旧实现禁用 Delivery Note 目标策略后仍接受 make，真实 RED 为 `disabled make target policy accepted`。新增仅要求策略行存在且 enabled 的 `require_enabled()`；不读取 `allow_create`，保持“Delivery Note 仅经 make”语义。恢复目标策略后同链放行，make 专项 `1 passed in 17.10s`。
+- C2.4：旧实现撤销 `Delivery Note.po_no` 当前读权限后返回 `matches_proposal=True`。修复后返回 `matches_proposal=None`、`comparison_status=部分字段不可比对` 和明确说明；未撤权的完整比对仍返回原有布尔结果。实现复用 `_shape_mismatch_path()`，删除未被消费的 projected 递归结果。
+- C2.6：README 已加入本证据链接；`operations.py` 原 `_project_frozen_shape()` 的 projected 构造没有消费者，已删除，匹配判断统一走既有冻结形状比较。
+
+### 验收矩阵未覆盖行的明确归属
+
+- 跨租户制造具体化：归属 **T5.2 daily 端到端终验**，届时以 daily 会话/身份对 alpha 绑定内容的拒绝作为多站点反例；本检查点不宣称覆盖。
+- Unknown 核实落到 Stock Entry submit：归属 **T4.2 自制链真实验收**，在提交响应中断场景只读核对 Stock Ledger Entry/单据状态，不重放提交；本检查点仅保留既有通用 Unknown 契约。
+- 预算耗尽文案：归属 **T4.1 缺料解释查询轮**，真实模型达到 8 次调用上限时验收明确“预算已用尽”失败，不把截断结果冒充成功。
+
+### C2 涉改测试与最终门
+
+直接新增或收紧的行为断言位于：
+
+- `tests/integration/test_subcontracting_operations.py::test_supplied_material_subcontracting_chain`：SE 成功、SCR 校验失败、前一步不回滚、失败步骤不重试。
+- `tests/integration/test_make_proposal.py::test_make_freezes_mapped_result_and_rejects_drift`：目标策略 disabled 拒绝/恢复放行；verify 当前读权限缺字段时返回部分不可比对。
+
+C2.1 聚焦复审运行配置 apply/confirmation/verification、make、subcontracting、stock-impact-fastfail 六个文件组：`16 passed in 118.38s`。三站策略播种完整组复跑：`23 passed in 113.91s`。
+
+首轮全仓为 `240 passed, 9 failed in 1323.42s`；九项全部是 `test_policy_seed.py` 调用 provision 脚本的外层 60 秒超时，没有策略内容断言失败。排查时三个后端无遗留 provision/bench 进程，数据库容器没有 OOM 或重启；单例 `1 passed`，原相邻测试顺序 `4 passed`，完整策略播种组 `23 passed`，未复现确定性代码缺陷，因此没有修改超时或加入重试。随后 fresh 权威全仓复跑：
+
+```text
+PYTHONPATH=. .venv/bin/python -m pytest tests -q --tb=short
+249 passed in 765.94s (0:12:45)
+```
+
+```text
+cd frontend && npm test
+Test Files  20 passed (20)
+Tests       160 passed (160)
+Duration    13.16s
+```
+
+最终 `python3 -m py_compile` 与 `git diff --check` 均退出 0。C2 未运行真实 provider/模型，未进入 Phase 4。
+
+全量门后 fresh 回读：alpha 仍为 14 条 enabled 策略和 7 条 route，beta/daily 各为 Customer、Item、Sales Order 三条 enabled 基础策略且 0 route；Delivery Note 目标策略已恢复 enabled。alpha 的 `make-` / `subcontract-` 临时用户、六类制造单据及四类 Agent 记录均为 0；合成库存恢复为原料仓 RM `100/100`、委外仓 RM `0/0`、成品仓 FG `0/0`（actual/projected）。

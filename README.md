@@ -38,6 +38,7 @@
 - [DSH 分层验证证据](docs/engineering/dsh-validation-evidence.md)
 - [ERPNext 真实验证证据](docs/engineering/erpnext-integration-evidence.md)
 - [阶段 1 策略迁移工程证据](docs/engineering/stage-1-policy-migration-evidence.md)
+- [阶段 2/3 制造闭环与技能升版证据](docs/engineering/stage-2-3-manufacturing-evidence.md)
 - [ERPNext 中文术语纠正包实施与验收证据](docs/engineering/terminology-pack-evidence.md)
 - [当前前端优先与应用生成计划](docs/superpowers/plans/2026-08-28-frontend-agent-app-generation.md)
 - [已确认的平台身份实施计划](docs/superpowers/plans/2026-08-28-platform-identity.md)
