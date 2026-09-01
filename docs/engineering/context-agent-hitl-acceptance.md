@@ -88,3 +88,7 @@
 - 第三个新会话运行 `050d7d49512bd0eb64dc97cab2f8debed7c046a82673b78f7963287c6eb721a3` 在 8 次/`21504` 内生成过提案 `5he61l424p`，但第二次自动压缩自身以 `summarization truncated at the token cap` 截断，整轮 Failed；该失败运行提案不确认，业务单据仍为 0。operation 压缩单次上限 3072 的运行器测试先红后绿，query 压缩保持 2048；相关压缩、授权和服务端预算组合 **10 passed / 23.98s**。运行配置摘要随之轮换，旧失败提案自然失效。
 - 新会话 `78phlad7vt` 最终连续完成创建 PO、提交 PO、make PR、提交 PR 四个真实模型运行：`5085194b…/3c24b716…/5c369484…/2bc88877…` 均 Succeeded，调用数 `7/3/3/4`、预留输出 `21504/9216/9216/12288`，全部低于 operation 的 9 次/`25600` 最终 ruling。四个提案 `828d68jcja/947ddbvuhv/9peoa2jm9s/al8vicfkeu` 分别且仅对应一条 Succeeded 执行 `8gfp7etehg/99u21klgme/a0c0q6pj29/aqj2jtj852`。
 - 原生结果为 `PUR-ORD-2026-00001` 与 `MAT-PRE-2026-00001` 均 docstatus 1、总额 CNY 200，PO `per_received=100`；owner 侧修改者均为普通 writer。PR 提交只产生一条未取消库存分录：`DSHERP-MFG-SYN-RM +20 @ DSHERP 制造测试合成原料仓 - DVT`，原料 Bin 从 T4.2 的 `20/20` 回到 `40/40`。没有新增 Work Order、其他 Stock Entry、Subcontracting Order/Receipt 或 Delivery Note。因此最终成功段的执行唯一、零意外 ERP 写入、预算未超三项通过；三笔前置失败及其不可确认审计记录保留，不纳入成功冒充。
+
+## Phase 4 / T4.4：企业供料委外与交付（R1 中间裁定）
+
+- 首个委外 PO 创建运行 `450d38629b6eff7bebb4aa2a18f5aa9dbc92d1d8fbb0515f589206b6630f1480` 在 8 次/`24576` 已生成提案 `d3u0kkn4kt`，第 9 次必要压缩被累计预算 HTTP 417 拒绝，整轮 Failed；该提案不可确认，委外 ERP 单据仍为 0。按实际复杂 schema 形状先红后绿锁定 operation 10 次/`30720`、第 11 次明确失败；query/configuration 仍保持 8 次/`16384`，单次预算、输入预算和容器资源不变。相关服务端预算、原生压缩、授权组合 **10 passed / 23.69s**。

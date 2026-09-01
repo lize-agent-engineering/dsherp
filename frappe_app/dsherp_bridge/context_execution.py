@@ -16,8 +16,8 @@ from dsherp_bridge import context_permissions
 TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
        'erp_read_record':(erp.read_record,{'doctype','name'}),
        'erp_search_records':(erp.search_records,{'doctype','query','filters','fields'})}
-MAX_OPERATION_MODEL_CALLS=9
-MAX_OPERATION_OUTPUT_TOKENS_RESERVED=25600
+MAX_OPERATION_MODEL_CALLS=10
+MAX_OPERATION_OUTPUT_TOKENS_RESERVED=30720
 
 
 @contextmanager
