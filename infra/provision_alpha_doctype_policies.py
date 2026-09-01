@@ -27,6 +27,10 @@ import frappe
 
 RUN_MODE = globals().get('RUN_MODE', 'provision')
 POLICY_SET = globals().get('POLICY_SET', 'base')
+ALLOWED_MANUFACTURING_SITES = globals().get(
+    'ALLOWED_MANUFACTURING_SITES',
+    {'dsherp-validation.localhost', 'dsherp-daily.localhost'},
+)
 BASE_POLICIES = [
     {
         'target_doctype': 'Customer',
@@ -313,9 +317,7 @@ try:
     require(frappe.local.site == SITE, 'Unexpected Site: ' + str(frappe.local.site))
     require(POLICY_SET in ('base', 'manufacturing'), 'Unsupported policy set: ' + POLICY_SET)
     require(
-        POLICY_SET != 'manufacturing' or SITE in {
-            'dsherp-validation.localhost', 'dsherp-daily.localhost'
-        },
+        POLICY_SET != 'manufacturing' or SITE in ALLOWED_MANUFACTURING_SITES,
         'Manufacturing policy set is unavailable on this Site',
     )
     require(frappe.db.exists('DocType', 'DS Doctype Policy'), 'DS Doctype Policy schema is missing')

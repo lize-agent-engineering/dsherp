@@ -129,3 +129,13 @@ v16 实际签名是 `create_raw_materials_supplied_or_received(self, raw_materia
 | `context-agent.js` | `cdde0e4d2f58e518d47424fe63ac396a432bc47e0729b40062e701ad6d4d0ed1` |
 | `studio.css` | `211c3f60a6a5c892b7fb28217c4dddab6cbda217915f29b7c5b0edf7c81af1ed` |
 | `studio.js` | `4c4e6c7c637f98d9457039ba15c9c2bb70bd4bab2ff80c90a0243a1a6a879142` |
+
+### C2 probe 复跑与新增红绿
+
+- 首次复跑命令在双站 provision 错用了系统 `python3`,未加载 bench Frappe;第二次改用 `env/bin/python` 后又因 compose 未传 `DSHERP_V16_PROBE_MEMBER_PASSWORD` fastfail。修复显式环境契约后从全新卷重建,没有在半成品 Site 上补数据制造假绿。
+- C1 脚本全绿：bind mount、doc_events commit、配置确认、框架签名、原生 setup、MariaDB 锁、Desk/Page/assets/CSRF/API、Python 3.14 锁文件 Runtime。worker 实际消费 default 队列任务,scheduler 运行,websocket 输出 `Realtime service listening on: ws://0.0.0.0:9000`。
+- T2.11/T2.12 转绿：完整 native OAuth client→authorize→callback→business session 成功重定向 `/desk/home`,callback 重放 403；原 `tabUser` record-changed/savepoint 错误未再出现。
+- 制造 probe 首先真实暴露 v16 主数据与 schema 差异：Item/Supplier Group 为 `Products`、`Raw Material`、`Services`;价目表为 `Standard Selling`;Work Order `fg_warehouse.reqd=0`;`Series` DocType 删除但 `tabSeries` 原生表仍用于只读 autoname 快照;Purchase Order Item 字段为 `subcontracted_qty`。
+- 产品红绿：Work Order 空 Table 字段从 `None` 读取时原代码 `TypeError`,现明确序列化为空数组;Stock Entry Detail insert 新派生 `secondary_item_type`,加入精确 DocType 字段集合;委外漂移测试改用 v16 `create_raw_materials_supplied_or_received` 注入点。所有失败均先在真实 v16 行为中复现,没有静默降级。
+- 最终 `t2_13_manufacturing_routes.py` 复用现有四个制造集成测试原文,仅替换 probe 容器/Site/合成 Company。Delivery、Work Order 两个目的、Purchase Receipt、PO→SCO、SCO→供料、SCO→Receipt 共 7 个 route 行为,10 类父/子表派生字段、原生 autoname、`confirm()`、库存回滚与引用冲突全部 PASS。
+- 宿主无站点单元层最终 `102 passed / 44.24s`;业务 Skill `erp-operation` 升至 2.1.0,固定摘要 `1c2c5f0abeb1d24ce7a069b36aec5f50630973306169ba1fab0b9babdd041e0d`,相关测试 `8 passed`。完整站点 integration 在 C3 fresh v16 四站执行。
