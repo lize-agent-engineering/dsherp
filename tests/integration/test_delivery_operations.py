@@ -212,7 +212,7 @@ try:
         'company':company,
         'currency':'CNY',
         'conversion_rate':1,
-        'selling_price_list':'标准销售',
+        'selling_price_list':'Standard Selling',
         'items':[{
             'item_code':actual_item['name'],
             'qty':delivery_qty,

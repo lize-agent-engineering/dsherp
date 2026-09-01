@@ -86,7 +86,7 @@ def test_query_skill_plans_bom_then_batches_warehouse_scoped_bins():
 def test_operation_skill_discovers_dynamic_capabilities_and_manufacturing_routes():
     content=(ROOT/'business-skills/erp-operation/SKILL.md').read_text()
     header=content.split('---',2)[1]
-    assert 'version: 2.0.0' in header
+    assert 'version: 2.1.0' in header
     description=next(
         line for line in header.splitlines() if line.startswith('description:')
     )
@@ -133,7 +133,7 @@ def test_operation_skill_discovers_dynamic_capabilities_and_manufacturing_routes
     assert '每次保存和提交分别产生自己的提案与侧栏确认' in content
 
     assert 'Purchase Order 普通收货看 per_received' in content
-    assert '委外供料进度看明细 subcontracted_quantity' in content
+    assert '委外供料进度看明细 subcontracted_qty' in content
     assert 'Subcontracting Order 看 per_received 与 status' in content
     assert 'Sales Order 完成交付但未开票时可为 To Bill' in content
     assert '不能误报为业务失败' in content

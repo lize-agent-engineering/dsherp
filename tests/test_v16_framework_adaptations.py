@@ -104,3 +104,7 @@ def test_manufacturing_fixture_requires_the_exact_v16_image_versions():
     source = (ROOT / "infra/provision_manufacturing_fixture.py").read_text()
     assert "ERP_VERSION = '16.33.0'" in source
     assert "FRAPPE_VERSION = '16.31.0'" in source
+    for name in ("Products", "Raw Material", "Services"):
+        assert f"filters={{'name': '{name}', 'is_group': 0}}" in source
+    for stale in ("产品展示", "filters={'name': '原材料'", "filters={'name': '服务'"):
+        assert stale not in source

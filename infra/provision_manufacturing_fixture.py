@@ -557,19 +557,19 @@ try:
     stock_uom = frappe.db.get_single_value('Stock Settings', 'stock_uom')
     require(stock_uom and frappe.db.get_value('UOM', stock_uom, 'enabled'), 'Stock Settings UOM is missing or disabled')
     finished_group = exactly_one(
-        frappe.get_all('Item Group', filters={'name': '产品展示', 'is_group': 0}, pluck='name'),
+        frappe.get_all('Item Group', filters={'name': 'Products', 'is_group': 0}, pluck='name'),
         'finished-good Item Group',
     )
     raw_group = exactly_one(
-        frappe.get_all('Item Group', filters={'name': '原材料', 'is_group': 0}, pluck='name'),
+        frappe.get_all('Item Group', filters={'name': 'Raw Material', 'is_group': 0}, pluck='name'),
         'raw-material Item Group',
     )
     service_group = exactly_one(
-        frappe.get_all('Item Group', filters={'name': '服务', 'is_group': 0}, pluck='name'),
+        frappe.get_all('Item Group', filters={'name': 'Services', 'is_group': 0}, pluck='name'),
         'service Item Group',
     )
     supplier_group = exactly_one(
-        frappe.get_all('Supplier Group', filters={'name': '原材料', 'is_group': 0}, pluck='name'),
+        frappe.get_all('Supplier Group', filters={'name': 'Raw Material', 'is_group': 0}, pluck='name'),
         'raw-material Supplier Group',
     )
     require(

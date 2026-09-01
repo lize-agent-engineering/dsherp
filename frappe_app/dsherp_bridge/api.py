@@ -66,8 +66,11 @@ def read_record(doctype: str, name: str):
                 continue
             child=frappe.get_meta(definition.options)
             readable=_readable_fields(child, frappe.session.user, parenttype=doctype)|{'name','idx'}
+            rows = doc.get(key)
+            if rows is None:
+                rows = []
             fields[key]=[{field:value for field,value in row.as_dict().items() if field in readable}
-                         for row in doc.get(key)]
+                         for row in rows]
         else:
             fields[key]=doc.get(key)
     if doc.meta.is_submittable:

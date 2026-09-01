@@ -114,6 +114,12 @@ def site_document_counts():
     }
 
 
+def naming_series_snapshot():
+    return [dict(row) for row in frappe.db.sql(
+        'SELECT name,current FROM `tabSeries` ORDER BY name', as_dict=True
+    )]
+
+
 def new_run():
     capability=uuid.uuid4().hex
     frappe.set_user(actor)
@@ -155,7 +161,7 @@ def propose_make_after_rejecting_options(source_doctype,source_name,route_key):
     before_counts=site_document_counts()
     target_doctype=routes[route_key][2]
     target_names=frappe.get_all(target_doctype,pluck='name',order_by='name asc')
-    naming_series=frappe.get_all('Series',fields=['name','current'],order_by='name asc')
+    naming_series=naming_series_snapshot()
     source_state=frappe.db.get_value(
         source_doctype,source_name,['docstatus','modified','status'],as_dict=True
     )
@@ -179,7 +185,7 @@ def propose_make_after_rejecting_options(source_doctype,source_name,route_key):
     })
     assert site_document_counts()==before_counts
     assert frappe.get_all(target_doctype,pluck='name',order_by='name asc')==target_names
-    assert frappe.get_all('Series',fields=['name','current'],order_by='name asc')==naming_series
+    assert naming_series_snapshot()==naming_series
     assert frappe.db.get_value(
         source_doctype,source_name,['docstatus','modified','status'],as_dict=True
     )==source_state
@@ -205,7 +211,7 @@ def reject_supplied_item_insert_drift(source_doctype,source_name,route_key,kind)
     def drift_after_generation(self):
         if original is not None:
             original(self)
-        generate=self.create_raw_materials_supplied
+        generate=self.create_raw_materials_supplied_or_received
 
         def generate_then_drift(raw_material_table='supplied_items'):
             generate(raw_material_table)
@@ -226,7 +232,7 @@ def reject_supplied_item_insert_drift(source_doctype,source_name,route_key,kind)
             else:
                 self.supplier_warehouse=warehouses['raw']
 
-        self.create_raw_materials_supplied=generate_then_drift
+        self.create_raw_materials_supplied_or_received=generate_then_drift
 
     target_class.before_insert=drift_after_generation
     try:
@@ -487,9 +493,7 @@ try:
     hash_candidates=iter([
         repeated_reference,repeated_reference,existing_item_reference,unique_reference,
     ])
-    series_before_reference_probe=frappe.get_all(
-        'Series',fields=['name','current'],order_by='name asc'
-    )
+    series_before_reference_probe=naming_series_snapshot()
     child_count_before_reference_probe=frappe.db.count('Subcontracting Order Item')
     reference_probe=frappe.get_doc({
         'doctype':'Subcontracting Order',
@@ -511,8 +515,7 @@ try:
     ]
     assert hash_lengths==[20,20,20,20],hash_lengths
     assert frappe.db.count('Subcontracting Order Item')==child_count_before_reference_probe
-    assert frappe.get_all('Series',fields=['name','current'],order_by='name asc') \
-        ==series_before_reference_probe
+    assert naming_series_snapshot()==series_before_reference_probe
 
     # The public proposal path performs the same exact-table collision check,
     # exposes only the eventual frozen reference, and stays read-only.
@@ -545,7 +548,7 @@ try:
     # A bounded allocator failure is explicit and still cannot consume Series
     # or create either a proposal target or a proposal record.
     exhausted_counts=site_document_counts()
-    exhausted_series=frappe.get_all('Series',fields=['name','current'],order_by='name asc')
+    exhausted_series=naming_series_snapshot()
     exhausted_proposals=frappe.db.count(
         'DS Operation Proposal',{'conversation':conversation}
     )
@@ -569,8 +572,7 @@ try:
     assert exhausted_calls and len(exhausted_calls)<=10,exhausted_calls
     assert all(length==20 for length in exhausted_calls),exhausted_calls
     assert site_document_counts()==exhausted_counts
-    assert frappe.get_all('Series',fields=['name','current'],order_by='name asc') \
-        ==exhausted_series
+    assert naming_series_snapshot()==exhausted_series
     assert frappe.db.count(
         'DS Operation Proposal',{'conversation':conversation}
     )==exhausted_proposals
@@ -898,7 +900,7 @@ try:
     assert po_outcome['fields']['status']=='To Receive and Bill',po_outcome
     assert len(po_outcome['fields']['items'])==1,po_outcome
     assert flt(
-        po_outcome['fields']['items'][0]['subcontracted_quantity']
+        po_outcome['fields']['items'][0]['subcontracted_qty']
     )==purchase_qty,po_outcome
     assert flt(sco_outcome['fields']['per_received'])==100,sco_outcome
     assert sco_outcome['fields']['status']=='Completed',sco_outcome
@@ -913,7 +915,7 @@ try:
         'po_per_received':flt(po_outcome['fields']['per_received']),
         'po_status':po_outcome['fields']['status'],
         'po_subcontracted_quantity':flt(
-            po_outcome['fields']['items'][0]['subcontracted_quantity']
+            po_outcome['fields']['items'][0]['subcontracted_qty']
         ),
         'sco_per_received':flt(sco_outcome['fields']['per_received']),
         'sco_status':sco_outcome['fields']['status'],

@@ -190,7 +190,7 @@ try:
     assert supplier_fields['supplier_type']['options']=='Company\nIndividual\nPartnership'
     supplier_values={
         'supplier_name':supplier_name,
-        'supplier_group':'原材料',
+        'supplier_group':'Raw Material',
         'supplier_type':'Company',
         'country':'China',
     }
@@ -205,7 +205,7 @@ try:
     assert supplier_created['status']=='Succeeded',supplier_created
     assert supplier_created['name']==supplier_name,supplier_created
     supplier=frappe.get_doc('Supplier',supplier_name)
-    assert supplier.owner==actor and supplier.supplier_group=='原材料'
+    assert supplier.owner==actor and supplier.supplier_group=='Raw Material'
 
     # Purchase Order creation and submit are separate confirmed operations.
     cap,purchase_order_create_run=new_run()
@@ -230,7 +230,7 @@ try:
     actual_warehouse=run_tool(**cap,tool='erp_read_record',arguments={
         'doctype':'Warehouse','name':warehouse,
     })
-    assert actual_supplier['fields']['supplier_group']=='原材料'
+    assert actual_supplier['fields']['supplier_group']=='Raw Material'
     assert actual_item['fields']['stock_uom']=='Nos'
     assert actual_warehouse['fields']['company']==company
     schedule_date=str(add_days(nowdate(),7))

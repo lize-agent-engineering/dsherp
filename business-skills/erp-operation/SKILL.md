@@ -1,7 +1,7 @@
 ---
 name: erp-operation
 description: 在当前业务用户权限与服务端策略允许的业务对象上读取确切 schema 和记录，并提出需用户侧栏确认的创建、修改、填表、业务动作或映射草稿。
-version: 2.0.0
+version: 2.1.0
 ---
 
 # 业务操作提案
@@ -63,7 +63,7 @@ version: 2.0.0
 
 上述每一步仍服从“读源单与版本 → make 草稿提案 → 侧栏确认保存 → 重新读取草稿与版本 → action 提交提案 → 另一次侧栏确认”。前一步已成功而后一步失败时保留真实结果，停止并解释失败，不声称整个链条已经回滚。
 
-回读进度时使用真实字段与业务语义：Purchase Order 普通收货看 per_received；委外供料进度看明细 subcontracted_quantity；Subcontracting Order 看 per_received 与 status；Sales Order 完成交付但未开票时可为 To Bill，不能误报为业务失败。
+回读进度时使用真实字段与业务语义：Purchase Order 普通收货看 per_received；委外供料进度看明细 subcontracted_qty；Subcontracting Order 看 per_received 与 status；Sales Order 完成交付但未开票时可为 To Bill，不能误报为业务失败。
 
 ## 当前明确缺口
 

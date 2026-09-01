@@ -191,7 +191,7 @@ try:
     assert fields['qty']['fieldtype']=='Float' and fields['qty']['reqd']
     assert fields['source_warehouse']['options']=='Warehouse'
     assert fields['wip_warehouse']['options']=='Warehouse'
-    assert fields['fg_warehouse']['options']=='Warehouse' and fields['fg_warehouse']['reqd']
+    assert fields['fg_warehouse']['options']=='Warehouse' and not fields['fg_warehouse']['reqd']
     assert fields['naming_series']['options']=='MFG-WO-.YYYY.-'
     required_item_fields={
         field['fieldname']:field for field in fields['required_items']['fields']

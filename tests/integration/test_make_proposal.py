@@ -72,7 +72,7 @@ assert operations._MAKE_INSERT_DERIVED_FIELDS=={
     'Stock Entry':{'total_amount','total_incoming_value','total_outgoing_value'},
     'Stock Entry Detail':{
         'amount','basic_amount','basic_rate','description','expense_account','item_group','item_name',
-        'valuation_rate',
+        'secondary_item_type','valuation_rate',
     },
     'Subcontracting Order Item':{'conversion_factor'},
     'Subcontracting Receipt':{'represents_company','title'},
