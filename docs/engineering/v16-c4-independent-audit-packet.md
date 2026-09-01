@@ -211,6 +211,6 @@ launchctl bootstrap "gui/$(id -u)" .runtime/com.dsherp.agent-worker-v16.plist
 
 C4 核心技术和浏览器审计通过后仍不能立即进入 C5。daily 必须跨若干自然日留下 scheduler 正常运行和每日四件套备份可恢复证据；每一天至少记录备份前缀、四件大小、`verify_daily_backup.py` 退出 0、一次性恢复 Site 已删除及当天异常。
 
-冷静期已于 2026-09-01 启动，但该日只计 Day 0，不计完整自然日：alpha scheduler disabled、daily enabled；首轮任务全部 Complete 后 scheduler 曾因 128 MiB OOM 退出且没有自动恢复，执行方以 TDD 修复为 256 MiB 与 `unless-stopped`，重建后跨过下一轮和原故障窗口无 OOM。Day 0 最终累计 36 条 Scheduled Job Log 全部 Complete、队列排空；备份 `20260901_224857-dsherp-daily_localhost` 四件套恢复验证退出 0，一次性恢复 Site 已删除。完整工作记录位于 `work/v16-cooldown/2026-09-01-day0.md`。通过门仍是 2026-09-02、2026-09-03、2026-09-04 三个连续完整自然日，且结束后须审计当前 HEAD。
+冷静期已于 2026-09-01 启动，但该日只计 Day 0，不计完整自然日：alpha scheduler disabled、daily enabled；首轮任务全部 Complete 后 scheduler 曾因 128 MiB OOM 退出且没有自动恢复，执行方以 TDD 修复为 256 MiB 与 `unless-stopped`，重建后跨过下一轮和原故障窗口无 OOM。Day 0 累计 36 条 Scheduled Job Log 全部 Complete、队列排空；容器内部进程退出实测又证明 scheduler/worker 分别约 4 秒、1 秒自动恢复，重启后的下一组 6 条任务全部 `Job OK`。备份 `20260901_224857-dsherp-daily_localhost` 四件套恢复验证退出 0，一次性恢复 Site 已删除。完整工作记录位于 `work/v16-cooldown/2026-09-01-day0.md`。通过门仍是 2026-09-02、2026-09-03、2026-09-04 三个连续完整自然日，且结束后须审计当前 HEAD。
 
 冷静期完成前不得更新“迁移完成”状态，不得归档或删除 v15。即使冷静期完成，v15 移除仍需单独用户授权、逐卷 dry-run 和最终确认。

@@ -205,7 +205,7 @@ Claude Code Opus 第三轮以 `3eb72e5` 为起点独立执行 T4.1、T4.2 真实
 
 冷静期采用保守口径：不计 2026-09-01 当天剩余时段，以 2026-09-02、2026-09-03、2026-09-04 三个连续完整自然日为通过条件。`v16-daily` 心跳检查已启用，每日 22:30 只对隔离 daily 站执行调度回读、四件套备份和一次性恢复验证；禁止调用 DeepSeek、接触生产数据或修改 v15。
 
-Day 0 于 2026-09-01 22:48 启动 scheduled profile：alpha scheduler 明确 disabled，daily scheduler 明确 enabled，`scheduler-worker` 在线并监听 `short,default,long`。22:52 首个自然调度周期产生 18 条 `Scheduled Job Log`，全部 `Complete`；但 scheduler 随后因原 128 MiB 上限 OOM 并以 137 退出，`restart: no` 使它没有恢复。执行方先以部署测试锁定 256 MiB 和 `unless-stopped` 契约、确认旧配置红，再做最小修改；部署测试 9 项、非集成 Python 128 项通过。22:57 重建后跨过 23:00 下一轮及原故障窗口连续运行 7 分钟，scheduler/worker 均无 OOM、重启计数 0，峰值分别为 `123973632` 和 `162099200` 字节；Day 0 最终累计 36 条日志全部 `Complete`，队列排空。
+Day 0 于 2026-09-01 22:48 启动 scheduled profile：alpha scheduler 明确 disabled，daily scheduler 明确 enabled，`scheduler-worker` 在线并监听 `short,default,long`。22:52 首个自然调度周期产生 18 条 `Scheduled Job Log`，全部 `Complete`；但 scheduler 随后因原 128 MiB 上限 OOM 并以 137 退出，`restart: no` 使它没有恢复。执行方先以部署测试锁定 256 MiB 和 `unless-stopped` 契约、确认旧配置红，再做最小修改；部署测试 9 项、非集成 Python 128 项通过。22:57 重建后跨过 23:00 下一轮及原故障窗口连续运行 7 分钟，scheduler/worker 均无 OOM、重启计数 0，峰值分别为 `123973632` 和 `162099200` 字节；Day 0 累计 36 条日志全部 `Complete`，队列排空。随后先识别并排除 `docker kill` 会触发 Docker“人工停止不重启”语义的无效验证方法，再从容器内部让应用 PID 1 退出；scheduler 和 worker 分别在约 4 秒、1 秒内由同一容器自动恢复，`restart_count=1`。23:12 恢复链又完成 6 条 `Job OK`，队列再次排空且无错误。
 
 同日备份前缀为 `20260901_224857-dsherp-daily_localhost`：database `1195439`、public files `10240`、private files `10240`、site config `483` 字节。第一次验证因误用系统 Python 缺少 `frappe` 而 fastfail，未创建恢复 Site；改用 control 容器内固定解释器后 `verify_daily_backup.py` 退出 0，源站与一次性恢复站快照一致，恢复 Site 随后删除。完整本地工作证据位于忽略提交的 `work/v16-cooldown/2026-09-01-day0.md`。
 
