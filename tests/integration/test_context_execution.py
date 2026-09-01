@@ -67,6 +67,37 @@ try:
     saved=api.get_session(doc['id'])
     assert saved['messages'][0]['answer']=='read completed'
     assert saved['active_run'] is None
+    operation=api.send_message(
+        'Synthetic operation budget',payload,uuid.uuid4().hex,
+        session_id=doc['id'],domain='operation',
+    )
+    frappe.db.commit()
+    operation_claim=execution.claim_run('a'*64);frappe.db.commit()
+    operation_cap={'run_id':operation_claim['run_id'],'capability':operation_claim['capability']}
+    frappe.set_user('Guest')
+    operation_call={**model_call,'max_output_tokens':3072,'domain':'operation'}
+    for maximum,purpose in (
+        (3072,'conversation'),(2048,'compaction'),(3072,'conversation'),
+        (2048,'compaction'),(3072,'conversation'),(3072,'conversation'),
+        (3072,'conversation'),
+    ):
+        assert execution.reserve_model_call(
+            **operation_cap,**{**operation_call,'max_output_tokens':maximum,'purpose':purpose}
+        )['allowed']
+    assert frappe.db.get_value(
+        'DS Model Run',operation_claim['run_id'],'model_output_tokens_reserved'
+    )==19456
+    try:
+        execution.reserve_model_call(
+            **operation_cap,**{**operation_call,'max_output_tokens':2048,'purpose':'compaction'}
+        )
+        raise AssertionError('operation output budget exceeded')
+    except frappe.ValidationError as error:
+        assert str(error)=='本轮模型调用预算已用尽',error
+    execution.finish_run(
+        **operation_cap,status='Failed',error='End synthetic operation budget'
+    )
+    frappe.db.commit();frappe.set_user(actor)
     queued=api.send_message('Cancel synthetic run',payload,uuid.uuid4().hex,session_id=doc['id'])
     frappe.db.commit()
     claim2=execution.claim_run('a'*64);frappe.db.commit()

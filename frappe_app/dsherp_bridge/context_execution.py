@@ -16,6 +16,7 @@ from dsherp_bridge import context_permissions
 TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
        'erp_read_record':(erp.read_record,{'doctype','name'}),
        'erp_search_records':(erp.search_records,{'doctype','query','filters','fields'})}
+MAX_MODEL_OUTPUT_TOKENS_RESERVED=20480
 
 
 @contextmanager
@@ -140,7 +141,7 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
     calls=run.model_calls or 0
     total_input=(run.model_input_bytes or 0)+input_bytes
     total_output=(run.model_output_tokens_reserved or 0)+max_output_tokens
-    if calls>=8 or total_input>524288 or total_output>16384:
+    if calls>=8 or total_input>524288 or total_output>MAX_MODEL_OUTPUT_TOKENS_RESERVED:
         frappe.throw('本轮模型调用预算已用尽')
     # Reserve before provider dispatch; uncertain/failed calls are not refunded.
     frappe.db.set_value('DS Model Run',run.name,{'model_calls':calls+1,

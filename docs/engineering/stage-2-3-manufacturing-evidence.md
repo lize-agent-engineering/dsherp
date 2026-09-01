@@ -109,6 +109,7 @@ T3.3 按计划取得两层证据：旧 1.5.0 对新行为测试为红；只改 S
 3. 阶段边界全量门发现既有 beta 配置测试残留。按“每段 finally 清理”硬约束单独修复测试清理，没有混入制造或技能提交。
 4. 阶段宽审把 make 的“mapper 重算相等”扩展为“落库后用户确认投影仍相等”；完整 mapper target 继续用于插入，只有用户实际看到的稳定业务投影承担确认语义，原生派生/default 字段通过真实四段链逐项精确登记，不使用通用忽略。复核后进一步禁止对 SCO/SCR `supplied_items` 整表排除：公共 ERPNext 方法在内存预生成供料表，供料核心字段与完整子表结构均进入冻结确认。
 5. 阶段宽审把库存影响从“未注册即 none”收紧为 exact stock/no-stock registry；新增策略若没有相应影响实现会 fastfail，不能借动态策略静默绕过确认解释。
+6. **R1-2026-09-01-T4.3**：alpha 采购链首个真实 operation 运行 `41dd8ca…` 在第 6 次模型调用后的第二次原生压缩触发 `summarization truncated at the token cap (incomplete checkpoint)`，运行明确 Failed，预留输出恰为 `16384`，且提案、执行记录、Purchase Order、Purchase Receipt 均为 0。先新增操作运行累计预留 `19456` 应放行、下一次预约应明确失败的行为测试并确认旧常量红灯，再把**单运行累计输出预留**从 `16384` 调整为 `20480`；8 次调用、`524288` 输入字节、query/operation/compaction 单次输出上限及容器资源均不变。失败运行保留审计，不恢复、不静默放松、不对同一运行重试；本 ruling 落盘并提交后才允许在新会话发起下一次真实采购请求。
 
 ### Deferred，不阻塞本检查点
 

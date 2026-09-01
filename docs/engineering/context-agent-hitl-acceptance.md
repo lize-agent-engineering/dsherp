@@ -79,3 +79,8 @@
 - 对领料 SE 的确认，浏览器在请求发出后 25ms 主动终止响应，实际观察为 `AbortError`；没有点击确认第二次，也没有重新调用 confirm。独立数据库只读核对发现唯一执行 `ocf82v7j4r` 已 `Succeeded`、Stock Entry docstatus 1，且恰有两条 Stock Ledger Entry：原料仓 `-80`、在制仓 `+80`。这证明本次是“响应丢失后核实”，不是盲目重放。
 - 首次调用 `verify_execution(o0lgv1vf5u)` 只回读 docstatus，未返回库存分录，不能满足验收矩阵。先在既有完整 Work Order 链加入 `stock_ledger_entries` 断言，确认红灯 `KeyError`；最小实现仅对 Stock Entry submit 的冻结 stock impact 用当前用户权限聚合读取未取消 Stock Ledger Entry，并纳入匹配。转绿 **1 passed / 15.96s**；相关 verify/make 回归 **3 passed / 21.08s**。重新加载后对上述真实中断提案只读核实返回 docstatus 1、两条 `-80/+80` 分录、`matches_proposal=true`，明确写明“不会重试操作或改写执行记录”。
 - 自制完成后的真实库存为：原料仓 `20/20`、在制仓 `0/0`、成品仓 `40/40`；四条 Stock Ledger Entry 与两张 SE 的冻结影响逐条一致。除预期一张 Work Order、两张 Stock Entry 及其四条库存分录外，没有 Purchase Order/Receipt、Subcontracting Order/Receipt、Delivery Note 或其他制造单据。因此 T4.2 的执行唯一、零意外写入、预算未超三项通过。
+
+## Phase 4 / T4.3：采购链（R1 中间裁定）
+
+- 首个真实 operation 运行 `41dd8ca5362ad3ac73de94e7ffa7a45e15e877f9974af8c94fe76db2e093c162` 在 6 次模型调用、`278587` 输入字节、`16384` 预留输出 token 后明确 Failed。原生 DSH 日志的确切原因是第二次压缩 `summarization truncated at the token cap (incomplete checkpoint)`；会话没有提案或执行记录，Purchase Order/Receipt 均未增加，因此本次失败没有业务写入，也没有伪装成成功。
+- 按 R1 先红后绿新增 operation 累计输出预算行为：七次预约合计 `19456` 必须放行，第八次再预约 `2048` 必须以“本轮模型调用预算已用尽”失败；旧常量在第七次即红，累计输出上限单独调整为 `20480` 后转绿。调用数、累计输入、各用途单次输出及容器资源不变；失败运行保留且不重试，下一次采购只能由新会话发起。
