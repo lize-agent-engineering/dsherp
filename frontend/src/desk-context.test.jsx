@@ -5,7 +5,7 @@ vi.mock('react-dom/client',()=>({createRoot:mocks.createRoot}));
 import {mountDeskContext} from './desk-context.jsx';
 afterEach(()=>{document.body.innerHTML='';vi.clearAllMocks();});
 it('正式 Agent 工作台不重复挂载全局侧栏',()=>{
- history.pushState({},'', '/app/dsherp-agent');
+ history.pushState({},'', '/desk/dsherp-agent');
  mountDeskContext();
  expect(mocks.createRoot).not.toHaveBeenCalled();
  expect(document.querySelector('#dsherp-context-root')).toBeNull();

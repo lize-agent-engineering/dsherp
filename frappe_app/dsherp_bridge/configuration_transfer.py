@@ -55,10 +55,10 @@ def prepare_transfer(bundle_id,digest,request_id):
     if existing:
         transfer=frappe.get_doc('DS Configuration Transfer',existing)
         if transfer.owner!=user or transfer.bundle!=bundle_id:frappe.throw('请求标识已用于其他配置交接')
-        return {'id':transfer.name,'preview_url':public.rstrip('/')+'/app/dsherp-configuration-preview/'+transfer.name}
+        return {'id':transfer.name,'preview_url':public.rstrip('/')+'/desk/dsherp-configuration-preview/'+transfer.name}
     transfer=frappe.get_doc({'doctype':'DS Configuration Transfer','request_id':request_key,'bundle':bundle_id,'payload':_json(payload),
         'platform_grant':frappe.session.data.get('dsherp_platform_grant')}).insert(ignore_permissions=True)
-    return {'id':transfer.name,'preview_url':public.rstrip('/')+'/app/dsherp-configuration-preview/'+transfer.name}
+    return {'id':transfer.name,'preview_url':public.rstrip('/')+'/desk/dsherp-configuration-preview/'+transfer.name}
 
 
 def read_receipt(transfer):

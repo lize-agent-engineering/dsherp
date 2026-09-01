@@ -816,7 +816,7 @@ function Content({ state, send }) {
               <p>助手查询与待办按企业、角色划分。原生单据仍在 Desk 中处理。</p>
               <Space wrap>
                 <Button onClick={go("assistant")}>打开助手</Button>
-                <Button href="/app/item">原生物料列表</Button>
+                <Button href="/desk/item">原生物料列表</Button>
               </Space>
             </section>
           </div>
@@ -932,10 +932,10 @@ function Content({ state, send }) {
             复用原生用户、角色和权限管理。演示角色不会授予真实管理权限。
           </Heading>
           <Space wrap>
-            <Button href="/app/user">用户管理</Button>
-            <Button href="/app/role">角色管理</Button>
-            <Button href="/app/permission-manager">权限配置</Button>
-            <Button href="/app/workflow">工作流</Button>
+            <Button href="/desk/user">用户管理</Button>
+            <Button href="/desk/role">角色管理</Button>
+            <Button href="/desk/permission-manager">权限配置</Button>
+            <Button href="/desk/workflow">工作流</Button>
           </Space>
         </>
       );
@@ -956,7 +956,7 @@ function Content({ state, send }) {
             ]}
           />
           <Space>
-            <Button href="/app/user-profile">原生个人设置</Button>
+            <Button href="/desk/user-profile">原生个人设置</Button>
             <Button onClick={() => send({ type: "expire" })}>
               模拟会话失效
             </Button>

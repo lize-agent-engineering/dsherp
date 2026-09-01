@@ -88,3 +88,13 @@ def test_stock_ledger_verification_reads_all_rows_in_deterministic_order():
     }
     assert keywords["order_by"] == "creation asc, name asc"
     assert keywords["limit_page_length"] == 0
+
+
+def test_server_generated_desk_links_do_not_retain_v15_app_routes():
+    paths = [
+        ROOT / "frappe_app/dsherp_bridge/configuration.py",
+        ROOT / "frappe_app/dsherp_bridge/configuration_transfer.py",
+        ROOT / "frappe_app/dsherp_bridge/sso.py",
+    ]
+    stale = [path.relative_to(ROOT).as_posix() for path in paths if "/app/" in path.read_text()]
+    assert not stale, stale

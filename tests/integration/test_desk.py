@@ -27,7 +27,7 @@ def test_native_realtime_transport_is_retired_for_http_polling_agent():
 
 def test_native_desk_requires_login():
     with httpx.Client(base_url=BASE_URL, trust_env=False, timeout=15) as client:
-        response = client.get('/app')
+        response = client.get('/desk')
         assert response.status_code in (301, 302, 303)
         assert '/login' in response.headers['location']
 

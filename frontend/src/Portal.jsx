@@ -26,10 +26,10 @@ export default function Portal({api,openDesk=navigate}){
  }
  return <ConfigProvider locale={zhCN} prefixCls="dsh-ant" theme={{token:{colorPrimary:'#176b63',borderRadius:6}}}>
   <div className="dsherp-prototype">
-   <header className="dsh-context"><div className="dsh-wordmark">dsherp <span>企业入口</span></div><Space>{identity?.user}<Button href="/app/user-profile">个人设置</Button></Space></header>
+   <header className="dsh-context"><div className="dsh-wordmark">dsherp <span>企业入口</span></div><Space>{identity?.user}<Button href="/desk/user-profile">个人设置</Button></Space></header>
    <main className="dsh-main">
     {error&&<Alert type="error" showIcon message={error}/>}
-    {identity?.platform_admin&&<Space><Button href="/app/ds-enterprise">企业管理</Button><Button href="/app/ds-membership">成员绑定</Button></Space>}
+    {identity?.platform_admin&&<Space><Button href="/desk/ds-enterprise">企业管理</Button><Button href="/desk/ds-membership">成员绑定</Button></Space>}
     {identity?.enterprises.length===0&&<Empty description="尚未加入可用企业"/>}
     {!!identity?.enterprises.length&&<>
      <h2>进入企业，继续工作</h2><p>业务操作在企业原生 Desk 完成；在业务页面打开 Agent 即可连续问询。</p>

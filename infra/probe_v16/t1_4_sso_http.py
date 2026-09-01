@@ -67,10 +67,7 @@ with (
     assert callback.netloc == "localhost:28082", callback
     result = business.get(callback.path + "?" + callback.query)
     assert result.status_code == 302, result.text
-    assert result.headers["location"] == "/app/home"
-    compatibility = business.get(result.headers["location"])
-    assert compatibility.status_code == 301
-    assert compatibility.headers["location"] == "/desk/home"
+    assert result.headers["location"] == "/desk/home"
 
     identity = business.get("/api/method/frappe.auth.get_logged_user")
     assert identity.status_code == 200, identity.text
@@ -78,4 +75,4 @@ with (
     replay = business.get(callback.path + "?" + callback.query)
     assert replay.status_code == 403
 
-print("C1-R2-R3 PASS: native OAuth client→authorize→callback→business session; /app uses v16 301")
+print("C1-R2-R3 PASS: native OAuth client→authorize→callback→business session on /desk")

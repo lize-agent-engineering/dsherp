@@ -119,7 +119,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
     const token=crypto.randomUUID().replaceAll('-','');
     sessionStorage.setItem(`dsherp-agent-handoff:${token}`,JSON.stringify(page));
     const sessionQuery=session?.id?`session=${encodeURIComponent(session.id)}&`:'';
-    event.currentTarget.href=`/app/dsherp-agent?${sessionQuery}handoff=${token}`;
+    event.currentTarget.href=`/desk/dsherp-agent?${sessionQuery}handoff=${token}`;
   }
   useEffect(()=>{
     if(!open||error)return;
@@ -171,7 +171,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
               {relativeTime(s.modified)&&<span className="dsh-meta">{relativeTime(s.modified)}</span>}
             </Button>)}
         </div>
-        {hasMoreSessions&&<a className="dsh-agent-history-more" href={`/app/dsherp-agent${session?.id?`?session=${encodeURIComponent(session.id)}`:''}`} onClick={handoff}>在页面中打开</a>}
+        {hasMoreSessions&&<a className="dsh-agent-history-more" href={`/desk/dsherp-agent${session?.id?`?session=${encodeURIComponent(session.id)}`:''}`} onClick={handoff}>在页面中打开</a>}
       </aside>}
       <section className="dsh-agent-context" aria-label="当前页面上下文">
         <span className="dsh-agent-context-icon"><LinkOutlined aria-hidden="true"/></span>

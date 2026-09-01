@@ -17,7 +17,7 @@ it('近期会话有更多记录时提供正式页面入口并定位当前会话'
   const link=screen.getByRole('link',{name:'在页面中打开'});
   link.addEventListener('click',event=>event.preventDefault(),{once:true});
   fireEvent.click(link);
-  expect(link.getAttribute('href')).toMatch(/^\/app\/dsherp-agent\?session=S-1&handoff=[a-f0-9]{32}$/);
+  expect(link.getAttribute('href')).toMatch(/^\/desk\/dsherp-agent\?session=S-1&handoff=[a-f0-9]{32}$/);
   const token=new URL(link.href).searchParams.get('handoff');
   expect(JSON.parse(sessionStorage.getItem(`dsherp-agent-handoff:${token}`))).toEqual(snapshot);
   await new Promise(resolve=>setTimeout(resolve,0));
