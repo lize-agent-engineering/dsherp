@@ -6,9 +6,9 @@
 
 ## 结论边界
 
-本记录只证明本机隔离合成环境中的版本切换、四站 fresh provision、自动化回归、固定 Runtime 本地模型替身链与制造行为重验。它不证明生产部署、生产租户可用、真实 DeepSeek 页面效果或人工 UI 已验收。
+本记录只证明本机隔离合成环境中的版本切换、四站 fresh provision、自动化回归、固定 Runtime 本地模型替身链、制造行为重验和本轮应用内真实浏览器 UI 验收。它不证明生产部署、生产租户可用或真实 DeepSeek 页面效果。
 
-截至本记录，C0–C3 已由执行方完成，T4.1 已执行并回读清理结果；T4.2 人工浏览器矩阵、T4.3 获费用授权后的真实 DeepSeek、若干天冷静期、C5 文档全量更新与 v15 移除均未完成。C4 放行仍要求独立审计，不能以本文件的执行方自报代替。
+截至本记录，C0–C3 已由执行方完成，T4.1 已执行并回读清理结果，T4.2 浏览器矩阵已完成并落档；T4.3 已获本轮费用授权但尚未执行，若干天冷静期、C5 文档全量更新与 v15 移除均未完成。C4 放行仍要求独立审计，不能以本文件的执行方自报代替。
 
 ## 固定运行基线
 
@@ -83,11 +83,35 @@ ERPNext 镜像本身没有 Node 可执行文件；固定 DSH Runtime 的 Node �
 
 七类单据为 Work Order、Stock Entry、Purchase Order、Purchase Receipt、Subcontracting Order、Subcontracting Receipt、Delivery Note。T4.1 后清理 303 条合成测试后台任务并重启同一 worker；没有真实 DeepSeek 调用。
 
+## T4.2：真实浏览器 UI 与四站登录链
+
+用户明确授权使用此前的本地 `0600` 合成账号登录，并授权 Codex 控制应用内真实浏览器完成验收。本轮不是静态 DOM 单测或 headless 截图替代：页面在当前浏览器实际渲染并经原生登录/OAuth 表单交互完成。
+
+### React、生命周期与互斥
+
+- alpha 以 `dsherp-writer@example.invalid` 原生登录后，`/desk/dsherp-agent` 渲染会话栏、对话区、来源入口和只读输入区，React 工作台可见。
+- 打开原生 `Item / DSHERP-HITL-ITEM` 后，`on_page_show` 注入的“打开 Agent”按钮为 1；打开侧栏后当前页面上下文精确显示 `Item / DSHERP-HITL-ITEM`。
+- 切回 `/desk/dsherp-agent` 后，全局“打开 Agent”按钮为 0、工作台 main 为 1；再回到 Item 页按钮恢复为 1。由此验证全局侧栏生命周期和正式工作台互斥，没有同页双挂载。
+
+截图：[`alpha 工作台`](evidence/v16/t4.2-alpha-workbench.jpg)、[`Item 上下文侧栏`](evidence/v16/t4.2-alpha-record-sidebar.jpg)。
+
+### 四站登录与 SSO
+
+| 站点 | 登录链 | 浏览器最终身份 | 结果 |
+| --- | --- | --- | --- |
+| platform | 原生账号密码 → `/desk/dsherp-home` | `member@example.invalid` | 三个 Ready 企业均可见 |
+| alpha | platform → 原生 OAuth consent → callback | `dsherp-reader@example.invalid` | 直接落到 `/desk/dsherp-agent` |
+| beta | platform → 原生 OAuth consent → preview callback | `beta-reader@example.invalid` | 直接落到 `/desk/dsherp-agent` |
+| daily | platform → 原生 OAuth consent → daily callback | `daily-operator@example.invalid` | SSO 身份成立，工作台可访问 |
+
+截图：[`平台三企业入口`](evidence/v16/t4.2-platform-enterprises.jpg)、[`alpha SSO 工作台`](evidence/v16/t4.2-alpha-sso-workbench.jpg)、[`beta SSO 工作台`](evidence/v16/t4.2-beta-sso-workbench.jpg)、[`daily SSO 工作台`](evidence/v16/t4.2-daily-sso-workbench.jpg)。
+
+浏览器首轮真实暴露 beta 入口 HTTP 417（“该企业 Desk 登录尚未配置”），没有盲目重复点击。先把三企业 Desk URL 行为写入集成测试并确认红，再为 fresh provision 补 beta 原生 OAuth Client/Social Login Key 和 `18085` 回调；复验又发现普通用户回跳 `/desk/home` 会触发 Page 权限弹窗，于是先把 OAuth 回跳行为测试改为核心 `/desk/dsherp-agent` 并确认红，再做最小实现。修复提交为 `d94efce`，相关 v16/平台/SSO 回归为 **34 passed in 14.01s**。T4.2 全程没有点击发送、没有创建 Agent run，也没有真实 provider 调用。
+
 ## 当前待完成门槛
 
-1. **T4.2 人工浏览器**：React 挂载、`on_page_show`、全局侧栏与 `/desk/dsherp-agent` 互斥、四站登录/SSO 全链路的人工截图和记录尚缺。当前 Codex 浏览器只能排队打开且执行环境没有可见/可控面板；不能用 Playwright/headless 结果替代人工证据。
-2. **T4.3 真实 DeepSeek**：必须先取得并落盘本轮费用授权，再执行中文物料搜索、企业隔离和记录读取；当前没有授权，没有调用。
-3. **C4 审计与冷静期**：T4.1 仍待独立审计；C4 三项完成并审计后，daily 还需若干天调度与备份正常证据。
-4. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 归档、dry-run、用户确认和逐名删除尚未执行。
+1. **T4.3 真实 DeepSeek**：本轮费用授权已于 2026-09-01 落盘；仍须按中文物料搜索、企业隔离和记录读取矩阵实际执行并记录付费调用。
+2. **C4 审计与冷静期**：T4.1/T4.2 仍待独立审计；C4 三项完成并审计后，daily 还需若干天调度与备份正常证据。
+3. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 归档、dry-run、用户确认和逐名删除尚未执行。
 
 因此当前不得宣称 v16 迁移整体完成、用户可见上线或可删除 v15。
