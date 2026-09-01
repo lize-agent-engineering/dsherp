@@ -8,7 +8,7 @@
 
 本记录只证明本机隔离合成环境中的版本切换、四站 fresh provision、自动化回归、固定 Runtime 本地模型替身链、制造行为重验和本轮应用内真实浏览器 UI 验收。它不证明生产部署、生产租户可用或真实 DeepSeek 页面效果。
 
-截至本记录，C0–C3 已由执行方完成，T4.1 已执行并回读清理结果，T4.2 浏览器矩阵已完成并落档；T4.3 已获本轮费用授权但尚未执行，若干天冷静期、C5 文档全量更新与 v15 移除均未完成。C4 放行仍要求独立审计，不能以本文件的执行方自报代替。
+截至本记录，C0–C3 已由执行方完成，T4.1 已执行并回读清理结果，T4.2 浏览器矩阵和 T4.3 真实 DeepSeek 只读矩阵均已完成并落档；若干天冷静期、C5 文档全量更新与 v15 移除仍未完成。C4 放行仍要求独立审计，不能以本文件的执行方自报代替。
 
 ## 固定运行基线
 
@@ -108,10 +108,29 @@ ERPNext 镜像本身没有 Node 可执行文件；固定 DSH Runtime 的 Node �
 
 浏览器首轮真实暴露 beta 入口 HTTP 417（“该企业 Desk 登录尚未配置”），没有盲目重复点击。先把三企业 Desk URL 行为写入集成测试并确认红，再为 fresh provision 补 beta 原生 OAuth Client/Social Login Key 和 `18085` 回调；复验又发现普通用户回跳 `/desk/home` 会触发 Page 权限弹窗，于是先把 OAuth 回跳行为测试改为核心 `/desk/dsherp-agent` 并确认红，再做最小实现。修复提交为 `d94efce`，相关 v16/平台/SSO 回归为 **34 passed in 14.01s**。T4.2 全程没有点击发送、没有创建 Agent run，也没有真实 provider 调用。
 
+## T4.3：真实 DeepSeek 中文查询、记录读取与企业隔离
+
+费用授权先由用户明确给出，并在提交 `390438a` 中落盘；随后才开始真实 provider 请求。协调进程从本项目权限为 `0600` 的 `.env` 读取既有 DeepSeek 配置，实际模型为 `deepseek-v4-flash`。密钥、token 和 provider 原始响应没有进入仓库或证据输出。
+
+| Site / 用例 | Run | 状态 | 模型调用 | 输入字节 | 预留输出 token | ERP 读取结论 |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| alpha 无匹配校准 | `b857f9613c9921638372a20dcae5c3aac86b4a414cd76de4f148df2ccf9162dc` | Succeeded | 6 | 194332 | 12288 | 合成中文名称精确查询两次均 0 条 |
+| alpha 正向记录读取 | `54f2c17d9f318fa2d2292faf2f4f1a6d42a3acfff84413d0d6ffc394900a6749` | Succeeded | 3 | 53983 | 6144 | 唯一命中 `DSHERP-HITL-ITEM` |
+| daily 企业隔离 | `c50dad0eb6fb54a446077a3dd1462257349ab980d4c957181b840c8d7a5a373a` | Succeeded | 5 | 141520 | 10240 | 同一中文名称在 daily 为 0 条 |
+
+合计 **3 个真实运行、14 次模型调用、389835 输入字节、28672 预留输出 token**。预留 token 是运行预算记账，不是实际输出 token 或人民币金额，不能据此宣称精确费用。
+
+alpha 正向页面回答为：物料编号 `DSHERP-HITL-ITEM`、物料名称“`HITL 确认前物料`”、最后修改时间 `2026-09-01 16:27:47.287925`。独立 ERP 数据库回读三项完全相同，持久化 source 的 `record_versions` 也记录同一版本。daily 页面明确返回当前企业无匹配记录；独立 daily 数据库按该中文名称回读同样为不存在，source 的 records 为空，没有带回 alpha 记录。
+
+两个成功回答都包含当前运行的真实 ERP 来源；模型在负例中另行尝试的模糊/文本查询被服务端以 HTTP 417 拒绝，最终只采用已成功的精确查询来源。该低效行为如实保留，不把被拒绝的尝试隐藏成全绿。
+
+最终两站活跃运行均为 0；`DS Operation Proposal`、`DS Execution Record`、`DS Configuration Confirmation`、`DS Configuration Execution` 均为 0；没有业务写入。一次性 daily worker 退出后，alpha 常驻 LaunchAgent 已恢复并存活；无遗留 `dsherp-context-*` 容器或 `context-run-*` 临时目录。
+
+截图：[`alpha 真实记录读取`](evidence/v16/t4.3-alpha-real-item-read.jpg)、[`daily 企业隔离`](evidence/v16/t4.3-daily-enterprise-isolation.jpg)。
+
 ## 当前待完成门槛
 
-1. **T4.3 真实 DeepSeek**：本轮费用授权已于 2026-09-01 落盘；仍须按中文物料搜索、企业隔离和记录读取矩阵实际执行并记录付费调用。
-2. **C4 审计与冷静期**：T4.1/T4.2 仍待独立审计；C4 三项完成并审计后，daily 还需若干天调度与备份正常证据。
-3. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 归档、dry-run、用户确认和逐名删除尚未执行。
+1. **C4 独立审计与冷静期**：T4.1–T4.3 均仍待独立审计；审计放行后，daily 还需若干天调度与备份正常证据。
+2. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 归档、dry-run、用户确认和逐名删除尚未执行。
 
 因此当前不得宣称 v16 迁移整体完成、用户可见上线或可删除 v15。
