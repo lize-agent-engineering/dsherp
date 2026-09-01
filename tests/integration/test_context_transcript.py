@@ -11,7 +11,7 @@ frappe.init(site='dsherp-validation.localhost');frappe.connect()
 from dsherp_bridge.context_execution import run_tool
 from dsherp_bridge.context_permissions import revision
 from dsherp_bridge import context_api as api
-conversation=None
+conversation=None;actor=None
 try:
     frappe.set_user('Administrator')
     actor='transcript-'+uuid.uuid4().hex+'@example.invalid'
@@ -50,7 +50,11 @@ finally:
         for name in frappe.get_all('DS Model Run',filters={'conversation':conversation.name},pluck='name'):
             frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
         frappe.delete_doc('DS Conversation',conversation.name,ignore_permissions=True)
-    frappe.db.commit();frappe.destroy()
+    if actor and frappe.db.exists('User',actor):
+        frappe.delete_doc('User',actor,ignore_permissions=True)
+    frappe.db.commit()
+    assert not actor or not frappe.db.exists('User',actor), 'synthetic transcript user leaked'
+    frappe.destroy()
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],
                           input=script,text=True,capture_output=True,timeout=90)
