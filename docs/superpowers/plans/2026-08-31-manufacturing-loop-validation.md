@@ -117,7 +117,7 @@ make 路由候选方法名（`make_delivery_note`、`make_stock_entry`、`make_p
 ## 阶段 5：daily 终验
 
 - [x] **T5.1 daily 角色与 fixture**：先改 `tests/integration/test_daily_site.py:25-32`（数量断言改为包含制造 fixture 集合；角色断言加 Manufacturing/Purchase 类角色）确认红；再对 daily 执行 fixture 与角色扩充，转绿。变更前按既有惯例做 daily 备份。
-- [ ] **T5.2 daily 端到端终验**：普通成员经平台 SSO 登录 daily，真实模型完整叙事：销售订单 → 缺料解释 → 用户聊天中选定方式（至少自制+采购+委外主变体各一次）→ 逐个确认 → 收货/入库 → 交付 → SO 状态回读。验收后四件套备份恢复比对，证据落档，按功能提交。判据：全仓 Python + 前端回归全绿、证据数字更新。
+- [x] **T5.2 daily 端到端终验**：普通成员经平台 SSO 登录 daily，真实模型完整叙事：销售订单 → 缺料解释 → 用户聊天中选定方式（至少自制+采购+委外主变体各一次）→ 逐个确认 → 收货/入库 → 交付 → SO 状态回读。验收后四件套备份恢复比对，证据落档，按功能提交。判据：全仓 Python + 前端回归全绿、证据数字更新。
 
 ## 风险与显式决策
 
