@@ -2,6 +2,7 @@
 import hashlib
 import json
 import frappe
+from frappe.exceptions import QueryDeadlockError
 from frappe.utils import add_to_date, flt, now_datetime, get_system_timezone
 from zoneinfo import ZoneInfo
 from dsherp_bridge.context_api import _conversation, _user, _json
@@ -129,11 +130,22 @@ def confirm(proposal_id, digest, request_id):
     # open another snapshot, so the deduplication lookup below is also a locking
     # (current) read rather than a repeatable-read lookup.
     frappe.db.rollback()
-    proposal = frappe.get_doc('DS Operation Proposal', proposal_id, for_update=True)
-    public=get_proposal(proposal_id)
-    if not isinstance(digest, str) or digest != proposal.digest:
-        frappe.throw('确认内容不匹配，请重新核对提案')
-    existing = frappe.db.get_value('DS Execution Record', {'proposal': proposal_id}, 'name', for_update=True)
+    try:
+        proposal = frappe.get_doc('DS Operation Proposal', proposal_id, for_update=True)
+        public=get_proposal(proposal_id)
+        if not isinstance(digest, str) or digest != proposal.digest:
+            frappe.throw('确认内容不匹配，请重新核对提案')
+        existing = frappe.db.get_value('DS Execution Record', {'proposal': proposal_id}, 'name', for_update=True)
+    except QueryDeadlockError:
+        # The winning request may commit while MariaDB rejects the waiter's
+        # stale locked-row snapshot. Read only the durable intent; never replay.
+        frappe.db.rollback()
+        proposal=frappe.get_doc('DS Operation Proposal',proposal_id)
+        if not isinstance(digest,str) or digest!=proposal.digest:
+            frappe.throw('确认内容不匹配，请重新核对提案')
+        existing=frappe.db.get_value('DS Execution Record',{'proposal':proposal_id},'name')
+        if not existing:raise
+        return _execution_result(frappe.get_doc('DS Execution Record',existing))
     if existing:
         return public['execution']
     if proposal.model_run and frappe.db.get_value('DS Model Run',proposal.model_run,'status',for_update=True)!='Succeeded':

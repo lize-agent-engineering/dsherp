@@ -139,6 +139,24 @@ try:
     again=confirm(proposal['id'],proposal['digest'],tag)
     assert again==result
     assert confirm(proposal['id'],proposal['digest'],uuid.uuid4().hex)==result
+    # MariaDB may deadlock the waiter after the winner commits. The waiter must
+    # observe the durable execution instead of surfacing HTTP 500 or replaying.
+    native_get_doc=frappe.get_doc;deadlocked=[False]
+    def deadlock_waiter(doctype,*args,**kwargs):
+        if doctype=='DS Operation Proposal' and kwargs.get('for_update') and not deadlocked[0]:
+            deadlocked[0]=True
+            raise frappe.QueryDeadlockError('Synthetic locked-row snapshot')
+        return native_get_doc(doctype,*args,**kwargs)
+    frappe.get_doc=deadlock_waiter
+    try:
+        try:
+            confirm(proposal['id'],'forged',uuid.uuid4().hex)
+            raise AssertionError('deadlock recovery bypassed the frozen digest')
+        except frappe.ValidationError:pass
+        deadlocked[0]=False
+        assert confirm(proposal['id'],proposal['digest'],uuid.uuid4().hex)==result
+    finally:
+        frappe.get_doc=native_get_doc
     assert frappe.db.get_value('Item',item.name,'modified')==version
     assert frappe.db.count('DS Execution Record',{'proposal':proposal['id']})==1
     # A proposal freezes its target/version; intervening native writes invalidate it.
