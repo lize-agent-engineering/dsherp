@@ -22,7 +22,7 @@ assert not frappe.has_permission('Item','read')
 assert not frappe.has_permission('Customer','read')
 frappe.set_user('Administrator');frappe.db.commit()
 update_site_config('dsherp_runtime_user',user)
-print(json.dumps({'base_url':'http://127.0.0.1:18081','site':'dsherp-validation.localhost',**keys}))
+print(json.dumps({'base_url':'http://127.0.0.1:18081','business_url':'http://dsherp-validation-backend-1:8000','site':'dsherp-validation.localhost',**keys}))
 frappe.destroy()
 '''
 

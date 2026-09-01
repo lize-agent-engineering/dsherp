@@ -397,6 +397,8 @@ def provision_fixture(
     company, root_warehouse, supplier_group, finished_group, raw_group,
     service_group, stock_uom, opening_account,
 ):
+    from erpnext.stock.utils import get_or_make_bin
+
     group = ensure_warehouse(
         WAREHOUSE_LABELS['group'], company.abbr, company.name, root_warehouse, 1
     )
@@ -417,6 +419,13 @@ def provision_fixture(
     service_item = ensure_item(
         SERVICE_ITEM, 'DSHERP 制造测试合成委外加工服务', service_group, stock_uom,
         is_stock_item=0,
+    )
+    finished_bin = frappe.get_doc(
+        'Bin', get_or_make_bin(FINISHED_GOOD, warehouses['finished_goods'])
+    )
+    require(
+        flt(finished_bin.actual_qty) == 0 and flt(finished_bin.projected_qty) == 0,
+        'Synthetic finished-good Bin must start empty',
     )
     bom = ensure_bom(company.name, company.default_currency, stock_uom)
     reconciliation, actual_qty = ensure_opening_stock(

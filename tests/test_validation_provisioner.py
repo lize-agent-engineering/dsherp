@@ -64,3 +64,57 @@ def test_container_provisioner_uses_native_documents_and_fastfails_existing_site
     assert "frappe.permissions.add_permission" in source
     assert "User Permission" in source
     assert "frappe.db.sql" not in source
+    assert 'replace(secret, "[redacted]")' in source
+    assert 'os.chdir(SITES)' in source
+
+
+@pytest.mark.parametrize(
+    "name",
+    ("provision_identity.py", "provision_daily_site.py", "verify_daily_backup.py"),
+)
+def test_other_bench_control_scripts_redact_secrets_from_persistent_log(name):
+    source = (Path(__file__).resolve().parents[1] / "infra" / name).read_text()
+    assert 'replace(secret, "[redacted]")' in source
+
+
+def test_validation_company_provisioner_uses_native_setup_once():
+    source = (Path(__file__).resolve().parents[1] / "infra" / "provision_validation_company.py").read_text()
+    assert "frappe.is_setup_complete()" in source
+    assert "Company already initialized; inspect instead of retrying" in source
+    assert "from frappe.desk.page.setup_wizard.setup_wizard import setup_complete" in source
+    assert "DSHERP 原生验收测试公司" in source
+    assert "'company_abbr':'DVT'" in source
+    assert "DSHERP 隔离预览合成公司" in source
+    assert "'company_abbr':'DPR'" in source
+    assert "--target" in source
+    assert "frappe.db.sql" not in source
+
+
+def test_beta_provisioner_persists_all_preview_isolation_flags_as_integers():
+    source = (Path(__file__).resolve().parents[1] / "infra" / "provision_identity.py").read_text()
+    for key in (
+        "dsherp_preview",
+        "mute_emails",
+        "disable_scheduler",
+        "pause_scheduler",
+        "disable_async",
+    ):
+        assert repr(key) in source
+    assert "run(['bench','--site',site,'set-config','--parse',key,'1'])" in source
+
+
+def test_alpha_writer_provisioning_reuses_the_native_sales_baseline_fixture():
+    root = Path(__file__).resolve().parents[1]
+    writer = (root / "infra" / "provision_context_writer.py").read_text()
+    fixture = (root / "infra" / "provision_alpha_sales_baseline.py").read_text()
+    assert "from provision_alpha_sales_baseline import FIXTURE_SCRIPT" in writer
+    assert "SCRIPT+=FIXTURE_SCRIPT" in writer
+    for value in (
+        "DSHERP-UI-ITEM",
+        "DSHERP-HITL-CUSTOMER",
+        "SAL-ORD-2026-00001",
+        "DSHERP-TEST-CUSTOMER",
+    ):
+        assert value in fixture
+    assert "frappe.get_doc" in fixture
+    assert "frappe.db.sql" not in fixture

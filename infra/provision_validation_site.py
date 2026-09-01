@@ -6,6 +6,7 @@ credential material; operational output goes to stderr.
 """
 import contextlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -36,18 +37,28 @@ assets = SITES / "assets"
 if not assets.exists():
     assets.symlink_to(ROOT / "assets", target_is_directory=True)
 
-run(
-    "bench", "new-site", SITE,
-    "--db-host", "db",
-    "--db-root-username", "root",
-    "--db-root-password", Path("/run/secrets/db_root_password").read_text().strip(),
-    "--admin-password", Path("/run/secrets/validation_admin_password").read_text().strip(),
-    "--mariadb-user-host-login-scope", "%",
-    "--install-app", "erpnext",
-    "--set-default",
-)
-run("bench", "--site", SITE, "install-app", "dsherp_bridge")
-run("bench", "--site", SITE, "disable-scheduler")
+db_root_password = Path("/run/secrets/db_root_password").read_text().strip()
+validation_admin_password = Path("/run/secrets/validation_admin_password").read_text().strip()
+try:
+    run(
+        "bench", "new-site", SITE,
+        "--db-host", "db",
+        "--db-root-username", "root",
+        "--db-root-password", db_root_password,
+        "--admin-password", validation_admin_password,
+        "--mariadb-user-host-login-scope", "%",
+        "--install-app", "erpnext",
+        "--set-default",
+    )
+    run("bench", "--site", SITE, "install-app", "dsherp_bridge")
+    run("bench", "--site", SITE, "disable-scheduler")
+finally:
+    bench_log = ROOT / "logs" / "bench.log"
+    if bench_log.exists():
+        redacted = bench_log.read_text(errors="replace")
+        for secret in (db_root_password, validation_admin_password):
+            redacted = redacted.replace(secret, "[redacted]")
+        bench_log.write_text(redacted)
 
 import frappe
 from frappe.core.doctype.user.user import generate_keys
@@ -55,6 +66,7 @@ from frappe.core.doctype.user.user import generate_keys
 
 profiles = {}
 with contextlib.redirect_stdout(sys.stderr):
+    os.chdir(SITES)
     frappe.init(site=SITE, sites_path=str(SITES))
     frappe.connect()
     try:

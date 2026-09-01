@@ -41,7 +41,7 @@ frappe.destroy()
     credentials = json.loads(execute(['docker', 'exec', '-i', PLATFORM], 'dsherp-platform.localhost', f"""
 import secrets
 enterprise=frappe.get_doc({{'doctype':'DS Enterprise','enterprise_id':'daily','title':'日常企业（待初始化）','site':{SITE!r},'base_url':'http://backend:8000','status':'Provisioning'}}).insert()
-client=frappe.get_doc({{'doctype':'OAuth Client','app_name':'DSHERP daily Desk','client_secret':secrets.token_urlsafe(32),'scopes':'openid','redirect_uris':{CALLBACK!r},'default_redirect_uri':{CALLBACK!r},'grant_type':'Authorization Code','response_type':'Code','skip_authorization':0}}).insert()
+client=frappe.get_doc({{'doctype':'OAuth Client','app_name':'DSHERP daily Desk','client_secret':secrets.token_urlsafe(32),'scopes':'openid','redirect_uris':{CALLBACK!r},'default_redirect_uri':{CALLBACK!r},'grant_type':'Authorization Code','response_type':'Code','skip_authorization':0,'allowed_roles':[{{'role':'DSHERP Member'}}]}}).insert()
 from frappe.installer import update_site_config
 sites=frappe.conf.get('dsherp_business_sites') or {{}};sites[{SITE!r}]='http://backend:8000';update_site_config('dsherp_business_sites',sites)
 desks=frappe.conf.get('dsherp_desk_sites') or {{}};desks[{SITE!r}]='http://daily.localhost:18086/api/method/dsherp_bridge.sso.start';update_site_config('dsherp_desk_sites',desks)

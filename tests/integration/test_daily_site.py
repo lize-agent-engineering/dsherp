@@ -75,8 +75,8 @@ def test_daily_site_has_isolated_http_entry_and_complete_backup_set():
     ).stdout
     assert '-database.sql.gz' in listing
     assert '-site_config_backup.json' in listing
-    assert '-files.tgz' in listing
-    assert '-private-files.tgz' in listing
+    assert '-files.tar' in listing
+    assert '-private-files.tar' in listing
     assert 'dsherp-daily-restore.localhost' not in subprocess.run(
         [*COMPOSE, 'exec', '-T', 'backend', 'find', 'sites', '-maxdepth', '1', '-type', 'd'],
         text=True, capture_output=True, check=True,

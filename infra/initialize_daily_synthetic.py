@@ -54,11 +54,10 @@ frappe.set_user(user.name)
 checks=[('Item','read'),('Item','write'),('Customer','create'),('Customer','write'),
         ('Sales Order','create'),('Sales Order','write'),('Sales Order','submit'),('Sales Order','cancel')]
 assert all(frappe.has_permission(doctype,ptype) for doctype,ptype in checks),checks
-from frappe.utils.nestedset import get_root_of
 item=frappe.get_doc({{'doctype':'Item','item_code':'DAILY-AGENT-ITEM','item_name':'日常 Agent 合成物料',
- 'item_group':get_root_of('Item Group'),'stock_uom':frappe.db.get_single_value('Stock Settings','stock_uom') or 'Nos','is_stock_item':0}}).insert()
+ 'item_group':'Products','stock_uom':frappe.db.get_single_value('Stock Settings','stock_uom') or 'Nos','is_stock_item':0}}).insert()
 customer=frappe.get_doc({{'doctype':'Customer','customer_name':'日常 Agent 合成客户','customer_type':'Individual',
- 'customer_group':'个人','territory':'China'}}).insert()
+ 'customer_group':'Individual','territory':'China'}}).insert()
 frappe.db.commit()
 print(json.dumps({{'user':user.name,'api_key':keys['api_key'],'api_secret':keys['api_secret'],
  'company':'DSHERP 日常合成企业','item':item.name,'customer':customer.name}}))

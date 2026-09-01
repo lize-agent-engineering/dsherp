@@ -20,7 +20,15 @@ resume_restored = parser.parse_args().resume_restored
 
 
 def run(command):
-    result = subprocess.run(command, cwd=ROOT)
+    try:
+        result = subprocess.run(command, cwd=ROOT)
+    finally:
+        bench_log = ROOT / 'logs' / 'bench.log'
+        if bench_log.exists():
+            redacted = bench_log.read_text(errors='replace')
+            for secret in (root_password, admin_password):
+                redacted = redacted.replace(secret, "[redacted]")
+            bench_log.write_text(redacted)
     if result.returncode:
         raise SystemExit(f'Bench backup verification command failed with exit code {result.returncode}')
 
@@ -153,8 +161,8 @@ if not databases:
     raise SystemExit('No daily database backup exists')
 database = databases[-1]
 prefix = database.name.removesuffix('-database.sql.gz')
-public = BACKUPS / f'{prefix}-files.tgz'
-private = BACKUPS / f'{prefix}-private-files.tgz'
+public = BACKUPS / f'{prefix}-files.tar'
+private = BACKUPS / f'{prefix}-private-files.tar'
 config = BACKUPS / f'{prefix}-site_config_backup.json'
 for artifact in (database, config, public, private):
     if not artifact.is_file() or artifact.stat().st_size == 0:

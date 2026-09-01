@@ -50,6 +50,20 @@ def test_retired_realtime_and_queue_services_are_absent():
     assert "profiles: [legacy]" not in COMPOSE
 
 
+def test_beta_backend_stays_internal_and_uses_the_separate_preview_entry():
+    beta = COMPOSE.split("  beta-backend:\n", 1)[1].split("\n  platform-frontend:\n", 1)[0]
+    assert "ports:" not in beta
+    assert "networks: [validation]" in beta
+    frontend = COMPOSE.split("  frontend:\n", 1)[1].split("\n  scheduler:\n", 1)[0]
+    assert "127.0.0.1:18085:8081" in frontend
+
+
+def test_platform_backend_has_enough_memory_for_v16_integration_reads():
+    platform = COMPOSE.split("  platform-backend:\n", 1)[1].split("\n  beta-backend:\n", 1)[0]
+    assert "mem_limit: 448m" in platform
+    assert "memswap_limit: 448m" in platform
+
+
 def test_agent_runtime_isolated_volume_is_v16_specific_everywhere():
     paths = [
         ROOT / "infra/prepare_agent_runtime.sh",

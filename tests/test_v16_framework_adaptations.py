@@ -8,6 +8,11 @@ ROOT = Path(__file__).parents[1]
 SSO = (ROOT / "frappe_app/dsherp_bridge/sso.py").read_text()
 OPERATIONS = (ROOT / "frappe_app/dsherp_bridge/operations.py").read_text()
 OAUTH_PROVISION = (ROOT / "infra/provision_desk_oauth.py").read_text()
+DAILY_OAUTH_PROVISION = (ROOT / "infra/provision_daily_agent.py").read_text()
+DAILY_INITIALIZER = (ROOT / "infra/initialize_daily_synthetic.py").read_text()
+DAILY_BACKUP_VERIFIER = (ROOT / "infra/verify_daily_backup.py").read_text()
+ALPHA_RUNTIME_PROVISION = (ROOT / "infra/provision_context_worker.py").read_text()
+MANUFACTURING_PROVISION = (ROOT / "infra/provision_manufacturing_fixture.py").read_text()
 
 
 def test_sso_uses_native_v16_desk_route_and_ends_identity_snapshot_before_login():
@@ -20,8 +25,9 @@ def test_sso_uses_native_v16_desk_route_and_ends_identity_snapshot_before_login(
 
 
 def test_oauth_client_explicitly_allows_the_existing_platform_member_role():
-    compact = "".join(OAUTH_PROVISION.split())
-    assert "'allowed_roles':[{{'role':'DSHERPMember'}}]" in compact
+    for source in (OAUTH_PROVISION, DAILY_OAUTH_PROVISION):
+        compact = "".join(source.split())
+        assert "'allowed_roles':[{{'role':'DSHERPMember'}}]" in compact
 
 
 def test_subcontracting_preparer_uses_the_v16_supplied_items_method():
@@ -108,3 +114,27 @@ def test_manufacturing_fixture_requires_the_exact_v16_image_versions():
         assert f"filters={{'name': '{name}', 'is_group': 0}}" in source
     for stale in ("产品展示", "filters={'name': '原材料'", "filters={'name': '服务'"):
         assert stale not in source
+
+
+def test_daily_initializer_uses_the_fresh_v16_master_names():
+    compact = "".join(DAILY_INITIALIZER.split())
+    assert "'item_group':'Products'" in compact
+    assert "'customer_group':'Individual'" in compact
+    assert "get_root_of('ItemGroup')" not in compact
+    assert "'customer_group':'个人'" not in compact
+
+
+def test_daily_backup_verifier_uses_v16_file_archive_names():
+    assert "f'{prefix}-files.tar'" in DAILY_BACKUP_VERIFIER
+    assert "f'{prefix}-private-files.tar'" in DAILY_BACKUP_VERIFIER
+    assert "-files.tgz" not in DAILY_BACKUP_VERIFIER
+
+
+def test_alpha_runtime_profile_includes_the_container_business_url():
+    compact = "".join(ALPHA_RUNTIME_PROVISION.split())
+    assert "'business_url':'http://dsherp-validation-backend-1:8000'" in compact
+
+
+def test_manufacturing_fixture_creates_the_zero_finished_goods_bin_natively():
+    assert "from erpnext.stock.utils import get_or_make_bin" in MANUFACTURING_PROVISION
+    assert "get_or_make_bin(FINISHED_GOOD, warehouses['finished_goods'])" in MANUFACTURING_PROVISION

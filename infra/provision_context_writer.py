@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from provision_alpha_sales_baseline import FIXTURE_SCRIPT
 
 ROOT=Path(__file__).resolve().parents[1]
 TARGET=ROOT/'.runtime/context-writer.json'
@@ -22,6 +23,9 @@ item.item_code=item_name;item.item_name='HITL 确认前物料';item.insert()
 frappe.set_user(user)
 item.check_permission('read');item.check_permission('write')
 assert not frappe.has_permission('User','write',doc=frappe.get_doc('User','Administrator'))
+'''
+SCRIPT+=FIXTURE_SCRIPT
+SCRIPT+=r'''
 frappe.db.commit()
 print(json.dumps({'user':user,'password':password,'item':item.name,'baseline':str(item.modified)},ensure_ascii=False))
 frappe.destroy()
