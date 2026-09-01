@@ -130,7 +130,7 @@ alpha 正向页面回答为：物料编号 `DSHERP-HITL-ITEM`、物料名称“`
 
 ## 当前待完成门槛
 
-1. **C4 独立审计与冷静期**：T4.1–T4.3 均仍待独立审计；审计放行后，daily 还需若干天调度与备份正常证据。
+1. **C4 独立审计与冷静期**：T4.1–T4.3 均仍待独立审计；执行方已准备 [`v16-c4-independent-audit-packet.md`](v16-c4-independent-audit-packet.md)，该入口不构成审计结论。审计放行后，daily 还需若干天调度与备份正常证据。
 2. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 归档、dry-run、用户确认和逐名删除尚未执行。
 
 因此当前不得宣称 v16 迁移整体完成、用户可见上线或可删除 v15。
