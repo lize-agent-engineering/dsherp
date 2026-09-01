@@ -77,7 +77,7 @@ try:
     frappe.set_user('Guest')
     operation_call={**model_call,'max_output_tokens':3072,'domain':'operation'}
     for maximum,purpose in (
-        (3072,'conversation'),(2048,'compaction'),(3072,'conversation'),
+        (3072,'conversation'),(3072,'conversation'),(3072,'conversation'),
         (2048,'compaction'),(3072,'conversation'),(3072,'conversation'),
         (3072,'conversation'),
     ):
@@ -86,7 +86,19 @@ try:
         )['allowed']
     assert frappe.db.get_value(
         'DS Model Run',operation_claim['run_id'],'model_output_tokens_reserved'
-    )==19456
+    )==20480
+    assert execution.reserve_model_call(
+        **operation_cap,**{**operation_call,'max_output_tokens':2048,'purpose':'compaction'}
+    )['allowed']
+    assert frappe.db.get_value(
+        'DS Model Run',operation_claim['run_id'],'model_output_tokens_reserved'
+    )==22528
+    assert execution.reserve_model_call(
+        **operation_cap,**{**operation_call,'max_output_tokens':3072,'purpose':'conversation'}
+    )['allowed']
+    assert frappe.db.get_value(
+        'DS Model Run',operation_claim['run_id'],'model_output_tokens_reserved'
+    )==25600
     try:
         execution.reserve_model_call(
             **operation_cap,**{**operation_call,'max_output_tokens':2048,'purpose':'compaction'}
