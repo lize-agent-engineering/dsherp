@@ -65,7 +65,7 @@ before_insert_original=getattr(delivery_note_class,'before_insert',None)
 # catches a future wildcard or generic metadata exclusion even if a happy-path
 # make happens not to exercise the newly skipped business field.
 assert operations._MAKE_INSERT_DERIVED_FIELDS=={
-    'Delivery Note':{'installation_status','title'},
+    'Delivery Note':{'installation_status'},
     'Delivery Note Item':{'incoming_rate','stock_uom_rate'},
     'Purchase Receipt':{'represents_company','title'},
     'Purchase Receipt Item':{'received_qty','stock_uom_rate','valuation_rate'},
@@ -224,6 +224,7 @@ try:
         def drift_after_mapper(self):
             if before_insert_original is not None:before_insert_original(self)
             if kind=='scalar':self.po_no='DSHERP-HOOK-SCALAR-'+tag
+            elif kind=='title':self.title='DSHERP-HOOK-TITLE-'+tag
             elif kind=='qty':self.items[0].qty=self.items[0].qty+1
             elif kind=='empty':self.lr_no='DSHERP-HOOK-LR-'+tag
             elif kind=='source':self.items[0].against_sales_order=template.name
@@ -241,6 +242,7 @@ try:
         assert frappe.db.count('Delivery Note')==delivery_count_before
 
     confirm_with_insert_drift('scalar')
+    confirm_with_insert_drift('title')
     confirm_with_insert_drift('qty')
     confirm_with_insert_drift('empty')
     confirm_with_insert_drift('source')
@@ -267,7 +269,7 @@ try:
     control=run_tool(**cap,tool='erp_propose_make',arguments=make_arguments(str(read['modified'])))
     proposal_names.append(control['id'])
     assert 'installation_status' not in control['target']
-    assert 'title' not in control['target']
+    assert control['target']['title'] is None
     assert frappe.db.count('Delivery Note')==delivery_count_before
     frappe.db.set_value('DS Model Run',control_run,'status','Succeeded');frappe.db.commit()
     frappe.set_user(actor)
@@ -288,7 +290,7 @@ try:
     assert verified['matches_proposal'] is True
     assert succeeded['values']['po_no']==changed.po_no
     assert succeeded['values']['installation_status']=='Not Installed',succeeded['values']['installation_status']
-    assert succeeded['values']['title']==template.customer,succeeded['values']['title']
+    assert succeeded['values']['title'] is None,succeeded['values']['title']
 
     # Verification is measured against the frozen public proposal target. A
     # later legitimate native edit is observable but no longer matches it.

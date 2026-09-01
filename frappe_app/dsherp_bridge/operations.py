@@ -14,7 +14,7 @@ _TRANSIENT_IDENTITY_FIELDS={'name','owner','creation','modified','modified_by','
 # intentionally exact DocType registrations: adding another excluded field or
 # target type requires a real mapper -> insert regression proving the derivation.
 _MAKE_INSERT_DERIVED_FIELDS={
-    'Delivery Note':{'installation_status','title'},
+    'Delivery Note':{'installation_status'},
     'Delivery Note Item':{'incoming_rate','stock_uom_rate'},
     'Purchase Receipt':{'represents_company','title'},
     'Purchase Receipt Item':{'received_qty','stock_uom_rate','valuation_rate'},
