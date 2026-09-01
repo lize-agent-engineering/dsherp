@@ -88,14 +88,14 @@ services:
     logging: *logging
 
   scheduler:
-    # Not needed for synthetic acceptance; reserve its budget for preview Desk.
+    # Profiled cold-period scheduler; 128 MiB OOMed during its first real tick.
     profiles: [scheduled]
     image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
     pull_policy: never
-    mem_limit: 128m
-    memswap_limit: 128m
+    mem_limit: 256m
+    memswap_limit: 256m
     cpus: 0.1
-    restart: "no"
+    restart: "unless-stopped"
     command: ["bench", "schedule"]
     environment:
       PYTHONPATH: /opt/dsherp-frappe
@@ -115,7 +115,7 @@ services:
     mem_limit: 256m
     memswap_limit: 256m
     cpus: 0.2
-    restart: "no"
+    restart: "unless-stopped"
     command: ["bench", "worker", "--queue", "short,default,long"]
     environment:
       PYTHONPATH: /opt/dsherp-frappe

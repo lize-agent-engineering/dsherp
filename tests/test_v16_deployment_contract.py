@@ -56,8 +56,11 @@ def test_scheduled_profile_pairs_the_scheduler_with_one_queue_consumer():
     worker = COMPOSE.split("  scheduler-worker:\n",1)[1].split("\n  daily-provision:\n",1)[0]
     assert "profiles: [scheduled]" in scheduler
     assert 'command: ["bench", "schedule"]' in scheduler
+    assert "mem_limit: 256m" in scheduler
+    assert 'restart: "unless-stopped"' in scheduler
     assert "profiles: [scheduled]" in worker
     assert 'command: ["bench", "worker", "--queue", "short,default,long"]' in worker
+    assert 'restart: "unless-stopped"' in worker
     assert "v16-sites:/home/frappe/frappe-bench/sites" in worker
     assert "v16-logs:/home/frappe/frappe-bench/logs" in worker
     assert "../frappe_app:/opt/dsherp-frappe:ro" in worker
