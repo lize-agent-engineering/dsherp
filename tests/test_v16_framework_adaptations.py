@@ -98,3 +98,9 @@ def test_server_generated_desk_links_do_not_retain_v15_app_routes():
     ]
     stale = [path.relative_to(ROOT).as_posix() for path in paths if "/app/" in path.read_text()]
     assert not stale, stale
+
+
+def test_manufacturing_fixture_requires_the_exact_v16_image_versions():
+    source = (ROOT / "infra/provision_manufacturing_fixture.py").read_text()
+    assert "ERP_VERSION = '16.33.0'" in source
+    assert "FRAPPE_VERSION = '16.31.0'" in source

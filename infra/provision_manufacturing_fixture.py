@@ -29,8 +29,8 @@ from frappe.utils import flt
 RUN_MODE = globals().get('RUN_MODE', 'provision')
 SITE = globals()['SITE']
 OPERATOR = globals()['OPERATOR']
-ERP_VERSION = '15.119.3'
-FRAPPE_VERSION = '15.118.0'
+ERP_VERSION = '16.33.0'
+FRAPPE_VERSION = '16.31.0'
 WAREHOUSE_LABELS = {
     'group': 'DSHERP 制造测试合成仓库',
     'raw': 'DSHERP 制造测试合成原料仓',

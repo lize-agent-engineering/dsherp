@@ -96,15 +96,15 @@ def test_fixed_upstream_translation_files_are_unchanged():
     script = r'''
 import hashlib, json
 paths={
-    'frappe':'/home/frappe/frappe-bench/apps/frappe/frappe/translations/zh.csv',
-    'erpnext':'/home/frappe/frappe-bench/apps/erpnext/erpnext/translations/zh.csv',
+    'frappe':'/home/frappe/frappe-bench/apps/frappe/frappe/locale/zh.po',
+    'erpnext':'/home/frappe/frappe-bench/apps/erpnext/erpnext/locale/zh.po',
 }
 print(json.dumps({name:hashlib.sha256(open(path,'rb').read()).hexdigest() for name,path in paths.items()},sort_keys=True))
 '''
 
     assert json.loads(run_alpha(script)) == {
-        "frappe": "9e9dbd64f0965853e6be131b6335efdbba906a1a8e2908bfdd9f8888a2f0fdc8",
-        "erpnext": "233ab506626683446fb137dd8aab3fb6c28f78b1b6a55d803bc3cd537af00be9",
+        "frappe": "398bc73c2456c4531f6a8d4e9f6e89237d6fe06a3db4d306e66331f8462503a1",
+        "erpnext": "b1daeeaaa55f87ea7b97035ae0c268eea087a4ab962317633af9721a269c3fe6",
     }
 
 
