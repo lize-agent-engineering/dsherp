@@ -2,7 +2,7 @@
 import hashlib
 import json
 import frappe
-from frappe.exceptions import QueryDeadlockError
+from frappe.exceptions import QueryDeadlockError, QueryTimeoutError
 from frappe.utils import add_to_date, flt, now_datetime, get_system_timezone
 from zoneinfo import ZoneInfo
 from dsherp_bridge.context_api import _conversation, _user, _json
@@ -136,7 +136,7 @@ def confirm(proposal_id, digest, request_id):
         if not isinstance(digest, str) or digest != proposal.digest:
             frappe.throw('确认内容不匹配，请重新核对提案')
         existing = frappe.db.get_value('DS Execution Record', {'proposal': proposal_id}, 'name', for_update=True)
-    except QueryDeadlockError:
+    except (QueryDeadlockError,QueryTimeoutError):
         # The winning request may commit while MariaDB rejects the waiter's
         # stale locked-row snapshot. Read only the durable intent; never replay.
         frappe.db.rollback()

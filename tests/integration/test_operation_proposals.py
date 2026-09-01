@@ -157,6 +157,17 @@ try:
         assert confirm(proposal['id'],proposal['digest'],uuid.uuid4().hex)==result
     finally:
         frappe.get_doc=native_get_doc
+    timed_out=[False]
+    def timeout_waiter(doctype,*args,**kwargs):
+        if doctype=='DS Operation Proposal' and kwargs.get('for_update') and not timed_out[0]:
+            timed_out[0]=True
+            raise frappe.QueryTimeoutError('Synthetic locked-row timeout')
+        return native_get_doc(doctype,*args,**kwargs)
+    frappe.get_doc=timeout_waiter
+    try:
+        assert confirm(proposal['id'],proposal['digest'],uuid.uuid4().hex)==result
+    finally:
+        frappe.get_doc=native_get_doc
     assert frappe.db.get_value('Item',item.name,'modified')==version
     assert frappe.db.count('DS Execution Record',{'proposal':proposal['id']})==1
     # A proposal freezes its target/version; intervening native writes invalidate it.
