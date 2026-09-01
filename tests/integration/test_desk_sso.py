@@ -1,6 +1,7 @@
 """Native business identity validation before OAuth may establish a session."""
 import subprocess
 import httpx
+import pytest
 from urllib.parse import urlparse,parse_qs
 from html.parser import HTMLParser
 from test_platform_identity import platform_client,platform_operator
@@ -34,8 +35,14 @@ frappe.destroy()
     assert result.returncode==0,result.stderr
 
 
-def test_real_native_oauth_code_exchange_logs_into_bound_business_user():
-    with httpx.Client(base_url='http://localhost:18082',trust_env=False,timeout=30) as business,platform_client() as platform:
+@pytest.mark.parametrize(('enterprise','business_url','callback_netloc','business_user'),(
+    ('alpha','http://localhost:18082','localhost:18082','dsherp-reader@example.invalid'),
+    ('beta','http://preview.localhost:18085','preview.localhost:18085','beta-reader@example.invalid'),
+    ('daily','http://daily.localhost:18086','daily.localhost:18086','daily-operator@example.invalid'),
+))
+def test_real_native_oauth_code_exchange_logs_into_bound_business_user(
+        enterprise,business_url,callback_netloc,business_user):
+    with httpx.Client(base_url=business_url,trust_env=False,timeout=30) as business,platform_client() as platform:
         start=business.get('/api/method/dsherp_bridge.sso.start')
         assert start.status_code==302
         target=urlparse(start.headers['location'])
@@ -46,13 +53,13 @@ def test_real_native_oauth_code_exchange_logs_into_bound_business_user():
             authorization=platform.post(form.action,data={'csrf_token':form.csrf})
         assert authorization.status_code==302,authorization.text
         callback=urlparse(authorization.headers['location'])
-        assert callback.netloc=='localhost:18082'
+        assert callback.netloc==callback_netloc
         result=business.get(callback.path+'?'+callback.query)
         assert result.status_code==302,result.text
         assert result.headers['location']=='/desk/dsherp-agent'
         identity=business.get('/api/method/frappe.auth.get_logged_user')
         assert identity.status_code==200,identity.text
-        assert identity.json()['message']=='dsherp-reader@example.invalid'
+        assert identity.json()['message']==business_user
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=4) as pool:
             responses=list(pool.map(lambda _:business.get('/api/method/dsherp_bridge.context_api.list_sessions'),range(4)))
@@ -60,7 +67,7 @@ def test_real_native_oauth_code_exchange_logs_into_bound_business_user():
         assert business.get('/api/method/dsherp_bridge.context_api.list_sessions').status_code==200
         assert business.get(callback.path+'?'+callback.query).status_code==403
         with platform_operator() as operator:
-            records=operator.get('/api/resource/DS Membership',params={'filters':json.dumps({'enterprise':'alpha','platform_user':'member@example.invalid'})}).json()['data']
+            records=operator.get('/api/resource/DS Membership',params={'filters':json.dumps({'enterprise':enterprise,'platform_user':'member@example.invalid'})}).json()['data']
             path='/api/resource/DS Membership/'+records[0]['name']
             try:
                 assert operator.put(path,json={'enabled':0}).status_code==200
