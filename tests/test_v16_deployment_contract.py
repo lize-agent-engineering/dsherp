@@ -22,7 +22,7 @@ def test_all_deployment_entrypoints_use_only_the_pinned_v16_images():
     ]
     sources = [path.read_text() for path in paths]
     assert not [path.relative_to(ROOT).as_posix() for path, source in zip(paths, sources) if ERP_V15 in source]
-    assert sum(source.count(ERP_V16) for source in sources) == 10
+    assert sum(source.count(ERP_V16) for source in sources) == 11
     assert DB_V15 not in COMPOSE
     assert COMPOSE.count(DB_V16) == 1
 
@@ -49,6 +49,18 @@ def test_retired_realtime_and_queue_services_are_absent():
     for service in ("websocket", "worker", "platform-websocket"):
         assert not re.search(rf"^  {service}:$", COMPOSE, re.MULTILINE)
     assert "profiles: [legacy]" not in COMPOSE
+
+
+def test_scheduled_profile_pairs_the_scheduler_with_one_queue_consumer():
+    scheduler = COMPOSE.split("  scheduler:\n",1)[1].split("\n  scheduler-worker:\n",1)[0]
+    worker = COMPOSE.split("  scheduler-worker:\n",1)[1].split("\n  daily-provision:\n",1)[0]
+    assert "profiles: [scheduled]" in scheduler
+    assert 'command: ["bench", "schedule"]' in scheduler
+    assert "profiles: [scheduled]" in worker
+    assert 'command: ["bench", "worker", "--queue", "short,default,long"]' in worker
+    assert "v16-sites:/home/frappe/frappe-bench/sites" in worker
+    assert "v16-logs:/home/frappe/frappe-bench/logs" in worker
+    assert "../frappe_app:/opt/dsherp-frappe:ro" in worker
 
 
 def test_beta_backend_stays_internal_and_uses_the_separate_preview_entry():
