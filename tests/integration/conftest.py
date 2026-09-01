@@ -7,6 +7,17 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 import pytest
 
+from infra.v16_integration_queue import purge_validation_jobs
+
+
+@pytest.fixture(scope="session", autouse=True)
+def validation_queue_hygiene():
+    purge_validation_jobs()
+    try:
+        yield
+    finally:
+        purge_validation_jobs()
+
 
 @pytest.fixture
 def erp():
