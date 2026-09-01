@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 from tempfile import TemporaryDirectory
 import time
@@ -105,12 +106,17 @@ def worker_pid(path):
             pass
 
 
+def exit_on_signal(_signum, _frame):
+    raise SystemExit(0)
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--profile',type=Path,required=True)
     parser.add_argument('--provider-env',type=Path,required=True)
     parser.add_argument('--once',action='store_true')
     args=parser.parse_args()
+    signal.signal(signal.SIGTERM,exit_on_signal)
     load_settings(args.provider_env)
     profile=json.loads(args.profile.read_text())
     business=profile_business(profile)

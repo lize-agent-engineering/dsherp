@@ -15,6 +15,7 @@
   "dsherp/runtime_revision.py",
   "infra/compose.validation.yml",
   "infra/prepare_agent_runtime.sh",
+  "infra/render_context_worker_launch_agent.py",
   "dsherp/runtime_host.py",
   "dsherp/context_container.py",
   "dsherp/context_worker.py",

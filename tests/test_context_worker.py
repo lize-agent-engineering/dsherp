@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import httpx
 import pytest
 from dsherp.context_mcp import BusinessRuntimeError
@@ -103,4 +104,14 @@ def test_worker_pid_file_replaces_stale_value_and_is_removed_on_exit(tmp_path):
     with worker.worker_pid(target):
         assert target.read_text()==str(os.getpid())
         assert target.stat().st_mode & 0o777==0o600
+    assert not target.exists()
+
+
+def test_sigterm_exits_through_worker_pid_cleanup(tmp_path):
+    target=tmp_path/'worker.pid'
+    with pytest.raises(SystemExit) as caught:
+        with worker.worker_pid(target):
+            assert target.exists()
+            worker.exit_on_signal(signal.SIGTERM,None)
+    assert caught.value.code==0
     assert not target.exists()

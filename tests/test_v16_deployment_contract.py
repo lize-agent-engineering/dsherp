@@ -1,5 +1,6 @@
 """Static deployment guards for the atomic v16 runtime switch."""
 import json
+import plistlib
 import re
 from pathlib import Path
 
@@ -83,4 +84,30 @@ def test_runtime_revision_covers_deployment_control_files():
         "dsherp/runtime_host.py",
         "dsherp/context_container.py",
         "dsherp/context_worker.py",
+        "infra/render_context_worker_launch_agent.py",
     } <= files
+
+
+def test_context_worker_launch_agent_is_reproducible_and_self_restarting(tmp_path):
+    from infra.render_context_worker_launch_agent import render_launch_agent
+
+    target = render_launch_agent(ROOT, target=tmp_path / "worker.plist")
+    launch_agent = plistlib.loads(target.read_bytes())
+    assert launch_agent["Label"] == "com.dsherp.agent-worker-v16"
+    assert launch_agent["WorkingDirectory"] == str(ROOT)
+    assert launch_agent["ProgramArguments"] == [
+        str(ROOT / ".venv/bin/python"),
+        "-m",
+        "dsherp.context_worker",
+        "--profile",
+        str(ROOT / ".runtime/context-worker.json"),
+        "--provider-env",
+        str(ROOT / ".env"),
+    ]
+    assert launch_agent["RunAtLoad"] is True
+    assert launch_agent["KeepAlive"] is True
+    assert launch_agent["ThrottleInterval"] == 10
+    assert launch_agent["EnvironmentVariables"]["PATH"].split(":") == [
+        "/usr/local/bin","/opt/homebrew/bin","/usr/bin","/bin","/usr/sbin","/sbin",
+    ]
+    assert target.stat().st_mode & 0o777 == 0o600
