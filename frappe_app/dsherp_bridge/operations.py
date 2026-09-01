@@ -140,12 +140,12 @@ def confirm(proposal_id, digest, request_id):
         # The winning request may commit while MariaDB rejects the waiter's
         # stale locked-row snapshot. Read only the durable intent; never replay.
         frappe.db.rollback()
-        proposal=frappe.get_doc('DS Operation Proposal',proposal_id)
-        if not isinstance(digest,str) or digest!=proposal.digest:
+        public=get_proposal(proposal_id)
+        if not isinstance(digest,str) or digest!=public['digest']:
             frappe.throw('确认内容不匹配，请重新核对提案')
         existing=frappe.db.get_value('DS Execution Record',{'proposal':proposal_id},'name')
         if not existing:raise
-        return _execution_result(frappe.get_doc('DS Execution Record',existing))
+        return public['execution']
     if existing:
         return public['execution']
     if proposal.model_run and frappe.db.get_value('DS Model Run',proposal.model_run,'status',for_update=True)!='Succeeded':

@@ -59,6 +59,24 @@ try:
     repeated=confirm_preview(proposal['id'],proposal['digest'],'different-id')
     assert repeated['execution_id']==result['execution_id']
     assert frappe.db.count('DS Configuration Execution',{'confirmation':proposal['id']})==1
+    native_get_doc=frappe.get_doc
+    def assert_deadlock_recovery_rejects(current_user,candidate_digest,error_type):
+        frappe.set_user(current_user);deadlocked=[False]
+        def deadlock_waiter(doctype,*args,**kwargs):
+            if doctype=='DS Configuration Confirmation' and kwargs.get('for_update') and not deadlocked[0]:
+                deadlocked[0]=True
+                raise frappe.QueryDeadlockError('Synthetic configuration locked-row snapshot')
+            return native_get_doc(doctype,*args,**kwargs)
+        frappe.get_doc=deadlock_waiter
+        try:
+            try:
+                confirm_preview(proposal['id'],candidate_digest,'deadlock-authorization')
+                raise AssertionError('deadlock recovery bypassed confirmation authorization')
+            except error_type:pass
+        finally:frappe.get_doc=native_get_doc
+    assert_deadlock_recovery_rejects('dsherp-preview@example.invalid','forged',frappe.ValidationError)
+    assert_deadlock_recovery_rejects('beta-reader@example.invalid',proposal['digest'],frappe.PermissionError)
+    frappe.set_user('dsherp-preview@example.invalid')
     from dsherp_bridge.configuration_execution import get_confirmation
     assert get_confirmation(proposal['id'])['execution']['status']=='Succeeded'
 finally:

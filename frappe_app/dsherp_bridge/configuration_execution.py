@@ -183,9 +183,11 @@ def _confirm(proposal_id,digest,request_id,purpose):
         # winner commits.  Observe the winner's durable intent; never execute
         # the configuration a second time.
         frappe.db.rollback()
+        public=get_confirmation(proposal_id)
+        if digest!=public['digest']:frappe.throw('配置确认摘要不匹配')
         existing=frappe.db.get_value('DS Configuration Execution',{'confirmation':proposal_id},'name')
         if not existing:raise
-        return _result(frappe.get_doc('DS Configuration Execution',existing))
+        return public['execution']
     if existing:return _result(frappe.get_doc('DS Configuration Execution',existing,for_update=True))
     if not public['execution_ready']:frappe.throw('来源运行尚未成功完成，不能应用此配置')
     if confirmation.status!='Pending' or confirmation.expires_at<=now_datetime():frappe.throw('配置确认已结束或过期')
