@@ -1,4 +1,5 @@
-"""Provision the idempotent synthetic manufacturing fixture on the alpha Site."""
+"""Provision the idempotent synthetic manufacturing fixture on an allowlisted Site."""
+import argparse
 import json
 from pathlib import Path
 import subprocess
@@ -7,6 +8,14 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ["docker", "compose", "-f", "infra/compose.validation.yml"]
+SITE_SERVICES = {
+    "dsherp-validation.localhost": "backend",
+    "dsherp-daily.localhost": "backend",
+}
+SITE_OPERATORS = {
+    "dsherp-validation.localhost": "dsherp-writer@example.invalid",
+    "dsherp-daily.localhost": "daily-operator@example.invalid",
+}
 
 SITE_SCRIPT = r'''
 import json
@@ -18,7 +27,8 @@ from frappe.utils import flt
 
 
 RUN_MODE = globals().get('RUN_MODE', 'provision')
-SITE = 'dsherp-validation.localhost'
+SITE = globals()['SITE']
+OPERATOR = globals()['OPERATOR']
 ERP_VERSION = '15.119.3'
 FRAPPE_VERSION = '15.118.0'
 WAREHOUSE_LABELS = {
@@ -160,7 +170,7 @@ def ensure_item(
         'doctype': 'Item',
         **expected,
         'valuation_rate': VALUATION_RATE,
-        'description': f'{item_name}；仅用于隔离 alpha 验收。',
+        'description': f'{item_name}；仅用于隔离合成验收。',
     })
     doc.insert(set_name=item_code)
     return doc
@@ -537,12 +547,12 @@ try:
 
     company = exactly_one(
         frappe.get_all('Company', fields=['name', 'abbr', 'default_currency', 'country', 'cost_center']),
-        'alpha Company',
+        'Site Company',
     )
-    require(company.abbr, 'Alpha Company abbreviation is missing')
-    require(company.default_currency, 'Alpha Company currency is missing')
-    require(company.country and frappe.db.exists('Country', company.country), 'Alpha Company country is invalid')
-    require(company.cost_center and frappe.db.exists('Cost Center', company.cost_center), 'Alpha Company cost center is invalid')
+    require(company.abbr, 'Site Company abbreviation is missing')
+    require(company.default_currency, 'Site Company currency is missing')
+    require(company.country and frappe.db.exists('Country', company.country), 'Site Company country is invalid')
+    require(company.cost_center and frappe.db.exists('Cost Center', company.cost_center), 'Site Company cost center is invalid')
 
     stock_uom = frappe.db.get_single_value('Stock Settings', 'stock_uom')
     require(stock_uom and frappe.db.get_value('UOM', stock_uom, 'enabled'), 'Stock Settings UOM is missing or disabled')
@@ -564,7 +574,7 @@ try:
     )
     require(
         frappe.db.get_single_value('Buying Settings', 'supp_master_name') == 'Supplier Name',
-        'Supplier naming must use Supplier Name on alpha',
+        'Supplier naming must use Supplier Name on the selected Site',
     )
     root_warehouse = exactly_one(
         frappe.get_all(
@@ -591,6 +601,15 @@ try:
             company, supplier_group, finished_group, service_group, stock_uom
         )
     else:
+        operator = frappe.get_doc('User', OPERATOR)
+        required_roles = {
+            'Manufacturing User', 'Purchase User', 'Purchase Master Manager', 'Stock User',
+        }
+        existing_roles = {row.role for row in operator.roles}
+        for role in sorted(required_roles - existing_roles):
+            operator.append('roles', {'role': role})
+        if required_roles - existing_roles:
+            operator.save()
         empty_counts = {
             'warehouses': 0, 'suppliers': 0, 'items': 0, 'boms': 0,
             'reconciliations': 0, 'stock_ledger_entries': 0,
@@ -642,19 +661,34 @@ finally:
 
 
 def main():
-    arguments = sys.argv[1:]
-    if not arguments:
-        mode = "provision"
-    elif arguments == ["--verify-fresh"]:
-        mode = "verify-fresh"
-    elif arguments == ["--verify-conflicts"]:
-        mode = "verify-conflicts"
-    else:
-        raise SystemExit("Usage: provision_manufacturing_fixture.py [--verify-fresh|--verify-conflicts]")
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--site",
+        choices=tuple(SITE_SERVICES),
+        default="dsherp-validation.localhost",
+    )
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--verify-fresh", action="store_true")
+    modes.add_argument("--verify-conflicts", action="store_true")
+    arguments = parser.parse_args()
+    mode = (
+        "verify-fresh" if arguments.verify_fresh
+        else "verify-conflicts" if arguments.verify_conflicts
+        else "provision"
+    )
+    site = arguments.site
     result = subprocess.run(
-        [*COMPOSE, "exec", "-T", "backend", "/home/frappe/frappe-bench/env/bin/python", "-"],
+        [
+            *COMPOSE, "exec", "-T", SITE_SERVICES[site],
+            "/home/frappe/frappe-bench/env/bin/python", "-",
+        ],
         cwd=ROOT,
-        input=f"RUN_MODE = {mode!r}\n" + SITE_SCRIPT,
+        input=(
+            f"RUN_MODE = {mode!r}\n"
+            f"SITE = {site!r}\n"
+            f"OPERATOR = {SITE_OPERATORS[site]!r}\n"
+            + SITE_SCRIPT
+        ),
         text=True,
         capture_output=True,
         timeout=180,

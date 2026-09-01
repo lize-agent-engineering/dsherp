@@ -13,6 +13,10 @@ SITE_SERVICES = {
     "dsherp-beta.localhost": "beta-backend",
     "dsherp-daily.localhost": "backend",
 }
+MANUFACTURING_SITES = {
+    "dsherp-validation.localhost",
+    "dsherp-daily.localhost",
+}
 
 SITE_SCRIPT = r'''
 import json
@@ -277,14 +281,12 @@ def ensure_policy(expected):
         doc = frappe.get_doc('DS Doctype Policy', name)
         actual = {**policy_values(doc), 'routes': policy_routes(doc)}
         if (
-            SITE == 'dsherp-validation.localhost'
-            and expected == BASE_POLICIES[2]
+            expected == BASE_POLICIES[2]
             and actual == ALPHA_SALES_ORDER_POLICY
         ):
             return expected
         if (
-            SITE == 'dsherp-validation.localhost'
-            and expected == ALPHA_SALES_ORDER_POLICY
+            expected == ALPHA_SALES_ORDER_POLICY
             and actual == BASE_POLICIES[2]
         ):
             doc.set('routes', [dict(route) for route in expected['routes']])
@@ -311,8 +313,10 @@ try:
     require(frappe.local.site == SITE, 'Unexpected Site: ' + str(frappe.local.site))
     require(POLICY_SET in ('base', 'manufacturing'), 'Unsupported policy set: ' + POLICY_SET)
     require(
-        POLICY_SET != 'manufacturing' or SITE == 'dsherp-validation.localhost',
-        'Manufacturing policy set is alpha-only in Phase 2',
+        POLICY_SET != 'manufacturing' or SITE in {
+            'dsherp-validation.localhost', 'dsherp-daily.localhost'
+        },
+        'Manufacturing policy set is unavailable on this Site',
     )
     require(frappe.db.exists('DocType', 'DS Doctype Policy'), 'DS Doctype Policy schema is missing')
     require(
@@ -379,8 +383,8 @@ def main():
     parser.add_argument("--verify-conflict", action="store_true")
     arguments = parser.parse_args()
     site = arguments.site
-    if arguments.policy_set == "manufacturing" and site != "dsherp-validation.localhost":
-        parser.error("manufacturing policy set is alpha-only in Phase 2")
+    if arguments.policy_set == "manufacturing" and site not in MANUFACTURING_SITES:
+        parser.error("manufacturing policy set is unavailable on this Site")
     service = SITE_SERVICES[site]
     mode = "verify-conflict" if arguments.verify_conflict else "provision"
     result = subprocess.run(

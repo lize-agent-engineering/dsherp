@@ -29,6 +29,37 @@ def snapshot(site):
     os.chdir(ROOT / 'sites')
     frappe.init(site=site)
     frappe.connect()
+    abbreviation = frappe.db.get_value('Company', 'DSHERP 日常合成企业', 'abbr')
+    warehouse_names = [
+        f'DSHERP 制造测试合成{label} - {abbreviation}'
+        for label in ('仓库', '原料仓', '在制仓', '委外仓', '成品仓')
+    ]
+    policies = []
+    for name in frappe.get_all('DS Doctype Policy', pluck='name', order_by='target_doctype'):
+        policy = frappe.get_doc('DS Doctype Policy', name)
+        policies.append({
+            'target_doctype': policy.target_doctype,
+            'enabled': policy.enabled,
+            'allow_read': policy.allow_read,
+            'allow_create': policy.allow_create,
+            'allow_update': policy.allow_update,
+            'allow_submit': policy.allow_submit,
+            'allow_cancel': policy.allow_cancel,
+            'allow_fill': policy.allow_fill,
+            'company_scope': policy.company_scope,
+            'routes': [
+                {
+                    'route_name': row.route_name,
+                    'method_path': row.method_path,
+                    'target_doctype': row.target_doctype,
+                }
+                for row in policy.routes
+            ],
+        })
+    bom = frappe.get_doc('BOM', 'BOM-DSHERP-MFG-SYN-FG-001')
+    reconciliation = frappe.get_doc(
+        'Stock Reconciliation', 'DSHERP-MFG-SYN-OPENING-STOCK'
+    )
     report = {
         'apps': sorted(frappe.get_installed_apps()),
         'setup_complete': int(frappe.db.get_single_value('System Settings', 'setup_complete') or 0),
@@ -36,7 +67,75 @@ def snapshot(site):
         'items': sorted(frappe.get_all('Item', pluck='name')),
         'customers': sorted(frappe.get_all('Customer', pluck='customer_name')),
         'sales_orders': sorted(frappe.get_all('Sales Order', pluck='name')),
-        'operator_exists': bool(frappe.db.exists('User', 'daily-operator@example.invalid')),
+        'operator_roles': sorted(
+            row.role
+            for row in frappe.get_doc('User', 'daily-operator@example.invalid').roles
+        ),
+        'fixture_warehouses': [
+            dict(row)
+            for row in frappe.get_all(
+                'Warehouse', filters={'name': ['in', warehouse_names]},
+                fields=['name', 'warehouse_name', 'parent_warehouse', 'is_group', 'company'],
+                order_by='name',
+            )
+        ],
+        'fixture_supplier': frappe.get_all(
+            'Supplier', filters={'name': 'DSHERP 制造测试合成供应商'},
+            fields=['name', 'supplier_name', 'supplier_group', 'supplier_type'],
+        ),
+        'fixture_bom': {
+            'name': bom.name,
+            'item': bom.item,
+            'company': bom.company,
+            'docstatus': bom.docstatus,
+            'is_active': bom.is_active,
+            'is_default': bom.is_default,
+            'quantity': float(bom.quantity),
+            'items': [
+                {'item_code': row.item_code, 'qty': float(row.qty), 'uom': row.uom}
+                for row in bom.items
+            ],
+        },
+        'fixture_reconciliation': {
+            'name': reconciliation.name,
+            'company': reconciliation.company,
+            'purpose': reconciliation.purpose,
+            'docstatus': reconciliation.docstatus,
+            'posting_date': str(reconciliation.posting_date),
+            'items': [
+                {
+                    'item_code': row.item_code,
+                    'warehouse': row.warehouse,
+                    'qty': float(row.qty),
+                    'valuation_rate': float(row.valuation_rate),
+                }
+                for row in reconciliation.items
+            ],
+        },
+        'raw_qty': float(frappe.db.get_value(
+            'Bin',
+            {
+                'item_code': 'DSHERP-MFG-SYN-RM',
+                'warehouse': f'DSHERP 制造测试合成原料仓 - {abbreviation}',
+            },
+            'actual_qty',
+        ) or 0),
+        'policies': policies,
+        'business_documents': {
+            doctype: sorted(frappe.get_all(doctype, pluck='name'))
+            for doctype in (
+                'Sales Order', 'Work Order', 'Stock Entry', 'Purchase Order',
+                'Purchase Receipt', 'Subcontracting Order',
+                'Subcontracting Receipt', 'Delivery Note',
+            )
+        },
+        'audit_counts': {
+            doctype: frappe.db.count(doctype)
+            for doctype in (
+                'DS Conversation', 'DS Model Run', 'DS Operation Proposal',
+                'DS Execution Record',
+            )
+        },
     }
     frappe.destroy()
     return report
@@ -56,7 +155,8 @@ database = databases[-1]
 prefix = database.name.removesuffix('-database.sql.gz')
 public = BACKUPS / f'{prefix}-files.tgz'
 private = BACKUPS / f'{prefix}-private-files.tgz'
-for artifact in (database, public, private):
+config = BACKUPS / f'{prefix}-site_config_backup.json'
+for artifact in (database, config, public, private):
     if not artifact.is_file() or artifact.stat().st_size == 0:
         raise SystemExit(f'Missing or empty backup artifact: {artifact.name}')
 
@@ -84,4 +184,9 @@ run([
     'bench', 'drop-site', RESTORED, '--force', '--no-backup',
     '--db-root-username', 'root', '--db-root-password', root_password,
 ])
-print(json.dumps({'site': RESTORED, **report}, sort_keys=True))
+print(json.dumps({
+    'site': RESTORED,
+    'backup_prefix': prefix,
+    'backup_artifacts': [database.name, config.name, public.name, private.name],
+    **report,
+}, sort_keys=True))

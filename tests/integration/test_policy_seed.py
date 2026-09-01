@@ -398,7 +398,9 @@ finally:
 def test_policy_seed_creates_or_verifies_exact_legacy_rows(site, service):
     result = _provision(site)
     expected_rows = (
-        EXPECTED_ALL_ROWS if site == "dsherp-validation.localhost" else EXPECTED_ROWS
+        EXPECTED_ALL_ROWS
+        if site in ("dsherp-validation.localhost", "dsherp-daily.localhost")
+        else EXPECTED_ROWS
     )
 
     assert result == {
@@ -412,7 +414,9 @@ def test_policy_seed_creates_or_verifies_exact_legacy_rows(site, service):
 def test_policy_seed_second_run_is_idempotent(site, service):
     first_result = _provision(site)
     expected_rows = (
-        EXPECTED_ALL_ROWS if site == "dsherp-validation.localhost" else EXPECTED_ROWS
+        EXPECTED_ALL_ROWS
+        if site in ("dsherp-validation.localhost", "dsherp-daily.localhost")
+        else EXPECTED_ROWS
     )
     before = _read_policy_rows(site, service)
     second_result = _provision(site)
@@ -427,7 +431,9 @@ def test_policy_seed_fast_fails_on_conflicting_governance(site, service):
     _provision(site)
     result = _provision(site, "--verify-conflict")
     expected_rows = (
-        EXPECTED_ALL_ROWS if site == "dsherp-validation.localhost" else EXPECTED_ROWS
+        EXPECTED_ALL_ROWS
+        if site in ("dsherp-validation.localhost", "dsherp-daily.localhost")
+        else EXPECTED_ROWS
     )
 
     assert result == {
@@ -573,25 +579,24 @@ def test_manufacturing_policy_set_fast_fails_and_rolls_back_conflict():
     ) == EXPECTED_ALL_ROWS
 
 
-def test_manufacturing_policy_set_is_not_available_for_beta_or_daily():
-    for site in ("dsherp-beta.localhost", "dsherp-daily.localhost"):
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(PROVISIONER),
-                "--site",
-                site,
-                "--policy-set",
-                "manufacturing",
-            ],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            timeout=10,
-        )
+def test_manufacturing_policy_set_is_not_available_for_beta():
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(PROVISIONER),
+            "--site",
+            "dsherp-beta.localhost",
+            "--policy-set",
+            "manufacturing",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
 
-        assert result.returncode != 0
-        assert result.stdout == ""
+    assert result.returncode != 0
+    assert result.stdout == ""
 
 
 @pytest.mark.parametrize(

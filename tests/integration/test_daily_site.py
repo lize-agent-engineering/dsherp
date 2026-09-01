@@ -12,8 +12,9 @@ def test_daily_site_has_one_explicitly_synthetic_enterprise_and_no_extra_standin
 import json,os,frappe
 os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-daily.localhost');frappe.connect()
 operator='daily-operator@example.invalid';frappe.set_user(operator)
-checks={f'{d}:{p}':bool(frappe.has_permission(d,p)) for d,p in (('Item','read'),('Item','write'),('Customer','create'),('Customer','write'),('Sales Order','create'),('Sales Order','write'),('Sales Order','submit'),('Sales Order','cancel'))}
-print(json.dumps({'apps':sorted(frappe.get_installed_apps()),'setup_complete':int(frappe.db.get_single_value('System Settings','setup_complete') or 0),'companies':frappe.get_all('Company',pluck='name'),'items':frappe.get_all('Item',pluck='name'),'customers':frappe.get_all('Customer',pluck='customer_name'),'sales_orders':frappe.db.count('Sales Order'),'roles':sorted(frappe.get_roles()),'permissions':checks}))
+checks={f'{d}:{p}':bool(frappe.has_permission(d,p)) for d,p in (('Item','read'),('Item','write'),('Customer','create'),('Customer','write'),('Sales Order','create'),('Sales Order','write'),('Sales Order','submit'),('Sales Order','cancel'),('BOM','read'),('Bin','read'),('Warehouse','read'),('Work Order','create'),('Work Order','submit'),('Stock Entry','create'),('Stock Entry','submit'),('Purchase Order','create'),('Purchase Order','submit'),('Purchase Receipt','create'),('Purchase Receipt','submit'),('Subcontracting Order','create'),('Subcontracting Order','submit'),('Subcontracting Receipt','create'),('Subcontracting Receipt','submit'),('Delivery Note','create'),('Delivery Note','submit'))}
+fixture_warehouses=frappe.get_all('Warehouse',filters={'warehouse_name':['like','DSHERP 制造测试合成%']},pluck='name')
+print(json.dumps({'apps':sorted(frappe.get_installed_apps()),'setup_complete':int(frappe.db.get_single_value('System Settings','setup_complete') or 0),'companies':frappe.get_all('Company',pluck='name'),'items':sorted(frappe.get_all('Item',pluck='name')),'customers':frappe.get_all('Customer',pluck='customer_name'),'sales_orders':frappe.db.count('Sales Order'),'roles':sorted(frappe.get_roles()),'permissions':checks,'fixture_warehouses':sorted(fixture_warehouses),'fixture_supplier':frappe.db.count('Supplier',{'name':'DSHERP 制造测试合成供应商'}),'fixture_bom':frappe.db.count('BOM',{'name':'BOM-DSHERP-MFG-SYN-FG-001','docstatus':1}),'fixture_reconciliation':frappe.db.count('Stock Reconciliation',{'name':'DSHERP-MFG-SYN-OPENING-STOCK','docstatus':1}),'raw_qty':frappe.db.get_value('Bin',{'item_code':'DSHERP-MFG-SYN-RM','warehouse':'DSHERP 制造测试合成原料仓 - DSE'},'actual_qty') or 0,'policy_rows':frappe.db.count('DS Doctype Policy'),'policy_routes':frappe.db.count('DS Doctype Policy Route')}))
 frappe.destroy()
 '''
     result = subprocess.run(
@@ -25,11 +26,32 @@ frappe.destroy()
     assert {'frappe', 'erpnext', 'dsherp_bridge'}.issubset(state['apps'])
     assert state['setup_complete'] == 1
     assert state['companies'] == ['DSHERP 日常合成企业']
-    assert state['items'] == ['DAILY-AGENT-ITEM']
+    assert state['items'] == [
+        'DAILY-AGENT-ITEM',
+        'DSHERP-MFG-SYN-FG',
+        'DSHERP-MFG-SYN-RM',
+        'DSHERP-MFG-SYN-SERVICE',
+    ]
     assert state['customers'] == ['日常 Agent 合成客户']
     assert state['sales_orders'] == 0
-    assert {'Sales User', 'Sales Manager', 'Stock Manager', 'Item Manager'}.issubset(state['roles'])
+    assert {
+        'Sales User', 'Sales Manager', 'Stock Manager', 'Item Manager',
+        'Manufacturing User', 'Purchase User', 'Purchase Master Manager', 'Stock User',
+    }.issubset(state['roles'])
     assert all(state['permissions'].values())
+    assert state['fixture_warehouses'] == [
+        'DSHERP 制造测试合成仓库 - DSE',
+        'DSHERP 制造测试合成原料仓 - DSE',
+        'DSHERP 制造测试合成在制仓 - DSE',
+        'DSHERP 制造测试合成委外仓 - DSE',
+        'DSHERP 制造测试合成成品仓 - DSE',
+    ]
+    assert state['fixture_supplier'] == 1
+    assert state['fixture_bom'] == 1
+    assert state['fixture_reconciliation'] == 1
+    assert state['raw_qty'] == 100
+    assert state['policy_rows'] == 14
+    assert state['policy_routes'] == 7
 
     services = subprocess.run([*COMPOSE, 'ps', '--services', '--status', 'running'], text=True, capture_output=True, check=True).stdout.splitlines()
     assert 'daily-provision' not in services
