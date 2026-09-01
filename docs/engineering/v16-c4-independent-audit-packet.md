@@ -7,10 +7,11 @@
 ## 1. 审计对象与边界
 
 - 原始执行证据提交：`d64a2f98156cdc77e004c734f2a7c32d10f2e8b7`；Claude 首轮和第二轮审计结论均为 C4 BLOCKED。
-- 第二轮整改代码/测试固定提交：`3eb72e569c120748054747bb7ebca86b4a09cdf9`。首轮五项 Important 已被第二轮审计确认修复；本轮继续修复共享队列、宿主 worker 启动契约和锁等待超时。后续文档提交只记录审计与整改事实；若产品代码、测试或部署契约再变化，必须再次更新固定对象。
+- 第三轮起点为第二轮整改提交 `3eb72e569c120748054747bb7ebca86b4a09cdf9`。第三轮独立自动化、真实浏览器与既有模型回读通过后，新发现 operation/configuration 并发恢复身份校验缺口；核心修复固定提交为 `11d22ed`，第四轮聚焦复审确认两项均 FIXED，且无新的 Critical 或阻断级 Important。
+- 当前冷静期部署 HEAD 为 `1f1b46c`，相对核心放行对象新增 scheduled profile 的队列 worker。该变化须在三天冷静期完成后连同证据做最终独立审计；本文件当前只记录审计入口，不把 Day 0 外推成整体 C4 通过。
 - 授权记录：`390438a03a754463b6cf2e3d4b9163564c054cd0`；OAuth 修复：`d94efcee002216ea7443b95e5ba71d4d7b3454a8`；浏览器证据：`28ea7624b53530d177d6106f05491eff3b4daf4f`；真实模型证据：`d64a2f98156cdc77e004c734f2a7c32d10f2e8b7`。
 - 审计环境仅为本机隔离合成四站，不是生产环境，不包含生产租户或真实企业数据。
-- 复审必须同时检查原始证据、`d64a2f9..ccce8a1` 首轮整改和 `ccce8a1..3eb72e5` 第二轮整改，不能只重跑绿灯而跳过两轮审计根因与修复。
+- 最终复审必须同时检查原始证据、`d64a2f9..ccce8a1` 首轮整改、`ccce8a1..3eb72e5` 第二轮整改、`3eb72e5..11d22ed` 第三轮阻断修复及 `11d22ed..HEAD` 冷静期部署变化，不能只重跑绿灯而跳过根因与修复。
 - v15 卷、冷静期回滚材料和本地凭证均不得修改或删除。任何真实模型补跑都需要新的费用授权；本审计默认只读核对既有运行。
 
 先固定对象并确认工作副本：
@@ -18,9 +19,9 @@
 ```bash
 git status --short
 git show -s --format='%H %P %cI %s' \
-  3eb72e5 64a26f5 973879f 982011a 00f3ff3 ccce8a1 d64a2f9
-git diff --check d64a2f9..3eb72e5
-git diff --stat d64a2f9..3eb72e5
+  HEAD 1f1b46c 11d22ed 3eb72e5 64a26f5 973879f 982011a 00f3ff3 ccce8a1 d64a2f9
+git diff --check d64a2f9..HEAD
+git diff --stat d64a2f9..HEAD
 ```
 
 审计应在独立 checkout/worktree 执行，不应在执行方当前工作副本上签发结论。
@@ -208,6 +209,8 @@ launchctl bootstrap "gui/$(id -u)" .runtime/com.dsherp.agent-worker-v16.plist
 
 ## 8. 冷静期与 C5 边界
 
-C4 技术审计通过后仍不能立即进入 C5。daily 必须跨若干自然日留下 scheduler 正常运行和每日四件套备份可恢复证据；每一天至少记录备份前缀、四件大小、`verify_daily_backup.py` 退出 0、一次性恢复 Site 已删除及当天异常。当前只有 2026-09-01 基线，scheduler 已停止且没有跨日自动任务，**冷静期尚未开始，也未满足若干天要求**。
+C4 核心技术和浏览器审计通过后仍不能立即进入 C5。daily 必须跨若干自然日留下 scheduler 正常运行和每日四件套备份可恢复证据；每一天至少记录备份前缀、四件大小、`verify_daily_backup.py` 退出 0、一次性恢复 Site 已删除及当天异常。
+
+冷静期已于 2026-09-01 启动，但该日只计 Day 0，不计完整自然日：alpha scheduler disabled、daily enabled；scheduled profile 的 scheduler 与 worker 在线；首个自然周期 18 条 Scheduled Job Log 全部 Complete，队列排空；备份 `20260901_224857-dsherp-daily_localhost` 四件套恢复验证退出 0，一次性恢复 Site 已删除。完整工作记录位于 `work/v16-cooldown/2026-09-01-day0.md`。通过门仍是 2026-09-02、2026-09-03、2026-09-04 三个连续完整自然日，且结束后须审计当前 HEAD。
 
 冷静期完成前不得更新“迁移完成”状态，不得归档或删除 v15。即使冷静期完成，v15 移除仍需单独用户授权、逐卷 dry-run 和最终确认。

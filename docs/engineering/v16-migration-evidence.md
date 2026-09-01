@@ -6,9 +6,9 @@
 
 ## 结论边界
 
-本记录只证明本机隔离合成环境中的版本切换、四站 fresh provision、自动化回归、固定 Runtime 本地模型替身链、制造行为重验和本轮应用内真实浏览器 UI 验收。它不证明生产部署、生产租户可用或真实 DeepSeek 页面效果。
+本记录只证明本机隔离合成环境中的版本切换、四站 fresh provision、自动化回归、固定 Runtime 本地模型替身链、制造行为重验、应用内真实浏览器 UI 验收和经授权的真实 DeepSeek 只读页面矩阵。它不证明生产部署或生产租户可用。
 
-截至本记录，C0–C3 已由执行方完成，T4.1 已执行并回读清理结果，T4.2 浏览器矩阵和 T4.3 真实 DeepSeek 只读矩阵均已完成并落档。Claude 首轮独立审计已明确判定 C4 BLOCKED；执行方已完成首轮整改并重跑全量门，但整改结果仍待 Claude 复审和独立浏览器复验。若干天冷静期、C5 文档全量更新与 v15 移除仍未完成，不能以本文件的执行方自报替代放行。
+截至本记录，C0–C3、T4.1、T4.2 和 T4.3 均已完成并落档。Claude 第三轮独立审计实际重跑自动化、操作真实浏览器并回读既有真实模型证据，在发现两项并发确认恢复身份校验缺口后没有放行；执行方以 TDD 修复，第四轮聚焦复审确认两项阻断解除且无新的 Critical 或阻断级 Important。C4 核心技术与浏览器审计已经通过，但整体 C4 仍须等待 2026-09-02 至 2026-09-04 三个连续完整自然日的 daily 调度、备份与恢复冷静期证据。C5 文档全量更新与 v15 移除均未开始；v15 归档/删除仍需用户单独授权。
 
 ## 固定运行基线
 
@@ -179,12 +179,40 @@ Claude Code Opus 第二轮只读复审确认首轮五项 Important 均已修复�
 - alpha/daily 活跃 Run、七类制造单据、四类 Proposal/Execution 产物、Translation、`transcript-*` 用户均为 0；alpha/daily 原料仓分别以各自公司缩写回读为 `100/100`，在制/委外/成品仓均 `0/0`；beta Translation 和四类 Agent 产物为 0；
 - 未调用 DeepSeek，未修改 v15，scheduler 仍停止。
 
-以上仍是执行方整改证据。技术复审对象现为 `3eb72e569c120748054747bb7ebca86b4a09cdf9`，必须由 Claude 第三轮独立重跑；T4.2 仍需独立真实浏览器复验后才能裁决 C4。
+以上是第二轮后的执行方整改证据；第三、第四轮独立结果见下一节。
+
+## C4 第三、第四轮独立审计与核心放行
+
+Claude Code Opus 第三轮以 `3eb72e5` 为起点独立执行 T4.1、T4.2 真实浏览器矩阵、T4.3 既有运行只读回读和全量自动化。它确认四站登录、React 工作台/侧栏生命周期、企业身份隔离和真实模型来源成立；独立浏览器共保存并复核 8 张截图，其 sha256 如下：
+
+| 页面 | sha256 |
+| --- | --- |
+| platform 三企业入口 | `955bb9bea2ed907f2a6f20d2b99c756240f0a5c32844d184e8dde0af4c49af65` |
+| alpha 记录侧栏 | `29d28986228be6a44f1850a4b07bc9651c6582034c27aaa1def3fb19da33318c` |
+| alpha 工作台 / SSO 工作台 | `ef837264afe49cd4a7ab0275038efb399e854244c4e075afb36adf6863e8ca49` |
+| beta SSO 工作台 | `d24fb4bc8e08b8c7f961092e8f33bcc1bf40bdfd9ebeb9116e536a538314f1aa` |
+| daily SSO 工作台 | `19ef262814483fd4295305a12656c88e300711d92cf671e8eecaa5479a5438e2` |
+| 生命周期工作台 | `34ef2eb5eec161f9534f6d8824a23e10aee6a81d23db99f99962fd4a13acc319` |
+| 生命周期返回 Item | `18a9d5e6e4c39ec5f7bad8f577a78ff2cea6607e088b93b189a3a87b6a368c5f` |
+
+第三轮没有因页面通过而直接放行，而是发现两个阻断级 Important：operation 在 deadlock/timeout 后的 durable 回读绕过 owner/actor/access 复核；configuration 在 deadlock 后的 durable 回读绕过 owner/target 和 digest 复核。执行方先增加普通外部用户和伪造 digest 的确定性测试，旧实现稳定分别抛出错误结果，再让恢复分支复用公开的 `get_proposal` / `get_confirmation` 身份与摘要校验，提交 `11d22ed`。聚焦测试 11 项通过。
+
+修复目标冷启全量门为：集成 `165 passed in 702.09s`、非集成 `127 passed in 43.51s`、前端 `162 passed`、生产构建退出 0；四站队列和测试产物回到 0，正式 worker 恢复。Claude 第四轮独立比较修复前后代码，并重跑 11 项聚焦测试（`11 passed in 56.98s`），最终裁决 I-1、I-2 均为 FIXED，没有新的 Critical 或阻断级 Important，第三轮 C4 阻断解除。它记录的两个 Minor 均为 fail-closed 或测试覆盖粒度建议，不构成当前放行阻断。
+
+该结论只放行 C4 核心技术、浏览器与既有 provider 证据。随后为真实执行 Frappe 调度任务增加 `scheduler-worker` scheduled profile（提交 `1f1b46c`）；这是冷静期部署契约变化，仍须在跨日证据完成后连同当前 HEAD 做最终独立审计。
+
+## daily 冷静期启动
+
+冷静期采用保守口径：不计 2026-09-01 当天剩余时段，以 2026-09-02、2026-09-03、2026-09-04 三个连续完整自然日为通过条件。`v16-daily` 心跳检查已启用，每日 22:30 只对隔离 daily 站执行调度回读、四件套备份和一次性恢复验证；禁止调用 DeepSeek、接触生产数据或修改 v15。
+
+Day 0 于 2026-09-01 22:48 启动 scheduled profile：alpha scheduler 明确 disabled，daily scheduler 明确 enabled，`scheduler-worker` 在线并监听 `short,default,long`。22:52 首个自然调度周期产生 18 条 `Scheduled Job Log`，时间范围为 22:52:15–22:53:56，全部 `Complete`；worker 对应日志均为 `Job OK`，队列随后排空。
+
+同日备份前缀为 `20260901_224857-dsherp-daily_localhost`：database `1195439`、public files `10240`、private files `10240`、site config `483` 字节。第一次验证因误用系统 Python 缺少 `frappe` 而 fastfail，未创建恢复 Site；改用 control 容器内固定解释器后 `verify_daily_backup.py` 退出 0，源站与一次性恢复站快照一致，恢复 Site 随后删除。完整本地工作证据位于忽略提交的 `work/v16-cooldown/2026-09-01-day0.md`。
 
 ## 当前待完成门槛
 
-1. **C4 第三轮复审与独立浏览器复验**：前两轮 Claude 审计均为 BLOCKED；第二轮整改和最终全量门已完成但仍待独立复审。此前 Claude CLI 未操作真实浏览器，T4.2 不能放行。执行方已更新 [`v16-c4-independent-audit-packet.md`](v16-c4-independent-audit-packet.md)，该入口不构成审计结论。
-2. **daily 冷静期**：目前只有 2026-09-01 一套备份基线，scheduler 已停止且没有跨日自动任务；审计放行后才开始若干天调度与备份正常证据积累。
-3. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 归档、dry-run、用户确认和逐名删除尚未执行。
+1. **daily 跨日冷静期**：Day 0 已通过；仍须取得 2026-09-02 至 2026-09-04 三个连续完整自然日的 scheduler/worker、无未解释失败、四件套备份和一次性恢复证据。
+2. **当前 HEAD 最终独立审计**：核心代码对象 `11d22ed` 已放行；冷静期 worker 契约 `1f1b46c` 及后续证据仍须在三天结束后独立复核。
+3. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 归档、dry-run、用户单独确认和逐名删除尚未执行。
 
 因此当前不得宣称 v16 迁移整体完成、用户可见上线或可删除 v15。
