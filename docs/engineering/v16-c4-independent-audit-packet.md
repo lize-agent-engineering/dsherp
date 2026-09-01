@@ -8,7 +8,7 @@
 
 - 原始执行证据提交：`d64a2f98156cdc77e004c734f2a7c32d10f2e8b7`；Claude 首轮和第二轮审计结论均为 C4 BLOCKED。
 - 第三轮起点为第二轮整改提交 `3eb72e569c120748054747bb7ebca86b4a09cdf9`。第三轮独立自动化、真实浏览器与既有模型回读通过后，新发现 operation/configuration 并发恢复身份校验缺口；核心修复固定提交为 `11d22ed`，第四轮聚焦复审确认两项均 FIXED，且无新的 Critical 或阻断级 Important。
-- 当前冷静期部署代码为 `867048f`：`1f1b46c` 新增 scheduled profile 的队列 worker，Day 0 首轮又暴露 scheduler 128 MiB OOM 和 `restart: no`，随后以红绿测试把 scheduler 调整为 256 MiB，并让 scheduler/worker 使用 `unless-stopped`。这些变化须在三天冷静期完成后连同证据做最终独立审计；本文件当前只记录审计入口，不把 Day 0 外推成整体 C4 通过。
+- 当前冷静期部署代码为 `867048f`：`1f1b46c` 新增 scheduled profile 的队列 worker，Day 0 首轮又暴露 scheduler 128 MiB OOM 和 `restart: no`，随后以红绿测试把 scheduler 调整为 256 MiB，并让 scheduler/worker 使用 `unless-stopped`。用户于 2026-09-02 接受 24 小时加速门；这些变化须在连续运行满 24 小时、至少三次分时备份恢复通过后连同证据做最终独立审计。本文件不把 Day 0 或早间检查外推成整体 C4 通过。
 - 授权记录：`390438a03a754463b6cf2e3d4b9163564c054cd0`；OAuth 修复：`d94efcee002216ea7443b95e5ba71d4d7b3454a8`；浏览器证据：`28ea7624b53530d177d6106f05491eff3b4daf4f`；真实模型证据：`d64a2f98156cdc77e004c734f2a7c32d10f2e8b7`。
 - 审计环境仅为本机隔离合成四站，不是生产环境，不包含生产租户或真实企业数据。
 - 最终复审必须同时检查原始证据、`d64a2f9..ccce8a1` 首轮整改、`ccce8a1..3eb72e5` 第二轮整改、`3eb72e5..11d22ed` 第三轮阻断修复及 `11d22ed..HEAD` 冷静期部署变化，不能只重跑绿灯而跳过根因与修复。
@@ -209,8 +209,8 @@ launchctl bootstrap "gui/$(id -u)" .runtime/com.dsherp.agent-worker-v16.plist
 
 ## 8. 冷静期与 C5 边界
 
-C4 核心技术和浏览器审计通过后仍不能立即进入 C5。daily 必须跨若干自然日留下 scheduler 正常运行和每日四件套备份可恢复证据；每一天至少记录备份前缀、四件大小、`verify_daily_backup.py` 退出 0、一次性恢复 Site 已删除及当天异常。
+C4 核心技术和浏览器审计通过后仍不能立即进入 C5。daily 必须从最后一次受控恢复后连续运行满 24 小时，并在三个分时时点留下 scheduler 正常运行和四件套备份可恢复证据；每次至少记录备份前缀、四件大小、`verify_daily_backup.py` 退出 0、一次性恢复 Site 已删除及期间异常。
 
-冷静期已于 2026-09-01 启动，但该日只计 Day 0，不计完整自然日：alpha scheduler disabled、daily enabled；首轮任务全部 Complete 后 scheduler 曾因 128 MiB OOM 退出且没有自动恢复，执行方以 TDD 修复为 256 MiB 与 `unless-stopped`，重建后跨过下一轮和原故障窗口无 OOM。Day 0 累计 36 条 Scheduled Job Log 全部 Complete、队列排空；容器内部进程退出实测又证明 scheduler/worker 分别约 4 秒、1 秒自动恢复，重启后的下一组 6 条任务全部 `Job OK`。备份 `20260901_224857-dsherp-daily_localhost` 四件套恢复验证退出 0，一次性恢复 Site 已删除。完整工作记录位于 `work/v16-cooldown/2026-09-01-day0.md`。通过门仍是 2026-09-02、2026-09-03、2026-09-04 三个连续完整自然日，且结束后须审计当前 HEAD。
+冷静期已于 2026-09-01 启动：alpha scheduler disabled、daily enabled；首轮任务全部 Complete 后 scheduler 曾因 128 MiB OOM 退出且没有自动恢复，执行方以 TDD 修复为 256 MiB 与 `unless-stopped`，重建后跨过下一轮和原故障窗口无 OOM。Day 0 累计 36 条 Scheduled Job Log 全部 Complete、队列排空；容器内部进程退出实测又证明 scheduler/worker 分别约 4 秒、1 秒自动恢复，重启后的下一组 6 条任务全部 `Job OK`。备份 `20260901_224857-dsherp-daily_localhost` 四件套恢复验证退出 0，一次性恢复 Site 已删除。2026-09-02 早间检查时两进程已连续运行约 8 小时、183 条日志全部 Complete、队列为空，第二套备份 `20260902_071617-dsherp-daily_localhost` 恢复验证退出 0。工作记录分别位于 `work/v16-cooldown/2026-09-01-day0.md` 和 `work/v16-cooldown/2026-09-02-morning.md`。用户于 2026-09-02 接受的通过门为：从最后一次受控恢复约 2026-09-01 23:12 起连续运行满 24 小时，至少三次分时调度、备份和恢复均正常，且结束后审计当前 HEAD；最早检查时间为 2026-09-02 23:12。
 
 冷静期完成前不得更新“迁移完成”状态，不得归档或删除 v15。v15 移除授权已于 2026-09-02 取得；冷静期和最终审计通过后，仍须先完成归档与逐卷 dry-run，再按精确目标执行。

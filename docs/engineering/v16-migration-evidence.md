@@ -60,7 +60,7 @@ ERPNext 镜像本身没有 Node 可执行文件；固定 DSH Runtime 的 Node �
 - `verify_daily_backup.py` 退出 0。当前 daily 私有备份四件套前缀为 `20260901_163426-dsherp-daily_localhost`：数据库 `942896` 字节，public/private tar 各 `10240` 字节，Site 配置备份 `483` 字节；恢复比对完成后一次性恢复 Site 已删除。
 - v16 八个站点/数据库/Redis/日志卷和 `dsherp-v16-agent-runtime` 均存在。
 - v15 的 validation/platform/beta sites/logs、db、redis 以及 `dsherp-agent-runtime` 仍逐名存在；未执行 `down -v`、volume rm、image rm 或 prune。
-- fresh 重建前的 `.runtime` 完整备份位于忽略提交的 `work/v16-rollback-20260901/runtime`，旧现场运行状态位于 `work/v16-rollback-20260901/retired-live-runtime`。它们在冷静期和 v15 删除授权前不得清理。
+- fresh 重建前的 `.runtime` 完整备份位于忽略提交的 `work/v16-rollback-20260901/runtime`，旧现场运行状态位于 `work/v16-rollback-20260901/retired-live-runtime`。它们在 C4 放行、v15 归档和精确 dry-run 完成前不得清理。
 
 ## T4.1：本地模型替身与制造重验
 
@@ -203,7 +203,7 @@ Claude Code Opus 第三轮以 `3eb72e5` 为起点独立执行 T4.1、T4.2 真实
 
 ## daily 冷静期启动
 
-冷静期采用保守口径：不计 2026-09-01 当天剩余时段，以 2026-09-02、2026-09-03、2026-09-04 三个连续完整自然日为通过条件。`v16-daily` 心跳检查已启用，每日 22:30 只对隔离 daily 站执行调度回读、四件套备份和一次性恢复验证；禁止调用 DeepSeek、接触生产数据或修改 v15。
+冷静期最初采用三个连续完整自然日的保守口径。用户在了解覆盖差异后于 2026-09-02 接受 24 小时加速门：从最后一次受控恢复约 2026-09-01 23:12 起连续运行满 24 小时，跨过午夜与完整日周期，至少取得 Day 0、2026-09-02 早间和满 24 小时后三次分时调度、四件套备份及一次性恢复证据，再对当前 HEAD 做最终独立审计。`v16-daily` 心跳检查改在最早满足时长后的 2026-09-02 23:15 执行；禁止调用 DeepSeek、接触生产数据或修改 v15。该口径减少两个日历日的漂移覆盖，不把 24 小时表述为三日等价证据。
 
 Day 0 于 2026-09-01 22:48 启动 scheduled profile：alpha scheduler 明确 disabled，daily scheduler 明确 enabled，`scheduler-worker` 在线并监听 `short,default,long`。22:52 首个自然调度周期产生 18 条 `Scheduled Job Log`，全部 `Complete`；但 scheduler 随后因原 128 MiB 上限 OOM 并以 137 退出，`restart: no` 使它没有恢复。执行方先以部署测试锁定 256 MiB 和 `unless-stopped` 契约、确认旧配置红，再做最小修改；部署测试 9 项、非集成 Python 128 项通过。22:57 重建后跨过 23:00 下一轮及原故障窗口连续运行 7 分钟，scheduler/worker 均无 OOM、重启计数 0，峰值分别为 `123973632` 和 `162099200` 字节；Day 0 累计 36 条日志全部 `Complete`，队列排空。随后先识别并排除 `docker kill` 会触发 Docker“人工停止不重启”语义的无效验证方法，再从容器内部让应用 PID 1 退出；scheduler 和 worker 分别在约 4 秒、1 秒内由同一容器自动恢复，`restart_count=1`。23:12 恢复链又完成 6 条 `Job OK`，队列再次排空且无错误。
 
@@ -211,8 +211,8 @@ Day 0 于 2026-09-01 22:48 启动 scheduled profile：alpha scheduler 明确 dis
 
 ## 当前待完成门槛
 
-1. **daily 跨日冷静期**：Day 0 已完成并修复实际 OOM；仍须取得 2026-09-02 至 2026-09-04 三个连续完整自然日的 scheduler/worker、无未解释失败、四件套备份和一次性恢复证据。
-2. **当前 HEAD 最终独立审计**：核心代码对象 `11d22ed` 已放行；冷静期 worker 与持续运行契约 `1f1b46c`、`867048f` 及后续证据仍须在三天结束后独立复核。
+1. **daily 24 小时加速门**：Day 0 已完成并修复实际 OOM，2026-09-02 早间检查取得第二次备份恢复证据；仍须运行至不早于 2026-09-02 23:12，并取得第三次分时健康、四件套备份和一次性恢复证据，期间 scheduler/worker 持续运行且没有未解释失败。
+2. **当前 HEAD 最终独立审计**：核心代码对象 `11d22ed` 已放行；冷静期 worker 与持续运行契约 `1f1b46c`、`867048f` 及后续证据仍须在 24 小时门满足后独立复核。
 3. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 删除授权已取得，但归档、精确 dry-run 和逐名删除尚未执行。
 
 因此当前不得宣称 v16 迁移整体完成、用户可见上线或可删除 v15。
