@@ -3,6 +3,7 @@ import hashlib
 import json
 from zoneinfo import ZoneInfo
 import frappe
+from frappe.exceptions import QueryDeadlockError
 from frappe.utils import add_to_date,now_datetime,get_system_timezone
 from dsherp_bridge.configuration import check_bundle,get_bundle,check_authorization,workflow_masters
 from dsherp_bridge.configuration_bundle import freeze_bundle
@@ -172,10 +173,19 @@ def _confirm(proposal_id,digest,request_id,purpose):
     _user()
     if not isinstance(request_id,str) or not 1<=len(request_id)<=128:frappe.throw('请求标识无效')
     frappe.db.rollback()
-    confirmation=frappe.get_doc('DS Configuration Confirmation',proposal_id,for_update=True)
-    public=get_confirmation(proposal_id)
-    if digest!=confirmation.digest:frappe.throw('配置确认摘要不匹配')
-    existing=frappe.db.get_value('DS Configuration Execution',{'confirmation':proposal_id},'name',for_update=True)
+    try:
+        confirmation=frappe.get_doc('DS Configuration Confirmation',proposal_id,for_update=True)
+        public=get_confirmation(proposal_id)
+        if digest!=confirmation.digest:frappe.throw('配置确认摘要不匹配')
+        existing=frappe.db.get_value('DS Configuration Execution',{'confirmation':proposal_id},'name',for_update=True)
+    except QueryDeadlockError:
+        # MariaDB 11 can reject the waiter's stale locked-row snapshot after the
+        # winner commits.  Observe the winner's durable intent; never execute
+        # the configuration a second time.
+        frappe.db.rollback()
+        existing=frappe.db.get_value('DS Configuration Execution',{'confirmation':proposal_id},'name')
+        if not existing:raise
+        return _result(frappe.get_doc('DS Configuration Execution',existing))
     if existing:return _result(frappe.get_doc('DS Configuration Execution',existing,for_update=True))
     if not public['execution_ready']:frappe.throw('来源运行尚未成功完成，不能应用此配置')
     if confirmation.status!='Pending' or confirmation.expires_at<=now_datetime():frappe.throw('配置确认已结束或过期')
