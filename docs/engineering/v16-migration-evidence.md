@@ -8,7 +8,7 @@
 
 本记录只证明本机隔离合成环境中的版本切换、四站 fresh provision、自动化回归、固定 Runtime 本地模型替身链、制造行为重验和本轮应用内真实浏览器 UI 验收。它不证明生产部署、生产租户可用或真实 DeepSeek 页面效果。
 
-截至本记录，C0–C3 已由执行方完成，T4.1 已执行并回读清理结果，T4.2 浏览器矩阵和 T4.3 真实 DeepSeek 只读矩阵均已完成并落档；若干天冷静期、C5 文档全量更新与 v15 移除仍未完成。C4 放行仍要求独立审计，不能以本文件的执行方自报代替。
+截至本记录，C0–C3 已由执行方完成，T4.1 已执行并回读清理结果，T4.2 浏览器矩阵和 T4.3 真实 DeepSeek 只读矩阵均已完成并落档。Claude 首轮独立审计已明确判定 C4 BLOCKED；执行方已完成首轮整改并重跑全量门，但整改结果仍待 Claude 复审和独立浏览器复验。若干天冷静期、C5 文档全量更新与 v15 移除仍未完成，不能以本文件的执行方自报替代放行。
 
 ## 固定运行基线
 
@@ -128,9 +128,37 @@ alpha 正向页面回答为：物料编号 `DSHERP-HITL-ITEM`、物料名称“`
 
 截图：[`alpha 真实记录读取`](evidence/v16/t4.3-alpha-real-item-read.jpg)、[`daily 企业隔离`](evidence/v16/t4.3-daily-enterprise-isolation.jpg)。
 
+## C4 首轮独立审计与整改
+
+Claude Code Opus 以只读审计方检查固定提交 `d64a2f9` 及执行方审计包，实际重跑自动化、读取截图和数据库/运行态。首轮结论为 **C4 BLOCKED**，Critical 0、Important 5；它没有浏览器驱动，因此 T4.2 真实浏览器矩阵也明确标为未独立复验，而不是以截图放行。
+
+审计发现及整改如下：
+
+| 审计发现 | 根因 | Red-Green 整改 |
+| --- | --- | --- |
+| `transcript-*` 合成用户残留 | `test_context_transcript.py` 的 finally 只删会话链，没删 actor | 新增清理后不存在断言，旧实现稳定红；补精确 User 删除后绿，提交 `3f425b6` |
+| 常驻 worker 遇连接重置/HTTP 500 退出，PID 陈旧 | `claim_run` 的 transport/server 异常逸出主循环；PID 由外部手工记录 | 单元红测锁定 transient 继续、417 fastfail 和 PID 生命周期；仅吸收 transport 与 500/502/503/504，PID 原子写入/退出清除，提交 `2a0af9a` |
+| operation 并发确认偶发 `QueryDeadlockError` HTTP 500 | MariaDB 等待方在赢家提交后拒绝旧锁快照；operation 未像 configuration 一样观察赢家记录 | 确定性注入 locked-row deadlock，旧实现稳定红；回滚后复核 digest，只读返回唯一 durable Execution、没有重放，提交 `d510e5c`；真实并发用例连续 3 次通过 |
+| beta/daily OAuth 码交换缺少自动化守护 | 真实授权码交换回归只覆盖 alpha | 同一原生 OAuth 流程参数化覆盖 alpha/beta/daily，三条授权→callback→业务身份→撤权链均通过，提交 `ccce8a1`；聚焦门从 34 增至 36 项 |
+| 审计包遗漏全量门前置且两项判据与持久化事实不符 | 没写 worker 停止/队列清理；Run 无 `model` 字段；417 只保留在答复正文 | 审计包改为先核对活跃运行、bootout worker、用 Frappe 原生命令清理合成队列，结束后恢复；模型改核服务端白名单，417 改核最终答复正文 |
+
+本机忽略提交的 LaunchAgent 同时增加 `KeepAlive=true` 和 10 秒节流；真实 SIGTERM 后由 PID `51322` 自动拉起为 `51406`，随后正式重启 PID `72056` 与 `0600` PID 文件一致。该运行态配置不作为产品代码提交，也不能替代 `2a0af9a` 的进程内 transient 行为测试。
+
+整改代码目标提交 `ccce8a1c3fd32418f1482ffefa2cb24429c3939c` 上，先停止常驻 worker、确认活跃运行 0，并在前后用 Frappe `purge-jobs` 精确清理 alpha 合成测试队列：
+
+- 集成：`165 passed in 698.83s`；结束后清理 379 条可重建测试任务；
+- 非集成 Python：`121 passed in 44.53s`；
+- 前端：`21 files / 162 tests passed in 12.91s`；
+- `npm run build`、`git diff --check` 均退出 0，构建后工作副本无制品差异；
+- alpha/daily 分别回读：活跃 Run 0、七类制造单据 0、四类 Proposal/Execution 配置产物 0、`transcript-*` 用户 0、原料仓 `100/100`、在制/委外/成品仓 `0/0`；默认队列空；无 Agent 容器和运行临时目录；
+- 四站 ping 成功，正式 worker `launchctl state=running`，PID 与 `.runtime/agent-worker.pid` 一致。
+
+以上是执行方整改证据，**不是 Claude 复审通过**。整改改变了代码和测试，审计对象必须从 `d64a2f9` 更新为 `ccce8a1` 后重新复核；T4.2 真实浏览器矩阵仍需具备浏览器控制能力的独立审计方操作。
+
 ## 当前待完成门槛
 
-1. **C4 独立审计与冷静期**：T4.1–T4.3 均仍待独立审计；执行方已准备 [`v16-c4-independent-audit-packet.md`](v16-c4-independent-audit-packet.md)，该入口不构成审计结论。审计放行后，daily 还需若干天调度与备份正常证据。
-2. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 归档、dry-run、用户确认和逐名删除尚未执行。
+1. **C4 复审与独立浏览器复验**：首轮 Claude 审计为 BLOCKED，整改和全量门已完成但仍待复审；Claude CLI 未能独立操作真实浏览器，T4.2 不能放行。执行方已更新 [`v16-c4-independent-audit-packet.md`](v16-c4-independent-audit-packet.md)，该入口不构成审计结论。
+2. **daily 冷静期**：目前只有 2026-09-01 一套备份基线，scheduler 已停止且没有跨日自动任务；审计放行后才开始若干天调度与备份正常证据积累。
+3. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 归档、dry-run、用户确认和逐名删除尚未执行。
 
 因此当前不得宣称 v16 迁移整体完成、用户可见上线或可删除 v15。

@@ -6,19 +6,20 @@
 
 ## 1. 审计对象与边界
 
-- 固定被审提交：`d64a2f98156cdc77e004c734f2a7c32d10f2e8b7`。
+- 原始执行证据提交：`d64a2f98156cdc77e004c734f2a7c32d10f2e8b7`；首轮 Claude 审计结论为 C4 BLOCKED。
+- 首轮整改代码/测试固定提交：`ccce8a1c3fd32418f1482ffefa2cb24429c3939c`。后续文档提交只记录审计与整改事实；若产品代码、测试或部署契约再变化，必须再次更新固定对象。
 - 授权记录：`390438a03a754463b6cf2e3d4b9163564c054cd0`；OAuth 修复：`d94efcee002216ea7443b95e5ba71d4d7b3454a8`；浏览器证据：`28ea7624b53530d177d6106f05491eff3b4daf4f`；真实模型证据：`d64a2f98156cdc77e004c734f2a7c32d10f2e8b7`。
 - 审计环境仅为本机隔离合成四站，不是生产环境，不包含生产租户或真实企业数据。
-- 本文件之后的提交只能增加审计入口；若产品代码、测试、部署描述或既有证据发生变化，审计方必须重新固定被审提交。
+- 复审必须同时检查原始证据和 `d64a2f9..ccce8a1` 整改增量，不能只重跑绿灯而跳过首轮五项 Important 的根因与修复。
 - v15 卷、冷静期回滚材料和本地凭证均不得修改或删除。任何真实模型补跑都需要新的费用授权；本审计默认只读核对既有运行。
 
 先固定对象并确认工作副本：
 
 ```bash
 git status --short
-git show -s --format='%H %P %cI %s' d64a2f9 28ea762 d94efce 390438a
-git diff --check d64a2f9^..d64a2f9
-git show --stat --oneline d64a2f9
+git show -s --format='%H %P %cI %s' ccce8a1 3f425b6 2a0af9a d510e5c d64a2f9
+git diff --check d64a2f9..ccce8a1
+git diff --stat d64a2f9..ccce8a1
 ```
 
 审计应在独立 checkout/worktree 执行，不应在执行方当前工作副本上签发结论。
@@ -42,6 +43,8 @@ docker volume ls --format '{{.Name}}' | sort | rg 'dsherp'
 ```
 
 判据：四站 ping 成功；固定 v16 worker 存活；没有按需 Agent 容器或运行临时目录遗留；v15 与 v16 卷同时存在。`pid` 文件、配置 dump 或容器存在本身都不能替代上述运行态核对。
+
+复审还必须确认 `launchctl` 属性含 `keepalive`，真实进程 PID 与 `0600` `.runtime/agent-worker.pid` 一致；`tests/test_context_worker.py` 中 transport/500 继续、417 fastfail、PID 生命周期行为实际通过。
 
 ## 3. T4.1 制造闭环复核
 
@@ -129,11 +132,11 @@ e7e858190476a4cf7f67e46eb09c46d910b06dc4808000487a982090b5b38f2d  t4.2-platform-
 
 必须分别从 alpha 与 daily 数据库核对：
 
-- 三个 Run 的 `model` 为 `deepseek-v4-flash`，状态与预算计数符合表格；
+- `DS Model Run` 没有 `model` 字段；模型判据改为核对 `frappe_app/dsherp_bridge/context_execution.py` 对 provider=`deepseek-official`、model=`deepseek-v4-flash` 的服务端硬白名单，并确认三个成功 Run 的 `model_calls>0`、状态与预算计数符合表格；
 - alpha 正向 Run 的成功 source 唯一命中 Item `DSHERP-HITL-ITEM`，中文名为“`HITL 确认前物料`”，版本为 `2026-09-01 16:27:47.287925`；与当前 ERP 记录一致；
 - daily Run 的成功 sources 中 records 为空；daily 按同一中文名查询也不存在；不得出现 alpha 的记录、版本或来源；
 - 两站活跃 Run 为 0；DS Operation Proposal、DS Execution Record、DS Configuration Confirmation、DS Configuration Execution 均为 0；
-- 运行中的 HTTP 417 模糊/文本查询拒绝保留在事件/错误证据中，最终答复只引用成功的精确来源；不能把被拒绝尝试删掉后宣称零偏差；
+- 运行中的 HTTP 417 模糊/文本查询拒绝保留在最终答复正文中；结构化 `Run.error` 和 `sources[].error` 为空。最终答复只引用成功的精确来源；不能把正文中的拒绝尝试删掉后宣称零偏差；
 - 预留输出 token 只是预算账本，不是实际输出 token 或精确费用。
 
 浏览器截图哈希：
@@ -147,7 +150,15 @@ dc3bbb504485a647a30d23c6239573a40ff1602a5259bb0097e5018e1f0d2ec5  t4.3-alpha-rea
 
 ## 6. 全量回归与构建
 
-独立审计至少应执行：
+全量集成会在隔离合成站点创建并 finally 删除大量记录，但 Frappe 的动态链接清理任务仍会进入默认队列。审计方在运行前必须确认三站活跃 Run 均为 0，bootout 常驻 worker，并确认队列任务只属于本轮合成测试后使用 Frappe 原生命令清理；不得在生产站或队列归属不明时执行：
+
+```bash
+launchctl bootout "gui/$(id -u)/com.dsherp.agent-worker-v16"
+docker exec dsherp-validation-backend-1 \
+  bench purge-jobs --site dsherp-validation.localhost --queue default
+```
+
+随后至少执行：
 
 ```bash
 PYTHONPATH=. .venv/bin/python -m pytest tests/integration -q --tb=short
@@ -157,7 +168,7 @@ PYTHONPATH=. .venv/bin/python -m pytest tests --ignore=tests/integration -q --tb
 git diff --check
 ```
 
-收集数量以固定提交实际结果为准，不沿用 v15 的 `251/160` 或执行方旧报告。构建后应确认 `frappe_app/dsherp_bridge/public` 制品时间和内容来自当前 `frontend/src`；不能只看命令退出码。
+无论测试成功或失败，都应再次用同一 Frappe 命令清理本轮合成任务，再从 `.runtime/com.dsherp.agent-worker-v16.plist` 恢复 LaunchAgent，并核对 `state=running`、keepalive、真实 PID 与 PID 文件。收集数量以固定提交实际结果为准；整改执行方结果为 integration 165、非集成 121、前端 162，不能直接采信。构建后应确认 `frappe_app/dsherp_bridge/public` 制品来自当前 `frontend/src` 且工作副本没有意外差异；不能只看命令退出码。
 
 ## 7. 审计裁决表
 
@@ -180,6 +191,6 @@ git diff --check
 
 ## 8. 冷静期与 C5 边界
 
-C4 技术审计通过后仍不能立即进入 C5。daily 必须跨若干自然日留下 scheduler 正常运行和每日四件套备份可恢复证据；每一天至少记录备份前缀、四件大小、`verify_daily_backup.py` 退出 0、一次性恢复 Site 已删除及当天异常。当前只有 2026-09-01 基线，**尚未满足若干天冷静期**。
+C4 技术审计通过后仍不能立即进入 C5。daily 必须跨若干自然日留下 scheduler 正常运行和每日四件套备份可恢复证据；每一天至少记录备份前缀、四件大小、`verify_daily_backup.py` 退出 0、一次性恢复 Site 已删除及当天异常。当前只有 2026-09-01 基线，scheduler 已停止且没有跨日自动任务，**冷静期尚未开始，也未满足若干天要求**。
 
 冷静期完成前不得更新“迁移完成”状态，不得归档或删除 v15。即使冷静期完成，v15 移除仍需单独用户授权、逐卷 dry-run 和最终确认。
