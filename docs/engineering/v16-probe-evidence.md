@@ -107,3 +107,12 @@ v16 实际签名是 `create_raw_materials_supplied_or_received(self, raw_materia
 ## C1 资源清理
 
 已销毁。`docker compose -p dsherp-v16probe ... ps --format json` 输出为空；`docker volume ls --format '{{.Name}}' | rg '^dsherp-v16probe'` 无命中。清理使用明确 project 与卷名，没有使用 prune 或通配；既有 `dsherp-validation` v15 backend、beta、platform、frontend、db、redis 仍保持运行。
+
+## C2 部署契约切换
+
+- TDD 红：新增 `tests/test_v16_deployment_contract.py` 后，旧配置在镜像、卷、退役服务、agent-runtime 与指纹清单五项全部失败（`5 failed`）。
+- 最小实现：ERPNext 切到 `sha256:493cecf…f1bd`，MariaDB 切到 `sha256:2439dcd…43c3`；7 个保留 compose 服务加 2 个宿主入口共 9 处 ERP digest。Redis digest未变。
+- 全新卷：compose 的 sites/logs/db/redis/platform/beta 共 8 个逻辑卷全部增加 `v16-` 前缀；隔离 Runtime 使用 `dsherp-v16-agent-runtime`。没有创建或删除卷，切换前 v15 仍挂载旧卷运行。
+- 价值裁决：仓库已证明 Context Agent 使用 HTTP 轮询且 `/socket.io` 明确返回 404，因此删除 `websocket`、`worker`、`platform-websocket` 三个退役 `legacy` 服务；保留有调度验收价值的 `scheduler` profile。
+- 指纹：新增 compose、镜像准备、Runtime 镜像及两处 agent-runtime 卷消费者，共 5 个部署控制文件。目标契约与相关运行测试 `14 passed`，`docker compose ... config --quiet` 退出码 0；非历史源码 v15 ERP/MariaDB digest 与旧 agent-runtime 卷名均为 0 命中。
+- 无运行切换：核验时 `docker compose ... ps` 仍显示原 v15 ERPNext digest 与 MariaDB digest，6 个既有服务保持运行。C3 前不会执行 down/up。

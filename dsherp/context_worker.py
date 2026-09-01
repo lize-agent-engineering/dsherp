@@ -94,7 +94,7 @@ def main():
     with (ROOT/'.runtime'/'agent-worker.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         subprocess.run(['docker','image','inspect',IMAGE],check=True,stdout=subprocess.DEVNULL)
-        subprocess.run(['docker','volume','inspect','dsherp-agent-runtime'],check=True,stdout=subprocess.DEVNULL)
+        subprocess.run(['docker','volume','inspect','dsherp-v16-agent-runtime'],check=True,stdout=subprocess.DEVNULL)
         with httpx.Client(base_url=profile['base_url'],headers={'X-Frappe-Site-Name':profile['site'],
             'Authorization':'token '+profile['api_key']+':'+profile['api_secret']},timeout=25,trust_env=False,follow_redirects=False) as client:
             while True:

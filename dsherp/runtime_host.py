@@ -5,7 +5,7 @@ from dotenv import dotenv_values
 
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = 'frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341'
+IMAGE = 'frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd'
 KEYS = ('DEEPSEEK_API_KEY', 'DSH_MODEL', 'DEEPSEEK_BASE_URL')
 
 

@@ -9,7 +9,7 @@ def docker_command(root,secret,session_directory,name):
         '-v',f'{root}/runtime:/opt/dsherp/runtime:ro',
         '-v',f'{root}/business-skills:/opt/dsherp/business-skills:ro',
         '-v',f'{root}/requirements.lock:/opt/dsherp/requirements.lock:ro',
-        '-v','dsherp-agent-runtime:/opt/runtime:ro',
+        '-v','dsherp-v16-agent-runtime:/opt/runtime:ro',
         '-v',f'{secret}:/run/business.json:ro',
         '-v',f'{session_directory}:/session:rw',
         '-e','PYTHONPATH=/opt/dsherp','-e','PYTHONDONTWRITEBYTECODE=1',

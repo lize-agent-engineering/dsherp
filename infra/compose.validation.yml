@@ -2,7 +2,7 @@ name: dsherp-validation
 
 services:
   db:
-    image: mariadb@sha256:92e50059ea0a5965a33ef751970eab37d421b91ebbd01ac909039cffe159e574
+    image: mariadb@sha256:2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3
     pull_policy: never
     mem_limit: 1g
     memswap_limit: 1g
@@ -12,7 +12,7 @@ services:
     environment:
       MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
     secrets: [db_root_password]
-    volumes: ["db-data:/var/lib/mysql"]
+    volumes: ["v16-db-data:/var/lib/mysql"]
     networks: [validation]
     logging: &logging
       driver: json-file
@@ -26,12 +26,12 @@ services:
     cpus: 0.1
     restart: "no"
     command: ["redis-server", "--maxmemory", "80mb", "--maxmemory-policy", "noeviction", "--save", "", "--appendonly", "no"]
-    volumes: ["redis-data:/data"]
+    volumes: ["v16-redis-data:/data"]
     networks: [validation]
     logging: *logging
 
   backend:
-    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
     pull_policy: never
     # Reserve 384 MiB / 0.1 CPU for the single on-demand Agent container.
     mem_limit: 640m
@@ -45,8 +45,8 @@ services:
       GUNICORN_WORKERS: "1"
       GUNICORN_THREADS: "2"
     volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - logs:/home/frappe/frappe-bench/logs
+      - v16-sites:/home/frappe/frappe-bench/sites
+      - v16-logs:/home/frappe/frappe-bench/logs
       - ../frappe_app:/opt/dsherp-frappe:ro
     networks:
       validation:
@@ -55,7 +55,7 @@ services:
     logging: *logging
 
   frontend:
-    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
     pull_policy: never
     mem_limit: 128m
     memswap_limit: 128m
@@ -76,8 +76,8 @@ services:
       DSHERP_ACCEPTANCE_ORIGIN: http://agent-source.localhost:18082
       DSHERP_ALLOWED_HOSTS: "127[.]0[.]0[.]1|localhost|dsherp-validation[.]localhost|agent-source[.]localhost"
     volumes:
-      - sites:/home/frappe/frappe-bench/sites:ro
-      - beta-sites:/home/frappe/frappe-bench/beta-sites:ro
+      - v16-sites:/home/frappe/frappe-bench/sites:ro
+      - v16-beta-sites:/home/frappe/frappe-bench/beta-sites:ro
       - ./preview.conf:/opt/dsherp-preview.conf:ro
       - ./daily.conf:/opt/dsherp-daily.conf:ro
       - ./frappe.conf.template:/opt/dsherp-frappe.conf.template:ro
@@ -87,44 +87,10 @@ services:
     networks: [validation, api]
     logging: *logging
 
-  websocket:
-    profiles: [legacy]
-    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
-    pull_policy: never
-    mem_limit: 256m
-    memswap_limit: 256m
-    cpus: 0.1
-    restart: "no"
-    entrypoint: []
-    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
-    volumes: ["sites:/home/frappe/frappe-bench/sites:ro"]
-    depends_on: [redis]
-    networks: [validation]
-    logging: *logging
-
-  worker:
-    profiles: [legacy]
-    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
-    pull_policy: never
-    mem_limit: 512m
-    memswap_limit: 512m
-    cpus: 0.15
-    restart: "no"
-    command: ["bench", "worker", "--queue", "short,default,long"]
-    environment:
-      PYTHONPATH: /opt/dsherp-frappe
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - logs:/home/frappe/frappe-bench/logs
-      - ../frappe_app:/opt/dsherp-frappe:ro
-    depends_on: [db, redis]
-    networks: [validation]
-    logging: *logging
-
   scheduler:
     # Not needed for synthetic acceptance; reserve its budget for preview Desk.
     profiles: [scheduled]
-    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
     pull_policy: never
     mem_limit: 128m
     memswap_limit: 128m
@@ -134,8 +100,8 @@ services:
     environment:
       PYTHONPATH: /opt/dsherp-frappe
     volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - logs:/home/frappe/frappe-bench/logs
+      - v16-sites:/home/frappe/frappe-bench/sites
+      - v16-logs:/home/frappe/frappe-bench/logs
       - ../frappe_app:/opt/dsherp-frappe:ro
     depends_on: [db, redis]
     networks: [validation]
@@ -143,7 +109,7 @@ services:
 
   daily-provision:
     profiles: [control]
-    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
     pull_policy: never
     mem_limit: 640m
     memswap_limit: 640m
@@ -154,8 +120,8 @@ services:
     environment: {PYTHONPATH: /opt/dsherp-frappe}
     secrets: [db_root_password, daily_admin_password]
     volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - logs:/home/frappe/frappe-bench/logs
+      - v16-sites:/home/frappe/frappe-bench/sites
+      - v16-logs:/home/frappe/frappe-bench/logs
       - ../frappe_app:/opt/dsherp-frappe:ro
       - ./provision_daily_site.py:/opt/provision_daily_site.py:ro
       - ./verify_daily_backup.py:/opt/verify_daily_backup.py:ro
@@ -164,7 +130,7 @@ services:
     logging: *logging
 
   platform-backend:
-    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
     pull_policy: never
     mem_limit: 320m
     memswap_limit: 320m
@@ -173,8 +139,8 @@ services:
     command: ["start.sh"]
     environment: {PYTHONPATH: /opt/dsherp-frappe, GUNICORN_WORKERS: "1", GUNICORN_THREADS: "2"}
     volumes:
-      - platform-sites:/home/frappe/frappe-bench/sites
-      - platform-logs:/home/frappe/frappe-bench/logs
+      - v16-platform-sites:/home/frappe/frappe-bench/sites
+      - v16-platform-logs:/home/frappe/frappe-bench/logs
       - ../frappe_app:/opt/dsherp-frappe:ro
     networks:
       validation:
@@ -182,7 +148,7 @@ services:
     logging: *logging
 
   beta-backend:
-    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
     pull_policy: never
     mem_limit: 448m
     memswap_limit: 448m
@@ -192,29 +158,15 @@ services:
     ports: ["127.0.0.1:18084:8000"]
     environment: {PYTHONPATH: /opt/dsherp-frappe, GUNICORN_WORKERS: "1", GUNICORN_THREADS: "2"}
     volumes:
-      - beta-sites:/home/frappe/frappe-bench/sites
-      - beta-logs:/home/frappe/frappe-bench/logs
+      - v16-beta-sites:/home/frappe/frappe-bench/sites
+      - v16-beta-logs:/home/frappe/frappe-bench/logs
       - ../frappe_app:/opt/dsherp-frappe:ro
     # Synthetic preview has no external route; ingress goes through nginx.
     networks: [validation]
     logging: *logging
 
-  platform-websocket:
-    profiles: [legacy]
-    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
-    pull_policy: never
-    mem_limit: 128m
-    memswap_limit: 128m
-    cpus: 0.1
-    restart: "no"
-    entrypoint: []
-    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
-    volumes: ["platform-sites:/home/frappe/frappe-bench/sites:ro"]
-    networks: [validation]
-    logging: *logging
-
   platform-frontend:
-    image: frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
     pull_policy: never
     mem_limit: 128m
     memswap_limit: 128m
@@ -233,7 +185,7 @@ services:
       DSHERP_ACCEPTANCE_ORIGIN: http://agent-platform.localhost:18083
       DSHERP_ALLOWED_HOSTS: "platform[.]localhost|agent-platform[.]localhost"
     volumes:
-      - platform-sites:/home/frappe/frappe-bench/sites:ro
+      - v16-platform-sites:/home/frappe/frappe-bench/sites:ro
       - ./frappe.conf.template:/opt/dsherp-frappe.conf.template:ro
       - ./nginx-validation.sh:/opt/nginx-validation.sh:ro
       - ../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
@@ -247,14 +199,14 @@ networks:
   api:
 
 volumes:
-  sites:
-  logs:
-  db-data:
-  redis-data:
-  platform-sites:
-  platform-logs:
-  beta-sites:
-  beta-logs:
+  v16-sites:
+  v16-logs:
+  v16-db-data:
+  v16-redis-data:
+  v16-platform-sites:
+  v16-platform-logs:
+  v16-beta-sites:
+  v16-beta-logs:
 
 secrets:
   db_root_password:
