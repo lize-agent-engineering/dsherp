@@ -77,7 +77,7 @@ MCP readonly annotations 仅为工具元数据，实际边界仍是服务端权�
 
 后续用户单独授权后，已完成真实 DeepSeek 官方模型→DSH→MCP→本 Site 的只读闭环：实际调用一次 `erp_read_record`，合成物料的四个回答字段与工具结果及独立 ERP 回读一致，耗时 4.09 秒。详情见 [真实官方模型闭环记录](dsh-validation-evidence.md#后续真实官方模型与-erp-只读闭环)。前述替身测试继续保留作为不付费的回归，不替代此次真实验证。
 
-## 制造方法核对（未执行业务）
+## 制造方法与闭环验证
 
 已从安装镜像导入并读取签名：
 
@@ -85,7 +85,7 @@ MCP readonly annotations 仅为工具元数据，实际边界仍是服务端权�
 - `erpnext.buying.doctype.purchase_order.purchase_order.make_subcontracting_order(source_name, target_doc=None, save=False, submit=False, notify=False)`。
 - `erpnext.subcontracting.doctype.subcontracting_order.subcontracting_order.make_subcontracting_receipt(source_name, target_doc=None)`。
 
-这些是实际可导入方法，不是已经跑通的制造链。回读 Stock Entry、Purchase Receipt、Purchase Invoice、Sales Invoice、Subcontracting Receipt 的已提交数量均为 **0**。
+这些方法均已从固定版本实际导入核对；制造闭环已在本地合成环境验证（alpha 分段 + daily 端到端），证据见[阶段 2/3 制造闭环与技能升版证据](stage-2-3-manufacturing-evidence.md)与[原生侧栏 HITL 真实验收](context-agent-hitl-acceptance.md)。该结论仅适用于本地隔离合成环境，不代表生产验证或生产上线。
 
 ## 复验与运行方式
 

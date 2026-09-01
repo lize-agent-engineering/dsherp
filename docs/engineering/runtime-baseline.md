@@ -48,7 +48,7 @@
 - 未来部署必须使用该 digest 或经核验的新 digest、独立 compose project/网络/卷；不能挂载现有站点。用户已授权并启动独立测试栈；具体资源边界见 ERP 证据。
 - [Work Order 源码](https://github.com/frappe/erpnext/blob/v15.119.3/erpnext/manufacturing/doctype/work_order/work_order.py)：`make_stock_entry(work_order_id, purpose, qty=None, target_warehouse=None, source_stock_entry=None)` 生成 Stock Entry 字典，不等于保存或提交。
 - [Purchase Order 源码](https://github.com/frappe/erpnext/blob/v15.119.3/erpnext/buying/doctype/purchase_order/purchase_order.py)：`make_subcontracting_order(source_name, target_doc=None, save=False, submit=False, notify=False)`；此方法内部捕获部分提交错误，不可凭返回文档报告提交成功。
-- [Subcontracting Order 源码](https://github.com/frappe/erpnext/blob/v15.119.3/erpnext/subcontracting/doctype/subcontracting_order/subcontracting_order.py)：`make_subcontracting_receipt(source_name, target_doc=None)`。供料加工、供应商供料和直接采购不能直接合并为一种动作；基础资料 schema 已验证；BOM 与制造单据业务运行尚未验证。
+- [Subcontracting Order 源码](https://github.com/frappe/erpnext/blob/v15.119.3/erpnext/subcontracting/doctype/subcontracting_order/subcontracting_order.py)：`make_subcontracting_receipt(source_name, target_doc=None)`。供料加工、供应商供料和直接采购不能直接合并为一种动作；制造闭环已在本地合成环境验证（alpha 分段 + daily 端到端），证据见[阶段 2/3 制造闭环与技能升版证据](stage-2-3-manufacturing-evidence.md)与[原生侧栏 HITL 真实验收](context-agent-hitl-acceptance.md)；不代表生产验证或生产上线。
 - [Frappe v2](https://github.com/frappe/frappe/blob/v15.118.0/frappe/api/v2.py) 提供 `/api/v2/doctype/<doctype>/meta`，仅 `only_for("All")`；自定义接口须另行检查业务 DocType read 权限。客户/物料 v1 路径为 `/api/resource/Customer`、`/api/resource/Item`，调用 [frappe.client.get_list](https://github.com/frappe/frappe/blob/v15.118.0/frappe/client.py) 受权限约束。本项目通过普通用户验证原生记录读取，并新增带业务权限检查的薄 schema API，字段均从实际 Site 发现。
 
 ## 当前限制
