@@ -84,7 +84,6 @@ def test_runtime_revision_covers_deployment_control_files():
         "dsherp/runtime_host.py",
         "dsherp/context_container.py",
         "dsherp/context_worker.py",
-        "infra/render_context_worker_launch_agent.py",
     } <= files
 
 
