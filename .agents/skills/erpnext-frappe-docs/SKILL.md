@@ -9,7 +9,7 @@ description: Use when dsherp development needs official ERPNext or Frappe docume
 
 本技能只解决"去哪查、怎么查官方文档"。文档用于理解概念、业务流程和官方口径；字段、可选值、方法签名以实际站点 metadata 和固定版本源码为准（见 [AGENTS](../../../AGENTS.md)「ERP 与租户」与 [erpnext-integration](../erpnext-integration/SKILL.md)）。
 
-- 项目实测版本：ERPNext `15.119.3`、Frappe `15.118.0`。
+- 已验证历史基线：ERPNext `15.119.3`、Frappe `15.118.0`。项目自 2026-09-01 进入 v16 完整迁移期；迁移完成前须分别标注 v15 历史证据与 v16 探针/运行证据，不再把 v15 表述为当前长期锁定版本。
 - 中文术语以 [glossary.csv](../../../config/terminology/glossary.csv) 为准；erpnext.cc 译名仅供理解，冲突时用术语表。
 
 ## 文档源
@@ -23,7 +23,7 @@ description: Use when dsherp development needs official ERPNext or Frappe docume
 | `erpnext.cc/docs/V14/...` | 中 / V14 | 中文概念与流程理解，仅 51 页 |
 | `erpnext.cc/best-practice/...` | 中 / 版本不一 | 社区实践文章（安装/开发/运维/财务实战），62 页，非官方规范 |
 
-注意：docs.frappe.io 的版本归档路径（`/erpnext/v14/`、`/framework/v15/` 等）虽在 sitemap 中，访问时一律被 301 合并到现行版页面（2026-08-31 实测）；该站不提供固定版本文档。**现行主线已是 v16**（2026-08 起），而项目锁定 v15（仍在维护线每周二发版）——文档"最新"口径可能超前于项目版本。需与安装版本严格对齐时，查 GitHub tag 源码（erpnext-integration 已固定 `v15.118.0` / `v15.119.3` 链接）；版本动态与发布渠道见 [frappe-io-map.md](references/frappe-io-map.md)。
+注意：docs.frappe.io 的版本归档路径（`/erpnext/v14/`、`/framework/v15/` 等）虽在 sitemap 中，访问时一律被 301 合并到现行版页面（2026-08-31 实测）；该站不提供固定版本文档。**现行主线已是 v16**（2026-08 起），项目也已进入 v16 迁移期，但迁移验收完成前 v15 仍是历史运行基线——文档“最新”口径、目标 v16 tag 与实际容器版本必须分别核验。需与安装版本严格对齐时，查对应 GitHub tag 源码；版本动态与发布渠道见 [frappe-io-map.md](references/frappe-io-map.md)。
 
 ## 检索流程
 
@@ -48,4 +48,4 @@ description: Use when dsherp development needs official ERPNext or Frappe docume
 | WebFetch erpnext.cc 不带尾斜杠 | 规范 URL 以 `/` 结尾 |
 | 用 erpnext.cc 译名覆盖项目术语 | `config/terminology/glossary.csv` 优先 |
 | 把 docs.frappe.io 的 vXX 归档 URL 当固定版依据 | 会 301 到现行版；固定版本行为查 GitHub tag 源码 |
-| 把 v16 主线的新特性/字段当项目事实 | 项目锁定 v15；v16 内容仅用于升级评估，渠道见 frappe-io-map |
+| 把 v16 主线的新特性/字段当项目事实 | 迁移期仍须以目标 tag 源码和实际 v16 probe Site 为准，不能把主线文档直接当运行事实 |
