@@ -8,6 +8,8 @@ def docker_command(root,secret,session_directory,name):
         '-v',f'{root}/config:/opt/dsherp/config:ro',
         '-v',f'{root}/runtime:/opt/dsherp/runtime:ro',
         '-v',f'{root}/business-skills:/opt/dsherp/business-skills:ro',
+        '-v',f'{root}/infra/compose.validation.yml:/opt/dsherp/infra/compose.validation.yml:ro',
+        '-v',f'{root}/infra/prepare_agent_runtime.sh:/opt/dsherp/infra/prepare_agent_runtime.sh:ro',
         '-v',f'{root}/requirements.lock:/opt/dsherp/requirements.lock:ro',
         '-v','dsherp-v16-agent-runtime:/opt/runtime:ro',
         '-v',f'{secret}:/run/business.json:ro',

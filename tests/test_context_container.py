@@ -9,6 +9,8 @@ def test_business_container_mounts_only_current_session_and_run():
     assert '/state/tenant/user/conversation:/session:rw' in mounts
     assert '/project/runtime:/opt/dsherp/runtime:ro' in mounts
     assert '/project/business-skills:/opt/dsherp/business-skills:ro' in mounts
+    assert '/project/infra/compose.validation.yml:/opt/dsherp/infra/compose.validation.yml:ro' in mounts
+    assert '/project/infra/prepare_agent_runtime.sh:/opt/dsherp/infra/prepare_agent_runtime.sh:ro' in mounts
     assert not any('/state:' in m or '/project:/opt' in m for m in mounts)
     assert command[command.index('--memory')+1]=='384m'
     assert command[command.index('--cpus')+1]=='0.1'
