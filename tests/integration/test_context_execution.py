@@ -38,7 +38,8 @@ try:
         assert execution.reserve_model_call(**cap,**{**model_call,'purpose':'compaction' if index==1 else 'conversation'})['allowed']
     assert frappe.db.get_value('DS Model Run',claim['run_id'],'model_calls')==8
     try:execution.reserve_model_call(**cap,**model_call);raise AssertionError('model budget exceeded')
-    except frappe.ValidationError:pass
+    except frappe.ValidationError as error:
+        assert str(error)=='本轮模型调用预算已用尽',error
     try:execution.run_tool(**{**cap,'capability':'wrong'},tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'});raise AssertionError('bad cap allowed')
     except frappe.PermissionError:pass
     try:execution.finish_run(**cap,status='Succeeded',answer='fake');raise AssertionError('fake success allowed')

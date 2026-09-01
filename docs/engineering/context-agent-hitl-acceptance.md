@@ -63,3 +63,11 @@
 - 关闭侧栏后单独点击原生“保存”，未叠加Agent确认。数据库此时才变为建议值，版本2026-08-29 04:29:24.661284，modified_by普通writer；fill授权记录仍只有1份。原生手动保存与Agent填入保持分离。
 - 模型回答曾把十分钟有效期误说“约一小时后”；实际expires_at和确认检查未变化。固定operation skill1.4.0增加不自行推算相对期限的规则；后续不能依赖模型文字判断授权是否有效。
 - 随后TDD补用户显式提供的标量草稿form_before：数据库before/版本仍绑定确认，前端用form_before匹配当前草稿和展示差异；后来再编辑仍停止。65项前端/构建、7项真实Frappe和8项Runtime/技能通过。此扩展尚未单独重跑真实模型UI，子表填入/易读明细等仍待推进。
+
+## Phase 4 / T4.1：制造订单缺料解释与预算文案
+
+- 2026-09-01 在 alpha 先只给既有合成普通账号 `dsherp-writer@example.invalid` 增加原生 `Manufacturing User`、`Purchase User`、`Purchase Master Manager`、`Stock User` 角色，并逐项回读 BOM/Bin、Work Order、Stock Entry、Purchase Order/Receipt、Subcontracting Order/Receipt、Delivery Note 权限；未改平台 alpha 的只读成员绑定，未使用 Administrator 执行业务请求。后端首次打开 Desk 暴露旧进程仍加载 C1 前模块，确切报错为 `boot.py` 无法导入 `require_policy_schema`；只重启既有 business backend 使已提交代码生效，没有重建数据库或重放请求。
+- 不修改 `SAL-ORD-2026-00001/00002`。通过原生业务方法建立专用合成验收草稿 `SAL-ORD-2026-00003`（客户采购订单标记 `DSHERP-PHASE4-MFG-ACCEPTANCE`）：唯一明细为制造 fixture 成品 `DSHERP-MFG-SYN-FG` 60 Nos，目标为合成成品仓，BOM `BOM-DSHERP-MFG-SYN-FG-001` 每件耗 `DSHERP-MFG-SYN-RM` 2 Nos。该明确 fixture 写入落盘后才开始 T4.1 零意外写入基线。
+- 普通 writer 在该销售订单原生表单侧栏新建查询会话 `hcadbl4q4h`，真实 `deepseek-v4-flash` 运行 `4e321463b8bebee30ba896b118e80237159aefc6434ca5c705eda959a0c7ee09` 为 `Succeeded`。模型按 Sales Order → BOM → Bin 顺序完成 7 次有来源 ERP 读取，页面明确给出需求 `60 × 2 = 120`、原料仓 `actual_qty/projected_qty = 100/100`、缺口 `20 Nos`，并说明没有修改记录。
+- 该运行正好使用 8 次模型调用、`412983` 输入字节、`16384` 预留输出 token，均未超过单运行上限；没有静默放松常量，也没有再次运行。把第 9 次预约的明确错误永久锁定为 `本轮模型调用预算已用尽`，`tests/integration/test_context_execution.py` 现场 **1 passed / 6.67s**。
+- 运行后会话内提案 0、执行记录 0（只读查询的预期形状），制造业务单据仍为 Work Order/Stock Entry/Purchase Order/Purchase Receipt/Subcontracting Order/Subcontracting Receipt/Delivery Note 各 0；销售订单仅新增上述 fixture 至总数 3。原料 Bin 仍 `100/100`、成品 Bin 仍 `0/0`。因此 T4.1 的唯一运行、零意外写入和预算未超三项通过；查询段不伪造一条 operation 执行记录。
