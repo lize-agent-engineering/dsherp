@@ -15,7 +15,7 @@ def _user():
 @frappe.whitelist(methods=['GET'])
 def context():
     user = _user()
-    memberships = frappe.get_all('DS Membership', filters={'platform_user':user,'enabled':1}, pluck='enterprise')
+    memberships = frappe.get_all('DS Membership', filters={'platform_user':user,'enabled':1}, pluck='enterprise',order_by='enterprise asc')
     enterprises = []
     for name in memberships:
         enterprise=frappe.get_doc('DS Enterprise',name)

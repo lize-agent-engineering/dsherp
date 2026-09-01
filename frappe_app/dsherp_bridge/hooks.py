@@ -3,6 +3,11 @@ app_title = "DSHERP Bridge"
 app_publisher = "dsherp"
 app_description = "Restricted ERPNext read validation"
 app_email = "development@example.invalid"
+add_to_apps_screen = [{
+    "name": app_name,
+    "title": app_title,
+    "route": "/desk/dsherp-agent",
+}]
 required_apps = ["erpnext"]
 app_include_js = ["/assets/dsherp_bridge/dist/context-agent.js"]
 app_include_css = ["/assets/dsherp_bridge/dist/context-agent.css"]

@@ -5,6 +5,8 @@
   "custom": 0,
   "autoname": "hash",
   "engine": "InnoDB",
+  "sort_field": "creation",
+  "sort_order": "DESC",
   "track_changes": 1,
   "field_order": [
     "enterprise",

@@ -38,7 +38,7 @@ def read_configuration(doctype):
         meta=frappe.get_meta(doctype)
         if any(field.get('is_custom_field') for field in meta.fields):
             frappe.has_permission('Custom Field','read',throw=True)
-            for name in frappe.get_all('Custom Field',filters={'dt':doctype},pluck='name'):
+            for name in frappe.get_all('Custom Field',filters={'dt':doctype},pluck='name',order_by='name asc'):
                 custom=frappe.get_doc('Custom Field',name);custom.check_permission('read')
                 _require_columns(custom,'Custom Field',FIELD_COLUMNS)
         result['fields']=[{key:field.get(key) for key in FIELD_COLUMNS} for field in meta.fields]

@@ -59,7 +59,7 @@ def resolve_route(source_doctype, route_name):
     if not isinstance(source_doctype,str) or not source_doctype or not isinstance(route_name,str) or not route_name:
         frappe.throw('make 路由参数无效')
     policies=frappe.get_all('DS Doctype Policy',filters={'target_doctype':source_doctype},
-                            fields=['name','enabled'],limit_page_length=2)
+                            fields=['name','enabled'],order_by='name asc',limit_page_length=2)
     if not policies:
         raise frappe.PermissionError('缺少 DS DocType 策略：'+source_doctype)
     if len(policies)!=1:

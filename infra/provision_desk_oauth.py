@@ -19,7 +19,7 @@ def main():
     execute(business,'dsherp-validation.localhost',"assert not frappe.db.exists('Social Login Key','dsherp_platform')\nassert not frappe.conf.get('dsherp_platform_oauth')\nfrappe.destroy()")
     credentials=json.loads(execute(platform,'dsherp-platform.localhost',f"""
 import secrets
-doc=frappe.get_doc({{'doctype':'OAuth Client','app_name':'DSHERP alpha Desk','client_secret':secrets.token_urlsafe(32),'scopes':'openid','redirect_uris':{CALLBACK!r},'default_redirect_uri':{CALLBACK!r},'grant_type':'Authorization Code','response_type':'Code','skip_authorization':0}}).insert()
+doc=frappe.get_doc({{'doctype':'OAuth Client','app_name':'DSHERP alpha Desk','client_secret':secrets.token_urlsafe(32),'scopes':'openid','redirect_uris':{CALLBACK!r},'default_redirect_uri':{CALLBACK!r},'grant_type':'Authorization Code','response_type':'Code','skip_authorization':0,'allowed_roles':[{{'role':'DSHERP Member'}}]}}).insert()
 from frappe.installer import update_site_config
 endpoints=frappe.conf.get('dsherp_desk_sites') or {{}}
 endpoints['dsherp-validation.localhost']='http://localhost:18082/api/method/dsherp_bridge.sso.start'

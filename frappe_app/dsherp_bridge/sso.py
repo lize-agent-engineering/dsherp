@@ -69,19 +69,22 @@ def _exchange(code):
 
 @frappe.whitelist(allow_guest=True,methods=['GET'])
 def start():
-    frappe.response.update(type='redirect',location=get_oauth2_authorize_url(configuration()['provider'],'/app/home'))
+    frappe.response.update(type='redirect',location=get_oauth2_authorize_url(configuration()['provider'],'/desk/home'))
 
 
 @frappe.whitelist(allow_guest=True,methods=['GET'])
 def callback(code: str,state: str):
-    if consume_oauth_state(state)!='/app/home':raise frappe.PermissionError('登录请求已失效，请重新进入企业')
+    if consume_oauth_state(state)!='/desk/home':raise frappe.PermissionError('登录请求已失效，请重新进入企业')
     info,token=exchange(code)
     user=validate_identity(info)
+    # The platform identity round trip updates this User's session metadata on
+    # the business Site. End the read snapshot before native login_as updates it.
+    frappe.db.rollback()
     frappe.local.login_manager.login_as(user)
     frappe.session.data.dsherp_platform_grant=encrypt(json.dumps({'identity':info,'token':token}))
     frappe.local.session_obj.update(force=True)
     frappe.db.commit()
-    frappe.response.update(type='redirect',location='/app/home')
+    frappe.response.update(type='redirect',location='/desk/home')
 
 
 def validate_grant(grant,user):

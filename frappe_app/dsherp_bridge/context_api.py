@@ -135,7 +135,7 @@ def _public(doc):
     proposals=[get_proposal(name) for name in frappe.get_all('DS Operation Proposal',
         filters={'conversation':doc.name},pluck='name',order_by='creation asc')]
     from dsherp_bridge.configuration_execution import get_confirmation
-    bundles=frappe.get_all('DS Configuration Bundle',filters={'conversation':doc.name},pluck='name')
+    bundles=frappe.get_all('DS Configuration Bundle',filters={'conversation':doc.name},pluck='name',order_by='creation asc, name asc')
     configurations=[get_confirmation(name) for name in frappe.get_all('DS Configuration Confirmation',
         filters={'bundle':['in',bundles]},pluck='name',order_by='creation asc')] if bundles else []
     from dsherp_bridge.configuration import get_bundle
@@ -228,7 +228,7 @@ def _page(value):
 
 
 def _owned_conversations():
-    return frappe.get_all('DS Conversation',filters={'owner':_user()},pluck='name')
+    return frappe.get_all('DS Conversation',filters={'owner':_user()},pluck='name',order_by='name asc')
 
 
 def _paged(items,page):
@@ -246,7 +246,7 @@ def list_pending(page=1):
         items.append({'id':proposal.name,'session_id':proposal.conversation,'kind':'operation',
             'title':f"{payload.get('doctype','业务对象')} · {payload.get('action','待确认操作')}",
             'status':proposal.status,'expires_at':str(proposal.expires_at),'modified':str(proposal.modified)})
-    bundles=frappe.get_all('DS Configuration Bundle',filters={'conversation':['in',conversations]},fields=['name','conversation'])
+    bundles=frappe.get_all('DS Configuration Bundle',filters={'conversation':['in',conversations]},fields=['name','conversation'],order_by='name asc')
     bundle_sessions={item.name:item.conversation for item in bundles}
     if bundle_sessions:
         for confirmation in frappe.get_all('DS Configuration Confirmation',filters={'bundle':['in',list(bundle_sessions)],'status':'Pending'},fields=['name','bundle','status','expires_at','modified'],order_by='modified desc'):
@@ -260,16 +260,16 @@ def list_pending(page=1):
 def list_execution_records(page=1):
     conversations=_owned_conversations()
     if not conversations:return _paged([],page)
-    proposals=frappe.get_all('DS Operation Proposal',filters={'conversation':['in',conversations]},fields=['name','conversation'])
+    proposals=frappe.get_all('DS Operation Proposal',filters={'conversation':['in',conversations]},fields=['name','conversation'],order_by='name asc')
     proposal_sessions={item.name:item.conversation for item in proposals}
     items=[]
     if proposal_sessions:
         for record in frappe.get_all('DS Execution Record',filters={'proposal':['in',list(proposal_sessions)]},fields=['name','proposal','status','modified'],order_by='modified desc'):
             items.append({'id':record.name,'session_id':proposal_sessions[record.proposal],'kind':'operation','title':'业务执行',
                 'status':record.status,'modified':str(record.modified)})
-    bundles=frappe.get_all('DS Configuration Bundle',filters={'conversation':['in',conversations]},fields=['name','conversation'])
+    bundles=frappe.get_all('DS Configuration Bundle',filters={'conversation':['in',conversations]},fields=['name','conversation'],order_by='name asc')
     bundle_sessions={item.name:item.conversation for item in bundles}
-    confirmations=frappe.get_all('DS Configuration Confirmation',filters={'bundle':['in',list(bundle_sessions)]},fields=['name','bundle']) if bundle_sessions else []
+    confirmations=frappe.get_all('DS Configuration Confirmation',filters={'bundle':['in',list(bundle_sessions)]},fields=['name','bundle'],order_by='name asc') if bundle_sessions else []
     confirmation_sessions={item.name:bundle_sessions[item.bundle] for item in confirmations}
     if confirmation_sessions:
         for record in frappe.get_all('DS Configuration Execution',filters={'confirmation':['in',list(confirmation_sessions)]},fields=['name','confirmation','status','modified'],order_by='modified desc'):

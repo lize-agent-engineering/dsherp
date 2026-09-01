@@ -1,5 +1,5 @@
 {
- "doctype":"DocType","name":"DS Configuration Execution","module":"DSHERP Bridge","custom":0,"engine":"InnoDB","autoname":"hash",
+ "doctype":"DocType","name":"DS Configuration Execution","module":"DSHERP Bridge","custom":0,"engine":"InnoDB","autoname":"hash","sort_field":"creation","sort_order":"DESC",
  "field_order":["confirmation","request_id","status","steps","error"],
  "fields":[
   {"fieldname":"confirmation","label":"Confirmation","fieldtype":"Link","options":"DS Configuration Confirmation","reqd":1,"unique":1},

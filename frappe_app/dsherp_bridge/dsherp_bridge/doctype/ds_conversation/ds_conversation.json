@@ -5,6 +5,8 @@
   "custom": 0,
   "engine": "InnoDB",
   "autoname": "hash",
+  "sort_field": "creation",
+  "sort_order": "DESC",
   "field_order": [
     "title",
     "archived",

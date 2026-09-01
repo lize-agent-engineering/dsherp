@@ -85,7 +85,8 @@ def _prepare_subcontracting_supplied_items(doc,frozen=None):
     from erpnext.controllers.subcontracting_controller import SubcontractingController
     SubcontractingController.set_items_conversion_factor(doc)
     _subcontracting_item_references(doc,frozen)
-    SubcontractingController.create_raw_materials_supplied(doc)
+    SubcontractingController.create_raw_materials_supplied_or_received(
+        doc,raw_material_table='supplied_items')
 
 
 def _is_subcontracting_reference_duplicate(error,payload):
@@ -266,6 +267,8 @@ def _submitted_stock_entry_ledger(doc,payload):
             'is_cancelled':0,
         },
         fields=['item_code','warehouse','actual_qty','stock_uom'],
+        order_by='creation asc, name asc',
+        limit_page_length=0,
     )
     grouped={}
     for row in rows:

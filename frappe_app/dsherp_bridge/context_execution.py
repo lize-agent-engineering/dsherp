@@ -82,7 +82,7 @@ def claim_run(runtime_revision):
         frappe.throw('运行配置摘要无效')
     frappe.db.rollback()
     frappe.db.sql('SELECT name FROM `tabUser` WHERE name=%s FOR UPDATE',(user,))
-    for name in frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']], 'expires_at':['<=',now_datetime()]},pluck='name'):
+    for name in frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']], 'expires_at':['<=',now_datetime()]},pluck='name',order_by='creation asc, name asc'):
         frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':'运行已过期，未自动重试','capability_hash':''})
     if frappe.db.exists('DS Model Run',{'status':['in',['Running','Cancelling']]}):return None
     names=frappe.get_all('DS Model Run',filters={'status':'Queued'},pluck='name',order_by='creation asc',limit_page_length=1)
