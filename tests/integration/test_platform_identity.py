@@ -5,11 +5,17 @@ from contextlib import contextmanager
 
 PLATFORM = 'http://127.0.0.1:18083'
 
-def test_desk_entry_requires_membership_and_configured_target():
+def test_desk_entry_requires_membership_and_all_ready_targets_are_configured():
     with platform_client() as client:
-        response=client.get('/api/method/dsherp_platform.api.desk_entry',params={'enterprise':'alpha'})
-        assert response.status_code==200,response.text
-        assert response.json()['message']=={'url':'http://localhost:18082/api/method/dsherp_bridge.sso.start'}
+        expected = {
+            'alpha': 'http://localhost:18082/api/method/dsherp_bridge.sso.start',
+            'beta': 'http://preview.localhost:18085/api/method/dsherp_bridge.sso.start',
+            'daily': 'http://daily.localhost:18086/api/method/dsherp_bridge.sso.start',
+        }
+        for enterprise, url in expected.items():
+            response=client.get('/api/method/dsherp_platform.api.desk_entry',params={'enterprise':enterprise})
+            assert response.status_code==200,response.text
+            assert response.json()['message']=={'url':url}
     with platform_client('outsider') as client:
         assert client.get('/api/method/dsherp_platform.api.desk_entry',params={'enterprise':'alpha'}).status_code==403
 

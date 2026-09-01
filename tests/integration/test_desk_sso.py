@@ -49,7 +49,7 @@ def test_real_native_oauth_code_exchange_logs_into_bound_business_user():
         assert callback.netloc=='localhost:18082'
         result=business.get(callback.path+'?'+callback.query)
         assert result.status_code==302,result.text
-        assert result.headers['location']=='/desk/home'
+        assert result.headers['location']=='/desk/dsherp-agent'
         identity=business.get('/api/method/frappe.auth.get_logged_user')
         assert identity.status_code==200,identity.text
         assert identity.json()['message']=='dsherp-reader@example.invalid'
@@ -170,10 +170,10 @@ assert not calls
 frappe.local.session=frappe._dict(user='Guest',data=frappe._dict())
 frappe.local.login_manager=SimpleNamespace(login_as=lambda user:frappe.set_user(user))
 frappe.local.session_obj=SimpleNamespace(update=lambda force:None)
-state=create_oauth_state('/desk/home')
+state=create_oauth_state('/desk/dsherp-agent')
 sso.callback('code',state)
 assert frappe.session.user==info['email']
-assert frappe.response['location']=='/desk/home'
+assert frappe.response['location']=='/desk/dsherp-agent'
 grant=frappe.session.data.dsherp_platform_grant
 assert 'synthetic-oauth-token' not in grant
 sso.identity_for_token=lambda token:info

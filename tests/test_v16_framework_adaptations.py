@@ -17,7 +17,7 @@ MANUFACTURING_PROVISION = (ROOT / "infra/provision_manufacturing_fixture.py").re
 
 def test_sso_uses_native_v16_desk_route_and_ends_identity_snapshot_before_login():
     assert "/app/home" not in SSO
-    assert SSO.count("/desk/home") == 3
+    assert SSO.count("/desk/dsherp-agent") == 3
     exchange = SSO.index("info,token=exchange(code)")
     rollback = SSO.index("frappe.db.rollback()", exchange)
     login = SSO.index("frappe.local.login_manager.login_as(user)", rollback)
@@ -28,6 +28,17 @@ def test_oauth_client_explicitly_allows_the_existing_platform_member_role():
     for source in (OAUTH_PROVISION, DAILY_OAUTH_PROVISION):
         compact = "".join(source.split())
         assert "'allowed_roles':[{{'role':'DSHERPMember'}}]" in compact
+
+
+def test_alpha_and_beta_ready_enterprises_are_both_provisioned_for_desk_sso():
+    for expected in (
+        "'enterprise': 'alpha'",
+        "'enterprise': 'beta'",
+        "'app_name': 'DSHERP beta Desk'",
+        "'callback': 'http://preview.localhost:18085/api/method/dsherp_bridge.sso.callback'",
+        "'desk_url': 'http://preview.localhost:18085/api/method/dsherp_bridge.sso.start'",
+    ):
+        assert expected in OAUTH_PROVISION
 
 
 def test_subcontracting_preparer_uses_the_v16_supplied_items_method():
