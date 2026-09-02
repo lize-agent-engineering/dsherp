@@ -149,3 +149,16 @@ def test_alpha_runtime_profile_includes_the_container_business_url():
 def test_manufacturing_fixture_creates_the_zero_finished_goods_bin_natively():
     assert "from erpnext.stock.utils import get_or_make_bin" in MANUFACTURING_PROVISION
     assert "get_or_make_bin(FINISHED_GOOD, warehouses['finished_goods'])" in MANUFACTURING_PROVISION
+
+
+def test_daily_backup_verifier_diagnoses_a_compressed_backup_rather_than_a_bare_miss():
+    """v16 writes -files.tar; a --compress backup writes the v15-era .tgz shape instead.
+
+    The miss must name that cause, otherwise the operator only sees 'Missing or empty
+    backup artifact' and cannot tell a wrong backup flag from a real backup failure.
+    """
+    assert "with_suffix('.tgz')" in DAILY_BACKUP_VERIFIER
+    assert "--compress" in DAILY_BACKUP_VERIFIER
+    diagnosis = DAILY_BACKUP_VERIFIER.index("with_suffix('.tgz')")
+    fastfail = DAILY_BACKUP_VERIFIER.index("Missing or empty backup artifact")
+    assert diagnosis < fastfail

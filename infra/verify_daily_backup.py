@@ -166,6 +166,13 @@ private = BACKUPS / f'{prefix}-private-files.tar'
 config = BACKUPS / f'{prefix}-site_config_backup.json'
 for artifact in (database, config, public, private):
     if not artifact.is_file() or artifact.stat().st_size == 0:
+        # v16 writes plain .tar; `bench backup --compress` writes the v15-era .tgz instead.
+        compressed = artifact.with_suffix('.tgz')
+        if compressed.is_file():
+            raise SystemExit(
+                f'Missing or empty backup artifact: {artifact.name}; found {compressed.name} instead. '
+                'Retake the backup without --compress.'
+            )
         raise SystemExit(f'Missing or empty backup artifact: {artifact.name}')
 
 if not restored_exists:
