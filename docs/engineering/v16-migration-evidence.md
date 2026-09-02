@@ -230,10 +230,43 @@ Day 0 于 2026-09-01 22:48 启动 scheduled profile：alpha scheduler 明确 dis
 
 同日备份前缀为 `20260901_224857-dsherp-daily_localhost`：database `1195439`、public files `10240`、private files `10240`、site config `483` 字节。第一次验证因误用系统 Python 缺少 `frappe` 而 fastfail，未创建恢复 Site；改用 control 容器内固定解释器后 `verify_daily_backup.py` 退出 0，源站与一次性恢复站快照一致，恢复 Site 随后删除。完整本地工作证据位于忽略提交的 `work/v16-cooldown/2026-09-01-day0.md`。
 
-## 当前待完成门槛
+## C4 终验完成（2026-09-03）
 
-1. **daily 24 小时加速门**：Day 0 已完成并修复实际 OOM，2026-09-02 早间检查取得第二次备份恢复证据；仍须运行至不早于 2026-09-02 23:12，并取得第三次分时健康、四件套备份和一次性恢复证据，期间 scheduler/worker 持续运行且没有未解释失败。
-2. **当前 HEAD 最终独立审计**：核心代码对象 `11d22ed` 已放行；冷静期 worker 与持续运行契约 `1f1b46c`、`867048f` 及后续证据仍须在 24 小时门满足后独立复核。
-3. **C5**：README、runtime baseline、开发 skills、v15 九卷归档和精确 dry-run 已产生待审增量；v15 删除授权已取得，但卷与镜像仍全部在位，逐名删除尚未执行，C5 整体未放行。
+冷静期起点 2026-09-01 23:12（最后一次受控自恢复），终验于 2026-09-03 00:12 完成，连续运行超过 25 小时。
 
-因此当前不得宣称 v16 迁移整体完成、用户可见上线或可删除 v15。
+首次终验（2026-09-02 23:15，执行方）FASTFAIL，退出 1。审计方复核确认根因**不是 v16 回归**：仓库工作树被 `git checkout` 切回 `main`（迁移前状态），而运行栈仍为 v16。`main` 版 compose 的 `daily-provision` 挂载 v15 卷，容器读到 v15 的 `site_config.json`，以 v15 库名 `_c07a82853a23736c` 连接 v16 数据库（v16 库名为 `_58bf110913423627`），必然 1045 Access denied；失败发生在读取源站快照阶段，从未触及恢复逻辑。`codex/v16-migration` 分支上的 `daily-provision` 定义本身正确，T2.1 未遗漏该服务。97 个迁移提交全部完好，切回分支后损伤核查全清；宿主 agent-worker（PID 93381）在整个 `main` 窗口期未重启，从未加载 v15 镜像常量，风险未兑现。
+
+环境修正后第二次失败，暴露真实脆弱点：执行方第三次备份使用了 `bench backup --with-files --compress`，产出 v15 时期的 `.tgz` 形态，而 `verify_daily_backup.py` 按 v16 默认输出期望 `.tar`（`3b21d53` 的有意适配，并有 `-files.tgz` 反向守卫）。已以 TDD 加固：`61bf78f` 让缺件 fastfail 在检出同前缀 `.tgz` 时直接指出原因与处置，守卫与 `.tar` 期望均保持不变；运行时探针以 `--compress` 备份复现，报错为「found …-files.tgz instead. Retake the backup without --compress.」
+
+重取未压缩备份 `20260903_001210`（database 1214050、files.tar 10240、private-files.tar 10240、site_config 483 字节）后，以分支定义（无任何镜像或卷覆盖）执行恢复验证，**退出码 0**；输出重定向到文件后再取退出码，规避早间的输出边界坑。`Traceback|SystemExit|Access denied` 命中 0，一次性恢复站已删除，无遗留 run 容器。
+
+终验其余各步：两容器 `StartedAt` 与 24 小时门基线逐字符一致（`RestartCount=1`、`OOMKilled=false`，连续运行未中断）；冷静期累计 474 条 `Scheduled Job Log` 全部 `Complete`；short/default/long 队列均为 0；内存 92.44 / 96.72 MiB（上限 256 MiB，全程震荡非单调增长）；日志异常扫描两容器均 0 命中。三次分时备份恢复分别为 Day 0 `20260901_224857`、早间 `20260902_071617`、终验 `20260903_001210`。
+
+审计范围：`11d22ed..a5b901c` 冷静期部署变化（审计包 §9，PASS）、`bc475f2`/`c862043` 任务 B/C、`2be961c` 任务 D 均已独立核验通过。
+
+**独立性说明**：第三次恢复验证由审计方自行执行并自行报告，不具备执行/审计两方分离；判定依据为既有脚本退出码而非主观判断，方法完整记录可复现。用户于 2026-09-03 明确接受该结果，不再要求补做分离复核。前两次分时检查保持两方结构。
+
+## C5：全项目切换与 v15 移除（2026-09-03）
+
+`codex/v16-migration` 已快进合并入 `main`（46 个提交），合并后全量非集成回归 129 项通过、部署契约 9 项通过、v15 digest 除测试断言常量外零残留。
+
+v15 卷已按精确 dry-run 清单逐名删除，删除前完成归档前置门：九个 tar 均可完整读取（条目数 4593 / 13 / 27 / 5009 / 26 / 5 / 18 / 1 / 69），另有 123568901 字节全库 SQL dump 含 5 条建库语句，归档位于忽略提交的 `work/v16-rollback-20260901/v15-volumes/`。删除前逐卷确认无容器占用；全程未使用通配符、未执行 `prune`、未执行 `down -v`。
+
+已删除九卷：`dsherp-agent-runtime`、`dsherp-validation_beta-logs`、`dsherp-validation_beta-sites`、`dsherp-validation_db-data`、`dsherp-validation_logs`、`dsherp-validation_platform-logs`、`dsherp-validation_platform-sites`、`dsherp-validation_redis-data`、`dsherp-validation_sites`。删除后仅存 v16 九卷。
+
+**v15 镜像取消删除，且不得强删。** `frappe/erpnext@sha256:cf5905…d341`（`frappe/erpnext:v15.119.3`）被本机既有 **AgenERP 项目**共用，11 个容器引用，其中 `agenerp-agenerp-serve-1`、`agenerp-backend-1`、`agenerp-frontend-1`、`agenerp-scheduler-1` 正在 healthy 运行。按 [AGENTS](../../AGENTS.md)「不修改现有 AgenERP」，该镜像不属于 dsherp 可处置资产，`docker image rm` 的冲突拒绝是正确结果，不使用 `--force`。已核实 AgenERP 容器引用的 dsherp 卷数为 0，本次删除未波及；其 `queue-long`/`queue-short`/`websocket` 的重启循环 RestartCount 已达 1868/1868/2017，属该项目长期既有状态，与本次操作无关，未做任何干预。
+
+删除后四站以正确 Host 头核验：validation 18082、platform 18083、preview 18085、daily 18086 的 `api/method/ping` 均返回 `pong`。
+
+回滚材料（`work/v16-rollback-20260901/`）在此保留：v15 卷已删，tar 归档与 SQL dump 是唯一恢复路径。
+
+## 当前状态与剩余边界
+
+C4 与 C5 均已完成：24 小时冷静期通过、三次分时备份恢复取证、当前 HEAD 全量独立审计通过、`main` 已切换到 v16、v15 九卷按精确清单逐名删除。v15 镜像因与 AgenERP 共用而取消删除（见上节），这是终态决定，不是待办。
+
+**仍然成立的边界**：
+
+1. 全部证据来自本机隔离合成四站，**不是生产环境**，不含生产租户或真实企业数据。因此不得宣称用户可见上线或生产可用。
+2. 冷静期只覆盖 24 小时。`Weekly`(2)、`Weekly Long`(3)、`Monthly`(1)、`Monthly Long`(2) 共 8 类调度作业需 7~30 天才触发，**任何版本的冷静期门都未覆盖**（原三日门同样不覆盖）。这不是本次新增豁免，但也不得当作已验证；须在常规运行中另行观察。
+3. v15 回滚材料是唯一恢复路径：v15 卷已删除，`work/v16-rollback-20260901/` 下的九个 tar 归档与 123568901 字节 SQL dump 不得清理。
+4. `verify_daily_backup.py` 依赖「备份未压缩」这一不变量。`61bf78f` 已让违反时给出可诊断 fastfail，但备份命令本身仍由调用方决定；自动化调度备份走 v16 默认输出，人工补取备份时不要加 `--compress`。

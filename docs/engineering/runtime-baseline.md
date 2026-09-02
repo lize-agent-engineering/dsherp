@@ -52,7 +52,7 @@ ERPNext/Frappe 切换到 v16 没有改动本节的 DSH 链：SDK/Runtime 仍为 
 | 容器 Python | `3.14.7` |
 | 镜像 | `frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd` |
 
-镜像版本由容器内 `bench version`、Python 解释器和 RepoDigest 分别核验；标签、最新主线文档或工作副本不能代替运行事实。当前四站为 fresh provision 的隔离合成站点，证据见 [v16 迁移证据](v16-migration-evidence.md)。v15 九卷归档和精确 dry-run 已完成，但卷与镜像仍在；C4 的 24 小时冷静期、当前 HEAD 最终独立审计和 C5 整体放行尚未完成，因此本节不声明迁移整体完成或可上线。
+镜像版本由容器内 `bench version`、Python 解释器和 RepoDigest 分别核验；标签、最新主线文档或工作副本不能代替运行事实。当前四站为 fresh provision 的隔离合成站点，证据见 [v16 迁移证据](v16-migration-evidence.md)。C4 与 C5 已完成：冷静期、最终独立审计通过，`main` 已切换到 v16，v15 九卷已归档并逐名删除。本节仍不声明可上线或生产可用——四站为隔离合成环境，不含生产租户数据。
 
 ### v16.33.0 制造 mapper 固定契约
 
@@ -87,7 +87,7 @@ ERPNext/Frappe 切换到 v16 没有改动本节的 DSH 链：SDK/Runtime 仍为 
 
 ## 当前 v16 验证边界
 
-当前 v16 隔离合成环境已分别取得自动化、真实 ERP、固定 DSH Runtime、本地模型替身、真实浏览器和经授权真实 DeepSeek 只读证据；这些证据不能互相替代，也不代表生产租户部署。C4/C5 的剩余门槛见 [v16 迁移证据](v16-migration-evidence.md)；DSH 与 ERP 分层证据另见 [DSH 证据](dsh-validation-evidence.md) 和 [ERP 证据](erpnext-integration-evidence.md)。
+当前 v16 隔离合成环境已分别取得自动化、真实 ERP、固定 DSH Runtime、本地模型替身、真实浏览器和经授权真实 DeepSeek 只读证据；这些证据不能互相替代，也不代表生产租户部署。C4/C5 完成情况与剩余边界见 [v16 迁移证据](v16-migration-evidence.md)；DSH 与 ERP 分层证据另见 [DSH 证据](dsh-validation-evidence.md) 和 [ERP 证据](erpnext-integration-evidence.md)。
 
 ## 本轮依赖与环境补充
 
