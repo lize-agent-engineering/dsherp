@@ -8,7 +8,7 @@
 
 本记录只证明本机隔离合成环境中的版本切换、四站 fresh provision、自动化回归、固定 Runtime 本地模型替身链、制造行为重验、应用内真实浏览器 UI 验收和经授权的真实 DeepSeek 只读页面矩阵。它不证明生产部署或生产租户可用。
 
-截至本记录，C0–C3、T4.1、T4.2 和 T4.3 均已完成并落档。Claude 第三轮独立审计实际重跑自动化、操作真实浏览器并回读既有真实模型证据，在发现两项并发确认恢复身份校验缺口后没有放行；执行方以 TDD 修复，第四轮聚焦复审确认两项阻断解除且无新的 Critical 或阻断级 Important。C4 核心技术与浏览器审计已经通过，但整体 C4 仍须等待 daily 调度、备份与恢复冷静期证据。C5 文档全量更新与 v15 移除均未开始；用户已于 2026-09-02 明确授权后续移除 v15，但授权不改变 C4、归档和精确 dry-run 的前置顺序。
+截至本记录，C0–C3、T4.1、T4.2 和 T4.3 均已完成并落档。Claude 第三轮独立审计实际重跑自动化、操作真实浏览器并回读既有真实模型证据，在发现两项并发确认恢复身份校验缺口后没有放行；执行方以 TDD 修复，第四轮聚焦复审确认两项阻断解除且无新的 Critical 或阻断级 Important。C4 核心技术与浏览器审计已经通过，但整体 C4 仍须等待 daily 调度、备份与恢复冷静期证据。T5.1 文档更新、v15 九卷归档和精确 dry-run 已产生待审增量，但 C5 整体尚未放行，v15 卷与镜像仍全部在位；用户已明确授权后续移除 v15，该授权不允许跳过 C4 最终独立审计或按通配删除。
 
 ## 固定运行基线
 
@@ -61,6 +61,27 @@ ERPNext 镜像本身没有 Node 可执行文件；固定 DSH Runtime 的 Node �
 - v16 八个站点/数据库/Redis/日志卷和 `dsherp-v16-agent-runtime` 均存在。
 - v15 的 validation/platform/beta sites/logs、db、redis 以及 `dsherp-agent-runtime` 仍逐名存在；未执行 `down -v`、volume rm、image rm 或 prune。
 - fresh 重建前的 `.runtime` 完整备份位于忽略提交的 `work/v16-rollback-20260901/runtime`，旧现场运行状态位于 `work/v16-rollback-20260901/retired-live-runtime`。它们在 C4 放行、v15 归档和精确 dry-run 完成前不得清理。
+
+## v15 卷归档与精确 dry-run
+
+2026-09-02 对九个已退役 v15 卷逐名执行了九条独立归档命令；每条命令均将对应卷只读挂载到 `/src:ro`，用 Alpine `tar czf` 写入 `work/v16-rollback-20260901/v15-volumes/`，九条退出码均为 0。没有使用通配目标，没有启动 v15 应用栈，也没有执行 `docker volume rm`、`docker image rm`、`prune` 或 `down -v`。
+
+旧数据库卷的逻辑备份使用 MariaDB 10.6 临时容器、`--network none` 和 Unix socket。首次错误地只读挂载当前 v16 控制面 root secret，`mariadb-dump` 以鉴权拒绝退出 2；凭据值没有输出，精确确认其失败产物为 0 字节后已清理，没有覆盖重试。随后只读挂载迁移前备份 `work/v16-rollback-20260901/runtime/control/db_root_password`，以全新的 `.partial` 目标执行一次 `mariadb-dump --all-databases --single-transaction --routines --events --triggers`，退出 0；产物非空且含 5 条实际行首 `CREATE DATABASE` 语句，验证后原子改为最终文件名。临时数据库运行时可用空间由约 5.8 GiB 降到 4.4 GiB，停止并由 `--rm` 清理临时容器后恢复到约 5.6 GiB；旧数据库卷仍为 673.9 MB、无运行中挂载，额外占用来自已回收的临时容器写层。
+
+精确 dry-run 清单位于 `work/v16-rollback-20260901/v15-removal-dryrun.txt`，共 10 行，只包含九个卷名和镜像 `frappe/erpnext@sha256:cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341`，不包含可执行删除命令。本次只完成非破坏性归档和清单登记，不代表已删除 v15。
+
+| 归档文件 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `work/v16-rollback-20260901/v15-volumes/dsherp-agent-runtime.tar.gz` | 83745778 | `b1afd4c6085249ec83db59e53bba6a0ebd81916ef07668017bc87c2b63137876` |
+| `work/v16-rollback-20260901/v15-volumes/dsherp-validation_beta-logs.tar.gz` | 73252 | `064ad5fc6210c00b1fa41db0068d1cf6715deed9f7a48a921ab84fab29f72706` |
+| `work/v16-rollback-20260901/v15-volumes/dsherp-validation_beta-sites.tar.gz` | 73477 | `df171f8c5673fb3fd14e2ba8525e0156e1b915c2df103e8a0853c953405c0f40` |
+| `work/v16-rollback-20260901/v15-volumes/dsherp-validation_db-data.tar.gz` | 67479901 | `72d9c7a071467937e2f3f8c5432b9a4e9f22668ab00b24ea4773011aa0c836a8` |
+| `work/v16-rollback-20260901/v15-volumes/dsherp-validation_logs.tar.gz` | 193172 | `6a13e2fa8cb180969b00b0ca2b4f991f104a0ad0ec80d08cd5589d93c80c98e3` |
+| `work/v16-rollback-20260901/v15-volumes/dsherp-validation_platform-logs.tar.gz` | 19214 | `17355700d1c8ccee46d3ac5808f80797bd157b66106c36da183a7a243c93fc21` |
+| `work/v16-rollback-20260901/v15-volumes/dsherp-validation_platform-sites.tar.gz` | 19274 | `f9a0fd4d87b0043692a4847641b09045e5e74a3b7e732b28a39702519a7650d6` |
+| `work/v16-rollback-20260901/v15-volumes/dsherp-validation_redis-data.tar.gz` | 93 | `c77250a5691262fd11f9ad2d2a30c74f6d56cf4c4228f3cc86dd93b7fd3baa97` |
+| `work/v16-rollback-20260901/v15-volumes/dsherp-validation_sites.tar.gz` | 4501928 | `7136f701099c5af81376735047b597aa8bd19ed5d6fc3818fa12d84a080c4ef9` |
+| `work/v16-rollback-20260901/v15-volumes/dsherp-validation_db-data-all-databases.sql` | 123568901 | `5b44a6c7643f31119f9397b4c46df12f2ef5f3c9a6f9a33f75fba823d5f302fb` |
 
 ## T4.1：本地模型替身与制造重验
 
@@ -213,6 +234,6 @@ Day 0 于 2026-09-01 22:48 启动 scheduled profile：alpha scheduler 明确 dis
 
 1. **daily 24 小时加速门**：Day 0 已完成并修复实际 OOM，2026-09-02 早间检查取得第二次备份恢复证据；仍须运行至不早于 2026-09-02 23:12，并取得第三次分时健康、四件套备份和一次性恢复证据，期间 scheduler/worker 持续运行且没有未解释失败。
 2. **当前 HEAD 最终独立审计**：核心代码对象 `11d22ed` 已放行；冷静期 worker 与持续运行契约 `1f1b46c`、`867048f` 及后续证据仍须在 24 小时门满足后独立复核。
-3. **C5**：README、runtime baseline、开发 skills 和最终数字尚未更新；v15 删除授权已取得，但归档、精确 dry-run 和逐名删除尚未执行。
+3. **C5**：README、runtime baseline、开发 skills、v15 九卷归档和精确 dry-run 已产生待审增量；v15 删除授权已取得，但卷与镜像仍全部在位，逐名删除尚未执行，C5 整体未放行。
 
 因此当前不得宣称 v16 迁移整体完成、用户可见上线或可删除 v15。
