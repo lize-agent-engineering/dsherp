@@ -48,6 +48,8 @@ def lock_native(doc,method=None,*args,**kwargs):
 def check_new_custom_record(doc,method=None):
     # New app tables become visible after native DDL commits, before the next
     # workflow step. Do not let another request create rows in that window.
-    if not frappe.get_meta(doc.doctype).custom:return
+    # bench migrate inserts DocType JSON through this same hook; that in-flight Meta
+    # carries no `custom` attribute, and reading it directly aborts the whole migrate.
+    if not getattr(frappe.get_meta(doc.doctype), 'custom', 0):return
     owner,current=frappe.db.sql('SELECT IS_USED_LOCK(%s), CONNECTION_ID()',lock_key(doc.doctype))[0]
     if owner is not None and owner!=current:frappe.throw('新应用配置正在应用，请完成后再创建记录')

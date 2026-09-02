@@ -11,6 +11,7 @@ OAUTH_PROVISION = (ROOT / "infra/provision_desk_oauth.py").read_text()
 DAILY_OAUTH_PROVISION = (ROOT / "infra/provision_daily_agent.py").read_text()
 DAILY_INITIALIZER = (ROOT / "infra/initialize_daily_synthetic.py").read_text()
 DAILY_BACKUP_VERIFIER = (ROOT / "infra/verify_daily_backup.py").read_text()
+CONFIGURATION_LOCKS = (ROOT / "frappe_app/dsherp_bridge/configuration_locks.py").read_text()
 ALPHA_RUNTIME_PROVISION = (ROOT / "infra/provision_context_worker.py").read_text()
 MANUFACTURING_PROVISION = (ROOT / "infra/provision_manufacturing_fixture.py").read_text()
 
@@ -162,3 +163,12 @@ def test_daily_backup_verifier_diagnoses_a_compressed_backup_rather_than_a_bare_
     diagnosis = DAILY_BACKUP_VERIFIER.index("with_suffix('.tgz')")
     fastfail = DAILY_BACKUP_VERIFIER.index("Missing or empty backup artifact")
     assert diagnosis < fastfail
+
+
+def test_global_before_insert_hook_tolerates_meta_without_custom_during_migrate():
+    """`bench migrate` imports DocType JSON through doc.insert(), so the "*" before_insert
+    hook runs against an in-flight Meta that has no `custom` attribute. Reading it directly
+    aborts the whole migrate with AttributeError; absent must simply mean "not custom".
+    """
+    assert "frappe.get_meta(doc.doctype).custom" not in CONFIGURATION_LOCKS
+    assert "getattr(frappe.get_meta(doc.doctype), 'custom', 0)" in CONFIGURATION_LOCKS
