@@ -254,7 +254,7 @@ v15 卷已按精确 dry-run 清单逐名删除，删除前完成归档前置门�
 
 已删除九卷：`dsherp-agent-runtime`、`dsherp-validation_beta-logs`、`dsherp-validation_beta-sites`、`dsherp-validation_db-data`、`dsherp-validation_logs`、`dsherp-validation_platform-logs`、`dsherp-validation_platform-sites`、`dsherp-validation_redis-data`、`dsherp-validation_sites`。删除后仅存 v16 九卷。
 
-**v15 镜像取消删除，且不得强删。** `frappe/erpnext@sha256:cf5905…d341`（`frappe/erpnext:v15.119.3`）被本机既有 **AgenERP 项目**共用，11 个容器引用，其中 `agenerp-agenerp-serve-1`、`agenerp-backend-1`、`agenerp-frontend-1`、`agenerp-scheduler-1` 正在 healthy 运行。按 [AGENTS](../../AGENTS.md)「不修改现有 AgenERP」，该镜像不属于 dsherp 可处置资产，`docker image rm` 的冲突拒绝是正确结果，不使用 `--force`。已核实 AgenERP 容器引用的 dsherp 卷数为 0，本次删除未波及；其 `queue-long`/`queue-short`/`websocket` 的重启循环 RestartCount 已达 1868/1868/2017，属该项目长期既有状态，与本次操作无关，未做任何干预。
+**v15 镜像的处置经历两个阶段。** 首次删除被拒：`frappe/erpnext@sha256:cf5905…d341`（`frappe/erpnext:v15.119.3`）被本机既有 AgenERP 项目共用，11 个容器引用、4 个 healthy 运行；按当时的 AGENTS 约定「不修改现有 AgenERP」，该镜像不属 dsherp 可处置资产，`docker image rm` 的冲突拒绝是正确结果，未使用 `--force`。随后用户于 2026-09-03 明确决定废弃 AgenERP 并声明该约束过时，镜像连同 AgenERP 的容器与数据卷一并退役，过程与归档见后文「AgenERP 退役与资源清理」一节。已核实 AgenERP 容器引用的 dsherp 卷数为 0，此前的九卷删除未波及它。
 
 删除后四站以正确 Host 头核验：validation 18082、platform 18083、preview 18085、daily 18086 的 `api/method/ping` 均返回 `pong`。
 
@@ -286,9 +286,43 @@ v15 卷已按精确 dry-run 清单逐名删除，删除前完成归档前置门�
 
 **注意**：本次只是验证，运行中的四站仍是 fresh provision 的内容，不含上表的 v15 Agent 工作历史。该历史保存在 `work/v16-rollback-20260901/` 归档中，并已证明可按上述步骤导入。是否把它导入正式站点是独立决定，本记录不代表已导入。
 
+## v15 Agent 工作历史导入正式站点（2026-09-03）
+
+用户要求把 v15 的 Agent 工作历史导入运行中的正式站点。**未采用整库恢复**：正式站的 `.runtime` 凭证、OAuth Client 与运行时用户都是 C3 fresh provision 时生成的，整库覆盖会让现有凭证全部失效。改为只导入 Agent 历史这一组 DocType，v16 期已有记录保留，属增量而非替换。
+
+**可行性前置核验**：
+- 依赖闭包——`DS Conversation` 无 Link 字段；`DS Model Run` → conversation；`DS Operation Proposal` → conversation/model_run；`DS Execution Record` → proposal。全部指向 DS-* 家族内部，不含指向业务单据的 Link（业务引用存在 JSON payload 中），因此八张表构成自洽闭包，整体导入不会产生跨类型断链。
+- 用户引用——历史记录的 owner 为 `dsherp-context-runtime`、`dsherp-preview`、`dsherp-reader`、`dsherp-writer`（均 `@example.invalid`），四者在 v16 正式站均已存在。
+- Schema——八张表在 v15 与 v16 的**列集合完全一致**（无增删），但其中五张的**列顺序不同**。`mysqldump` 生成的是按位置的 `INSERT ... VALUES`，直接重放会错位，故按 v15 的 `CREATE TABLE` 顺序把八条 INSERT 改写为显式列名形式再导入。
+
+**回滚点**：导入前对正式站做整站备份，前缀 `20260903_021630-dsherp-validation_localhost`（database 3.3 MiB、site config 723 B）。
+
+**导入结果**：
+
+| DocType | 导入前 | 导入后 |
+| --- | --- | --- |
+| DS Conversation | 2 | 28 |
+| DS Model Run | 2 | 54 |
+| DS Operation Proposal | 0 | 33 |
+| DS Execution Record | 0 | 29 |
+| DS Configuration Bundle | 0 | 5 |
+| DS Configuration Confirmation | 0 | 3 |
+| DS Configuration Execution | 0 | 2 |
+| DS Configuration Transfer | 0 | 4 |
+
+引用完整性以 LEFT JOIN 实测：Model Run→Conversation、Proposal→Conversation、ExecRecord→Proposal 三条链路的断链数**均为 0**。ORM 回读抽样正常，最早记录为 2026-08-29 的 v15 时期数据，owner 与创建时间保持原值。
+
+## AgenERP 退役与资源清理（2026-09-03）
+
+用户决定废弃 AgenERP 后，其 14 个容器与 default 网络已以其自身 compose `down --remove-orphans` 移除，共用的 v15 镜像随后按 digest 与 tag 两步删除。五个数据卷先归档后删除：`agenerp_db-data`（归档 20436949 字节 / 2107 条目）、`agenerp_sites`（983499 / 44）、`agenerp_logs`（111584 / 14）、`agenerp_redis-cache-data`（2055248 / 2）、`agenerp_redis-queue-data`（502 / 2），归档位于忽略提交的 `work/agenerp-retired-20260903/`，五个 tar 均已验证可完整读取。其 compose 仍在 `/Users/lize/Claude/Projects/AgenERP/docker-compose.yml`，必要时可据归档重建。
+
+分支收敛：`codex/v16-migration` 独有提交为 0（已被 `main` 完全包含）后删除，仓库仅剩 `main` 且与 `origin/main` 同步；无额外 worktree。
+
+**最终资源状态**：本机 `frappe/erpnext` 镜像仅 `v16.33.0`；容器仅 dsherp 的 7 个（全部 v16）；卷仅 dsherp 的 9 个 v16 卷；仓库内除测试断言常量与历史标注外无 v15 digest 引用。
+
 ## 当前状态与剩余边界
 
-C4 与 C5 均已完成：24 小时冷静期通过、三次分时备份恢复取证、当前 HEAD 全量独立审计通过、`main` 已切换到 v16、v15 九卷按精确清单逐名删除。v15 镜像因与 AgenERP 共用而取消删除（见上节），这是终态决定，不是待办。
+C4 与 C5 均已完成：24 小时冷静期通过、三次分时备份恢复取证、当前 HEAD 全量独立审计通过、`main` 已切换到 v16、v15 九卷按精确清单逐名删除。v15 镜像与 AgenERP 全部容器、数据卷均已在归档后删除（见上节），本机仅剩 v16 镜像与 dsherp 的 9 个 v16 卷。v15 的 Agent 工作历史已导入正式站点。
 
 **仍然成立的边界**：
 

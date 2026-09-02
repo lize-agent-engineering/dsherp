@@ -10,7 +10,7 @@
 
 当前隔离合成环境运行 ERPNext `16.33.0` / Frappe `16.31.0`，容器 Python `3.14.7`；固定 DSH SDK/Runtime 仍为 `0.1.1rc1`。`pytest tests --collect-only` 收集 293 项，非集成子集 128 项通过；前端以 `NODE_OPTIONS=--no-experimental-webstorage npm test` 验证 21 个文件、162 项通过。自动化中的工具链使用本地模型替身，真实模型、真实 ERP 与浏览器证据另行记录，不能互相替代。
 
-**v15 时期历史证据**：ERPNext `15.119.3` / Frappe `15.118.0` 本地合成环境曾完成原生初始化、普通用户读取/拒绝、alpha 分段与 daily 制造闭环；详见[阶段 2/3 制造闭环与技能升版证据](docs/engineering/stage-2-3-manufacturing-evidence.md)和[原生侧栏 HITL 真实验收](docs/engineering/context-agent-hitl-acceptance.md)。**当前 v16 证据**：四站 fresh provision、制造行为重验、原生浏览器矩阵与经授权真实 DeepSeek 只读矩阵已落档；C4 24 小时冷静期、三次分时备份恢复和当前 HEAD 最终独立审计均已通过，`main` 已切换到 v16，v15 九卷已归档并按精确清单逐名删除（v15 镜像与既有 AgenERP 共用，取消删除）。全部证据来自本机隔离合成四站，不含生产租户数据，因此仍不得宣称可上线或生产可用。详见 [v16 迁移证据](docs/engineering/v16-migration-evidence.md)。
+**v15 时期历史证据**：ERPNext `15.119.3` / Frappe `15.118.0` 本地合成环境曾完成原生初始化、普通用户读取/拒绝、alpha 分段与 daily 制造闭环；详见[阶段 2/3 制造闭环与技能升版证据](docs/engineering/stage-2-3-manufacturing-evidence.md)和[原生侧栏 HITL 真实验收](docs/engineering/context-agent-hitl-acceptance.md)。**当前 v16 证据**：四站 fresh provision、制造行为重验、原生浏览器矩阵与经授权真实 DeepSeek 只读矩阵已落档；C4 24 小时冷静期、三次分时备份恢复和当前 HEAD 最终独立审计均已通过，`main` 已切换到 v16，v15 九卷已归档并按精确清单逐名删除（v15 镜像在用户决定废弃 AgenERP 后一并删除）。全部证据来自本机隔离合成四站，不含生产租户数据，因此仍不得宣称可上线或生产可用。详见 [v16 迁移证据](docs/engineering/v16-migration-evidence.md)。
 
 阶段 1–3 的原型与两次 DeepSeek 页面端到端验收属于 v15 时期历史证据，见[原生 Desk 证据与剩余事项](docs/engineering/native-desk-evidence.md)。当前 v16 本地入口：[alpha 原生登录页](http://127.0.0.1:18082/login)、[正式 Agent 工作台](http://127.0.0.1:18082/desk/dsherp-agent)、[应用构建原型](http://127.0.0.1:18082/desk/dsherp-studio)。页面与数据均为隔离合成环境，不代表真实生成、发布或生产迁移。
 
