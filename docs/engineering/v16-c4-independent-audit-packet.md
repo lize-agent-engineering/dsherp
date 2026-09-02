@@ -214,3 +214,50 @@ C4 核心技术和浏览器审计通过后仍不能立即进入 C5。daily 必�
 冷静期已于 2026-09-01 启动：alpha scheduler disabled、daily enabled；首轮任务全部 Complete 后 scheduler 曾因 128 MiB OOM 退出且没有自动恢复，执行方以 TDD 修复为 256 MiB 与 `unless-stopped`，重建后跨过下一轮和原故障窗口无 OOM。Day 0 累计 36 条 Scheduled Job Log 全部 Complete、队列排空；容器内部进程退出实测又证明 scheduler/worker 分别约 4 秒、1 秒自动恢复，重启后的下一组 6 条任务全部 `Job OK`。备份 `20260901_224857-dsherp-daily_localhost` 四件套恢复验证退出 0，一次性恢复 Site 已删除。2026-09-02 早间检查时两进程已连续运行约 8 小时、183 条日志全部 Complete、队列为空，第二套备份 `20260902_071617-dsherp-daily_localhost` 恢复验证退出 0。工作记录分别位于 `work/v16-cooldown/2026-09-01-day0.md` 和 `work/v16-cooldown/2026-09-02-morning.md`。用户于 2026-09-02 接受的通过门为：从最后一次受控恢复约 2026-09-01 23:12 起连续运行满 24 小时，至少三次分时调度、备份和恢复均正常，且结束后审计当前 HEAD；最早检查时间为 2026-09-02 23:12。
 
 冷静期完成前不得更新“迁移完成”状态，不得归档或删除 v15。v15 移除授权已于 2026-09-02 取得；冷静期和最终审计通过后，仍须先完成归档与逐卷 dry-run，再按精确目标执行。
+
+## 9. 冷静期部署变化（`11d22ed..a5b901c`）独立审计结论
+
+日期：2026-09-02。审计方：Claude。审计对象固定于 `a5b901c`，工作副本 `git status --short` 为空。本节只覆盖冷静期部署变化与当日连续性抽样；`11d22ed` 及以前的对象由前四轮审计另行裁决，本节不重复签发。
+
+### 9.1 变更面
+
+`11d22ed..a5b901c` 共 5 文件：3 个文档、`infra/compose.validation.yml`、`tests/test_v16_deployment_contract.py`。代码实质仅两笔：`1f1b46c` 为 scheduled profile 新增队列 worker；`867048f` 将 scheduler 由 128 MiB 提到 256 MiB 并把 scheduler/worker 改为 `unless-stopped`。`git diff --check` 干净。
+
+### 9.2 审计项与实测
+
+| 审计项 | 实测 | 裁决 |
+| --- | --- | --- |
+| 变更边界 | 仅 scheduler / scheduler-worker 两段；无新增端口、无 secrets、worker 只挂 v16 卷、仅接内网 `validation` | PASS |
+| 部署契约测试 | `tests/test_v16_deployment_contract.py` 9 项通过；镜像计数 10→11 与新增服务同步 | PASS |
+| 全量非集成回归 | 128 项通过 | PASS |
+| 容器实况与契约一致 | scheduler / scheduler-worker 均 `unless-stopped`、`mem_limit 256m`、`OOMKilled=false`、`RestartCount=1`（Day 0 那次受控自恢复） | PASS |
+| 连续运行起点 | `StartedAt` 分别为 `2026-09-01T15:11:44Z`、`15:11:55Z`，与 24 小时门基线 23:12+08 秒级吻合 | PASS |
+| 其余容器无未解释重启 | `db`、`backend` 均 `RestartCount=0`，启动早于冷静期起点并持续运行 | PASS |
+| 宿主 worker | `launchctl` 状态 `running` 且含 `keepalive`；PID 93381 与 `0600` `.runtime/agent-worker.pid` 一致 | PASS |
+| 运行残留 | 无 `dsherp-context-*` 容器；无 `/tmp/context-run-*` 目录 | PASS |
+| 四站可用 | validation / platform / preview / daily 四个 `api/method/ping` 全部 `pong` | PASS |
+| 卷共存 | v15 与 v16 各 9 个卷逐名在位；未执行 `down -v`、`volume rm`、`image rm` 或 prune | PASS |
+| 调度连续性抽样（09:55） | daily 站当日 219 条 `Scheduled Job Log` 全部 `Complete`；alpha `enable_scheduler=0`；`short/default/long` 队列长度均为 0；两容器当日日志中 `Traceback|ERROR|Exception|Job failed` 零命中 | PASS |
+
+### 9.3 冷静期覆盖度量化（09:55 抽样）
+
+自冷静期起点 2026-09-01 23:12 起 10.73 小时内，daily 站 82 个 `Scheduled Job Type` 的实际触发分布：
+
+| 频次 | 已执行 | 非 Complete |
+| --- | --- | --- |
+| Hourly Maintenance | 170 | 0 |
+| Daily Maintenance | 36 | 0 |
+| Hourly | 10 | 0 |
+| Daily | 3 | 0 |
+
+24 小时窗口可触发的全部频次类均已多次触发且零失败。余下 25 个未触发的 Job Type 为 Weekly(2)、Weekly Long(3)、Monthly(1)、Monthly Long(2) 及条件性 Cron，需 7~30 天才可能触发；它们到 23:12 同样不会触发。**该局限不是本轮新增豁免，原三日门与 24 小时门都不覆盖，须在 C5 后的常规运行中另行观察。**
+
+内存 soak：scheduler 由 07:15 的 90.58 MiB 变为 09:55 的 92.03 MiB；scheduler-worker 由 88.64 MiB 降至 84.98 MiB。两者稳定在 256 MiB 上限约 35%，无增长斜率，距 Day 0 OOM 失败模式有约 2.8 倍余量。
+
+### 9.4 裁决
+
+**冷静期部署变化（`11d22ed..a5b901c`）：PASS。无 Critical，无阻断级 Important。**
+
+C4 整体尚未放行，剩余项仅一条运行时交付物：第三次分时四件套备份与一次性恢复验证（记录备份前缀、四件大小、`verify_daily_backup.py` 退出 0、恢复 Site 已删除）。该项为可数交付物，不是时长函数。
+
+本结论钉在 `a5b901c`。若在 C4 最终放行前 HEAD 发生移动，增量部分须补审，本节不自动延用。
