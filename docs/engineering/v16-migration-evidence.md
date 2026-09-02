@@ -260,6 +260,32 @@ v15 卷已按精确 dry-run 清单逐名删除，删除前完成归档前置门�
 
 回滚材料（`work/v16-rollback-20260901/`）在此保留：v15 卷已删，tar 归档与 SQL dump 是唯一恢复路径。
 
+## v15 数据真实导入 v16 的 restore 验证（2026-09-03）
+
+原迁移策略为 fresh provision，不做 `bench migrate`；四站是全新建站后重新播种，v15 库只归档未导入。用户要求补做一次真实导入验证，确认 v15 数据可完整迁移到 v16。
+
+**方法**：从 `dsherp-validation_db-data-all-databases.sql` 归档中按 `-- Current Database:` 标记切出 v15 `dsherp-validation.localhost` 的库 `_0cf197bf77b6ef34`（87 MB、712 张表），剥离 `CREATE DATABASE` 与 `USE` 语句（保留其一会让 `bench restore` 以站点库用户越权访问别的库而失败）；在 v16 上新建一次性站 `dsherp-v15restore.localhost`，`bench restore` 导入，并从归档 `site_config.json` 注入原 `encryption_key` 以保证加密字段可解；随后 `bench migrate` 应用 v15→v16 补丁链。**全程不触碰运行中的四站。**
+
+**过程中发现并修复一个真实缺陷**：首次 `bench migrate` 以 `AttributeError: 'Meta' object has no attribute 'custom'` 中止，位置为 `dsherp_bridge/configuration_locks.py` 的 `check_new_custom_record`。migrate 通过 `frappe.model.sync` → `import_doc` → `doc.insert()` 触发 `doc_events["*"]["before_insert"]` 这个全站通配 hook，而该时机的 in-flight `Meta` 没有 `custom` 属性；正常运行态下所有 DocType 的 `Meta` 均有该属性，因此四站 fresh provision 从未暴露它。这正是迁移计划中标记为 P1 的「全站通配 hook 在 migrate/install 期放大失败面」。`dcc64ef` 以 TDD 改为带默认值取值（缺失即视为非 custom，语义不变）；修复后 `bench migrate` 退出 0、异常数 0。**该缺陷影响每一次 `bench migrate`，不限于本次验证。**
+
+**验证结果**（migrate 后回读一次性站）：
+
+| 项 | 值 |
+| --- | --- |
+| 已安装 apps | `frappe`、`erpnext`、`dsherp_bridge` |
+| Installed Application 版本 | ERPNext `16.33.0` |
+| 公司 | `DSHERP 原生验收测试公司`（DVT） |
+| 业务 | Item 6、Customer 3、Supplier 1、Warehouse 10、BOM 1、Sales Order 2 |
+| Agent 工作历史 | DS Conversation 26、DS Model Run 52、DS Operation Proposal 33、DS Execution Record 29 |
+| 策略 | DS Doctype Policy 14、Route 7 |
+| 用户 | 57 |
+
+**结论：v15 数据可完整迁移到 v16，业务数据、自定义 DocType 与 Agent 工作历史均完好可读。**
+
+一次性站已 `bench drop-site` 删除；其 drop 与 migrate 在 RQ 中残留的 34 条任务（32 条 `delete_dynamic_links` + 2 条索引重建）已按站精确清除（`bench purge-jobs` 要求站点存在，站已删故改用队列 API 定点删除），之后 `get_jobs` 返回空，受影响的配置锁与配置流程集成测试复跑 3 项通过。
+
+**注意**：本次只是验证，运行中的四站仍是 fresh provision 的内容，不含上表的 v15 Agent 工作历史。该历史保存在 `work/v16-rollback-20260901/` 归档中，并已证明可按上述步骤导入。是否把它导入正式站点是独立决定，本记录不代表已导入。
+
 ## 当前状态与剩余边界
 
 C4 与 C5 均已完成：24 小时冷静期通过、三次分时备份恢复取证、当前 HEAD 全量独立审计通过、`main` 已切换到 v16、v15 九卷按精确清单逐名删除。v15 镜像因与 AgenERP 共用而取消删除（见上节），这是终态决定，不是待办。
