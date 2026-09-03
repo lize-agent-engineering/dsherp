@@ -22,13 +22,18 @@ try:
         'question':'events','page_context':json.dumps({'schema_version':1,'page_type':'unknown','route':[]}),
         'permission_revision':revision(actor),'capability_hash':hashlib.sha256(b'cap').hexdigest(),
         'expires_at':add_to_date(now_datetime(),minutes=3),'sources':'[]'}).insert(ignore_permissions=True)
-    first=ev.record(run.name,'claimed',{'domain':'query','capability':'SECRET-CAP','nested':{'api_secret':'SECRET-2','ok':'x'*3000}})
+    first=ev.record(run.name,'claimed',{'domain':'query','capability':'SECRET-CAP','apiKey':'SECRET-KEY',
+        'callId':'call-1','nested':{'api_secret':'SECRET-2','accessToken':'SECRET-TOKEN','ok':'x'*3000,
+        'credential':'sk-abcdefghij_12345','header':'Bearer synthetic-value','toolCallId':'tool-1'}})
     second=ev.record(run.name,'tool_call',{'tool':'erp_read_record'},error_class=None)
     assert first==run.name+'-000001' and second==run.name+'-000002',(first,second)
     stored=frappe.get_doc('DS Run Event',first)
     assert 'SECRET' not in stored.payload, stored.payload
-    assert 'capability' not in json.loads(stored.payload) and 'api_secret' not in json.loads(stored.payload)['nested']
-    assert json.loads(stored.payload)['nested']['ok'].endswith('…[truncated]')
+    payload=json.loads(stored.payload)
+    assert 'capability' not in payload and 'apiKey' not in payload and 'api_secret' not in payload['nested'] and 'accessToken' not in payload['nested']
+    assert payload['callId']=='call-1' and payload['nested']['toolCallId']=='tool-1'
+    assert payload['nested']['credential']=='[redacted]' and payload['nested']['header']=='[redacted]'
+    assert payload['nested']['ok'].endswith('…[truncated]')
     try:
         stored.kind='changed';stored.save(ignore_permissions=True);raise AssertionError('event was rewritten')
     except frappe.ValidationError:pass
