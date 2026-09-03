@@ -1,6 +1,6 @@
 # 可观测与失败回放证据
 
-日期：2026-09-03。当前范围：C0 与 C1 整改，固定 Runtime 事件形状、隔离合成站历史运行基线和三站迁移事实。本文件分别记录探针、站点事实和后续检查点证据；本地模型替身结果不等同于真实 provider 证据，也不代表生产部署。
+日期：2026-09-03。当前范围：C0 至 C2，固定 Runtime 事件形状、隔离合成站历史运行基线、三站迁移事实和本地模型替身事件链。本文件分别记录探针、站点事实和后续检查点证据；本地模型替身结果不等同于真实 provider 证据，也不代表生产部署。
 
 ## C0：固定 Runtime 事件形状探针
 
@@ -89,3 +89,74 @@ daily 没有 Failed error 前缀。C4 的 T4.3 导出基准因此为 alpha 12 �
 ### 当前不可变边界
 
 `DS Run Event` 的只增不删不改目前是应用层约定：Document 层的 `validate` 拒绝更新、`on_trash` 拒绝删除，但 `frappe.db.delete` 等数据库直写仍可绕过。合成测试仅为按外键顺序清理数据而使用该直写；数据库层约束或触发器留待计划 4 的 G7 收口，C1 不把应用层约定表述为数据库强制保证。
+
+## C2：runner/worker 回写与结构化日志
+
+### 测试门禁
+
+`.venv/bin/python -m pytest tests --ignore=tests/integration -q` 在最终提交候选上退出 0：
+
+```text
+........................................................................ [ 51%]
+...................................................................      [100%]
+139 passed in 48.46s
+```
+
+计划原命令 `node --test runtime/` 在本机 Node v26.7.0 把目录当作单个模块，退出 1，报 `Cannot find module '/Users/lize/Documents/ChatGPT/dsherp/runtime'`；这是命令行入口不兼容，不是测试断言失败。没有添加空入口伪造绿灯。实际测试文件命令 `node --test runtime/*.test.cjs` 退出 0，结果为 `tests 8, pass 8, fail 0`。因此 C2 的原样 Node 命令标准仍记为偏离，等待审计裁决。
+
+完整门禁首次还发现 C1 新增的 `DS Run Event` 使用 `sort_order: ASC`，违反仓库全部自定义 DocType 的 `creation DESC` 契约；先取得 `1 failed, 15 passed`，再改为 `DESC` 后取得 `16 passed`。这是 C1 元数据遗漏，不属于 T2 行为。变更后按全局约束串行迁移 alpha、daily、beta，三次 `bench migrate` 退出码均为 0；三站 `table_exists('DS Run Event')` 均返回 `true`、退出码均为 0，DocType 的 `sort_order` 均为 `DESC`。每站迁移产生的 long queue 搜索索引任务均由对应 bench 串行 burst worker 完成并显示 `Job OK`。
+
+### 本地替身链路与 usage 结论
+
+验证前 `launchctl` 未加载 `com.dsherp.agent-worker-v16`，`.runtime/agent-worker.pid` 不存在，进程表没有 `dsherp.context_worker`。首次链路在新加的 HTTP 读取核验处失败：已挂载的新源码包含 `list_run_events`，但 alpha Web 进程仍加载旧模块，返回 HTTP 417 和 `has no attribute 'list_run_events'`；fixture 正常清理该运行。重启 alpha/beta backend 并核验 alpha HTTP ping 200、beta 容器内 `frappe.ping` 为 `pong` 后，原样执行：
+
+```text
+.venv/bin/python -m pytest tests/integration/test_context_worker_chain.py -q -s
+1 passed in 130.91s (0:02:10)
+```
+
+测试在 fixture 清理前通过所有者的 `list_run_events` 实际读取两次运行；两条结果均按 `seq` 返回以下完整 kind 序列：
+
+```text
+queued, claimed, runtime_started, model_call_reserved, model_response, tool_call,
+model_call_reserved, model_response, runtime_tool_call, tool_result, turn_end,
+container_finished, finished
+```
+
+两次运行各有两条 `model_response`，每条 payload 都是：
+
+```json
+{"usage":null,"chunk_keys":["type","reason"],"purpose":"conversation","model":"deepseek-v4-flash"}
+```
+
+结论：固定 Runtime 的 finish chunk 只有 `type`、`reason` 顶层键，没有 `usage`；C2 如实记录 `usage: null`，不估算 token。模型地址固定为容器内本地替身 `127.0.0.1:38127/v1`，没有调用真实 provider。事件顺序也表明服务端 `tool_call` 在 runner 汇总 Runtime 通知形成的 `runtime_tool_call` 之前入库；两类事件都存在，未改写实际 `seq` 来迎合展示顺序。
+
+### worker 状态与 stderr
+
+旧日志可恢复地轮转到 `/Users/lize/Library/Logs/dsherp-agent-worker-v16.log.pre-c2-20260903140303`。替身测试 stderr 写入新日志；恢复前又以数据库只读 SQL 核验 alpha、daily、beta 的 Queued/Running/Cancelling 计数均为 `[[0]]`。随后从 `infra/render_context_worker_launch_agent.py` 重建 plist 并只 bootstrap 一次。最终实态为 launchd `state = running`、`properties = keepalive | runatload`，PID 文件权限 `-rw-------`，PID `87290` 与 launchd/进程表一致，`dsherp.context_worker` 精确计数为 1。
+
+日志逐行 JSON 校验命令与输出：
+
+```text
+.venv/bin/python - <<'PY'
+import json
+from pathlib import Path
+lines=Path('/Users/lize/Library/Logs/dsherp-agent-worker-v16.log').read_text().splitlines()
+for line in lines: json.loads(line)
+print(f'json_lines={len(lines)} invalid=0')
+PY
+json_lines=7 invalid=0
+```
+
+不把真实 provider key 展开到命令行或输出，使用进程替换把本地配置值仅送入 grep；服务凭据同样复核：
+
+```text
+grep -F -c -f <(.venv/bin/python -c 'from pathlib import Path; from dsherp.runtime_host import load_settings; print(load_settings(Path(".env"))["DEEPSEEK_API_KEY"])') /Users/lize/Library/Logs/dsherp-agent-worker-v16.log
+0
+provider_grep_exit=1
+grep -F -c -f <(jq -r .api_secret .runtime/context-worker.json) /Users/lize/Library/Logs/dsherp-agent-worker-v16.log
+0
+service_secret_grep_exit=1
+```
+
+七行中有一条 `event_writeback_failed/BusinessRuntimeError`，对应首次链路遇到旧 Web 进程缺少读取/回写端点时的预期结构化诊断；该次运行仍由 fixture 精确清理。其余为三次合成运行的 `claimed`/`container_finished`。日志无明文凭据、无非 JSON 行。
