@@ -257,6 +257,8 @@ HTTP 状态为 200；`lsof` 显示 PID `18765` 只监听 `127.0.0.1:9109`。`--o
 
 整改提交为 `1fd3020`（陈旧快照）、`b1aeea7`（探针/metrics 启动故障隔离）、`c74c26e`（告警与指标脱敏）、`3eeeb2b`（证据因果修正）和 `632df3f`（空快照测试隔离）。P1.1 单元 RED 为 `6 failed, 18 passed`，GREEN 为 `24 passed`；P1.2 首轮 RED 为 `5 failed, 23 passed`，Cursor 最小实现后主审补获 `ORPHAN_CONTAINERS.set(None)` 的 RED，最终相关测试 `29 passed`；P1.3 RED 为 `2 failed, 9 passed`，GREEN 为 `12 passed`。最终快照集成测试使用模拟空查询、不删真实快照，结果为 `1 passed in 27.15s`。
 
+整改代码与证据落盘后重跑全量非集成门禁，尾部为 `164 passed in 51.23s`；同一候选运行 `node --test runtime/*.test.cjs` 为 `tests 8, pass 8, fail 0, duration_ms 57.832875`。定向告警/metrics/worker 日志测试为 `34 passed in 0.87s`。
+
 本轮没有修改 DocType JSON 或 `hooks.py`，因此没有重复执行三站 migrate；上一候选在同一 DocType/hooks 版本上的 alpha、daily、beta migrate 退出码均为 0。本轮只按要求修改站点运行设置：alpha、daily 的 `System Settings.enable_scheduler` 实测启用，beta 的 `is_scheduler_disabled(verbose=False)` 返回 true，作为预览隔离站不参加自然调度。
 
 从 `2026-09-03T09:08:51Z` 到 `09:25:03Z` 连续观察 scheduled profile，scheduler 与 scheduler-worker 均保持 running。排除测试创建并自行清理的快照后，两站自然 `collected_at`（站点时区 UTC+8）为：
