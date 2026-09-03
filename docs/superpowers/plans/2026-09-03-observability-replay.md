@@ -12,6 +12,8 @@
 
 ## Global Constraints
 
+- 每个检查点（C1–C4）报告都必须附 `.venv/bin/python -m pytest tests --ignore=tests/integration -q` 与 `node --test runtime/*.test.cjs` 的完整尾部输出，不只跑本阶段新增的测试；任何红灯先修再报。
+- `tests/integration/test_context_worker_chain.py` 与其他在进程内调用 `worker.run_once` 的测试，只能在常驻 worker（`.runtime/agent-worker.pid` 对应进程）停止时运行：否则常驻 worker 会用真实 provider 凭证抢先领取测试排入的运行。该类测试须在开头 fastfail 检查。
 - 任何 DocType/Report 变更后，装有 `dsherp_bridge` 的三个 Site（alpha `dsherp-validation.localhost`、daily `dsherp-daily.localhost`、beta `dsherp-beta.localhost`）都必须 `bench migrate`，并在检查点报告中逐站列出退出码；平台站只装 `dsherp_platform`，不涉及。
 
 - 全部按 AGENTS.md：中文；TDD（先写失败测试）；fastfail；不 fork Frappe/ERPNext；按功能分类提交；不推送远端；不提交密钥、租户数据、运行日志。
