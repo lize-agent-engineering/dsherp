@@ -1,0 +1,14 @@
+{
+  "doctype": "Report",
+  "name": "DS Agent Audit",
+  "report_name": "DS Agent Audit",
+  "report_type": "Script Report",
+  "ref_doctype": "DS Model Run",
+  "module": "DSHERP Bridge",
+  "is_standard": "Yes",
+  "roles": [
+    {
+      "role": "System Manager"
+    }
+  ]
+}

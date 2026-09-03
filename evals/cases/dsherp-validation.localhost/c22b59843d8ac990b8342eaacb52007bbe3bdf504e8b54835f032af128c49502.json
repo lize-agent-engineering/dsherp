@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "site": "dsherp-validation.localhost",
+  "run_id": "c22b59843d8ac990b8342eaacb52007bbe3bdf504e8b54835f032af128c49502",
+  "domain": "query",
+  "question": "Read test item",
+  "page_context": {
+    "page_type": "unknown",
+    "route": [
+      "Workspaces",
+      "Home"
+    ],
+    "schema_version": 1
+  },
+  "status": "Failed",
+  "error": "业务运行失败：RuntimeError",
+  "sources": [],
+  "events": [],
+  "proposals": [],
+  "created": "2026-08-31 14:15:35.074456"
+}

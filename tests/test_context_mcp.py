@@ -112,3 +112,14 @@ def test_http_rejections_are_not_retried_or_replaced_by_empty_results(status):
             context_mcp.post(client,'run_tool',run_id='RUN',capability='CAP')
         assert 'sensitive-provider-detail' not in str(error.value)
     assert len(calls)==1
+
+
+def test_post_timeout_is_transport_only_and_not_business_payload():
+    seen=[]
+    def handler(request):
+        seen.append((json.loads(request.content),request.extensions['timeout']))
+        return httpx.Response(200,json={'message':{'status':'ok'}})
+    with httpx.Client(base_url='http://synthetic',transport=httpx.MockTransport(handler),timeout=30) as client:
+        assert context_mcp.post(client,'record_run_event',timeout=5,run_id='RUN',events=[])=={'status':'ok'}
+    assert seen[0][0]=={'run_id':'RUN','events':[]}
+    assert set(seen[0][1].values())=={5.0}

@@ -15,4 +15,5 @@ dist/
 coverage/
 work/
 .runtime/
+evals/runs/
 *.log

@@ -1,0 +1,28 @@
+{
+  "doctype": "DocType",
+  "name": "DS Run Event",
+  "module": "DSHERP Bridge",
+  "custom": 0,
+  "engine": "InnoDB",
+  "sort_field": "creation",
+  "sort_order": "DESC",
+  "field_order": [
+    "run",
+    "seq",
+    "kind",
+    "source",
+    "error_class",
+    "recorded_at",
+    "payload"
+  ],
+  "fields": [
+    {"fieldname":"run","label":"run","fieldtype":"Link","options":"DS Model Run","reqd":1,"search_index":1},
+    {"fieldname":"seq","label":"seq","fieldtype":"Int","reqd":1},
+    {"fieldname":"kind","label":"kind","fieldtype":"Data","reqd":1},
+    {"fieldname":"source","label":"source","fieldtype":"Select","options":"server\nrunner\nworker","reqd":1},
+    {"fieldname":"error_class","label":"error_class","fieldtype":"Data"},
+    {"fieldname":"recorded_at","label":"recorded_at","fieldtype":"Datetime","reqd":1},
+    {"fieldname":"payload","label":"payload","fieldtype":"Long Text"}
+  ],
+  "permissions": []
+}

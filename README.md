@@ -8,7 +8,9 @@
 
 用户要求收敛旧服务后，旧独立聊天付费 worker 已于 2026-08-29 停止（无在途任务），其提交、领取、工具和完成端点及本地凭证随后退役；旧任务记录只读保留。下文“已启用”的历史描述不再代表当前运行状态。原生 ERP 与身份服务保留。新实现进度见 [上下文 Agent 证据](docs/engineering/context-agent-evidence.md)。
 
-当前隔离合成环境运行 ERPNext `16.33.0` / Frappe `16.31.0`，容器 Python `3.14.7`；固定 DSH SDK/Runtime 仍为 `0.1.1rc1`。`pytest tests --collect-only` 收集 293 项，非集成子集 128 项通过；前端以 `NODE_OPTIONS=--no-experimental-webstorage npm test` 验证 21 个文件、162 项通过。自动化中的工具链使用本地模型替身，真实模型、真实 ERP 与浏览器证据另行记录，不能互相替代。
+当前隔离合成环境运行 ERPNext `16.33.0` / Frappe `16.31.0`，容器 Python `3.14.7`；固定 DSH SDK/Runtime 仍为 `0.1.1rc1`。截至计划 1 C4 的最终门禁分别为非集成 `168 passed`、集成 `174 passed`、前端 21 个文件 `167 passed`、Node Runtime `8 passed`。自动化中的工具链使用本地模型替身，真实模型、真实 ERP 与浏览器证据另行记录，不能互相替代。
+
+运行事件流、Prometheus 指标与规则化告警已在隔离合成站落地，计划 1 于 2026-09-03 通过 C4；失败回放、告警时延和真实浏览器截图见[可观测与失败回放证据](docs/engineering/observability-evidence.md)。这仍不代表生产租户部署或生产可用。
 
 **v15 时期历史证据**：ERPNext `15.119.3` / Frappe `15.118.0` 本地合成环境曾完成原生初始化、普通用户读取/拒绝、alpha 分段与 daily 制造闭环；详见[阶段 2/3 制造闭环与技能升版证据](docs/engineering/stage-2-3-manufacturing-evidence.md)和[原生侧栏 HITL 真实验收](docs/engineering/context-agent-hitl-acceptance.md)。**当前 v16 证据**：四站 fresh provision、制造行为重验、原生浏览器矩阵与经授权真实 DeepSeek 只读矩阵已落档；C4 24 小时冷静期、三次分时备份恢复和当前 HEAD 最终独立审计均已通过，`main` 已切换到 v16，v15 九卷已归档并按精确清单逐名删除（v15 镜像在用户决定废弃 AgenERP 后一并删除）。全部证据来自本机隔离合成四站，不含生产租户数据，因此仍不得宣称可上线或生产可用。详见 [v16 迁移证据](docs/engineering/v16-migration-evidence.md)。
 
@@ -34,6 +36,7 @@
 - [首版设计](docs/superpowers/specs/2026-08-28-dsherp-design.md)
 - [Agent 体系架构设计](docs/superpowers/specs/2026-08-31-agent-system-architecture-design.md)
 - [ERPNext 中文术语纠正包设计](docs/superpowers/specs/2026-08-31-terminology-correction-design.md)
+- [生产化总体设计](docs/superpowers/specs/2026-09-03-production-hardening-design.md)
 - [首次技术验证计划](docs/superpowers/plans/2026-08-28-foundation-validation.md)
 - [项目开发约定](AGENTS.md)
 - [准确版本与运行契约](docs/engineering/runtime-baseline.md)
@@ -47,6 +50,8 @@
 - [阶段 3 身份绑定参考](docs/superpowers/plans/2026-08-28-identity-bound-read-execution.md)
 - [制造业务闭环验证实施计划](docs/superpowers/plans/2026-08-31-manufacturing-loop-validation.md)
 - [ERPNext/Frappe v16 完整迁移计划](docs/superpowers/plans/2026-09-01-v16-migration.md)
+- [生产就绪第二轮审计](docs/engineering/production-readiness-audit-2026-09-03.md)
+- [计划 1：可观测与失败回放](docs/superpowers/plans/2026-09-03-observability-replay.md)
 
 ## 最小验证
 

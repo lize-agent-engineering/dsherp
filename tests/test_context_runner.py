@@ -1,5 +1,9 @@
 import threading
+import time
+
+import httpx
 import pytest
+from dsherp import context_runner
 from dsherp.context_runner import monitored_run
 from dsherp.session_runtime import open_runtime
 
@@ -36,6 +40,66 @@ def test_failure_diagnostic_excludes_exception_text_locals_and_credentials():
     assert result['frames'][-1]['function']=='test_failure_diagnostic_excludes_exception_text_locals_and_credentials'
     assert private_value not in json.dumps(result)
     assert all(set(frame)=={'file','function','line'} for frame in result['frames'])
+
+
+def test_monitored_run_records_tool_and_turn_events_before_returning(model_server,tmp_path):
+    import json
+    settings,requests,state=model_server
+    state['tool_call']={'name':'skill','arguments':json.dumps({'name':'erp-query'})}
+    recorded=[]
+    with open_runtime(settings,tmp_path,'events-run',resume=False) as runtime:
+        result=monitored_run(runtime,'hello','events-run',lambda:'Running',record=recorded.append)
+    assert result['status']=='Succeeded'
+    kinds=[item['kind'] for batch in recorded for item in batch]
+    assert 'runtime_tool_call' in kinds and kinds[-1]=='turn_end',kinds
+    assert settings['DEEPSEEK_API_KEY'] not in json.dumps(recorded)
+
+
+def test_monitored_run_records_runtime_failed_when_model_never_completes(model_server,tmp_path):
+    settings,requests,state=model_server
+    state['finish_reason']='length';state['content']=''
+    recorded=[]
+    with open_runtime(settings,tmp_path,'failed-run',resume=False) as runtime:
+        with pytest.raises(RuntimeError):
+            monitored_run(runtime,'hello','failed-run',lambda:'Running',record=recorded.append)
+    items=[item for batch in recorded for item in batch]
+    assert items[-1]['kind']=='runtime_failed' and items[-1]['error_class']=='RuntimeError'
+    assert set(items[-1]['payload'])=={'type','frames'}
+
+
+def test_event_writeback_timeout_does_not_change_successful_run(model_server,tmp_path):
+    settings,_,_=model_server
+    attempts=[];outcomes=[]
+    def handler(request):
+        attempts.append(request.extensions['timeout'])
+        raise httpx.TimeoutException('synthetic slow event sink',request=request)
+    started=time.monotonic()
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler),timeout=30) as client:
+        def record(items):
+            outcomes.append(context_runner.flush_run_events(client,'RUN','CAP',items))
+        with open_runtime(settings,tmp_path,'event-timeout',resume=False) as runtime:
+            result=monitored_run(runtime,'hello','event-timeout',lambda:'Running',record=record)
+    assert result=={'status':'Succeeded','answer':'DSHERP_OK'}
+    assert outcomes and all(outcome['error']=='TimeoutException' for outcome in outcomes)
+    assert attempts and all(set(timeout.values())=={5.0} for timeout in attempts)
+    assert time.monotonic()-started<10
+
+
+def test_event_mapping_failure_does_not_change_successful_run(model_server,tmp_path,monkeypatch,capsys):
+    import json
+    settings,_,_=model_server
+    recorded=[]
+    def fail_mapping(*args):
+        raise TypeError('synthetic event payload must not affect the run')
+    monkeypatch.setattr(context_runner.run_events,'from_runtime_events',fail_mapping)
+    with open_runtime(settings,tmp_path,'mapping-failure',resume=False) as runtime:
+        result=monitored_run(runtime,'hello','mapping-failure',lambda:'Running',record=recorded.append)
+    assert result=={'status':'Succeeded','answer':'DSHERP_OK'}
+    assert all(item['kind']!='runtime_failed' for batch in recorded for item in batch)
+    lines=capsys.readouterr().err.strip().splitlines()
+    assert len(lines)==1 and lines[0].startswith('DSHERP_DIAGNOSTIC ')
+    diagnostic=json.loads(lines[0].removeprefix('DSHERP_DIAGNOSTIC '))
+    assert diagnostic=={'type':'EventMappingFailed','error':'TypeError'}
 
 
 def test_cancel_state_stops_actual_model_request(model_server,tmp_path):

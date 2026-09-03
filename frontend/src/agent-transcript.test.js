@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {buildTranscript,toolEvents,pendingCount} from './agent-transcript.js';
+import {buildTranscript,toolEvents,pendingCount,runEventRows} from './agent-transcript.js';
 
 const run = (id, extra={}) => ({id,question:'问题 '+id,answer:'回答 '+id,status:'Succeeded',context:{page_type:'unknown'},sources:[],...extra});
 
@@ -124,4 +124,24 @@ it('配置读取事件带回模块、角色与配置基线，而不是只剩参�
  expect(event.configVersion).toBe('2026-08-29 03:00:00');
  expect(event.configRevision).toBe('r-9');
  expect(event.detail).toBe('2 个模块 · 1 个角色');
+});
+
+it('运行事件逐类翻译且错误类使用 danger 语气', () => {
+ const events = [
+  ['queued',{}],['claimed',{}],['runtime_started',{}],['model_call_reserved',{model_calls:2}],
+  ['model_response',{}],['model_error',{}],['runtime_tool_call',{name:'erp_read_record'}],
+  ['tool_call',{tool:'erp_read_record',duration_ms:7}],['tool_result',{}],['tool_error',{}],
+  ['compaction',{}],['turn_end',{reason:'completed'}],['runtime_failed',{},'RuntimeError'],
+  ['container_finished',{status:'Succeeded'}],['finished',{status:'Succeeded'}],['expired',{}],
+  ['cancel_requested',{}],['worker_error',{}],['future_kind',{}],
+ ].map(([kind,payload,error_class],index)=>({seq:index+1,kind,payload,error_class,recorded_at:'2026-09-03 10:00:00'}));
+ const rows=runEventRows(events);
+ expect(rows.map(row=>row.label)).toEqual([
+  '已排队','已领取','运行时启动','模型调用 #2','模型返回','模型错误','调用工具 erp_read_record',
+  '服务端执行 erp_read_record（7 ms）','工具返回','工具错误','上下文压缩','回合结束（completed）',
+  '运行失败（RuntimeError）','容器结束（Succeeded）','运行结束（Succeeded）','运行过期','已请求取消',
+  'worker 错误','future_kind',
+ ]);
+ expect(rows.filter(row=>row.tone==='danger').map(row=>row.seq)).toEqual([6,10,13,18]);
+ expect(rows[0]).toMatchObject({seq:1,time:'2026-09-03 10:00:00'});
 });

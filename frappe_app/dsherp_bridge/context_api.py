@@ -328,6 +328,8 @@ def send_message(question, context, request_id, session_id=None, domain='query')
         'platform_grant':grant,'domain':domain,
         'request_id':request_id,'request_digest':digest,'question':question.strip(),
         'page_context':_json(snapshot),'status':'Queued','sources':'[]'}).insert(ignore_permissions=True,set_name=run_id)
+    from dsherp_bridge import context_events as events
+    events.record_safely(run_id,'queued',{'domain':domain,'question_chars':len(question.strip()),'page_type':snapshot.get('page_type')})
     return _public(doc)
 
 
@@ -344,4 +346,19 @@ def cancel_run(session_id,run_id,request_id):
         run.status='Cancelled' if run.status=='Queued' else 'Cancelling'
         run.cancel_request_id=request_id
         run.save(ignore_permissions=True)
+        from dsherp_bridge import context_events as events
+        events.record_safely(run.name,'cancel_requested',{'to_status':run.status})
+        if run.status=='Cancelled':
+            events.record_safely(run.name,'finished',{'status':'Cancelled'})
     return _public(doc)
+
+
+@frappe.whitelist(methods=['GET'])
+def list_run_events(run_id,page=1):
+    user=_user();page=_page(page)
+    run=frappe.db.get_value('DS Model Run',run_id,['name','owner'],as_dict=True)
+    if not run or (run.owner!=user and 'System Manager' not in frappe.get_roles(user)):
+        raise frappe.PermissionError('运行不属于当前用户')
+    from dsherp_bridge import context_events as events
+    rows=events.list_events(run.name,page=page,page_length=200,fetch_length=201)
+    return {'run_id':run.name,'page':page,'events':rows[:200],'has_more':len(rows)>200}

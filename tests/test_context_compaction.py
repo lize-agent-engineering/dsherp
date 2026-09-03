@@ -12,10 +12,13 @@ from dsherp.runtime_revision import configuration_revision
     ('operation',False,True),
 ])
 def test_native_auto_compaction_cannot_bypass_authorization(model_server,tmp_path,domain,deny_summary,pressure):
-    observed=[]
+    observed=[];reports=[]
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])));observed.append(payload)
+            payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            if self.path.endswith('.record_run_event'):
+                reports.append(payload);self.send_response(200);self.end_headers();return
+            observed.append(payload)
             self.send_response(403 if deny_summary and payload['purpose']=='compaction' else 200)
             self.end_headers();self.wfile.write(b'{"message":{"allowed":true}}')
         def log_message(self,*args):pass

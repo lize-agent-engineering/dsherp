@@ -9,6 +9,7 @@
   "runtime/context-plugin.cjs",
   "runtime/model-guard.cjs",
   "dsherp/context_runner.py",
+  "dsherp/run_events.py",
   "dsherp/context_mcp.py",
   "dsherp/read_tools.py",
   "dsherp/session_runtime.py",

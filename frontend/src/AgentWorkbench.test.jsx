@@ -112,6 +112,23 @@ it("没有工具读取的一轮不显示工具入口", async () => {
   expect(within(turn).queryByRole("button", { name: /查看本轮 ERP 读取/ })).toBeNull();
 });
 
+it("每条运行按需展开服务端事件流", async () => {
+  const api = apiFactory();
+  api.mockImplementation(async (method, params) => {
+    if (method === "search_sessions")
+      return { items: [{ id: "S-1", title: active.title, modified: "2026-08-29" }], has_more: false };
+    if (method === "get_session") return active;
+    if (method === "list_run_events")
+      return { run_id: params.run_id, page: 1, events: [{ seq: 1, kind: "queued", recorded_at: "2026-09-03 10:00:00", payload: {} }], has_more: false };
+    return { items: [] };
+  });
+  render(<AgentWorkbench api={api} initialSession="S-1" />);
+  const turn = (await screen.findByText("已核对")).closest("article");
+  fireEvent.click(within(turn).getByRole("button", { name: "事件流" }));
+  expect(await within(turn).findByText("已排队")).toBeTruthy();
+  expect(api).toHaveBeenCalledWith("list_run_events", { run_id: "M-1", page: 1 });
+});
+
 it("待确认提案就地出现在产生它的那条消息下，标题右侧提示需要确认", async () => {
   const proposal = {
     id: "P-1",

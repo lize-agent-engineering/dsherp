@@ -357,7 +357,9 @@ finally:
         if frappe.db.exists('DS Operation Proposal',proposal_id):
             frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
     for run_id in run_names:
-        if frappe.db.exists('DS Model Run',run_id):frappe.delete_doc('DS Model Run',run_id,ignore_permissions=True)
+        if frappe.db.exists('DS Model Run',run_id):
+            frappe.db.delete('DS Run Event',{'run':run_id})
+            frappe.delete_doc('DS Model Run',run_id,ignore_permissions=True)
     for conversation in conversation_names:
         if frappe.db.exists('DS Conversation',conversation):frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     if order_name and frappe.db.exists('Sales Order',order_name):

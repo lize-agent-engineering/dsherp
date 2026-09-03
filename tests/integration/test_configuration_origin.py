@@ -47,7 +47,9 @@ finally:
             frappe.delete_doc('DS Configuration Execution',name,force=True)
         frappe.delete_doc('DS Configuration Confirmation',confirmation['id'],force=True)
     if bundle:frappe.delete_doc('DS Configuration Bundle',bundle['id'],force=True)
-    if run:frappe.delete_doc('DS Model Run',run.name,force=True)
+    if run:
+        frappe.db.delete('DS Run Event',{'run':run.name})
+        frappe.delete_doc('DS Model Run',run.name,force=True)
     if conversation:frappe.delete_doc('DS Conversation',conversation.name,force=True)
     if other and frappe.db.exists('DS Conversation',other.name):frappe.delete_doc('DS Conversation',other.name,force=True)
     frappe.db.commit()

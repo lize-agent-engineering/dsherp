@@ -50,6 +50,6 @@ frappe.destroy()
         execute("""
 frappe.set_user('Administrator')
 for name in frappe.get_all('DS Configuration Bundle',filters={'conversation':SESSION},pluck='name'):frappe.delete_doc('DS Configuration Bundle',name,force=True)
-frappe.delete_doc('DS Model Run',RUN,force=True);frappe.delete_doc('DS Conversation',SESSION,force=True)
+frappe.db.delete('DS Run Event',{'run':RUN});frappe.delete_doc('DS Model Run',RUN,force=True);frappe.delete_doc('DS Conversation',SESSION,force=True)
 frappe.db.commit();frappe.destroy()
 """.replace('SESSION',repr(claim['session_id'])).replace('RUN',repr(claim['run_id'])))

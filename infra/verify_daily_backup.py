@@ -141,7 +141,7 @@ def snapshot(site):
             doctype: frappe.db.count(doctype)
             for doctype in (
                 'DS Conversation', 'DS Model Run', 'DS Operation Proposal',
-                'DS Execution Record',
+                'DS Execution Record', 'DS Run Event',
             )
         },
     }

@@ -202,7 +202,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
         </div>}
         {busy&&!session&&<div className="dsh-agent-thinking"><i/><span>正在读取会话状态</span></div>}
         {transcript.turns.map(turn=><article key={turn.message.id} className="dsh-agent-message">
-          <TranscriptTurn turn={turn} cx={turnClasses} labelContext={label} confirmations={confirmations(turn)}>
+          <TranscriptTurn turn={turn} cx={turnClasses} api={api} labelContext={label} confirmations={confirmations(turn)}>
             {turn.message.context?.server_version&&turn.message.context.server_version!==turn.message.context.version&&<p className="dsh-agent-notice">页面版本与服务器已保存版本不同；查询以实际读取为准，未保存内容不会被覆盖。</p>}
           </TranscriptTurn>
         </article>)}

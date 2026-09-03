@@ -994,6 +994,7 @@ finally:
             frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
     for run_name in run_names:
         if frappe.db.exists('DS Model Run',run_name):
+            frappe.db.delete('DS Run Event',{'run':run_name})
             frappe.delete_doc('DS Model Run',run_name,ignore_permissions=True)
     if conversation and frappe.db.exists('DS Conversation',conversation):
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)

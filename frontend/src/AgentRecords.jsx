@@ -1,15 +1,75 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button } from 'antd';
+import { Button, Collapse } from 'antd';
 import { ClockCircleOutlined, InboxOutlined, InfoCircleOutlined, LeftOutlined, SettingOutlined } from '@ant-design/icons';
 import ConfigurationBundle from './ConfigurationBundle.jsx';
 import { ConfirmCard, EmptyState, KindIcon, LoadMore, SkeletonLine, StatusChip } from './agent-ui.jsx';
 import { expiryText, isExpired, recordKind, relativeTime } from './agent-format.js';
+import { runEventRows } from './agent-transcript.js';
 
 // A record row names a frozen configuration bundle inside one session. The
 // detail pane reads that session on demand and shows the exact bundle, never
 // a guess.
 const locate = (record, detail) =>
   detail?.configuration_bundles?.find((row) => row.id === record?.id) ?? null;
+
+// Loaded on first expand only. Putting the rows on the public session payload
+// would reopen the size problem the dedicated GET exists to avoid.
+export function RunEventPanel({ api, runId }) {
+  const requested = useRef(false);
+  const [state, setState] = useState({ loading: false, error: '', rows: null });
+
+  function load() {
+    if (requested.current) return;
+    requested.current = true;
+    setState({ loading: true, error: '', rows: null });
+    api('list_run_events', { run_id: runId, page: 1 })
+      .then((result) => {
+        setState({ loading: false, error: '', rows: runEventRows(result.events) });
+      })
+      .catch((e) => {
+        setState({ loading: false, error: e.message, rows: null });
+      });
+  }
+
+  return (
+    <Collapse
+      ghost
+      size="small"
+      className="dsh-run-events"
+      expandIcon={({ isActive }) => <span aria-hidden="true">{isActive ? '⌄' : '›'}</span>}
+      onChange={(keys) => {
+        const open = (Array.isArray(keys) ? keys : [keys]).filter(Boolean).includes('events');
+        if (open) load();
+      }}
+      items={[
+        {
+          key: 'events',
+          label: '事件流',
+          children: (
+            <>
+              {state.error && (
+                <p className="dsh-run-events-error" role="alert">
+                  {state.error}
+                </p>
+              )}
+              {state.loading && <p className="dsh-run-event-count">正在读取事件…</p>}
+              {state.rows && <p className="dsh-run-event-count">共 {state.rows.length} 条</p>}
+              {state.rows?.map((row) => (
+                <div key={row.seq} className={row.tone === 'danger' ? 'dsh-run-event dsh-is-danger' : 'dsh-run-event'}>
+                  <div className="dsh-run-event-head">
+                    <strong>{row.label}</strong>
+                    <time dateTime={row.time}>{row.time}</time>
+                  </div>
+                  <div className="dsh-run-event-detail">{row.detail}</div>
+                </div>
+              ))}
+            </>
+          ),
+        },
+      ]}
+    />
+  );
+}
 
 export default function AgentRecords({ api, method, empty, refresh = 0 }) {
   const [records, setRecords] = useState([]);

@@ -31,6 +31,7 @@ frappe.init(site='dsherp-validation.localhost');frappe.connect()
 frappe.set_user('Administrator')
 for name in NAMES:
     for run in frappe.get_all('DS Model Run',filters={'conversation':name},pluck='name'):
+        frappe.db.delete('DS Run Event',{'run':run})
         frappe.delete_doc('DS Model Run',run,ignore_permissions=True)
     frappe.delete_doc('DS Conversation',name,ignore_permissions=True)
 frappe.db.commit();frappe.destroy()

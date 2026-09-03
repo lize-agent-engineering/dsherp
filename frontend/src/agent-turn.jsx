@@ -4,6 +4,7 @@ import { ConfirmCard, Prose, Spark, StatusChip, ToolChain } from './agent-ui.jsx
 import OperationProposal from './OperationProposal.jsx';
 import ConfigurationProposal from './ConfigurationProposal.jsx';
 import ConfigurationBundle from './ConfigurationBundle.jsx';
+import { RunEventPanel } from './AgentRecords.jsx';
 
 // One rendering of a transcript turn for both Agent surfaces (the workbench
 // page and the per-page sidebar). The surfaces keep their own CSS worlds, so
@@ -63,7 +64,7 @@ export function TurnConfirmations({ group, api, filterBundles = (bundles) => bun
   );
 }
 
-export function TranscriptTurn({ turn, cx, labelContext, children = null, confirmations = null }) {
+export function TranscriptTurn({ turn, cx, labelContext, children = null, confirmations = null, api }) {
   const message = turn.message;
   return (
     <>
@@ -101,6 +102,7 @@ export function TranscriptTurn({ turn, cx, labelContext, children = null, confir
         </div>
       )}
       {message.status === 'Cancelled' && <p className={cx.notice}>已取消后续工作；已发生的操作不会自动撤销。</p>}
+      <RunEventPanel api={api} runId={message.id} />
       {confirmations}
     </>
   );

@@ -105,6 +105,7 @@ finally:
         for run_name in frappe.get_all(
             'DS Model Run',filters={'conversation':conversation},pluck='name'
         ):
+            frappe.db.delete('DS Run Event',{'run':run_name})
             frappe.delete_doc('DS Model Run',run_name,force=True)
     if record and frappe.db.exists(doctype,record):
         document=frappe.get_doc(doctype,record)
@@ -254,6 +255,7 @@ finally:
         for run_name in frappe.get_all(
             'DS Model Run',filters={'conversation':conversation},pluck='name'
         ):
+            frappe.db.delete('DS Run Event',{'run':run_name})
             frappe.delete_doc('DS Model Run',run_name,force=True)
     if stock_entry and frappe.db.exists('Stock Entry',stock_entry):
         document=frappe.get_doc('Stock Entry',stock_entry)

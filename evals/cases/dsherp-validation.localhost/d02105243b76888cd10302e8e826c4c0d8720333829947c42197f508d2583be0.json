@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "site": "dsherp-validation.localhost",
+  "run_id": "d02105243b76888cd10302e8e826c4c0d8720333829947c42197f508d2583be0",
+  "domain": "query",
+  "question": "Read test item",
+  "page_context": {
+    "page_type": "unknown",
+    "route": [
+      "Workspaces",
+      "Home"
+    ],
+    "schema_version": 1
+  },
+  "status": "Failed",
+  "error": "运行已过期，未自动重试",
+  "sources": [],
+  "events": [],
+  "proposals": [],
+  "created": "2026-08-31 14:15:36.679341"
+}

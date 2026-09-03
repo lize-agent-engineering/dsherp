@@ -90,6 +90,7 @@ finally:
     user.set('roles',[row for row in user.roles if row.role!=role]);user.save()
     if frappe.db.exists('Role',role):frappe.delete_doc('Role',role)
     for run in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):
+        frappe.db.delete('DS Run Event',{'run':run})
         frappe.delete_doc('DS Model Run',run,ignore_permissions=True)
     frappe.delete_doc('DS Conversation',doc['id'],ignore_permissions=True)
     frappe.db.commit();frappe.destroy()

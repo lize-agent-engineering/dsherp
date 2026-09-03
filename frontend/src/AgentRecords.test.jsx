@@ -2,7 +2,7 @@
 import React from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import AgentRecords from './AgentRecords.jsx';
+import AgentRecords, { RunEventPanel } from './AgentRecords.jsx';
 
 afterEach(cleanup);
 
@@ -46,4 +46,26 @@ it('所属会话读不到时如实退回会话标识，不显示空白', async (
   fireEvent.click(await screen.findByRole('button', { name: /应用配置包/ }));
   const detail = await screen.findByRole('region', { name: '记录详情' });
   expect(await within(detail).findByText(/所属会话：S-1/)).toBeTruthy();
+});
+
+it('事件流首次展开才加载且重复展开不重复请求', async () => {
+  const api=vi.fn(async method=>method==='list_run_events'
+    ? {run_id:'M-1',page:1,events:[{seq:1,kind:'queued',recorded_at:'2026-09-03 10:00:00',payload:{domain:'query'}}],has_more:false}
+    : {});
+  render(<RunEventPanel api={api} runId="M-1" />);
+  const trigger=screen.getByRole('button',{name:/事件流/});
+  expect(api).not.toHaveBeenCalled();
+  fireEvent.click(trigger);
+  expect(await screen.findByText('已排队')).toBeTruthy();
+  fireEvent.click(trigger);fireEvent.click(trigger);
+  expect(api).toHaveBeenCalledTimes(1);
+  expect(api).toHaveBeenCalledWith('list_run_events',{run_id:'M-1',page:1});
+});
+
+it('事件流接口失败显示服务端错误而不是让消息白屏', async () => {
+  const api=vi.fn(async()=>{throw new Error('事件读取被服务端拒绝')});
+  render(<RunEventPanel api={api} runId="M-1" />);
+  fireEvent.click(screen.getByRole('button',{name:/事件流/}));
+  expect((await screen.findByRole('alert')).textContent).toBe('事件读取被服务端拒绝');
+  expect(screen.getByRole('button',{name:/事件流/})).toBeTruthy();
 });

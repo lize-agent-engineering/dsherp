@@ -53,13 +53,17 @@ def test_subcontracting_preparer_uses_the_v16_supplied_items_method():
 
 def test_all_custom_doctype_json_files_make_creation_sorting_explicit():
     paths = sorted(ROOT.glob("frappe_app/**/doctype/*/*.json"))
-    assert len(paths) == 13
+    assert len(paths) == 15
     missing = []
     for path in paths:
         data = json.loads(path.read_text())
         if data.get("sort_field") != "creation" or data.get("sort_order") != "DESC":
             missing.append(path.relative_to(ROOT).as_posix())
     assert not missing, missing
+
+
+def test_daily_backup_verifier_compares_run_event_audit_count():
+    assert "'DS Run Event'" in DAILY_BACKUP_VERIFIER
 
 
 def test_both_apps_register_a_native_v16_apps_screen_route():
