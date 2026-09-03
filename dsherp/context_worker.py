@@ -11,9 +11,9 @@ import subprocess
 from tempfile import TemporaryDirectory
 import time
 import uuid
-import sys
 from urllib.parse import urlsplit
 import httpx
+from dsherp import worker_log
 from dsherp.runtime_host import ROOT,IMAGE,load_settings
 from dsherp.context_container import docker_command
 from dsherp.context_mcp import BusinessRuntimeError,post
@@ -48,7 +48,7 @@ def run_container(task,settings,directory):
                 for line in result.stderr.splitlines():
                     if line.startswith('DSHERP_DIAGNOSTIC '):
                         diagnostic=json.loads(line.removeprefix('DSHERP_DIAGNOSTIC '))
-                        print(json.dumps(diagnostic),file=sys.stderr)
+                        worker_log.log('runtime_diagnostic',**diagnostic)
                 raise RuntimeError('Isolated business runtime failed')
             output=json.loads(result.stdout)
             if set(output)!={'status','answer'} or output['status'] not in ('Succeeded','Cancelled'):
@@ -64,14 +64,26 @@ def run_once(client,settings,state_root,*,business=None,execute=run_container):
     task=post(client,'claim_run',runtime_revision=configuration_revision(settings))
     if task is None:return False
     cap={key:task[key] for key in ('run_id','capability')}
+    worker_log.log('claimed',run_id=cap['run_id'])
+    started=time.monotonic()
+    def writeback(items):
+        try:post(client,'record_run_event',**cap,events=items)
+        except Exception as error:
+            worker_log.log('event_writeback_failed',run_id=cap['run_id'],error_class=type(error).__name__)
     try:
         scope=task.get('scope_id')
         if not isinstance(scope,str) or not re.fullmatch('[a-f0-9]{64}',scope):
             raise ValueError('Invalid server session scope')
         result=execute({**task,**(business or {}),'resume':'inspect'},settings,Path(state_root)/scope)
     except Exception as exc:
+        duration=int((time.monotonic()-started)*1000)
+        worker_log.log('runtime_failed',run_id=cap['run_id'],error_class=type(exc).__name__,duration_ms=duration)
+        writeback([{'kind':'runtime_failed','source':'worker','error_class':type(exc).__name__,'payload':{'duration_ms':duration}}])
         post(client,'finish_run',**cap,status='Failed',error='业务运行失败：'+type(exc).__name__)
         return True
+    duration=int((time.monotonic()-started)*1000)
+    worker_log.log('container_finished',run_id=cap['run_id'],status=result['status'],duration_ms=duration)
+    writeback([{'kind':'container_finished','source':'worker','payload':{'duration_ms':duration,'status':result['status']}}])
     # Never retry a model run or overwrite an ambiguous finish response.
     post(client,'finish_run',**cap,**result)
     return True
@@ -81,11 +93,11 @@ def poll_once(client,settings,state_root,*,business=None):
     try:
         return run_once(client,settings,state_root,business=business)
     except httpx.TransportError as error:
-        print(json.dumps({'worker_error':type(error).__name__}),file=sys.stderr)
+        worker_log.log('worker_error',error_class=type(error).__name__)
         return False
     except BusinessRuntimeError as error:
         if error.status_code not in (500,502,503,504):raise
-        print(json.dumps({'worker_error':type(error).__name__,'status_code':error.status_code}),file=sys.stderr)
+        worker_log.log('worker_error',error_class=type(error).__name__,status_code=error.status_code)
         return False
 
 
@@ -117,8 +129,9 @@ def main():
     parser.add_argument('--once',action='store_true')
     args=parser.parse_args()
     signal.signal(signal.SIGTERM,exit_on_signal)
-    load_settings(args.provider_env)
+    settings=load_settings(args.provider_env)
     profile=json.loads(args.profile.read_text())
+    worker_log.configure([settings['DEEPSEEK_API_KEY'],profile.get('api_secret')])
     business=profile_business(profile)
     base=urlsplit(profile.get('base_url',''))
     if base.scheme not in ('http','https') or not base.netloc or base.path not in ('','/'):

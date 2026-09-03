@@ -22,7 +22,7 @@ def test_worker_claims_one_scoped_run_and_finishes_without_replay(tmp_path):
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         assert run_once(client,SETTINGS,tmp_path,execute=execute)
     assert executed==[tmp_path/('a'*64)]
-    assert [m for m,_ in calls]==['claim_run','finish_run']
+    assert [m for m,_ in calls]==['claim_run','record_run_event','finish_run']
     assert len(calls[0][1]['runtime_revision'])==64
     assert calls[-1][1]['answer']=='answer'
 
@@ -36,7 +36,7 @@ def test_unknown_finish_response_does_not_overwrite_or_execute_again(tmp_path):
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(httpx.ReadTimeout):
             run_once(client,SETTINGS,tmp_path,execute=lambda *args:{'status':'Succeeded','answer':'ok'})
-    assert calls==['claim_run','finish_run']
+    assert calls==['claim_run','record_run_event','finish_run']
 
 
 def test_bad_scope_is_failed_without_opening_any_directory(tmp_path):
@@ -115,3 +115,31 @@ def test_sigterm_exits_through_worker_pid_cleanup(tmp_path):
             worker.exit_on_signal(signal.SIGTERM,None)
     assert caught.value.code==0
     assert not target.exists()
+
+
+def test_worker_records_container_outcome_before_finishing(tmp_path):
+    calls=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];calls.append((method,json.loads(request.content)))
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'d'*64,'capability':'cap'}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':9} if method=='record_run_event' else {'status':'Failed'}})
+    def execute(task,settings,directory):raise RuntimeError('boom')
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=execute)
+    assert [m for m,_ in calls]==['claim_run','record_run_event','finish_run']
+    event=calls[1][1]['events'][0]
+    assert event['kind']=='runtime_failed' and event['error_class']=='RuntimeError' and event['source']=='worker'
+    assert 'boom' not in json.dumps(calls)
+    assert calls[-1][1]['status']=='Failed'
+
+
+def test_event_writeback_failure_does_not_change_the_run_result(tmp_path,capsys):
+    calls=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];calls.append(method)
+        if method=='record_run_event':return httpx.Response(503)
+        return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'e'*64,'capability':'cap'} if method=='claim_run' else {'status':'Succeeded'}})
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'ok'})
+    assert calls==['claim_run','record_run_event','finish_run']
+    assert 'event_writeback_failed' in capsys.readouterr().err
