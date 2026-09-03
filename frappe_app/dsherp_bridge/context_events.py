@@ -140,14 +140,14 @@ def record_many(run, items):
     return {"recorded": len(items), "last_seq": int(last.rsplit("-", 1)[1])}
 
 
-def list_events(run, page=1, page_length=200):
+def list_events(run, page=1, page_length=200, fetch_length=None):
     rows = frappe.get_all(
         "DS Run Event",
         filters={"run": run},
         fields=["name", "seq", "kind", "source", "error_class", "payload", "recorded_at"],
         order_by="seq asc",
         start=(page - 1) * page_length,
-        page_length=page_length,
+        page_length=fetch_length or page_length,
     )
     return [
         {

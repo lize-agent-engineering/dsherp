@@ -358,5 +358,5 @@ def list_run_events(run_id,page=1):
     if run.owner!=user and 'System Manager' not in frappe.get_roles(user):
         raise frappe.PermissionError('运行不属于当前用户')
     from dsherp_bridge import context_events as events
-    rows=events.list_events(run.name,page=page,page_length=201)
+    rows=events.list_events(run.name,page=page,page_length=200,fetch_length=201)
     return {'run_id':run.name,'page':page,'events':rows[:200],'has_more':len(rows)>200}

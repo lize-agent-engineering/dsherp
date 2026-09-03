@@ -215,6 +215,12 @@ try:
     assert 'SECRET-CAP' not in json.dumps(page)
     second=api.list_run_events(run.name,page=2)
     assert second['events']==[] and second['has_more'] is False
+    for seq in range(3,202):
+        ev.record(run.name,'finished',{'status':'Failed','ordinal':seq})
+    first=api.list_run_events(run.name)
+    assert [e['seq'] for e in first['events']]==list(range(1,201)) and first['has_more'] is True
+    second=api.list_run_events(run.name,page=2)
+    assert [e['seq'] for e in second['events']]==[201] and second['has_more'] is False
     frappe.set_user(other)
     try:api.list_run_events(run.name);raise AssertionError('other user read events')
     except frappe.PermissionError:pass
