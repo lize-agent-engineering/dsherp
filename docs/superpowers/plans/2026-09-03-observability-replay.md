@@ -687,17 +687,22 @@ def test_constants_match_server_module():
 
 
 def test_runtime_events_map_to_tool_and_turn_records_without_secrets():
-    events=[{'type':'turn/start','data':{}},
-            {'type':'tool/call','data':{'callId':'c1','name':'mcp__erp__erp_read_record','args':{'doctype':'Item','name':'I','capability':'SECRET'}}},
-            {'type':'tool/result','data':{'callId':'c1','isError':True,'content':[{'type':'text','text':'业务运行请求未完成（HTTP 417）'}]}},
-            {'type':'assistant/message','data':{'message':{'content':[{'type':'text','text':'x'*5000}]}}},
-            {'type':'turn/end','data':{'reason':{'kind':'completed'}}}]
+    # 形状来自 C0 探针证据（observability-evidence.md）：arguments 是 JSON 字符串，结果嵌在 message.content[] 内
+    events=[{'type':'turn/start','seq':1,'data':{'turn':1}},
+            {'type':'tool/call','seq':2,'data':{'turn':1,'step':1,'callId':'c1','name':'mcp__erp__erp_read_record',
+                                                 'arguments':json.dumps({'doctype':'Item','name':'I','capability':'SECRET'})}},
+            {'type':'tool/result','seq':3,'data':{'turn':1,'step':1,'message':{'source':{'kind':'tool','callId':'c1'},'role':'tool','id':'m1',
+                'content':[{'type':'tool_result','toolCallId':'c1','isError':True,'content':[{'type':'text','text':'业务运行请求未完成（HTTP 417）'}]}]},
+                'error':{'name':'ToolExecutionError','code':'E_TOOL'}}},
+            {'type':'assistant/message','seq':4,'data':{'message':{'content':[{'type':'text','text':'x'*5000}]}}},
+            {'type':'turn/end','seq':5,'data':{'reason':{'kind':'completed'}}}]
     items=re_.from_runtime_events(events,[])
     kinds=[i['kind'] for i in items]
     assert kinds==['runtime_tool_call','tool_error','turn_end'],kinds
-    assert items[0]['payload']['name']=='mcp__erp__erp_read_record' and 'capability' not in items[0]['payload']['args']
-    assert items[1]['error_class']=='ToolError' and '417' in items[1]['payload']['text']
-    assert items[2]['payload']['reason']=='completed'
+    assert items[0]['payload']['name']=='mcp__erp__erp_read_record' and items[0]['payload']['call_id']=='c1'
+    assert items[0]['payload']['arguments']=={'doctype':'Item','name':'I'}
+    assert items[1]['error_class']=='ToolExecutionError' and '417' in items[1]['payload']['text'] and items[1]['payload']['call_id']=='c1'
+    assert items[2]['payload']['reason']=='completed' and all(i['payload'].get('seq') for i in items)
     assert 'SECRET' not in json.dumps(items)
 
 
@@ -746,27 +751,42 @@ def sanitize(value,depth=0):
 
 
 def _text(content):
-    if isinstance(content,list):
-        return ''.join(str(block.get('text','')) for block in content if isinstance(block,dict))
-    return str(content) if content is not None else ''
+    """Flatten nested content blocks ({type,text} or {content:[...]}) into one string."""
+    if isinstance(content,str):return content
+    if isinstance(content,dict):return _text(content.get('text',content.get('content')))
+    if isinstance(content,list):return ''.join(_text(block) for block in content)
+    return '' if content is None else str(content)
+
+
+def _arguments(raw):
+    if isinstance(raw,str):
+        try:return json.loads(raw)
+        except ValueError:return {'raw':raw}
+    return raw
 
 
 def from_runtime_events(events,notifications):
-    items=[]
+    """Shapes per C0 probe: tool/call.data{callId,name,arguments:str}; tool/result.data{message{content[{toolCallId,content,isError}]},error{name,code}}."""
+    items=[];compactions=0
     for event in events:
-        kind=event.get('type');data=event.get('data') if isinstance(event.get('data'),dict) else {}
+        kind=event.get('type') or '';data=event.get('data') if isinstance(event.get('data'),dict) else {};seq=event.get('seq')
         if kind=='tool/call':
-            items.append({'kind':'runtime_tool_call','source':'runner','payload':sanitize({'call_id':data.get('callId'),
-                'name':data.get('name'),'args':data.get('args') if 'args' in data else data.get('arguments')})})
+            items.append({'kind':'runtime_tool_call','source':'runner','payload':sanitize({'seq':seq,'call_id':data.get('callId'),
+                'name':data.get('name'),'arguments':_arguments(data.get('arguments'))})})
         elif kind=='tool/result':
-            error=bool(data.get('isError'))
-            items.append({'kind':'tool_error' if error else 'tool_result','source':'runner',
-                'error_class':'ToolError' if error else None,
-                'payload':sanitize({'call_id':data.get('callId'),'text':_text(data.get('content'))})})
+            message=data.get('message') if isinstance(data.get('message'),dict) else {}
+            blocks=[b for b in (message.get('content') or []) if isinstance(b,dict)]
+            error=data.get('error') if isinstance(data.get('error'),dict) else None
+            is_error=bool(error) or any(b.get('isError') for b in blocks)
+            call_id=next((b.get('toolCallId') for b in blocks if b.get('toolCallId')),(message.get('source') or {}).get('callId'))
+            items.append({'kind':'tool_error' if is_error else 'tool_result','source':'runner',
+                'error_class':(error or {}).get('name') or ('ToolError' if is_error else None),
+                'payload':sanitize({'seq':seq,'call_id':call_id,'text':_text([b.get('content') for b in blocks]),'code':(error or {}).get('code')})})
         elif kind=='turn/end':
             reason=data.get('reason') if isinstance(data.get('reason'),dict) else {}
-            items.append({'kind':'turn_end','source':'runner','payload':{'reason':reason.get('kind')}})
-    compactions=sum(1 for n in notifications if getattr(n,'method','')=='compaction/end')
+            items.append({'kind':'turn_end','source':'runner','payload':{'seq':seq,'reason':reason.get('kind')}})
+        elif 'compact' in kind:
+            compactions+=1
     if compactions:items.append({'kind':'compaction','source':'runner','payload':{'count':compactions}})
     return items
 
@@ -783,7 +803,7 @@ def flush(post,run_id,capability,items,*,batch=100):
     return {'sent':sent,'error':None}
 ```
 
-`compaction/end` 是否为真实通知方法名以 T0.1 证据为准；若探针给出别的名字，替换字符串并把测试的 notifications 改为对应对象。
+C0 证据：通知方法只有 `session.event`、`session.status`，不存在 `compaction/*` 通知，故压缩以事件类型含 `compact` 计数；`notifications` 参数保留但本任务不解析它。若 C2 替身链路中压缩事件的类型名不含 `compact`，以 `tests/test_context_compaction.py` 实测的类型名替换该判断并记入证据。
 
 - [ ] **Step 4: 加入运行时文件清单并重跑相关测试**
 
@@ -1049,7 +1069,7 @@ git commit -m "feat: worker 结构化日志与容器结果事件"
 - Test: `runtime/model-guard.test.cjs`
 
 **Interfaces:**
-- `createGuard(authorize, check=()=>{}, report=async()=>{})`：`report({kind:'model_response'|'model_error', payload, error_class?})` 在 finish 后 / 出错时各调用一次，永不影响流；`apply` 中的 `report` 把记录 POST 到 `record_run_event`（5 秒超时，失败静默）。`model_response.payload = {usage: <T0.1 结论的键或 null>, purpose, model}`。
+- `createGuard(authorize, check=()=>{}, report=async()=>{})`：`report({kind:'model_response'|'model_error', payload, error_class?})` 在 finish 后 / 出错时各调用一次，永不影响流；`apply` 中的 `report` 把记录 POST 到 `record_run_event`（5 秒超时，失败静默）。`model_response.payload = {usage: chunk.usage ?? null, chunk_keys: Object.keys(chunk), purpose, model}`。C0 证据：根会话事件不携带 usage，因此 finish chunk 是唯一可能的来源；`chunk_keys` 只记键名不记值，用于在 C2 证据中确认固定 Runtime 是否提供 usage，禁止估算。
 
 - [ ] **Step 1: 写失败测试（追加）**
 
@@ -1061,7 +1081,7 @@ test('finish and errors are reported without affecting the stream',async()=>{
   const delivered=[];for await(const item of guard(request,next))delivered.push(item);
   assert.equal(delivered.length,2);
   assert.deepEqual(reports.map(r=>r.kind),['model_response']);
-  assert.deepEqual(reports[0].payload.usage,{input:3,output:4});
+  assert.deepEqual(reports[0].payload.usage,{input:3,output:4});assert.deepEqual(reports[0].payload.chunk_keys,['type','usage']);
   const failing=createGuard(async()=>{},()=>{},async r=>{reports.push(r);});
   await assert.rejects(consume(failing(request,async function*(){throw new Error('provider down');})),/provider down/);
   assert.equal(reports.at(-1).kind,'model_error');assert.equal(reports.at(-1).error_class,'Error');
@@ -1091,7 +1111,7 @@ function createGuard(authorize,check=()=>{},report=async()=>{}){
     if(disabled)throw new Error('Model access disabled after failed authorization');
     try{
       for await(const chunk of next()){
-        if(chunk.type==='finish'){check();await safeReport({kind:'model_response',payload:{usage:chunk.usage??null,purpose:options.purpose??'conversation',model:options.model}});}
+        if(chunk.type==='finish'){check();await safeReport({kind:'model_response',payload:{usage:chunk.usage??null,chunk_keys:Object.keys(chunk),purpose:options.purpose??'conversation',model:options.model}});}
         yield chunk;
       }
       check();
@@ -1126,7 +1146,7 @@ git add runtime/model-guard.cjs runtime/model-guard.test.cjs
 git commit -m "feat: 模型调用结果与错误回写事件流"
 ```
 
-**C2 放行标准**：`.venv/bin/python -m pytest tests --ignore=tests/integration -q` 全绿且收集数比基线（130）增加 ≥ 7；`node --test runtime/` 全绿；用替身跑一次 `tests/integration/test_context_worker_chain.py` 后，该运行的 `list_run_events` 含 `queued, claimed, runtime_started, model_call_reserved, runtime_tool_call, tool_call, model_response, turn_end, container_finished, finished`（顺序按 seq，缺哪一类要说明原因）；worker 的 stderr（`~/Library/Logs/dsherp-agent-worker-v16.log`）每行可被 `json.loads`，grep provider key 为 0。
+**C2 放行标准**：`.venv/bin/python -m pytest tests --ignore=tests/integration -q` 全绿且收集数比基线（130）增加 ≥ 7；替身链路中至少一条 `model_response` 事件的 `chunk_keys` 写入证据文档并给出 usage 有无的结论；`node --test runtime/` 全绿；用替身跑一次 `tests/integration/test_context_worker_chain.py` 后，该运行的 `list_run_events` 含 `queued, claimed, runtime_started, model_call_reserved, runtime_tool_call, tool_call, model_response, turn_end, container_finished, finished`（顺序按 seq，缺哪一类要说明原因）；worker 的 stderr（`~/Library/Logs/dsherp-agent-worker-v16.log`）每行可被 `json.loads`，grep provider key 为 0。
 
 ---
 
