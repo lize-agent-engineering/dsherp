@@ -67,7 +67,7 @@ SECRET_KEY_PARTS = (
 
 def _secret_key(key, value):
     normalized = str(key).lower().replace("-", "").replace("_", "")
-    if normalized == "maxoutputtokens" and type(value) is int:
+    if normalized.endswith("tokens") and type(value) is int:
         return False
     return any(part in normalized for part in SECRET_KEY_PARTS)
 
