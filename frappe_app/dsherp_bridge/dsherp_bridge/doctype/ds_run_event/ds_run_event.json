@@ -5,7 +5,7 @@
   "custom": 0,
   "engine": "InnoDB",
   "sort_field": "creation",
-  "sort_order": "ASC",
+  "sort_order": "DESC",
   "field_order": [
     "run",
     "seq",
