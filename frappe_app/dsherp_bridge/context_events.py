@@ -91,16 +91,26 @@ def sanitize(value, depth=0):
 
 
 def _serialize(kind, payload):
-    text = json.dumps(
-        sanitize(payload if isinstance(payload, dict) else {"value": payload}),
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    sanitized = sanitize(payload if isinstance(payload, dict) else {"value": payload})
+    text = json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"))
     if len(text.encode()) > MAX_PAYLOAD:
-        text = json.dumps(
-            {"truncated": True, "kind": kind, "bytes": len(text.encode())},
-            separators=(",", ":"),
+        by_size = sorted(
+            sanitized,
+            key=lambda key: len(
+                json.dumps(sanitized[key], ensure_ascii=False, separators=(",", ":")).encode()
+            ),
+            reverse=True,
         )
+        for key in by_size:
+            size = len(
+                json.dumps(sanitized[key], ensure_ascii=False, separators=(",", ":")).encode()
+            )
+            sanitized[key] = f"…[omitted {size} bytes]"
+            text = json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"))
+            if len(text.encode()) <= MAX_PAYLOAD:
+                break
+        if len(text.encode()) > MAX_PAYLOAD:
+            frappe.throw(f"{kind} 事件顶层键超过载荷上限")
     return text
 
 

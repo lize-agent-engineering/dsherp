@@ -76,6 +76,39 @@ finally:
     assert result.returncode == 0 and "OK" in result.stdout, result.stdout + result.stderr
 
 
+def test_oversized_tool_payload_keeps_contract_keys_within_limit():
+    script = r'''
+import os,json,frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import context_events as ev
+try:
+    result={f'field_{index}':'x'*1500 for index in range(20)}
+    text=ev._serialize('tool_call',{'tool':'erp_read_record','arguments':{'doctype':'Item'},'duration_ms':7,'result':result})
+    payload=json.loads(text)
+    assert set(payload)=={'tool','arguments','duration_ms','result'},payload
+    assert len(text.encode())<=ev.MAX_PAYLOAD,len(text.encode())
+    print('OK')
+finally:
+    frappe.destroy()
+'''
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-i",
+            "dsherp-validation-backend-1",
+            "/home/frappe/frappe-bench/env/bin/python",
+            "-",
+        ],
+        input=script,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0 and "OK" in result.stdout, result.stdout + result.stderr
+
+
 def test_server_records_the_run_lifecycle_in_order():
     script = r'''
 import os,uuid,json,frappe
