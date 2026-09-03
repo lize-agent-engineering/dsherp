@@ -12,6 +12,6 @@ description = "Restricted ERPNext read endpoints for dsherp validation"
 include = ["dsherp_bridge*", "dsherp_platform*"]
 
 [tool.setuptools.package-data]
-dsherp_bridge = ["modules.txt", "dsherp_bridge/page/**/*.json", "dsherp_bridge/page/**/*.js", "dsherp_bridge/report/**/*.json", "public/dist/*", "translations/*.csv"]
+dsherp_bridge = ["modules.txt", "dsherp_bridge/page/**/*.json", "dsherp_bridge/page/**/*.js", "dsherp_bridge/report/**/*.json", "dsherp_bridge/report/**/*.js", "public/dist/*", "translations/*.csv"]
 
 dsherp_platform = ["modules.txt", "platform/**/*.json", "platform/**/*.js"]
