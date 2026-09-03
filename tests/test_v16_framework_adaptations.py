@@ -53,7 +53,7 @@ def test_subcontracting_preparer_uses_the_v16_supplied_items_method():
 
 def test_all_custom_doctype_json_files_make_creation_sorting_explicit():
     paths = sorted(ROOT.glob("frappe_app/**/doctype/*/*.json"))
-    assert len(paths) == 14
+    assert len(paths) == 15
     missing = []
     for path in paths:
         data = json.loads(path.read_text())

@@ -36,6 +36,7 @@ def collect_snapshot():
         "DS Model Run",
         filters={"status": ["in", ["Running", "Cancelling"]]},
         fields=["expires_at"],
+        order_by="expires_at asc",
     )
     counts = {}
     for row in frappe.get_all(
@@ -43,6 +44,7 @@ def collect_snapshot():
         filters={"creation": [">=", add_to_date(now, hours=-24)]},
         fields=["status", {"COUNT": "name", "as": "n"}],
         group_by="status",
+        order_by="status asc",
     ):
         counts[row.status] = row.n
     claimed = frappe.get_all(
