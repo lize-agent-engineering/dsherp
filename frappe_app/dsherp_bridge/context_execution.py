@@ -82,14 +82,26 @@ def claim_run(runtime_revision):
         raise frappe.PermissionError('需要站点指定的运行服务身份')
     if not isinstance(runtime_revision,str) or not re.fullmatch('[a-f0-9]{64}',runtime_revision):
         frappe.throw('运行配置摘要无效')
+    from dsherp_bridge.run_budget import budget as run_budget
     frappe.db.rollback()
     frappe.db.sql('SELECT name FROM `tabUser` WHERE name=%s FOR UPDATE',(user,))
-    for name in frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']], 'expires_at':['<=',now_datetime()]},pluck='name',order_by='creation asc, name asc'):
+    now=now_datetime()
+    frappe.cache().set_value('dsherp_worker_heartbeat',now.isoformat(),expires_in_sec=3600)
+    queued_expiry_filters=[['status','=','Queued'],['queue_expires_at','is','set'],['queue_expires_at','<=',now]]
+    for name in frappe.get_all('DS Model Run',filters=queued_expiry_filters,pluck='name',order_by='creation asc, name asc'):
+        error='系统繁忙，排队超时，请稍后重试'
+        frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':error})
+        events.record_safely(name,'expired',{'reason':'queue_expired'})
+        events.record_safely(name,'finished',{'status':'Failed','error':'queue_expired'})
+    for name in frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']], 'expires_at':['<=',now]},pluck='name',order_by='creation asc, name asc'):
         frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':'运行已过期，未自动重试','capability_hash':''})
         events.record_safely(name,'expired',{'reason':'lease_expired'})
-    if frappe.db.exists('DS Model Run',{'status':['in',['Running','Cancelling']]}):return None
-    names=frappe.get_all('DS Model Run',filters={'status':'Queued'},pluck='name',order_by='creation asc',limit_page_length=1)
+    active=frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']]},fields=['owner'])
+    busy_owners={row.owner for row in active}
+    candidates=frappe.get_all('DS Model Run',filters={'status':'Queued'},fields=['name','owner','domain'],order_by='creation asc, name asc',limit_page_length=50)
+    names=[row.name for row in candidates if row.owner not in busy_owners]
     if not names:return None
+    if len(active)>=run_budget(candidates[0].domain)['site_concurrency']:return None
     run=frappe.get_doc('DS Model Run',names[0],for_update=True)
     if run.status!='Queued':return None
     try:
@@ -104,7 +116,7 @@ def claim_run(runtime_revision):
         return None
     capability=secrets.token_urlsafe(32)
     domain=run.domain
-    if domain not in ('query','operation','configuration'):frappe.throw('未知业务领域')
+    plan=run_budget(domain)
     combined_revision=hashlib.sha256((permission_revision+runtime_revision+domain).encode()).hexdigest()
     if identity:
         combined_revision=hashlib.sha256((combined_revision+conversations._json(identity)).encode()).hexdigest()
@@ -112,14 +124,15 @@ def claim_run(runtime_revision):
         conversation.runtime_session=uuid.uuid4().hex
         frappe.db.set_value('DS Conversation',conversation.name,{'runtime_session':conversation.runtime_session,'runtime_revision':combined_revision})
     frappe.db.set_value('DS Model Run',run.name,{'status':'Running','capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
-        'expires_at':add_to_date(now_datetime(),seconds=180),'permission_revision':permission_revision,'runtime_revision':runtime_revision})
+        'expires_at':add_to_date(now,seconds=plan['lease_seconds']),'permission_revision':permission_revision,'runtime_revision':runtime_revision})
     events.record_safely(run.name,'claimed',{'domain':domain,'permission_revision':permission_revision,
         'runtime_revision':runtime_revision,'native_session_id':conversation.runtime_session})
     return {'run_id':run.name,'session_id':run.conversation,'native_session_id':conversation.runtime_session,
             'permission_revision':permission_revision,
             'runtime_revision':runtime_revision,'domain':domain,
             'scope_id':hashlib.sha256(json.dumps([frappe.local.site,run.owner,run.conversation,domain,conversation.runtime_session],separators=(',',':')).encode()).hexdigest(),
-            'question':run.question,'context':json.loads(run.page_context),'capability':capability}
+            'question':run.question,'context':json.loads(run.page_context),'capability':capability,
+            'budget':plan,'site':frappe.local.site}
 
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
