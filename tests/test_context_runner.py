@@ -38,6 +38,31 @@ def test_failure_diagnostic_excludes_exception_text_locals_and_credentials():
     assert all(set(frame)=={'file','function','line'} for frame in result['frames'])
 
 
+def test_monitored_run_records_tool_and_turn_events_before_returning(model_server,tmp_path):
+    import json
+    settings,requests,state=model_server
+    state['tool_call']={'name':'skill','arguments':json.dumps({'name':'erp-query'})}
+    recorded=[]
+    with open_runtime(settings,tmp_path,'events-run',resume=False) as runtime:
+        result=monitored_run(runtime,'hello','events-run',lambda:'Running',record=recorded.append)
+    assert result['status']=='Succeeded'
+    kinds=[item['kind'] for batch in recorded for item in batch]
+    assert 'runtime_tool_call' in kinds and kinds[-1]=='turn_end',kinds
+    assert settings['DEEPSEEK_API_KEY'] not in json.dumps(recorded)
+
+
+def test_monitored_run_records_runtime_failed_when_model_never_completes(model_server,tmp_path):
+    settings,requests,state=model_server
+    state['finish_reason']='length';state['content']=''
+    recorded=[]
+    with open_runtime(settings,tmp_path,'failed-run',resume=False) as runtime:
+        with pytest.raises(RuntimeError):
+            monitored_run(runtime,'hello','failed-run',lambda:'Running',record=recorded.append)
+    items=[item for batch in recorded for item in batch]
+    assert items[-1]['kind']=='runtime_failed' and items[-1]['error_class']=='RuntimeError'
+    assert set(items[-1]['payload'])=={'type','frames'}
+
+
 def test_cancel_state_stops_actual_model_request(model_server,tmp_path):
     settings,requests,state=model_server
     state.update(received=threading.Event(),release=threading.Event())
