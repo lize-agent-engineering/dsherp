@@ -35,7 +35,10 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
             second=runtime.run('Do not continue after rejection',session_id='denied')
         if mode in ('allow','skill','operation'):
             assert result.finish_reason==second.finish_reason=='completed'
-            assert len(requests)==len(observed)==(3 if mode in ('skill','operation') else 2)
+            authorizations=[item for item in observed if item[0].endswith('.reserve_model_call')]
+            reports=[item for item in observed if item[0].endswith('.record_run_event')]
+            assert len(requests)==len(authorizations)==len(reports)==(3 if mode in ('skill','operation') else 2)
+            assert all(item[1]['events'][0]['kind']=='model_response' for item in reports)
             expected={'skill','mcp__erp__erp_read_schema','mcp__erp__erp_read_record','mcp__erp__erp_search_records'}
             if mode=='operation':expected.update({'mcp__erp__erp_propose_update','mcp__erp__erp_propose_create','mcp__erp__erp_propose_action','mcp__erp__erp_propose_fill','mcp__erp__erp_propose_make'})
             assert {tool['function']['name'] for tool in requests[0]['tools']}==expected

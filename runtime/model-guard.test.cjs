@@ -57,3 +57,17 @@ test('drift during a response cannot produce a successful terminal chunk',async(
   await assert.rejects(async()=>{for await(const item of guard(request,next))delivered.push(item);},/changed/);
   assert.deepEqual(delivered,[]);
 });
+test('finish and errors are reported without affecting the stream',async()=>{
+  const reports=[];
+  const guard=createGuard(async()=>{},()=>{},async record=>{reports.push(record);throw new Error('sink down');});
+  const next=async function*(){yield {type:'chunk'};yield {type:'finish',usage:{input:3,output:4}};};
+  const delivered=[];for await(const item of guard(request,next))delivered.push(item);
+  assert.equal(delivered.length,2);
+  assert.deepEqual(reports.map(record=>record.kind),['model_response']);
+  assert.deepEqual(reports[0].payload.usage,{input:3,output:4});
+  assert.deepEqual(reports[0].payload.chunk_keys,['type','usage']);
+  const failing=createGuard(async()=>{},()=>{},async record=>{reports.push(record);});
+  await assert.rejects(consume(failing(request,async function*(){throw new Error('provider down');})),/provider down/);
+  assert.equal(reports.at(-1).kind,'model_error');assert.equal(reports.at(-1).error_class,'Error');
+  assert.ok(!JSON.stringify(reports).includes('provider down'));
+});

@@ -4,8 +4,9 @@ const path=require('node:path');
 exports.name='dsherp-model-authorization';
 exports.inject=['llm'];
 
-function createGuard(authorize,check=()=>{}){
+function createGuard(authorize,check=()=>{},report=async()=>{}){
   let disabled=false;
+  const safeReport=async record=>{try{await report(record);}catch{}};
   return async function*(options,next){
     if(disabled)throw new Error('Model access disabled after failed authorization');
     try{
@@ -16,11 +17,18 @@ function createGuard(authorize,check=()=>{}){
     if(disabled)throw new Error('Model access disabled after failed authorization');
     try{
       for await(const chunk of next()){
-        if(chunk.type==='finish')check();
+        if(chunk.type==='finish'){
+          check();
+          await safeReport({kind:'model_response',payload:{usage:chunk.usage??null,chunk_keys:Object.keys(chunk),purpose:options.purpose??'conversation',model:options.model}});
+        }
         yield chunk;
       }
       check();
-    }catch(error){disabled=true;throw error;}
+    }catch(error){
+      disabled=true;
+      await safeReport({kind:'model_error',error_class:error?.name??'Error',payload:{purpose:options.purpose??'conversation'}});
+      throw error;
+    }
   };
 }
 exports.createGuard=createGuard;
@@ -62,6 +70,12 @@ exports.apply=function(ctx){
   const revision=createHash('sha256').update(JSON.stringify(material)).digest('hex');
   if(revision!==config.runtime_revision)throw new Error('Runtime revision mismatch');
   const endpoint=new URL('/api/method/dsherp_bridge.context_execution.reserve_model_call',config.business_url);
+  const recordEndpoint=new URL('/api/method/dsherp_bridge.context_execution.record_run_event',config.business_url);
+  const report=async record=>{
+    await fetch(recordEndpoint,{method:'POST',redirect:'error',signal:AbortSignal.timeout(5000),
+      headers:{'Content-Type':'application/json','X-Frappe-Site-Name':config.site},
+      body:JSON.stringify({run_id:config.run_id,capability:config.capability,events:[{...record,source:'runner'}]})});
+  };
   ctx.on('llm/stream',createGuard(async metadata=>{
     check();
     const response=await fetch(endpoint,{method:'POST',redirect:'error',signal:AbortSignal.timeout(20000),
@@ -71,5 +85,5 @@ exports.apply=function(ctx){
     const body=await response.json();
     if(body.message?.allowed!==true)throw new Error('Invalid model authorization response');
     check();
-  },check));
+  },check,report));
 };
