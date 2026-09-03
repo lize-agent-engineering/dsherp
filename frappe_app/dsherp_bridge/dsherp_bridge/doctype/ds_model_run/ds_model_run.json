@@ -22,11 +22,15 @@
     "cancel_request_id",
     "capability_hash",
     "expires_at",
+    "queue_expires_at",
     "permission_revision",
     "runtime_revision",
     "model_calls",
     "model_input_bytes",
-    "model_output_tokens_reserved"
+    "model_output_tokens_reserved",
+    "needs_input",
+    "provider_failures",
+    "answer_flagged"
   ],
   "fields": [
     {"fieldname":"domain","label":"Domain","fieldtype":"Select","options":"query\noperation\nconfiguration","default":"query","reqd":1},
@@ -38,6 +42,10 @@
     {"fieldname":"model_output_tokens_reserved","label":"Reserved output tokens","fieldtype":"Int","default":"0"},
     {"fieldname":"capability_hash","label":"Capability hash","fieldtype":"Data"},
     {"fieldname":"expires_at","label":"Expires at","fieldtype":"Datetime"},
+    {"fieldname":"queue_expires_at","label":"Queue expires at","fieldtype":"Datetime"},
+    {"fieldname":"needs_input","label":"Needs input","fieldtype":"Long Text"},
+    {"fieldname":"provider_failures","label":"Provider failures","fieldtype":"Int","default":"0"},
+    {"fieldname":"answer_flagged","label":"Answer flagged","fieldtype":"Check","default":"0"},
     {
       "fieldname": "conversation",
       "label": "conversation",
@@ -68,7 +76,7 @@
       "fieldname": "status",
       "label": "status",
       "fieldtype": "Select",
-      "options": "Queued\nRunning\nCancelling\nCancelled\nSucceeded\nFailed"
+      "options": "Queued\nRunning\nCancelling\nCancelled\nSucceeded\nFailed\nNeedsInput"
     },
     {
       "fieldname": "answer",
