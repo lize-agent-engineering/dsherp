@@ -161,3 +161,50 @@ def test_event_writeback_timeout_does_not_change_the_run_result(tmp_path,capsys)
     assert timeouts and set(timeouts[0].values())=={5.0}
     assert time.monotonic()-started<10
     assert 'event_writeback_failed' in capsys.readouterr().err
+
+
+def test_metrics_server_defaults_to_9109_and_once_mode_never_starts_it(monkeypatch):
+    calls=[]
+    sentinel=object()
+    monkeypatch.setattr(worker.metrics,'serve',lambda registry,port:(calls.append((registry,port)),sentinel)[1])
+    assert worker.start_metrics({},once=True) is None
+    assert calls==[]
+    assert worker.start_metrics({},once=False) is sentinel
+    assert calls==[(worker.REGISTRY,9109)]
+    calls.clear()
+    assert worker.start_metrics({'metrics_port':9201},once=False) is sentinel
+    assert calls==[(worker.REGISTRY,9201)]
+
+
+def test_run_once_updates_claim_result_and_duration_metrics(tmp_path,monkeypatch):
+    class Counter:
+        def __init__(self):self.calls=[]
+        def inc(self,amount=1,**labels):self.calls.append((amount,labels))
+    class Histogram:
+        def __init__(self):self.values=[]
+        def observe(self,value):self.values.append(value)
+    claims=Counter();runs=Counter();duration=Histogram();failures=[]
+    monkeypatch.setattr(worker,'CLAIMS_TOTAL',claims)
+    monkeypatch.setattr(worker,'RUNS_TOTAL',runs)
+    monkeypatch.setattr(worker,'RUN_DURATION',duration)
+    monkeypatch.setattr(worker,'set_consecutive_failures',lambda value:failures.append(value))
+    claim={'run_id':'r','scope_id':'a'*64,'capability':'cap'}
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        return httpx.Response(200,json={'message':claim if method=='claim_run' else {'status':'Succeeded'}})
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=lambda *args:{'status':'Succeeded','answer':'answer'})
+    assert claims.calls==[(1,{})]
+    assert runs.calls==[(1,{'status':'Succeeded'})]
+    assert len(duration.values)==1 and duration.values[0]>=0
+    assert failures==[0]
+
+
+def test_poll_once_counts_transient_worker_error_class(tmp_path,monkeypatch):
+    class Counter:
+        def __init__(self):self.calls=[]
+        def inc(self,amount=1,**labels):self.calls.append((amount,labels))
+    errors=Counter();monkeypatch.setattr(worker,'WORKER_ERRORS',errors)
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(lambda request:(_ for _ in ()).throw(httpx.ReadError('synthetic')))) as client:
+        assert worker.poll_once(client,SETTINGS,tmp_path) is False
+    assert errors.calls==[(1,{'error_class':'ReadError'})]

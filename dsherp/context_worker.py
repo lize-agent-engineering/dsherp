@@ -13,11 +13,43 @@ import time
 import uuid
 from urllib.parse import urlsplit
 import httpx
-from dsherp import worker_log
+from dsherp import metrics,worker_log
 from dsherp.runtime_host import ROOT,IMAGE,load_settings
 from dsherp.context_container import docker_command
 from dsherp.context_mcp import BusinessRuntimeError,post
 from dsherp.runtime_revision import configuration_revision
+
+REGISTRY=metrics.Registry()
+CLAIMS_TOTAL=REGISTRY.counter('dsherp_claims_total','Claimed runs')
+RUNS_TOTAL=REGISTRY.counter('dsherp_runs_total','Finished runs',labels=('status',))
+RUN_DURATION=REGISTRY.histogram('dsherp_run_duration_seconds','Run duration',(5,15,30,60,120,300))
+WORKER_ERRORS=REGISTRY.counter('dsherp_worker_errors_total','Continuable worker errors',labels=('error_class',))
+CONSECUTIVE_FAILURES=REGISTRY.gauge('dsherp_consecutive_run_failures','Consecutive failed runs')
+QUEUE_DEPTH=REGISTRY.gauge('dsherp_queue_depth','Queued runs')
+RUNNING_STUCK=REGISTRY.gauge('dsherp_running_stuck','Stuck running runs')
+BACKUP_AGE=REGISTRY.gauge('dsherp_backup_age_hours','Hours since last backup')
+ORPHAN_CONTAINERS=REGISTRY.gauge('dsherp_orphan_containers','Orphan context containers')
+LAST_CLAIM=REGISTRY.gauge('dsherp_last_claim_timestamp_seconds','Unix time of last claim')
+PROVIDER_FAILURES=REGISTRY.counter('dsherp_provider_call_failures_total','Provider call failures')
+_consecutive=0
+
+
+def set_consecutive_failures(value):
+    global _consecutive
+    _consecutive=value
+    CONSECUTIVE_FAILURES.set(value)
+
+
+def start_metrics(profile,once):
+    if once:return None
+    return metrics.serve(REGISTRY,profile.get('metrics_port',9109))
+
+
+def _note_run(status,duration_ms):
+    RUNS_TOTAL.inc(status=status)
+    RUN_DURATION.observe(duration_ms/1000)
+    if status=='Failed':set_consecutive_failures(_consecutive+1)
+    elif status in ('Succeeded','Cancelled'):set_consecutive_failures(0)
 
 
 def profile_business(profile):
@@ -63,6 +95,7 @@ def run_container(task,settings,directory):
 def run_once(client,settings,state_root,*,business=None,execute=run_container):
     task=post(client,'claim_run',runtime_revision=configuration_revision(settings))
     if task is None:return False
+    CLAIMS_TOTAL.inc()
     cap={key:task[key] for key in ('run_id','capability')}
     worker_log.log('claimed',run_id=cap['run_id'])
     started=time.monotonic()
@@ -80,12 +113,14 @@ def run_once(client,settings,state_root,*,business=None,execute=run_container):
         worker_log.log('runtime_failed',run_id=cap['run_id'],error_class=type(exc).__name__,duration_ms=duration)
         writeback([{'kind':'runtime_failed','source':'worker','error_class':type(exc).__name__,'payload':{'duration_ms':duration}}])
         post(client,'finish_run',**cap,status='Failed',error='业务运行失败：'+type(exc).__name__)
+        _note_run('Failed',duration)
         return True
     duration=int((time.monotonic()-started)*1000)
     worker_log.log('container_finished',run_id=cap['run_id'],status=result['status'],duration_ms=duration)
     writeback([{'kind':'container_finished','source':'worker','payload':{'duration_ms':duration,'status':result['status']}}])
     # Never retry a model run or overwrite an ambiguous finish response.
     post(client,'finish_run',**cap,**result)
+    _note_run(result['status'],duration)
     return True
 
 
@@ -93,10 +128,12 @@ def poll_once(client,settings,state_root,*,business=None):
     try:
         return run_once(client,settings,state_root,business=business)
     except httpx.TransportError as error:
+        WORKER_ERRORS.inc(error_class=type(error).__name__)
         worker_log.log('worker_error',error_class=type(error).__name__)
         return False
     except BusinessRuntimeError as error:
         if error.status_code not in (500,502,503,504):raise
+        WORKER_ERRORS.inc(error_class=type(error).__name__)
         worker_log.log('worker_error',error_class=type(error).__name__,status_code=error.status_code)
         return False
 
@@ -147,6 +184,7 @@ def main():
             subprocess.run(['docker','volume','inspect','dsherp-v16-agent-runtime'],check=True,stdout=subprocess.DEVNULL)
             with httpx.Client(base_url=profile['base_url'],headers={'X-Frappe-Site-Name':profile['site'],
                 'Authorization':'token '+profile['api_key']+':'+profile['api_secret']},timeout=25,trust_env=False,follow_redirects=False) as client:
+                start_metrics(profile,once=args.once)
                 while True:
                     settings=load_settings(args.provider_env)
                     if args.once:
