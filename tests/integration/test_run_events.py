@@ -128,3 +128,60 @@ finally:
         timeout=120,
     )
     assert result.returncode == 0 and "OK" in result.stdout, result.stdout + result.stderr
+
+
+def test_runner_batch_endpoint_requires_live_capability_and_runner_kinds():
+    script = r'''
+import os,uuid,json,hashlib,frappe
+from frappe.utils import now_datetime,add_to_date
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import context_events as ev
+from dsherp_bridge.context_execution import record_run_event
+from dsherp_bridge.context_permissions import revision
+conversation=None;run=None;actor=None
+try:
+    frappe.set_user('Administrator')
+    actor='batch-'+uuid.uuid4().hex+'@example.invalid'
+    frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic batch','enabled':1,'send_welcome_email':0,'roles':[{'role':'Item Manager'}]}).insert()
+    frappe.set_user(actor)
+    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Batch'}).insert(ignore_permissions=True)
+    capability=uuid.uuid4().hex
+    run=frappe.get_doc({'doctype':'DS Model Run','conversation':conversation.name,'domain':'query','status':'Running',
+        'question':'batch','page_context':json.dumps({'schema_version':1,'page_type':'unknown','route':[]}),
+        'permission_revision':revision(actor),'capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
+        'expires_at':add_to_date(now_datetime(),minutes=3),'sources':'[]'}).insert(ignore_permissions=True)
+    frappe.set_user('Guest')
+    out=record_run_event(run.name,capability,[{'kind':'runtime_started','payload':{'api_key':'SECRET'},'source':'runner'},
+                                              {'kind':'tool_error','payload':{'text':'拒绝'},'source':'runner','error_class':'PermissionError'}])
+    assert out=={'recorded':2,'last_seq':2},out
+    for bad in ([{'kind':'claimed','payload':{},'source':'runner'}],[{'kind':'runtime_started','payload':{},'source':'server'}],[]):
+        try:record_run_event(run.name,capability,bad);raise AssertionError('accepted %r'%bad)
+        except (frappe.ValidationError,frappe.PermissionError):pass
+    try:record_run_event(run.name,'wrong',[{'kind':'runtime_started','payload':{},'source':'runner'}]);raise AssertionError('bad capability accepted')
+    except frappe.PermissionError:pass
+    assert 'SECRET' not in ''.join(json.dumps(e['payload']) for e in ev.list_events(run.name))
+    print('OK')
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if run:
+        frappe.db.delete('DS Run Event',{'run':run.name});frappe.delete_doc('DS Model Run',run.name,ignore_permissions=True)
+    if conversation:frappe.delete_doc('DS Conversation',conversation.name,ignore_permissions=True)
+    if actor and frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-i",
+            "dsherp-validation-backend-1",
+            "/home/frappe/frappe-bench/env/bin/python",
+            "-",
+        ],
+        input=script,
+        text=True,
+        capture_output=True,
+        timeout=90,
+    )
+    assert result.returncode == 0 and "OK" in result.stdout, result.stdout + result.stderr

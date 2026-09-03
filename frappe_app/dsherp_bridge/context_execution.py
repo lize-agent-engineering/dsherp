@@ -300,6 +300,14 @@ def _run_tool(run,tool,arguments):
 
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
+def record_run_event(run_id,capability,events):
+    run=_run(run_id,capability)
+    items=json.loads(events) if isinstance(events,str) else events
+    from dsherp_bridge import context_events
+    return context_events.record_many(run.name,items)
+
+
+@frappe.whitelist(allow_guest=True,methods=['POST'])
 def finish_run(run_id,capability,status,answer='',error=''):
     run=_run(run_id,capability)
     if status not in ('Succeeded','Failed','Cancelled'):frappe.throw('无效运行结束状态')
