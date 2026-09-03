@@ -46,6 +46,11 @@ try:
     batch=ev.record_many(run.name,[{'kind':'runtime_started','payload':{},'source':'runner'},
                                    {'kind':'tool_error','payload':{'text':'x'},'source':'runner','error_class':'PermissionError'}])
     assert batch=={'recorded':2,'last_seq':4},batch
+    try:
+        ev.record_many(run.name,[{'kind':'turn_end','payload':{},'source':'runner'} for _ in range(201)])
+        raise AssertionError('201 event batch accepted')
+    except frappe.ValidationError as error:
+        assert str(error)=='运行事件批次无效',error
     listed=ev.list_events(run.name)
     assert [e['seq'] for e in listed]==[1,2,3,4] and listed[3]['error_class']=='PermissionError'
     assert set(listed[0])=={'name','seq','kind','source','error_class','payload','recorded_at'}
