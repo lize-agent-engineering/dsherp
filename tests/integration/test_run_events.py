@@ -185,3 +185,61 @@ finally:
         timeout=90,
     )
     assert result.returncode == 0 and "OK" in result.stdout, result.stdout + result.stderr
+
+
+def test_run_events_are_readable_by_owner_but_not_another_user():
+    script = r'''
+import os,uuid,json,hashlib,frappe
+from frappe.utils import now_datetime,add_to_date
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import context_api as api,context_events as ev
+from dsherp_bridge.context_permissions import revision
+conversation=None;run=None;actor=None;other=None
+try:
+    frappe.set_user('Administrator')
+    actor='events-owner-'+uuid.uuid4().hex+'@example.invalid'
+    other='events-other-'+uuid.uuid4().hex+'@example.invalid'
+    for email in (actor,other):
+        frappe.get_doc({'doctype':'User','email':email,'first_name':'Synthetic event reader','enabled':1,'send_welcome_email':0,'roles':[{'role':'Item Manager'}]}).insert()
+    frappe.set_user(actor)
+    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Readable events'}).insert(ignore_permissions=True)
+    run=frappe.get_doc({'doctype':'DS Model Run','conversation':conversation.name,'domain':'query','status':'Running',
+        'question':'read events','page_context':json.dumps({'schema_version':1,'page_type':'unknown','route':[]}),
+        'permission_revision':revision(actor),'capability_hash':hashlib.sha256(b'cap').hexdigest(),
+        'expires_at':add_to_date(now_datetime(),minutes=3),'sources':'[]'}).insert(ignore_permissions=True)
+    ev.record(run.name,'claimed',{'capability':'SECRET-CAP','domain':'query'})
+    ev.record(run.name,'finished',{'status':'Failed'})
+    frappe.set_user(actor);page=api.list_run_events(run.name)
+    assert page['run_id']==run.name and [e['seq'] for e in page['events']]==[1,2] and page['has_more'] is False
+    assert 'SECRET-CAP' not in json.dumps(page)
+    second=api.list_run_events(run.name,page=2)
+    assert second['events']==[] and second['has_more'] is False
+    frappe.set_user(other)
+    try:api.list_run_events(run.name);raise AssertionError('other user read events')
+    except frappe.PermissionError:pass
+    print('OK')
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if run:
+        frappe.db.delete('DS Run Event',{'run':run.name});frappe.delete_doc('DS Model Run',run.name,ignore_permissions=True)
+    if conversation:frappe.delete_doc('DS Conversation',conversation.name,ignore_permissions=True)
+    for email in (actor,other):
+        if email and frappe.db.exists('User',email):frappe.delete_doc('User',email,ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-i",
+            "dsherp-validation-backend-1",
+            "/home/frappe/frappe-bench/env/bin/python",
+            "-",
+        ],
+        input=script,
+        text=True,
+        capture_output=True,
+        timeout=90,
+    )
+    assert result.returncode == 0 and "OK" in result.stdout, result.stdout + result.stderr

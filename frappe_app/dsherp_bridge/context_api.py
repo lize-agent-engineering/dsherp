@@ -349,3 +349,14 @@ def cancel_run(session_id,run_id,request_id):
         from dsherp_bridge import context_events as events
         events.record(run.name,'cancel_requested',{'to_status':run.status})
     return _public(doc)
+
+
+@frappe.whitelist(methods=['GET'])
+def list_run_events(run_id,page=1):
+    user=_user();page=_page(page)
+    run=frappe.get_doc('DS Model Run',run_id)
+    if run.owner!=user and 'System Manager' not in frappe.get_roles(user):
+        raise frappe.PermissionError('运行不属于当前用户')
+    from dsherp_bridge import context_events as events
+    rows=events.list_events(run.name,page=page,page_length=201)
+    return {'run_id':run.name,'page':page,'events':rows[:200],'has_more':len(rows)>200}
