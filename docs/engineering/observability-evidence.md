@@ -82,7 +82,9 @@ daily 没有 Failed error 前缀。C4 的 T4.3 导出基准因此为 alpha 12 �
 | daily `dsherp-daily.localhost` | `dsherp-validation-backend-1` | 0 | `True` | 0 |
 | beta `dsherp-beta.localhost` | `dsherp-validation-beta-backend-1` | 0 | `True` | 0 |
 
-迁移产生的 `delete_dynamic_links` 与 `build_index_for_all_routes` 正常队列任务由 default/long burst worker 执行完毕，没有放宽测试队列卫生规则。后续每次 DocType 或 Report 变更都必须重新迁移并逐站记录退出码。
+最终复核从整改后的 HEAD 串行执行 alpha、daily、beta 迁移，三次退出码均为 0；每站迁移后立即由对应 bench 的 long burst worker 完成 `build_index_for_all_routes`。最终共享 Redis 的 default/long 队列均为 `queued=0, failed=0`，没有放宽测试队列卫生规则。后续每次 DocType 或 Report 变更都必须重新迁移并逐站记录退出码。
+
+复核过程中曾错误地并行启动两个 bench 的 long worker；由于两者共享 Redis 且队列同名，shared worker 误取 beta job，beta worker误取 daily job，分别因目标 Site 不在对应容器而失败。只删除了本次产生且逐项核对 Site 与 method 的两个失败 job：`dsherp-beta.localhost||01948341-1af4-49f0-8ca5-937d6d900cd2`、`dsherp-daily.localhost||c9f15813-bcc5-4b73-8db3-1e3c5ee851c9`；随后按“逐站迁移后立即由该站所在 bench 消费”重跑，最终三条索引任务均 `Job OK`。
 
 ### 当前不可变边界
 
