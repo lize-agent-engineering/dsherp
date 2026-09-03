@@ -65,8 +65,10 @@ SECRET_KEY_PARTS = (
 )
 
 
-def _secret_key(key):
+def _secret_key(key, value):
     normalized = str(key).lower().replace("-", "").replace("_", "")
+    if normalized == "maxoutputtokens" and type(value) is int:
+        return False
     return any(part in normalized for part in SECRET_KEY_PARTS)
 
 
@@ -77,7 +79,7 @@ def sanitize(value, depth=0):
         return {
             str(key): sanitize(item, depth + 1)
             for key, item in list(value.items())[:MAX_ITEMS]
-            if not _secret_key(key)
+            if not _secret_key(key, item)
         }
     if isinstance(value, (list, tuple)):
         return [sanitize(item, depth + 1) for item in list(value)[:MAX_ITEMS]]
@@ -151,8 +153,19 @@ def record(run, kind, payload, *, source="server", error_class=None):
 def record_safely(run, kind, payload, **kwargs):
     try:
         return record(run, kind, payload, **kwargs)
-    except Exception:
-        frappe.log_error(title="dsherp run event write failed")
+    except Exception as error:
+        form_dict = getattr(frappe.local, "form_dict", None)
+        try:
+            if isinstance(form_dict, dict):
+                frappe.local.form_dict = frappe._dict(sanitize(form_dict))
+            frappe.log_error(
+                title="dsherp run event write failed",
+                message=f"{type(error).__name__}: event persistence failed",
+            )
+        except Exception:
+            pass
+        finally:
+            frappe.local.form_dict = form_dict
         return None
 
 

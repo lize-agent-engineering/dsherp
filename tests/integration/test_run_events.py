@@ -142,6 +142,8 @@ try:
     frappe.db.commit()
     kinds=[e['kind'] for e in ev.list_events(run_id)]
     assert kinds==['queued','claimed','model_call_reserved','tool_call','finished'],kinds
+    reserved=ev.list_events(run_id)[2]['payload']
+    assert reserved['max_output_tokens']==512,reserved
     tool=ev.list_events(run_id)[3]['payload']
     assert tool['tool']=='erp_read_record' and tool['result']['records']==1 and isinstance(tool['result']['fields'],int),tool
     assert isinstance(tool['duration_ms'],int)
@@ -182,7 +184,7 @@ frappe.init(site='dsherp-validation.localhost');frappe.connect()
 from dsherp_bridge import context_api as api,context_events as ev
 from dsherp_bridge.context_execution import finish_run,run_tool
 from dsherp_bridge.context_permissions import run_revision
-conversation=None;run_id=None;actor=None;created_logs=[];original_insert=ev._insert
+conversation=None;run_id=None;actor=None;created_logs=[];original_insert=ev._insert;original_form_dict=frappe.local.form_dict;original_request=getattr(frappe.local,'request',None)
 title='dsherp run event write failed'
 try:
     frappe.set_user('Administrator')
@@ -205,14 +207,20 @@ try:
     ev._insert=original_insert
     assert run_tool(run_id,capability,'erp_read_record',{'doctype':'Item','name':'DSHERP-TEST-ITEM'})['name']=='DSHERP-TEST-ITEM'
     ev._insert=fail_insert
+    frappe.local.form_dict=frappe._dict({'run_id':run_id,'capability':capability})
+    frappe.local.request=frappe._dict({'method':'POST','path':'/api/method/finish_run','referrer':''})
+    assert frappe.local.form_dict['capability']==capability
+    assert ev.record_safely(run_id,'finished',{'status':'Succeeded'}) is None
     assert finish_run(run_id,capability,'Succeeded',answer='事件写入失败但业务完成')=={'run_id':run_id,'status':'Succeeded'}
     frappe.db.commit()
     assert frappe.db.get_value('DS Model Run',run_id,'status')=='Succeeded'
     created_logs=[name for name in frappe.get_all('Error Log',filters={'method':title},pluck='name') if name not in existing]
     assert created_logs,frappe.get_all('Error Log',filters={'method':title},fields=['name','method'])
+    log_text=''.join((frappe.db.get_value('Error Log',name,'error') or '')+(frappe.db.get_value('Error Log',name,'metadata') or '') for name in created_logs)
+    assert capability not in log_text
     print('OK')
 finally:
-    ev._insert=original_insert
+    ev._insert=original_insert;frappe.local.form_dict=original_form_dict;frappe.local.request=original_request
     frappe.db.rollback();frappe.set_user('Administrator')
     if run_id:
         frappe.db.delete('DS Run Event',{'run':run_id})
