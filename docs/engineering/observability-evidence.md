@@ -252,3 +252,26 @@ HTTP 状态为 200；`lsof` 显示 PID `18765` 只监听 `127.0.0.1:9109`。`--o
 最后一次 worker 重启时，`ops_status` 返回了第三项注入期间留下的旧快照，因此在 `08:43:54.217Z` 又输出一条 `worker_not_claiming`；这不是第二次注入，数据库当时活动运行已经为 0。根因不是正常的“五分钟最终一致性窗口”，而是 alpha scheduler 未启用、快照不会自然刷新，同时旧版 `ops_status` 没有返回新鲜度，worker 无法拒绝陈旧数据。该行未删除或改写。
 
 上一轮候选为消除该告警，于 `08:47:52Z` **手工调用 `collect_snapshot()`** 补采恢复态快照；该次放行证据依赖人工采集，不是 scheduler 自然执行，列为明确偏离。本轮整改将 `ops_status` 改为纯读取并返回服务端计算的 `age_seconds`，worker 对空快照或超过 900 秒的快照只发 `ops_snapshot_stale`，不再运行依赖快照的规则或孤儿容器探针；alpha 与 daily 的自然调度连续性另行记录在下方整改证据中。
+
+### C3 审计整改证据
+
+整改提交为 `1fd3020`（陈旧快照）、`b1aeea7`（探针/metrics 启动故障隔离）、`c74c26e`（告警与指标脱敏）、`3eeeb2b`（证据因果修正）和 `632df3f`（空快照测试隔离）。P1.1 单元 RED 为 `6 failed, 18 passed`，GREEN 为 `24 passed`；P1.2 首轮 RED 为 `5 failed, 23 passed`，Cursor 最小实现后主审补获 `ORPHAN_CONTAINERS.set(None)` 的 RED，最终相关测试 `29 passed`；P1.3 RED 为 `2 failed, 9 passed`，GREEN 为 `12 passed`。最终快照集成测试使用模拟空查询、不删真实快照，结果为 `1 passed in 27.15s`。
+
+本轮没有修改 DocType JSON 或 `hooks.py`，因此没有重复执行三站 migrate；上一候选在同一 DocType/hooks 版本上的 alpha、daily、beta migrate 退出码均为 0。本轮只按要求修改站点运行设置：alpha、daily 的 `System Settings.enable_scheduler` 实测启用，beta 的 `is_scheduler_disabled(verbose=False)` 返回 true，作为预览隔离站不参加自然调度。
+
+从 `2026-09-03T09:08:51Z` 到 `09:25:03Z` 连续观察 scheduled profile，scheduler 与 scheduler-worker 均保持 running。排除测试创建并自行清理的快照后，两站自然 `collected_at`（站点时区 UTC+8）为：
+
+```text
+alpha: 2026-09-03 17:12:21.996114, 17:16:37.286839, 17:20:21.964856
+       interval_seconds: 255.291, 224.678
+daily: 2026-09-03 17:12:55.795178, 17:16:01.788206, 17:20:04.359831
+       interval_seconds: 185.993, 242.572
+```
+
+两站各至少 3 条，`Scheduled Job Type` 均为 `frequency=Cron`、`cron_format=*/5 * * * *`，`last_execution` 分别推进到 `17:20:22.071746` 与 `17:20:04.544243`。实际落库间隔受本环境 Frappe scheduler 轮询时点影响，不承诺精确 300 秒。两站该任务的 `Scheduled Job Log` 都为空，不是通过“Failed=0”推断成功：实测 `Scheduled Job Type.create_log=0`；当前安装的 Frappe 16.31.0 `update_scheduler_log()` 在该值为 false 时只更新 `last_execution` 并提交，不创建 `Scheduled Job Log`。对应 scheduler-worker 日志同时出现任务的 `Successfully completed` 与 `Job OK`。
+
+`dsherp_provider_call_failures_total` 当前仅为预留指标，没有自增点；留待计划 2 的 provider 错误分类落地，不把其存在表述为已采集 provider 失败率。
+
+重启 alpha backend 使其加载新 `ops_status` 后，HTTP 实测返回键 `age_seconds/snapshot`，快照非空且当时 `age_seconds=110`。随后在三站活动运行均为 0、孤儿容器为 0 时，于 `2026-09-03T09:28:53Z` 只 bootstrap 一次 LaunchAgent；观察至 `09:39:57Z`，超过 10 分钟。该窗口 worker 日志新增事件为 `[]`，其中告警数为 0，因此既没有重复 `worker_not_claiming`，也没有其他新告警。最终 PID 文件与进程表均为 `27010`，worker 计数 1；metrics HTTP 仍为 17 条 `dsherp_` 行，孤儿容器 0，alpha/daily/beta 活动运行均为 0。alpha、daily scheduler 均启用且继续生成新快照，beta 保持禁用；scheduled 两容器均为 running。
+
+最终 worker 日志逐行 `json.loads` 的非法行数为 0；对当前 `.env` provider key 与 context-worker service secret 的逐值 grep 均为 0（退出码 1）。`.env` SHA-256 仍为 `153ad318cd565a004be9d7b4f78cfe15ca2cc509cb391acf03046470849709a6`，权限 `0600`。整改过程没有创建业务运行、没有改 provider 地址，也没有调用真实 provider。
