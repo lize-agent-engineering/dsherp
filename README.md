@@ -49,6 +49,7 @@
 - [制造业务闭环验证实施计划](docs/superpowers/plans/2026-08-31-manufacturing-loop-validation.md)
 - [ERPNext/Frappe v16 完整迁移计划](docs/superpowers/plans/2026-09-01-v16-migration.md)
 - [生产就绪第二轮审计](docs/engineering/production-readiness-audit-2026-09-03.md)
+- [计划 1：可观测与失败回放](docs/superpowers/plans/2026-09-03-observability-replay.md)
 
 ## 最小验证
 
