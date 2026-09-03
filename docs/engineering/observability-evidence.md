@@ -294,7 +294,9 @@ beta_exit=0
 
 定位 beta 容器前曾把 beta Site 错投到 alpha/daily bench，得到明确的 `404 Not Found: dsherp-beta.localhost does not exist` 和退出码 2；没有把该错误当作成功，查明当前容器拓扑后在正确 beta 容器重跑为 0。迁移产生的正常 scheduler job 已由既有 scheduler-worker 消费，未放宽集成队列卫生规则。
 
-另以真实合成 System Manager（非 Administrator）检查 `DS Model Run` 权限，结果为 `{'read': False, 'report': False}`。因此若要让该角色从原生入口打开报表，确实必须新增 `DS Model Run` 只读权限；按 C4 补充要求，本轮没有修改或提交该权限，等待用户明确确认。Administrator 报表验收不依赖这项未授权变更。
+候选阶段以真实合成 System Manager（非 Administrator）检查 `DS Model Run` 权限，结果为 `{'read': False, 'report': False}`，因此当时依裁决未擅自修改权限。C4 审计放行后，用户明确授权收尾：集成测试新增真实非 Administrator 的 System Manager 跨用户运行报表和读取他人事件，并保留普通用户拒绝断言。旧权限下 RED 为 `PermissionError: You don't have permission to get a report on: DS Model Run`；先仅增加 `read:1` 并迁移后仍得到同一拒绝，证明当前 Frappe 报表入口还需要 `report:1`。最终只授予 `System Manager` 的 `read:1, report:1`，没有 create、write、delete 或其他权限；三站再次迁移后首次 GREEN 为 `1 passed in 28.98s`，收尾复跑为 `1 passed in 28.80s`。
+
+权限收尾的最终迁移使用 `--skip-search-index`，避免重复生成已经在上一轮完整迁移中成功重建的索引；alpha、daily、beta 退出码均为 0。此前 `read:1` 阶段的三次完整 migrate 退出码同样均为 0；对应搜索索引已按站点在正确 bench 执行，确认队列只含这些可重建副本后处理至空。
 
 ### 失败用例导出
 
