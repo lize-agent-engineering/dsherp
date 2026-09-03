@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "site": "dsherp-validation.localhost",
+  "run_id": "c73a3a3b2ee89763e336bccff5442bfee8b8947c3cadfb912b55239182a6f68b",
+  "domain": "operation",
+  "question": "当前已选择业务操作。请用实际工具读取 SAL-ORD-2026-00002，并生成唯一明细qty从2到3的修改提案，其他字段保持不变。不要仅口头描述提案；工具成功后等侧栏确认，不提交订单。",
+  "page_context": {
+    "dirty": false,
+    "doctype": "Sales Order",
+    "name": "SAL-ORD-2026-00002",
+    "page_type": "form",
+    "route": [
+      "Form",
+      "Sales Order",
+      "SAL-ORD-2026-00002"
+    ],
+    "schema_version": 1,
+    "server_version": "2026-08-29 04:08:59.555355",
+    "version": "2026-08-29 04:08:59.555355"
+  },
+  "status": "Failed",
+  "error": "业务运行失败：RuntimeError",
+  "sources": [],
+  "events": [],
+  "proposals": [],
+  "created": "2026-08-29 04:10:51.206603"
+}

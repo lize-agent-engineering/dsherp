@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "site": "dsherp-validation.localhost",
+  "run_id": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307",
+  "domain": "query",
+  "question": "C3 provider unavailable synthetic 3",
+  "page_context": {
+    "dirty": false,
+    "doctype": "Item",
+    "name": "DSHERP-TEST-ITEM",
+    "page_type": "form",
+    "route": [
+      "Form",
+      "Item",
+      "DSHERP-TEST-ITEM"
+    ],
+    "schema_version": 1,
+    "server_version": "2026-09-01 13:47:08.904204",
+    "version": "2026-09-01 13:47:08.904204"
+  },
+  "status": "Failed",
+  "error": "业务运行失败：RuntimeError",
+  "sources": [],
+  "events": [
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000001",
+      "seq": 1,
+      "kind": "queued",
+      "source": "server",
+      "error_class": "",
+      "payload": {
+        "domain": "query",
+        "question_chars": 35,
+        "page_type": "form"
+      },
+      "recorded_at": "2026-09-03 16:32:40.935115"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000002",
+      "seq": 2,
+      "kind": "claimed",
+      "source": "server",
+      "error_class": "",
+      "payload": {
+        "domain": "query",
+        "permission_revision": "7c9cfcc2e17adf79c05b6c619836bca278c65f3ed569fb6389bb91e9551166c4",
+        "runtime_revision": "0636de3ad5167798bdf72b3d63be7b46ab51ba77490fea34004fc70eb119fcc7",
+        "native_session_id": "ddf4e48a22ab48ef9889aa58b42c7d20"
+      },
+      "recorded_at": "2026-09-03 16:34:29.552473"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000003",
+      "seq": 3,
+      "kind": "runtime_started",
+      "source": "runner",
+      "error_class": "",
+      "payload": {
+        "session_id": "ddf4e48a22ab48ef9889aa58b42c7d20"
+      },
+      "recorded_at": "2026-09-03 16:34:52.948380"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000004",
+      "seq": 4,
+      "kind": "model_call_reserved",
+      "source": "server",
+      "error_class": "",
+      "payload": {
+        "call_index": 1,
+        "input_bytes": 3472,
+        "max_output_tokens": 2048,
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:34:54.349077"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000005",
+      "seq": 5,
+      "kind": "model_response",
+      "source": "runner",
+      "error_class": "",
+      "payload": {
+        "usage": null,
+        "chunk_keys": [
+          "type",
+          "reason"
+        ],
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:34:55.820470"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000006",
+      "seq": 6,
+      "kind": "model_call_reserved",
+      "source": "server",
+      "error_class": "",
+      "payload": {
+        "call_index": 2,
+        "input_bytes": 3472,
+        "max_output_tokens": 2048,
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:34:56.458043"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000007",
+      "seq": 7,
+      "kind": "model_response",
+      "source": "runner",
+      "error_class": "",
+      "payload": {
+        "usage": null,
+        "chunk_keys": [
+          "type",
+          "reason"
+        ],
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:34:56.480563"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000008",
+      "seq": 8,
+      "kind": "model_call_reserved",
+      "source": "server",
+      "error_class": "",
+      "payload": {
+        "call_index": 3,
+        "input_bytes": 3472,
+        "max_output_tokens": 2048,
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:34:57.660974"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000009",
+      "seq": 9,
+      "kind": "model_response",
+      "source": "runner",
+      "error_class": "",
+      "payload": {
+        "usage": null,
+        "chunk_keys": [
+          "type",
+          "reason"
+        ],
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:34:57.681361"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000010",
+      "seq": 10,
+      "kind": "model_call_reserved",
+      "source": "server",
+      "error_class": "",
+      "payload": {
+        "call_index": 4,
+        "input_bytes": 3472,
+        "max_output_tokens": 2048,
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:35:00.040561"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000011",
+      "seq": 11,
+      "kind": "model_response",
+      "source": "runner",
+      "error_class": "",
+      "payload": {
+        "usage": null,
+        "chunk_keys": [
+          "type",
+          "reason"
+        ],
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:35:00.064319"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000012",
+      "seq": 12,
+      "kind": "model_call_reserved",
+      "source": "server",
+      "error_class": "",
+      "payload": {
+        "call_index": 5,
+        "input_bytes": 3472,
+        "max_output_tokens": 2048,
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:35:04.752520"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000013",
+      "seq": 13,
+      "kind": "model_response",
+      "source": "runner",
+      "error_class": "",
+      "payload": {
+        "usage": null,
+        "chunk_keys": [
+          "type",
+          "reason"
+        ],
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:35:04.825593"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000014",
+      "seq": 14,
+      "kind": "model_call_reserved",
+      "source": "server",
+      "error_class": "",
+      "payload": {
+        "call_index": 6,
+        "input_bytes": 3472,
+        "max_output_tokens": 2048,
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:35:12.345038"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000015",
+      "seq": 15,
+      "kind": "model_response",
+      "source": "runner",
+      "error_class": "",
+      "payload": {
+        "usage": null,
+        "chunk_keys": [
+          "type",
+          "reason"
+        ],
+        "purpose": "conversation",
+        "model": "deepseek-v4-flash"
+      },
+      "recorded_at": "2026-09-03 16:35:12.473250"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000016",
+      "seq": 16,
+      "kind": "turn_end",
+      "source": "runner",
+      "error_class": "",
+      "payload": {
+        "seq": 26,
+        "reason": "error"
+      },
+      "recorded_at": "2026-09-03 16:35:12.486066"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000017",
+      "seq": 17,
+      "kind": "runtime_failed",
+      "source": "runner",
+      "error_class": "RuntimeError",
+      "payload": {
+        "type": "RuntimeError",
+        "frames": [
+          {
+            "file": "context_runner.py",
+            "function": "monitored_run",
+            "line": 85
+          }
+        ]
+      },
+      "recorded_at": "2026-09-03 16:35:12.647202"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000018",
+      "seq": 18,
+      "kind": "runtime_failed",
+      "source": "worker",
+      "error_class": "RuntimeError",
+      "payload": {
+        "duration_ms": 46970
+      },
+      "recorded_at": "2026-09-03 16:35:16.535057"
+    },
+    {
+      "name": "786b2f1cee45b9cba9829994293d9879de6601933b24c7fe3379be6956dba307-000019",
+      "seq": 19,
+      "kind": "finished",
+      "source": "server",
+      "error_class": "",
+      "payload": {
+        "status": "Failed",
+        "answer_chars": 0,
+        "error": "业务运行失败：RuntimeError",
+        "model_calls": 6
+      },
+      "recorded_at": "2026-09-03 16:35:16.547884"
+    }
+  ],
+  "proposals": [],
+  "created": "2026-09-03 16:32:40.933227"
+}

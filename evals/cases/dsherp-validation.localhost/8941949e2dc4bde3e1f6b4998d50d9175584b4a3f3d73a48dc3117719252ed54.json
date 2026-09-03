@@ -1,0 +1,373 @@
+{
+  "schema_version": 1,
+  "site": "dsherp-validation.localhost",
+  "run_id": "8941949e2dc4bde3e1f6b4998d50d9175584b4a3f3d73a48dc3117719252ed54",
+  "domain": "operation",
+  "question": "创建且仅创建一张采购订单草稿：供应商 DSHERP 制造测试合成供应商；物料 DSHERP-MFG-SYN-RM，20 Nos，单价 10 CNY；目标仓 DSHERP 制造测试合成原料仓 - DVT；公司 DSHERP 原生验收测试公司；计划日期 2026-09-08。先按需读取实际 schema/记录，再生成创建确认提案。不要提交，不要创建收货或其他单据。",
+  "page_context": {
+    "page_type": "unknown",
+    "reason": "当前页面上下文能力有限；请明确说明业务对象。",
+    "route": [
+      "List",
+      "Purchase Order",
+      "List"
+    ],
+    "schema_version": 1
+  },
+  "status": "Failed",
+  "error": "业务运行失败：RuntimeError",
+  "sources": [
+    {
+      "arguments": {
+        "doctype": "Purchase Order"
+      },
+      "child_fields": {
+        "items": [
+          "fg_item",
+          "fg_item_qty",
+          "item_code",
+          "supplier_part_no",
+          "item_name",
+          "brand",
+          "product_bundle",
+          "schedule_date",
+          "expected_delivery_date",
+          "item_group",
+          "description",
+          "image",
+          "qty",
+          "stock_uom",
+          "subcontracted_quantity",
+          "uom",
+          "conversion_factor",
+          "stock_qty",
+          "price_list_rate",
+          "last_purchase_rate",
+          "base_price_list_rate",
+          "margin_type",
+          "margin_rate_or_amount",
+          "rate_with_margin",
+          "discount_percentage",
+          "discount_amount",
+          "distributed_discount_amount",
+          "base_rate_with_margin",
+          "rate",
+          "amount",
+          "item_tax_template",
+          "base_rate",
+          "base_amount",
+          "pricing_rules",
+          "stock_uom_rate",
+          "is_free_item",
+          "apply_tds",
+          "net_rate",
+          "net_amount",
+          "base_net_rate",
+          "base_net_amount",
+          "from_warehouse",
+          "warehouse",
+          "actual_qty",
+          "company_total_stock",
+          "material_request",
+          "material_request_item",
+          "sales_order",
+          "sales_order_item",
+          "sales_order_packed_item"
+        ],
+        "payment_schedule": [
+          "payment_term",
+          "description",
+          "due_date",
+          "invoice_portion",
+          "mode_of_payment",
+          "due_date_based_on",
+          "credit_days",
+          "credit_months",
+          "discount_date",
+          "discount",
+          "discount_type",
+          "discount_validity_based_on",
+          "discount_validity",
+          "payment_amount",
+          "outstanding",
+          "paid_amount",
+          "discounted_amount",
+          "base_payment_amount",
+          "base_outstanding",
+          "base_paid_amount"
+        ],
+        "pricing_rules": [
+          "pricing_rule",
+          "item_code",
+          "margin_type",
+          "rate_or_discount",
+          "child_docname",
+          "rule_applied"
+        ],
+        "supplied_items": [
+          "main_item_code",
+          "rm_item_code",
+          "stock_uom",
+          "reserve_warehouse",
+          "conversion_factor",
+          "bom_detail_no",
+          "reference_name",
+          "rate",
+          "amount",
+          "required_qty",
+          "supplied_qty",
+          "consumed_qty",
+          "returned_qty",
+          "total_supplied_qty"
+        ],
+        "taxes": [
+          "category",
+          "add_deduct_tax",
+          "charge_type",
+          "row_id",
+          "included_in_print_rate",
+          "included_in_paid_amount",
+          "account_head",
+          "description",
+          "is_tax_withholding_account",
+          "rate",
+          "cost_center",
+          "project",
+          "account_currency",
+          "tax_amount",
+          "tax_amount_after_discount_amount",
+          "total",
+          "base_tax_amount",
+          "base_total",
+          "base_tax_amount_after_discount_amount",
+          "item_wise_tax_detail"
+        ]
+      },
+      "fields": [
+        "title",
+        "naming_series",
+        "supplier",
+        "supplier_name",
+        "order_confirmation_no",
+        "order_confirmation_date",
+        "transaction_date",
+        "schedule_date",
+        "company",
+        "apply_tds",
+        "tax_withholding_category",
+        "is_subcontracted",
+        "has_unit_price_items",
+        "supplier_warehouse",
+        "amended_from",
+        "cost_center",
+        "project",
+        "currency",
+        "conversion_rate",
+        "buying_price_list",
+        "price_list_currency",
+        "plc_conversion_rate",
+        "scan_barcode",
+        "last_scanned_warehouse",
+        "set_from_warehouse",
+        "set_warehouse",
+        "items",
+        "total_qty",
+        "total_net_weight",
+        "base_total",
+        "base_net_total",
+        "total",
+        "net_total",
+        "tax_withholding_net_total",
+        "base_tax_withholding_net_total",
+        "pricing_rules",
+        "set_reserve_warehouse",
+        "supplied_items",
+        "tax_category",
+        "taxes_and_charges",
+        "shipping_rule",
+        "incoterm",
+        "named_place",
+        "taxes",
+        "base_taxes_and_charges_added",
+        "base_taxes_and_charges_deducted",
+        "base_total_taxes_and_charges",
+        "taxes_and_charges_added",
+        "taxes_and_charges_deducted",
+        "total_taxes_and_charges"
+      ],
+      "records": [],
+      "schema_version": "2026-07-28 12:20:11.284370",
+      "tool": "erp_read_schema"
+    },
+    {
+      "arguments": {
+        "doctype": "Supplier",
+        "fields": null,
+        "filters": null,
+        "query": "DSHERP 制造测试合成供应商"
+      },
+      "fields": [
+        "name",
+        "modified"
+      ],
+      "match_fields": [
+        "name",
+        "supplier_name"
+      ],
+      "record_versions": {
+        "DSHERP 制造测试合成供应商": "2026-08-31 12:25:59.077751"
+      },
+      "records": [
+        "DSHERP 制造测试合成供应商"
+      ],
+      "tool": "erp_search_records"
+    },
+    {
+      "arguments": {
+        "doctype": "Item",
+        "fields": null,
+        "filters": null,
+        "query": "DSHERP-MFG-SYN-RM"
+      },
+      "fields": [
+        "name",
+        "modified"
+      ],
+      "match_fields": [
+        "name",
+        "item_name"
+      ],
+      "record_versions": {
+        "DSHERP-MFG-SYN-RM": "2026-09-01 08:22:30.136368"
+      },
+      "records": [
+        "DSHERP-MFG-SYN-RM"
+      ],
+      "tool": "erp_search_records"
+    },
+    {
+      "arguments": {
+        "doctype": "Warehouse",
+        "fields": [
+          "name"
+        ],
+        "filters": {
+          "name": "DSHERP 制造测试合成原料仓 - DVT"
+        },
+        "query": ""
+      },
+      "fields": [
+        "name",
+        "modified"
+      ],
+      "match_fields": [
+        "name"
+      ],
+      "record_versions": {
+        "DSHERP 制造测试合成原料仓 - DVT": "2026-08-31 12:25:58.928996"
+      },
+      "records": [
+        "DSHERP 制造测试合成原料仓 - DVT"
+      ],
+      "tool": "erp_search_records"
+    },
+    {
+      "arguments": {
+        "doctype": "Item",
+        "name": "DSHERP-MFG-SYN-RM"
+      },
+      "child_fields": {
+        "attributes": [],
+        "barcodes": [],
+        "customer_items": [],
+        "item_defaults": [
+          "buying_cost_center",
+          "company",
+          "default_discount_account",
+          "default_price_list",
+          "default_provisional_account",
+          "default_supplier",
+          "default_warehouse",
+          "deferred_expense_account",
+          "deferred_revenue_account",
+          "expense_account",
+          "idx",
+          "income_account",
+          "name",
+          "selling_cost_center"
+        ],
+        "reorder_levels": [],
+        "supplier_items": [],
+        "taxes": [],
+        "uoms": [
+          "conversion_factor",
+          "idx",
+          "name",
+          "uom"
+        ]
+      },
+      "fields": [
+        "lead_time_days",
+        "sample_quantity",
+        "is_customer_provided_item",
+        "is_fixed_asset",
+        "default_bom",
+        "item_group",
+        "end_of_life",
+        "retain_sample",
+        "inspection_required_before_delivery",
+        "is_stock_item",
+        "stock_uom",
+        "customer_code",
+        "item_defaults",
+        "inspection_required_before_purchase",
+        "is_purchase_item",
+        "create_new_batch",
+        "has_variants",
+        "standard_rate",
+        "warranty_period",
+        "is_grouped_asset",
+        "customs_tariff_number",
+        "grant_commission",
+        "country_of_origin",
+        "no_of_months",
+        "barcodes",
+        "variant_based_on",
+        "weight_per_unit",
+        "image",
+        "reorder_levels",
+        "over_delivery_receipt_allowance",
+        "safety_stock",
+        "opening_stock",
+        "purchase_uom",
+        "last_purchase_rate",
+        "is_sales_item",
+        "total_projected_qty",
+        "taxes",
+        "default_material_request_type",
+        "has_serial_no",
+        "delivered_by_supplier",
+        "auto_create_assets",
+        "variant_of",
+        "quality_inspection_template",
+        "naming_series",
+        "customer",
+        "uoms",
+        "no_of_months_exp",
+        "customer_items",
+        "allow_alternative_item",
+        "default_manufacturer_part_no"
+      ],
+      "record_versions": {
+        "DSHERP-MFG-SYN-RM": "2026-09-01 08:22:30.136368"
+      },
+      "records": [
+        "DSHERP-MFG-SYN-RM"
+      ],
+      "tool": "erp_read_record"
+    }
+  ],
+  "events": [],
+  "proposals": [],
+  "created": "2026-09-01 09:14:27.585002"
+}
