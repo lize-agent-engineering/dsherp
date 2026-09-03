@@ -168,3 +168,83 @@ service_secret_grep_exit=1
 ```
 
 七行中有一条 `event_writeback_failed/BusinessRuntimeError`，对应首次链路遇到旧 Web 进程缺少读取/回写端点时的预期结构化诊断；该次运行仍由 fixture 精确清理。其余为三次合成运行的 `claimed`/`container_finished`。日志无明文凭据、无非 JSON 行。
+
+## C3：运维快照、指标与告警
+
+### T3.1 三站迁移与五分钟 scheduler
+
+新增 `DS Ops Snapshot` 后先按 alpha、daily、beta 串行执行完整 migrate，三站退出码均为 0，且三站 `table_exists('DS Ops Snapshot')` 都返回 `true`。迁移生成的三条 `build_index_for_all_routes` 先按站点直接执行成功；确认共享 Redis 只含这三条可重建任务后，再逐站精确移除待处理副本，最终队列为空。全量门禁随后要求快照 DocType 遵守仓库统一的 `creation DESC` 元数据；修正后再次以 `--skip-search-index` 串行迁移，最终三站退出码仍为：
+
+```text
+ALPHA_MIGRATE_EXIT=0
+DAILY_MIGRATE_EXIT=0
+BETA_MIGRATE_EXIT=0
+```
+
+`tests/integration/test_ops_snapshot.py` 最终为 `1 passed in 26.67s`。测试覆盖过期 Running、Queued、运行服务身份、System Manager、普通用户拒绝、7 天清理边界和清理时先删事件后删运行；测试开头对活的常驻 worker fastfail。
+
+scheduled profile 于 `2026-09-03T07:49:41Z` 拉起，等待至 `07:54:52Z`，超过完整 5 分钟。daily 的 `DS Ops Snapshot` 从 0 增至 1，最新 `collected_at=2026-09-03 15:52:51.390502`；alpha 的 scheduler 站点配置实测为 disabled，因此没有新增。alpha、daily 的 `Scheduled Job Log` Failed 均为 0；daily 的 `Scheduled Job Type` 方法为 `dsherp_bridge.ops.collect_snapshot`，`last_execution=2026-09-03 15:56:06.276406`。五分钟核验后为安全执行第二轮三站迁移，已精确停止 scheduled 的 scheduler 与 scheduler-worker 两个 profile 服务。
+
+### 全量门禁与 `/metrics`
+
+最终提交候选上执行非集成 Python：
+
+```text
+........................................................................ [ 46%]
+.......................................................... [ 92%]
+...........                                                              [100%]
+155 passed in 51.38s
+```
+
+同一候选执行 `node --test runtime/*.test.cjs`：`tests 8, pass 8, fail 0, duration_ms 59.865291`。T3.3 目标测试为 `24 passed in 0.81s`。
+
+最终恢复 LaunchAgent 后原样抓取：
+
+```text
+curl -s 127.0.0.1:9109/metrics | grep -c '^dsherp_'
+17
+```
+
+HTTP 状态为 200；`lsof` 显示 PID `18765` 只监听 `127.0.0.1:9109`。`--once` 不启动 HTTP、缺省端口 9109 的行为由 `tests/test_context_worker.py` 覆盖。
+
+### 三项故障注入
+
+注入前明确限定：不发真实业务请求；仅使用 alpha 合成用户、合成消息、本地不可达 provider 地址和临时容器。`.env` 原始 SHA-256 为 `153ad318cd565a004be9d7b4f78cfe15ca2cc509cb391acf03046470849709a6`，权限 `0600`；临时副本只放在 `mktemp` 目录，结束后已精确删除。
+
+1. provider 地址临时指向 `http://127.0.0.1:9`，于 `2026-09-03T08:32:36Z` 连发 3 条 alpha 合成消息。三条运行 `e6470c…226a`、`b7f4dd…f58c`、`786b2f…307` 最终均为 Failed。告警行：
+
+   ```json
+   {"ts": "2026-09-03T08:35:19.751+00:00", "event": "alert", "key": "provider_or_runtime_failing", "severity": "critical", "message": "连续运行失败"}
+   ```
+
+   从注入时间到告警行时间为 **163.751 秒**，小于 5 分钟；随后立即恢复 `.env` 原始哈希和权限。
+
+2. 活动运行数为 0 时，于 `2026-09-03T08:36:11Z` 创建唯一临时容器 `dsherp-context-orphan-test`。告警行：
+
+   ```json
+   {"ts": "2026-09-03T08:36:22.311+00:00", "event": "alert", "key": "orphan_containers", "severity": "warning", "message": "存在孤儿容器"}
+   ```
+
+   时间差为 **11.311 秒**。取证后执行精确 `docker rm -f dsherp-context-orphan-test`，容器计数回到 0。
+
+3. 精确 bootout 唯一 worker 后确认 PID 文件不存在、进程计数 0，于 `2026-09-03T08:37:29Z` 创建一条 alpha 合成 Queued 运行 `8a7fe8…2d67`；等待到 `08:39:37Z`，超过 120 秒。重启前主动采集快照，实测 `queued=1`、`queued_oldest_seconds=149`、`last_claim_age_seconds=329`；为避免重启领取后接触真实 provider，再次临时使用 `127.0.0.1:9`。告警行：
+
+   ```json
+   {"ts": "2026-09-03T08:40:01.816+00:00", "event": "alert", "key": "worker_not_claiming", "severity": "critical", "message": "有排队但未领取"}
+   ```
+
+   从创建 Queued 运行到告警行时间为 **152.816 秒**，小于 5 分钟。该运行随后在本地不可达地址上终止为 Failed，活动运行归零，`.env` 再次恢复原始字节与 `0600`。
+
+三项注入全程没有真实 provider 请求。恢复 `.env` 后，常驻 worker 停止状态下执行 alpha 固定替身用例：
+
+```text
+.venv/bin/python -m pytest 'tests/integration/test_context_mcp_chain.py::test_native_context_runtime_reads_actual_erp_through_run_capability[True]' -s -q
+.
+1 passed in 89.06s (0:01:29)
+```
+
+该用例断言运行结果为 `Succeeded/DSHERP_OK`，provider 固定在隔离容器内 `127.0.0.1:38127/v1`，并实际只读 `DSHERP-TEST-ITEM`；fixture 随后清理运行。
+
+### 恢复后的运行态
+
+从受版本控制的生成器重建 plist 并只 bootstrap 一次。最终 `launchctl state=running`，PID 文件、launchd 与进程表一致为 PID `18765`，`dsherp.context_worker` 精确计数 1，metrics 行数 17，孤儿容器 0；alpha、daily、beta 的 Queued/Running/Cancelling 均为 0。`.env` SHA-256 与注入前一致、权限 `0600`，临时备份 marker 与目录均不存在。worker 日志现有 23 行全部可 `json.loads`；真实 provider key 与运行服务 secret 的逐值 grep 均为 0（grep 退出 1）。
