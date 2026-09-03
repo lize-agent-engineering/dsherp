@@ -56,14 +56,20 @@ try:
     assert 'backup_age_hours' in snapshot
     assert not frappe.db.exists('DS Ops Snapshot',old.name) and frappe.db.exists('DS Ops Snapshot',recent.name)
     frappe.set_user('Administrator')
-    assert set(ops.ops_status())==set(snapshot)
+    status=ops.ops_status()
+    assert set(status)=={'snapshot','age_seconds'} and status['snapshot']==snapshot,status
+    assert isinstance(status['age_seconds'],int) and status['age_seconds']>=0,status
     frappe.set_user(frappe.conf.get('dsherp_runtime_user'))
     status=ops.ops_status()
-    assert set(status)==set(snapshot),status
+    assert set(status)=={'snapshot','age_seconds'} and status['snapshot']==snapshot,status
     frappe.set_user(actor)
     try:
         ops.ops_status();raise AssertionError('ordinary user read ops status')
     except frappe.PermissionError:pass
+    frappe.set_user('Administrator')
+    frappe.db.delete('DS Ops Snapshot',{})
+    assert ops.ops_status()=={'snapshot':None,'age_seconds':None}
+    assert frappe.db.count('DS Ops Snapshot')==0
     print('OK')
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')

@@ -47,7 +47,7 @@ def start_metrics(profile,once):
 
 def fetch_ops(client):
     try:
-        response=client.get('/api/method/dsherp_bridge.ops.ops_status')
+        response=client.get('/api/method/dsherp_bridge.ops.ops_status',timeout=5)
         response.raise_for_status()
         return response.json()['message']
     except Exception:
@@ -60,19 +60,22 @@ def monitor_ops(client,notifier,state,now=None):
     if last is not None and now-last<60:
         return
     state['last_ops']=now
-    snapshot=fetch_ops(client)
+    status=fetch_ops(client)
     orphan=0
-    if snapshot is not None:
+    snapshot=None if status is None else status.get('snapshot')
+    age=None if status is None else status.get('age_seconds')
+    fresh=snapshot is not None and age is not None and age<=alerts.OPS_SNAPSHOT_MAX_AGE_SECONDS
+    if fresh:
         QUEUE_DEPTH.set(snapshot.get('queued') or 0)
         RUNNING_STUCK.set(snapshot.get('running_stuck') or 0)
         backup=snapshot.get('backup_age_hours')
         if backup is not None:BACKUP_AGE.set(backup)
-        age=snapshot.get('last_claim_age_seconds')
-        LAST_CLAIM.set(0 if age is None else now-age)
+        claim_age=snapshot.get('last_claim_age_seconds')
+        if claim_age is not None:LAST_CLAIM.set(now-claim_age)
         if snapshot.get('running')==0:
             orphan=alerts.orphan_containers()
-    ORPHAN_CONTAINERS.set(orphan)
-    notifier.emit(alerts.evaluate(snapshot,{
+        ORPHAN_CONTAINERS.set(orphan)
+    notifier.emit(alerts.evaluate(status,{
         'consecutive_run_failures':_consecutive,'orphan_containers':orphan},now),now)
 
 

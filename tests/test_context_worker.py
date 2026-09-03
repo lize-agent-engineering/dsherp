@@ -212,10 +212,12 @@ def test_poll_once_counts_transient_worker_error_class(tmp_path,monkeypatch):
 
 def test_ops_monitor_refreshes_once_per_minute_and_reports_fetch_failure(monkeypatch):
     calls=[];emitted=[];state={}
-    responses=[httpx.Response(200,json={'message':{'queued':0,'queued_oldest_seconds':None,'running':0,
-        'running_stuck':0,'backup_age_hours':1,'last_claim_age_seconds':10}}),httpx.ReadError('synthetic ops failure')]
+    responses=[httpx.Response(200,json={'message':{'snapshot':{'queued':0,'queued_oldest_seconds':None,'running':0,
+        'running_stuck':0,'backup_age_hours':1,'last_claim_age_seconds':10},'age_seconds':0}}),httpx.ReadError('synthetic ops failure')]
+    timeouts=[]
     def handler(request):
         calls.append(request.url.path)
+        timeouts.append(request.extensions['timeout'])
         response=responses.pop(0)
         if isinstance(response,Exception):raise response
         return response
@@ -227,6 +229,7 @@ def test_ops_monitor_refreshes_once_per_minute_and_reports_fetch_failure(monkeyp
         worker.monitor_ops(client,Notifier(),state,now=59)
         worker.monitor_ops(client,Notifier(),state,now=60)
     assert calls==['/api/method/dsherp_bridge.ops.ops_status']*2
+    assert all(set(timeout.values())=={5.0} for timeout in timeouts)
     assert emitted==[([],0),(['ops_status_unavailable'],60)]
 
 
@@ -237,9 +240,10 @@ def test_fetch_ops_rejects_error_response_even_if_it_has_message():
 
 
 def test_ops_monitor_counts_orphans_only_without_inflight_runs(monkeypatch):
-    snapshots=[{'queued':0,'queued_oldest_seconds':None,'running':1,'running_stuck':0,
-        'backup_age_hours':1,'last_claim_age_seconds':10},{'queued':0,'queued_oldest_seconds':None,'running':0,
-        'running_stuck':0,'backup_age_hours':1,'last_claim_age_seconds':10}]
+    snapshots=[{'snapshot':{'queued':0,'queued_oldest_seconds':None,'running':1,'running_stuck':0,
+        'backup_age_hours':1,'last_claim_age_seconds':10},'age_seconds':0},{'snapshot':{'queued':0,
+        'queued_oldest_seconds':None,'running':0,'running_stuck':0,'backup_age_hours':1,
+        'last_claim_age_seconds':10},'age_seconds':0}]
     orphan_calls=[]
     monkeypatch.setattr(worker,'fetch_ops',lambda client:snapshots.pop(0))
     monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:orphan_calls.append(True) or 2)
@@ -251,3 +255,32 @@ def test_ops_monitor_counts_orphans_only_without_inflight_runs(monkeypatch):
     worker.monitor_ops(object(),notifier,state,now=60)
     assert orphan_calls==[True]
     assert notifier.keys==[[],['orphan_containers']]
+
+
+def test_ops_monitor_skips_snapshot_gauges_and_orphans_when_stale(monkeypatch):
+    stale={'snapshot':{'queued':9,'running':0,'running_stuck':3,'backup_age_hours':99,
+        'last_claim_age_seconds':999},'age_seconds':901}
+    monkeypatch.setattr(worker,'fetch_ops',lambda client:stale)
+    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:pytest.fail('stale snapshot probed docker'))
+    writes=[]
+    for name in ('QUEUE_DEPTH','RUNNING_STUCK','BACKUP_AGE','LAST_CLAIM','ORPHAN_CONTAINERS'):
+        monkeypatch.setattr(getattr(worker,name),'set',lambda value,name=name:writes.append((name,value)))
+    class Notifier:
+        def emit(self,items,now):
+            assert [item.key for item in items]==['ops_snapshot_stale']
+    worker.monitor_ops(object(),Notifier(),{},now=1000)
+    assert writes==[]
+
+
+def test_ops_monitor_does_not_overwrite_optional_gauges_with_missing_values(monkeypatch):
+    current={'snapshot':{'queued':0,'running':0,'running_stuck':0,'backup_age_hours':None,
+        'last_claim_age_seconds':None},'age_seconds':0}
+    monkeypatch.setattr(worker,'fetch_ops',lambda client:current)
+    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:0)
+    backup=[];claims=[]
+    monkeypatch.setattr(worker.BACKUP_AGE,'set',backup.append)
+    monkeypatch.setattr(worker.LAST_CLAIM,'set',claims.append)
+    class Notifier:
+        def emit(self,items,now):pass
+    worker.monitor_ops(object(),Notifier(),{},now=1000)
+    assert backup==[] and claims==[]

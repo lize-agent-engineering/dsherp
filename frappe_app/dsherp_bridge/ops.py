@@ -95,8 +95,13 @@ def ops_status():
         raise frappe.PermissionError("需要运行服务身份或系统管理员")
     latest = frappe.get_all(
         "DS Ops Snapshot",
-        fields=["payload"],
+        fields=["payload", "collected_at"],
         order_by="collected_at desc",
         limit_page_length=1,
     )
-    return json.loads(latest[0].payload) if latest else collect_snapshot()
+    if not latest:
+        return {"snapshot": None, "age_seconds": None}
+    return {
+        "snapshot": json.loads(latest[0].payload),
+        "age_seconds": _age_seconds(latest[0].collected_at),
+    }

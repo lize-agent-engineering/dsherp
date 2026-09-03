@@ -9,6 +9,7 @@ QUEUE_DEPTH=5
 QUEUED_OLDEST_SECONDS=600
 BACKUP_AGE_HOURS=26
 UNCLAIMED_SECONDS=120
+OPS_SNAPSHOT_MAX_AGE_SECONDS=900
 NOTIFIER_COOLDOWN=600
 
 Alert=namedtuple('Alert','key severity message')
@@ -19,21 +20,27 @@ def evaluate(snapshot,metrics,now):
     if snapshot is None:
         found.append(Alert('ops_status_unavailable','warning','运维快照不可用'))
     else:
-        queued=snapshot.get('queued') or 0
-        oldest=snapshot.get('queued_oldest_seconds')
-        if queued>QUEUE_DEPTH or (oldest is not None and oldest>QUEUED_OLDEST_SECONDS):
-            found.append(Alert('queue_backlog','warning','队列积压'))
-        if (snapshot.get('running_stuck') or 0)>0:
-            found.append(Alert('run_stuck','critical','运行卡住'))
-        backup=snapshot.get('backup_age_hours')
-        if backup is None or backup>BACKUP_AGE_HOURS:
-            found.append(Alert('backup_stale','critical','备份过期'))
-        age=snapshot.get('last_claim_age_seconds')
-        if age is not None and age>UNCLAIMED_SECONDS and queued>0:
-            found.append(Alert('worker_not_claiming','critical','有排队但未领取'))
+        age=snapshot.get('age_seconds')
+        current=snapshot.get('snapshot')
+        if current is None or age is None or age>OPS_SNAPSHOT_MAX_AGE_SECONDS:
+            found.append(Alert('ops_snapshot_stale','warning','运维快照陈旧'))
+            current=None
+        if current is not None:
+            queued=current.get('queued') or 0
+            oldest=current.get('queued_oldest_seconds')
+            if queued>QUEUE_DEPTH or (oldest is not None and oldest>QUEUED_OLDEST_SECONDS):
+                found.append(Alert('queue_backlog','warning','队列积压'))
+            if (current.get('running_stuck') or 0)>0:
+                found.append(Alert('run_stuck','critical','运行卡住'))
+            backup=current.get('backup_age_hours')
+            if backup is None or backup>BACKUP_AGE_HOURS:
+                found.append(Alert('backup_stale','critical','备份过期'))
+            claim_age=current.get('last_claim_age_seconds')
+            if claim_age is not None and claim_age>UNCLAIMED_SECONDS and queued>0:
+                found.append(Alert('worker_not_claiming','critical','有排队但未领取'))
     if (metrics.get('consecutive_run_failures') or 0)>=CONSECUTIVE_RUN_FAILURES:
         found.append(Alert('provider_or_runtime_failing','critical','连续运行失败'))
-    if (metrics.get('orphan_containers') or 0)>0:
+    if snapshot is not None and current is not None and (metrics.get('orphan_containers') or 0)>0:
         found.append(Alert('orphan_containers','warning','存在孤儿容器'))
     return found
 
