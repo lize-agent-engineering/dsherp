@@ -13,7 +13,7 @@ import time
 import uuid
 from urllib.parse import urlsplit
 import httpx
-from dsherp import metrics,worker_log
+from dsherp import alerts,metrics,worker_log
 from dsherp.runtime_host import ROOT,IMAGE,load_settings
 from dsherp.context_container import docker_command
 from dsherp.context_mcp import BusinessRuntimeError,post
@@ -43,6 +43,37 @@ def set_consecutive_failures(value):
 def start_metrics(profile,once):
     if once:return None
     return metrics.serve(REGISTRY,profile.get('metrics_port',9109))
+
+
+def fetch_ops(client):
+    try:
+        response=client.get('/api/method/dsherp_bridge.ops.ops_status')
+        response.raise_for_status()
+        return response.json()['message']
+    except Exception:
+        return None
+
+
+def monitor_ops(client,notifier,state,now=None):
+    if now is None:now=time.time()
+    last=state.get('last_ops')
+    if last is not None and now-last<60:
+        return
+    state['last_ops']=now
+    snapshot=fetch_ops(client)
+    orphan=0
+    if snapshot is not None:
+        QUEUE_DEPTH.set(snapshot.get('queued') or 0)
+        RUNNING_STUCK.set(snapshot.get('running_stuck') or 0)
+        backup=snapshot.get('backup_age_hours')
+        if backup is not None:BACKUP_AGE.set(backup)
+        age=snapshot.get('last_claim_age_seconds')
+        LAST_CLAIM.set(0 if age is None else now-age)
+        if snapshot.get('running')==0:
+            orphan=alerts.orphan_containers()
+    ORPHAN_CONTAINERS.set(orphan)
+    notifier.emit(alerts.evaluate(snapshot,{
+        'consecutive_run_failures':_consecutive,'orphan_containers':orphan},now),now)
 
 
 def _note_run(status,duration_ms):
@@ -185,11 +216,16 @@ def main():
             with httpx.Client(base_url=profile['base_url'],headers={'X-Frappe-Site-Name':profile['site'],
                 'Authorization':'token '+profile['api_key']+':'+profile['api_secret']},timeout=25,trust_env=False,follow_redirects=False) as client:
                 start_metrics(profile,once=args.once)
+                notifier=None
+                ops_state={}
+                if not args.once:
+                    notifier=alerts.Notifier(webhook=profile.get('alert_webhook'),cooldown=600)
                 while True:
                     settings=load_settings(args.provider_env)
                     if args.once:
                         run_once(client,settings,state_root,business=business)
                         return 0
+                    monitor_ops(client,notifier,ops_state)
                     poll_once(client,settings,state_root,business=business)
                     time.sleep(3)
 

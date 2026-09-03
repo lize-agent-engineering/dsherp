@@ -208,3 +208,46 @@ def test_poll_once_counts_transient_worker_error_class(tmp_path,monkeypatch):
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(lambda request:(_ for _ in ()).throw(httpx.ReadError('synthetic')))) as client:
         assert worker.poll_once(client,SETTINGS,tmp_path) is False
     assert errors.calls==[(1,{'error_class':'ReadError'})]
+
+
+def test_ops_monitor_refreshes_once_per_minute_and_reports_fetch_failure(monkeypatch):
+    calls=[];emitted=[];state={}
+    responses=[httpx.Response(200,json={'message':{'queued':0,'queued_oldest_seconds':None,'running':0,
+        'running_stuck':0,'backup_age_hours':1,'last_claim_age_seconds':10}}),httpx.ReadError('synthetic ops failure')]
+    def handler(request):
+        calls.append(request.url.path)
+        response=responses.pop(0)
+        if isinstance(response,Exception):raise response
+        return response
+    class Notifier:
+        def emit(self,items,now):emitted.append(([item.key for item in items],now))
+    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:0)
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        worker.monitor_ops(client,Notifier(),state,now=0)
+        worker.monitor_ops(client,Notifier(),state,now=59)
+        worker.monitor_ops(client,Notifier(),state,now=60)
+    assert calls==['/api/method/dsherp_bridge.ops.ops_status']*2
+    assert emitted==[([],0),(['ops_status_unavailable'],60)]
+
+
+def test_fetch_ops_rejects_error_response_even_if_it_has_message():
+    transport=httpx.MockTransport(lambda request:httpx.Response(503,json={'message':{'queued':0}}))
+    with httpx.Client(base_url='http://local',transport=transport) as client:
+        assert worker.fetch_ops(client) is None
+
+
+def test_ops_monitor_counts_orphans_only_without_inflight_runs(monkeypatch):
+    snapshots=[{'queued':0,'queued_oldest_seconds':None,'running':1,'running_stuck':0,
+        'backup_age_hours':1,'last_claim_age_seconds':10},{'queued':0,'queued_oldest_seconds':None,'running':0,
+        'running_stuck':0,'backup_age_hours':1,'last_claim_age_seconds':10}]
+    orphan_calls=[]
+    monkeypatch.setattr(worker,'fetch_ops',lambda client:snapshots.pop(0))
+    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:orphan_calls.append(True) or 2)
+    class Notifier:
+        def __init__(self):self.keys=[]
+        def emit(self,items,now):self.keys.append([item.key for item in items])
+    notifier=Notifier();state={}
+    worker.monitor_ops(object(),notifier,state,now=0)
+    worker.monitor_ops(object(),notifier,state,now=60)
+    assert orphan_calls==[True]
+    assert notifier.keys==[[],['orphan_containers']]
