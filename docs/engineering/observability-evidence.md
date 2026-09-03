@@ -1,6 +1,6 @@
 # 可观测与失败回放证据
 
-日期：2026-09-03。当前范围：C0，固定 Runtime 事件形状与隔离合成站历史运行基线。本文件分别记录探针、站点事实和后续检查点证据；本地模型替身结果不等同于真实 provider 证据，也不代表生产部署。
+日期：2026-09-03。当前范围：C0 与 C1 整改，固定 Runtime 事件形状、隔离合成站历史运行基线和三站迁移事实。本文件分别记录探针、站点事实和后续检查点证据；本地模型替身结果不等同于真实 provider 证据，也不代表生产部署。
 
 ## C0：固定 Runtime 事件形状探针
 
@@ -71,3 +71,19 @@ Failed 的 error 前缀分布：
 | `Failed` | 0 |
 
 daily 没有 Failed error 前缀。C4 的 T4.3 导出基准因此为 alpha 12 条、daily 0 条，合计 12 条 Failed 运行；导出时仍须重新读取站点并报告与本基线之间是否出现新增失败运行。
+
+## C1：三站事件表迁移
+
+`DS Run Event` 属于 `dsherp_bridge`，因此 alpha、daily、beta 三个 Site 都必须迁移。2026-09-03 的 C1 整改实测如下：
+
+| Site | 容器 | `bench migrate` 退出码 | `table_exists('DS Run Event')` | 表检查退出码 |
+| --- | --- | ---: | --- | ---: |
+| alpha `dsherp-validation.localhost` | `dsherp-validation-backend-1` | 0 | `True` | 0 |
+| daily `dsherp-daily.localhost` | `dsherp-validation-backend-1` | 0 | `True` | 0 |
+| beta `dsherp-beta.localhost` | `dsherp-validation-beta-backend-1` | 0 | `True` | 0 |
+
+迁移产生的 `delete_dynamic_links` 与 `build_index_for_all_routes` 正常队列任务由 default/long burst worker 执行完毕，没有放宽测试队列卫生规则。后续每次 DocType 或 Report 变更都必须重新迁移并逐站记录退出码。
+
+### 当前不可变边界
+
+`DS Run Event` 的只增不删不改目前是应用层约定：Document 层的 `validate` 拒绝更新、`on_trash` 拒绝删除，但 `frappe.db.delete` 等数据库直写仍可绕过。合成测试仅为按外键顺序清理数据而使用该直写；数据库层约束或触发器留待计划 4 的 G7 收口，C1 不把应用层约定表述为数据库强制保证。
