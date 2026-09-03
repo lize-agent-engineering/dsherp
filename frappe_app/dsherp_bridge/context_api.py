@@ -348,6 +348,8 @@ def cancel_run(session_id,run_id,request_id):
         run.save(ignore_permissions=True)
         from dsherp_bridge import context_events as events
         events.record_safely(run.name,'cancel_requested',{'to_status':run.status})
+        if run.status=='Cancelled':
+            events.record_safely(run.name,'finished',{'status':'Cancelled'})
     return _public(doc)
 
 

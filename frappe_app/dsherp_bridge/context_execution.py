@@ -98,7 +98,9 @@ def claim_run(runtime_revision):
             conversations._public(conversation)
             permission_revision=context_permissions.run_revision(run.owner,run.domain)
     except (frappe.PermissionError,frappe.DoesNotExistError):
-        frappe.db.set_value('DS Model Run',run.name,{'status':'Failed','error':'当前用户已无法读取会话来源','capability_hash':''})
+        error='当前用户已无法读取会话来源'
+        frappe.db.set_value('DS Model Run',run.name,{'status':'Failed','error':error,'capability_hash':''})
+        events.record_safely(run.name,'finished',{'status':'Failed','error':error})
         return None
     capability=secrets.token_urlsafe(32)
     domain=run.domain
