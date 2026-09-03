@@ -12,6 +12,8 @@
 
 ## Global Constraints
 
+- 任何 DocType/Report 变更后，装有 `dsherp_bridge` 的三个 Site（alpha `dsherp-validation.localhost`、daily `dsherp-daily.localhost`、beta `dsherp-beta.localhost`）都必须 `bench migrate`，并在检查点报告中逐站列出退出码；平台站只装 `dsherp_platform`，不涉及。
+
 - 全部按 AGENTS.md：中文；TDD（先写失败测试）；fastfail；不 fork Frappe/ERPNext；按功能分类提交；不推送远端；不提交密钥、租户数据、运行日志。
 - 生产化总体设计"演示与生产差异的前置约束"第 7 条：**每次模型调用与工具调用留持久事件；日志无凭证**。本计划每个任务的测试都必须包含"凭证值不出现"的断言（凭证值指 `DEEPSEEK_API_KEY`、capability、api_secret、platform_grant、密码）。
 - `DS Run Event` 只增不删不改（已裁决 #3）：`validate` 拒绝改写，`on_trash` 无条件拒绝；合成测试清理只能用 `frappe.db.delete('DS Run Event',{'run':...})`，且必须在删除 `DS Model Run` 之前执行。
@@ -356,12 +358,14 @@ def list_events(run,page=1,page_length=200):
 
 - [ ] **Step 5: 让站点识别新 DocType 并重跑测试**
 
-Run:
+Run（装有 dsherp_bridge 的三个 Site 都要迁移：alpha 与 daily 同在 backend-1 一个 bench，beta 在 beta-backend-1）：
 ```bash
 docker exec dsherp-validation-backend-1 bench --site dsherp-validation.localhost migrate
+docker exec dsherp-validation-backend-1 bench --site dsherp-daily.localhost migrate
+docker exec dsherp-validation-beta-backend-1 bench --site dsherp-beta.localhost migrate
 .venv/bin/python -m pytest tests/integration/test_run_events.py -q
 ```
-Expected: PASS。若 `migrate` 报 `custom` 缺失类错误，说明 `configuration_locks.check_new_custom_record` 的容忍分支未覆盖新表，先修 hook 再继续，不绕过。
+Expected: PASS；三站 `frappe.db.table_exists('DS Run Event')` 均为 True。若 `migrate` 报 `custom` 缺失类错误，说明 `configuration_locks.check_new_custom_record` 的容忍分支未覆盖新表，先修 hook 再继续，不绕过。
 
 - [ ] **Step 6: 提交**
 
@@ -647,7 +651,7 @@ git add frappe_app/dsherp_bridge/context_api.py tests/integration/test_run_event
 git commit -m "feat: 运行所有者与管理员可读取事件流"
 ```
 
-**C1 放行标准**：`.venv/bin/python -m pytest tests/integration/test_run_events.py -q` 4 passed；`tests/integration` 中改过清理顺序的文件全绿；审计方在 alpha 站抽一条真实运行的事件 payload，grep `capability|api_secret|DEEPSEEK` 为 0 命中；`bench migrate` 无报错。
+**C1 放行标准**：`.venv/bin/python -m pytest tests/integration/test_run_events.py -q` 全绿；`tests/integration` 中改过清理顺序的文件全绿；审计方在 alpha 站抽一条真实运行的事件 payload，grep `capability|api_secret|DEEPSEEK` 为 0 命中；alpha、daily、beta 三站 `bench migrate` 无报错且 `DS Run Event` 表均存在；服务端事件写入失败不改变业务结果（见 C1 整改 P1-1 的测试）。
 
 ---
 
