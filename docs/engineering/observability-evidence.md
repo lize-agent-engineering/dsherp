@@ -277,3 +277,70 @@ daily: 2026-09-03 17:12:55.795178, 17:16:01.788206, 17:20:04.359831
 重启 alpha backend 使其加载新 `ops_status` 后，HTTP 实测返回键 `age_seconds/snapshot`，快照非空且当时 `age_seconds=110`。随后在三站活动运行均为 0、孤儿容器为 0 时，于 `2026-09-03T09:28:53Z` 只 bootstrap 一次 LaunchAgent；观察至 `09:39:57Z`，超过 10 分钟。该窗口 worker 日志新增事件为 `[]`，其中告警数为 0，因此既没有重复 `worker_not_claiming`，也没有其他新告警。最终 PID 文件与进程表均为 `27010`，worker 计数 1；metrics HTTP 仍为 17 条 `dsherp_` 行，孤儿容器 0，alpha/daily/beta 活动运行均为 0。alpha、daily scheduler 均启用且继续生成新快照，beta 保持禁用；scheduled 两容器均为 running。
 
 最终 worker 日志逐行 `json.loads` 的非法行数为 0；对当前 `.env` provider key 与 context-worker service secret 的逐值 grep 均为 0（退出码 1）。`.env` SHA-256 仍为 `153ad318cd565a004be9d7b4f78cfe15ca2cc509cb391acf03046470849709a6`，权限 `0600`。整改过程没有创建业务运行、没有改 provider 地址，也没有调用真实 provider。
+
+## C4：管理员审计、前端事件流与失败回放
+
+### 报表、三站迁移与权限边界
+
+`DS Agent Audit` 的集成测试先以“Report 不存在”取得红灯，实现后为 `1 passed in 29.78s`。真实浏览器首次打开又发现报表没有日期筛选器，只显示“审计报表需要 from_date 与 to_date”；新增资产测试先以 `FileNotFoundError: ds_agent_audit.js` 失败，再增加标准 Query Report 的 `from_date`、`to_date` 必填筛选器，目标测试为 `2 passed in 0.01s`。Administrator 随后在 alpha 真实浏览器打开报表成功，页面展示 6 条当日运行，至少包含 `dsherp-denied@example.invalid` 与 `dsherp-reader@example.invalid` 两个 owner。
+
+报表文件最终变更后重新串行迁移。alpha、daily 使用 `dsherp-validation-backend-1`，beta 使用独立的 `dsherp-validation-beta-backend-1`，最终实测退出码分别为：
+
+```text
+alpha_exit=0
+daily_exit=0
+beta_exit=0
+```
+
+定位 beta 容器前曾把 beta Site 错投到 alpha/daily bench，得到明确的 `404 Not Found: dsherp-beta.localhost does not exist` 和退出码 2；没有把该错误当作成功，查明当前容器拓扑后在正确 beta 容器重跑为 0。迁移产生的正常 scheduler job 已由既有 scheduler-worker 消费，未放宽集成队列卫生规则。
+
+另以真实合成 System Manager（非 Administrator）检查 `DS Model Run` 权限，结果为 `{'read': False, 'report': False}`。因此若要让该角色从原生入口打开报表，确实必须新增 `DS Model Run` 只读权限；按 C4 补充要求，本轮没有修改或提交该权限，等待用户明确确认。Administrator 报表验收不依赖这项未授权变更。
+
+### 失败用例导出
+
+C0 基准为 alpha 12 条、daily 0 条 Failed。导出前重新只读盘点得到 alpha 16、daily 0，因此 alpha 相对基准新增 4 条，均为 C3 合成故障注入留下的失败运行；没有删除历史失败来迎合旧基准。第一次导出结果为：
+
+```text
+alpha: {'exported': 16, 'skipped': 0}
+daily: {'exported': 0, 'skipped': 0}
+alpha 幂等复跑: {'exported': 0, 'skipped': 16}
+```
+
+首轮导出因一条历史 submit 提案指向已删除的合成 Sales Order 而失败。新增纯函数回归测试先确认 `KeyError: id` 红灯，再改为只读冻结在 `DS Operation Proposal` 上的 `name/status/payload` 生成摘要，避免导出历史审计资料时重新访问已经消失的业务目标；最终 `tests/test_eval_cases.py` 为 `2 passed`。当前 `evals/cases` 共 16 个 JSON，全部位于 alpha 目录；逐文件执行区分大小写的 `grep -RIlE 'capability|api_secret|DEEPSEEK' evals/cases | wc -l` 输出 `0`。C4 结束前清理一次临时回放运行后，站点 Failed 计数仍为 alpha 16、daily 0，与已导出文件一致。
+
+### 无 Item 权限失败回放
+
+常驻 worker 已停止且进程计数为 0。使用 `.runtime/erp-users.json` 中已有的 `dsherp-denied@example.invalid` 合成身份，实际确认 Item read 权限为 false；本地模型替身固定在隔离地址，不读取 `.env` provider 地址，也没有调用真实 provider。替身请求 `erp_read_record(Item, DSHERP-TEST-ITEM)`，得到 HTTP 403 工具错误。运行 `768a71…ba336` 最终为 Failed，所有者端点返回 23 条事件：
+
+| seq | kind | error_class | payload 键名 |
+| ---: | --- | --- | --- |
+| 1 | `queued` | — | `domain,page_type,question_chars` |
+| 2 | `claimed` | — | `domain,native_session_id,permission_revision,runtime_revision` |
+| 3 | `runtime_started` | — | `session_id` |
+| 4,6,8,10,12,14,16 | `model_call_reserved` | — | `call_index,input_bytes,max_output_tokens,model,purpose` |
+| 5,7,9,11,13,15,17 | `model_response` | — | `chunk_keys,model,purpose,usage` |
+| 18 | `runtime_tool_call` | — | `arguments,call_id,name,seq` |
+| 19 | `tool_error` | `ToolError` | `call_id,code,seq,text` |
+| 20 | `turn_end` | — | `reason,seq` |
+| 21 | `runtime_failed` | `RuntimeError` | `frames,type` |
+| 22 | `runtime_failed` | `RuntimeError` | `duration_ms` |
+| 23 | `finished` | — | `answer_chars,error,model_calls,status` |
+
+第 19 条的脱敏文本为 `Error: Error executing tool erp_read_record: 业务运行请求未完成（HTTP 403）`，所以工具权限失败可在不暴露凭据的情况下回放；`runtime_failed` 明确先于最终 `finished`。本次路径没有触发 `compaction`，不推断未观测到的类型名。截图和事件读取完成后，精确删除这条临时运行及其 23 条事件与独占会话；删除前提案数为 0，删除后运行/会话均不存在，alpha Failed 从临时的 17 回到 16，活动运行数为 0。
+
+### 告警时延与真实浏览器证据
+
+C4 按要求复用 C3 已独立放行的三项注入，不重复制造故障：provider 不可达 `163.751` 秒、孤儿容器 `11.311` 秒、worker 未领取 `152.816` 秒，三项均小于 5 分钟；对应 JSON 告警行与注入时刻保留在上方“C3：三项故障注入”。
+
+真实浏览器截图：
+
+- `evidence/observability/c4-agent-audit-report.png`：Administrator 打开的 `DS Agent Audit`，同屏可见两个 owner。
+- `evidence/observability/c4-workbench-event-stream.png`：`dsherp-reader@example.invalid` 在 Agent 工作台展开运行 `8a7fe8…2d67` 的事件流；展开前由所有者 API 独立读取为 19 条，页面显示“共 19 条”，行数一致。
+
+浏览器验证前已执行 `node build.mjs` 并提交 `frappe_app/dsherp_bridge/public/dist`，随后重启 alpha backend；登录端点 HTTP 200，容器保持 running。两张 PNG 已重新读回并目视核验，不以文件存在代替 UI 事实。
+
+### C4 收口遗留
+
+`list_run_events` 对不存在 run id 原先返回 `DoesNotExistError`，与无权运行的 `PermissionError` 形成可枚举差异；集成测试先取得该 404 形状红灯，最小改为两者均返回“运行不属于当前用户”，目标用例为 `1 passed in 29.45s`。`verify_daily_backup.snapshot()` 的 `audit_counts` 已加入 `DS Run Event`，源/恢复站会同时比较事件数；源码测试先红后绿为 `17 passed`。
+
+仍未在本计划扩项的边界：授权/预算拒绝补 `model_error`、事件写回的租约与行锁、`worker_log` 非容器值脱敏，以及 sanitize 的 AST 级实现一致性，继续归计划 2；`notifications` 目前收集但不参与映射，C4 没有伪称其已使用。`DS Run Event` 的数据库层不可变约束仍属于计划 4（G7），本计划只保证应用层约定。
