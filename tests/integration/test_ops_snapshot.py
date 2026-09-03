@@ -71,9 +71,14 @@ try:
         ops.ops_status();raise AssertionError('ordinary user read ops status')
     except frappe.PermissionError:pass
     frappe.set_user('Administrator')
-    frappe.db.delete('DS Ops Snapshot',{})
-    assert ops.ops_status()=={'snapshot':None,'age_seconds':None}
-    assert frappe.db.count('DS Ops Snapshot')==0
+    snapshot_count=frappe.db.count('DS Ops Snapshot')
+    original_get_all=frappe.get_all
+    frappe.get_all=lambda doctype,*args,**kwargs:[] if doctype=='DS Ops Snapshot' else original_get_all(doctype,*args,**kwargs)
+    try:
+        assert ops.ops_status()=={'snapshot':None,'age_seconds':None}
+    finally:
+        frappe.get_all=original_get_all
+    assert frappe.db.count('DS Ops Snapshot')==snapshot_count
     print('OK')
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
