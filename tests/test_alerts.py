@@ -4,7 +4,7 @@ import subprocess
 import httpx
 import pytest
 
-from dsherp import alerts
+from dsherp import alerts, worker_log
 
 
 SNAPSHOT = {
@@ -70,6 +70,29 @@ def test_notifier_deduplicates_and_webhook_failure_only_logs(capsys):
     assert [line["key"] for line in emitted] == ["run_stuck", "run_stuck"]
     assert len(failures) == 2 and all(line["error_class"] == "HTTPStatusError" for line in failures)
     assert len(posted) == 2 and posted[0]["key"] == "run_stuck"
+
+
+def test_notifier_redacts_configured_credentials_from_log_and_webhook(capsys):
+    secret = "synthetic-provider-secret-value"
+    posted = []
+
+    def handler(request):
+        posted.append(json.loads(request.content))
+        return httpx.Response(200)
+
+    worker_log.configure([secret])
+    try:
+        notifier = alerts.Notifier(
+            webhook="http://hook.invalid/x",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        notifier.emit([alerts.Alert("synthetic", "warning", f"failure {secret}")], now=0)
+        output = capsys.readouterr().err
+        assert secret not in output
+        assert secret not in json.dumps(posted)
+        assert "[redacted]" in output and "[redacted]" in json.dumps(posted)
+    finally:
+        worker_log.configure([])
 
 
 def test_orphan_containers_counts_docker_ps_lines():

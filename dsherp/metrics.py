@@ -2,6 +2,8 @@
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 import threading
 
+from dsherp import worker_log
+
 
 def _escape(value):
     return str(value).replace('\\','\\\\').replace('\n','\\n').replace('"','\\"')
@@ -74,7 +76,7 @@ class Registry:
                     lines.append(f'{name}_bucket{{le="+Inf"}} {_number(metric._counts[-1])}')
                     lines.append(f'{name}_sum {_number(metric._sum)}')
                     lines.append(f'{name}_count {_number(metric._count)}')
-        return '\n'.join(lines)+'\n'
+        return worker_log.redact('\n'.join(lines)+'\n')
 
 
 def serve(registry,port):

@@ -74,7 +74,7 @@ class Notifier:
             if not self.webhook:
                 continue
             try:
-                response=(self.client or httpx).post(self.webhook,json=alert._asdict(),timeout=5)
+                response=(self.client or httpx).post(self.webhook,json=worker_log.redact(alert._asdict()),timeout=5)
                 response.raise_for_status()
             except Exception as error:
                 self.sink('alert_webhook_failed',key=alert.key,error_class=type(error).__name__)

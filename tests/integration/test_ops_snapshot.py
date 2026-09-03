@@ -53,7 +53,11 @@ try:
         'pending_proposals_expired','last_claim_age_seconds','runs_24h','backup_age_hours','site','collected_at'},snapshot
     assert snapshot['running_stuck']==1,snapshot
     assert snapshot['queued']>=1 and snapshot['queued_oldest_seconds']>=0,snapshot
+    assert snapshot['runs_24h'].get('Running',0)>=1,snapshot
+    assert snapshot['runs_24h'].get('Queued',0)>=1,snapshot
     assert 'backup_age_hours' in snapshot
+    serialized=json.dumps(snapshot,ensure_ascii=False).lower()
+    assert all(secret not in serialized for secret in ('capability','api_secret','deepseek')),serialized
     assert not frappe.db.exists('DS Ops Snapshot',old.name) and frappe.db.exists('DS Ops Snapshot',recent.name)
     frappe.set_user('Administrator')
     status=ops.ops_status()

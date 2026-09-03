@@ -1,5 +1,6 @@
 import httpx
 
+from dsherp import worker_log
 from dsherp.metrics import Registry, serve
 
 
@@ -38,3 +39,17 @@ def test_metrics_http_is_loopback_only_and_has_one_route():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_registry_render_never_exposes_configured_setting_values():
+    secret = "synthetic-metrics-secret-value"
+    worker_log.configure([secret])
+    try:
+        registry = Registry()
+        counter = registry.counter("dsherp_runs_total", f"Finished {secret}", labels=("status",))
+        counter.inc(status=secret)
+        output = registry.render()
+        assert secret not in output
+        assert "[redacted]" in output
+    finally:
+        worker_log.configure([])

@@ -29,6 +29,10 @@ def configure(secrets):
     _redact=redactor(secrets)
 
 
+def redact(value):
+    return _redact(value)
+
+
 def log(event,**fields):
-    record={'ts':datetime.now(timezone.utc).isoformat(timespec='milliseconds'),'event':event,**_redact(fields)}
+    record={'ts':datetime.now(timezone.utc).isoformat(timespec='milliseconds'),'event':event,**redact(fields)}
     print(json.dumps(record,ensure_ascii=False,default=str),file=sys.stderr,flush=True)
