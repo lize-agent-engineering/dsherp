@@ -344,3 +344,29 @@ C4 按要求复用 C3 已独立放行的三项注入，不重复制造故障：p
 `list_run_events` 对不存在 run id 原先返回 `DoesNotExistError`，与无权运行的 `PermissionError` 形成可枚举差异；集成测试先取得该 404 形状红灯，最小改为两者均返回“运行不属于当前用户”，目标用例为 `1 passed in 29.45s`。`verify_daily_backup.snapshot()` 的 `audit_counts` 已加入 `DS Run Event`，源/恢复站会同时比较事件数；源码测试先红后绿为 `17 passed`。
 
 仍未在本计划扩项的边界：授权/预算拒绝补 `model_error`、事件写回的租约与行锁、`worker_log` 非容器值脱敏，以及 sanitize 的 AST 级实现一致性，继续归计划 2；`notifications` 目前收集但不参与映射，C4 没有伪称其已使用。`DS Run Event` 的数据库层不可变约束仍属于计划 4（G7），本计划只保证应用层约定。
+
+### C4 最终门禁与恢复态
+
+门禁前确认 `.runtime/agent-worker.pid` 不存在、常驻 agent worker 进程为 0。为隔离长集成测试，临时停止 scheduler 两个 profile；停止时发现它们已合法入队 alpha/daily 定时任务，没有删除任务或放宽夹具，只启动 scheduler-worker 自然消费至队列 `{}`，随后再次停止。四套命令最终输出：
+
+```text
+.venv/bin/python -m pytest tests --ignore=tests/integration -q
+168 passed in 52.91s
+
+cd frontend && npm test
+Test Files  21 passed (21)
+Tests       167 passed (167)
+Duration    13.53s
+
+node --test runtime/*.test.cjs
+tests 8, pass 8, fail 0, duration_ms 60.635667
+
+.venv/bin/python -m pytest tests/integration -q
+174 passed in 766.45s (0:12:46)
+```
+
+伴生审查在第一次门禁后发现前端把真实 `runtime_tool_call.payload.name` 错读为测试伪造的 `payload.tool`。回归测试先明确得到“调用工具 undefined”红灯，再修正实现和两份 dist，提交 `e96994a`；上面四套输出均为该修复后的最终 HEAD 重跑结果。审查还发现浏览器工具返回 JPEG 字节却使用 `.png` 扩展名；两份证据已转码为真实 PNG，`file` 分别确认为 `PNG image data, 746 x 863` 与 `596 x 863`。
+
+门禁后重新启动 scheduler 与 scheduler-worker；从受版本控制的生成器重建 plist，并只执行一次 `launchctl bootstrap`。最终 PID 文件、`launchctl` 与 `kill -0` 一致为 `46688`，`dsherp.context_worker` 进程计数 1，`/metrics` 的 `dsherp_` 行数 17，孤儿容器 0；alpha、daily、beta 的 Queued/Running/Cancelling 均为 0。此 PID 是本次恢复态快照，不是稳定标识。
+
+当前事件面板按计划接口只请求 `page=1`，若单次运行超过 200 条则会显示前 200 条而未消费 `has_more`；本次真实运行只有 19 条，放行实例不受影响。该长运行分页属于伴生审查 P2，保留为后续实现，不把本次 19 条一致性扩大表述为任意长度完整回放。
