@@ -56,8 +56,7 @@ try:
     frappe.get_doc({'doctype':'Role','role_name':role}).insert()
     frappe.get_doc('User',actor).add_roles(role);frappe.db.commit()
     frappe.set_user('Guest')
-    try:execution.run_status(**cap);raise AssertionError('old authorization remained usable')
-    except frappe.PermissionError:pass
+    assert execution.run_status(**cap)['status']=='Running'
     try:execution.run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'});raise AssertionError('old tool context allowed')
     except frappe.PermissionError:pass
     try:execution.reserve_model_call(**cap,input_bytes=100,max_output_tokens=2048,provider='deepseek-official',model='deepseek-v4-flash',purpose='compaction',runtime_revision='a'*64);raise AssertionError('old summary context allowed')

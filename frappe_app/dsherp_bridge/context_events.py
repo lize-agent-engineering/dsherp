@@ -11,6 +11,7 @@ SERVER_KINDS = (
     "queued",
     "claimed",
     "expired",
+    "lease_renewed",
     "cancel_requested",
     "model_call_reserved",
     "tool_call",

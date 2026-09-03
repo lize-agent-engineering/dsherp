@@ -27,7 +27,9 @@ try:
     assert execution.claim_run('a'*64) is None
     frappe.set_user('Guest')
     cap={'run_id':claim['run_id'],'capability':claim['capability']}
-    assert execution.run_status(**cap)=={'run_id':claim['run_id'],'status':'Running'}
+    status=execution.run_status(**cap)
+    assert status['run_id']==claim['run_id'] and status['status']=='Running',status
+    assert 0<status['lease_remaining_seconds']<=claim['budget']['lease_seconds'],status
     model_call={'input_bytes':100,'max_output_tokens':2048,'provider':'deepseek-official','model':'deepseek-v4-flash','purpose':'conversation','runtime_revision':'a'*64}
     try:execution.reserve_model_call(**cap,**{**model_call,'runtime_revision':'b'*64});raise AssertionError('unbound model config allowed')
     except frappe.PermissionError:pass

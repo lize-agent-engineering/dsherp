@@ -141,12 +141,22 @@ def claim_run(runtime_revision):
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def run_status(run_id,capability):
-    run=_run(run_id,capability)
-    if run.status=='Running':
-        with _actor(run):
-            context_permissions.require_revision(run)
-            conversations._public(conversations._conversation(run.conversation))
-    return {'run_id':run.name,'status':run.status}
+    run=frappe.db.get_value('DS Model Run',run_id,
+        ['name','status','capability_hash','expires_at','domain'],as_dict=True)
+    if (not run or run.status not in ('Running','Cancelling','NeedsInput') or not run.capability_hash
+        or not run.expires_at or not isinstance(capability,str)
+        or not hmac.compare_digest(run.capability_hash,hashlib.sha256(capability.encode()).hexdigest())):
+        raise frappe.PermissionError('运行凭据失效')
+    from dsherp_bridge.run_budget import budget
+    plan=budget(run.domain);now=now_datetime()
+    remaining=int((get_datetime(run.expires_at)-now).total_seconds())
+    if remaining<=0:raise frappe.PermissionError('运行凭据失效')
+    if run.status in ('Running','Cancelling') and remaining<plan['lease_renew_below_seconds']:
+        new_expiry=add_to_date(now,seconds=plan['lease_seconds'])
+        frappe.db.set_value('DS Model Run',run.name,'expires_at',new_expiry)
+        events.record_safely(run.name,'lease_renewed',{'expires_at':str(new_expiry)})
+        remaining=plan['lease_seconds']
+    return {'run_id':run.name,'status':run.status,'lease_remaining_seconds':remaining}
 
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])

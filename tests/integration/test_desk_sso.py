@@ -116,7 +116,8 @@ try:
     cap={'run_id':claim['run_id'],'capability':claim['capability']}
     frappe.set_user('Guest')
     sso.identity_for_token=lambda token:{**info,'binding_version':'v2'}
-    for operation in (lambda:execution.run_status(**cap),lambda:execution.run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'}),lambda:execution.reserve_model_call(**cap,input_bytes=100,max_output_tokens=2048,provider='deepseek-official',model='deepseek-v4-flash',purpose='compaction',runtime_revision='a'*64)):
+    assert execution.run_status(**cap)['status']=='Running'
+    for operation in (lambda:execution.run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'}),lambda:execution.reserve_model_call(**cap,input_bytes=100,max_output_tokens=2048,provider='deepseek-official',model='deepseek-v4-flash',purpose='compaction',runtime_revision='a'*64)):
         try:operation();raise AssertionError('revoked background grant accepted')
         except frappe.PermissionError:pass
     assert frappe.db.get_value('DS Model Run',run.name,'model_calls')==0
