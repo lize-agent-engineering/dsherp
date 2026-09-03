@@ -19,8 +19,10 @@ class BusinessRuntimeError(RuntimeError):
         super().__init__(f'业务运行请求未完成（HTTP {status_code}）')
 
 
-def post(client,method,**data):
-    response=client.post(API+method,json=data)
+def post(client,method,*,timeout=None,**data):
+    request={'json':data}
+    if timeout is not None:request['timeout']=timeout
+    response=client.post(API+method,**request)
     if response.status_code!=200:raise BusinessRuntimeError(response.status_code)
     body=response.json()
     if method=='claim_run' and 'message' not in body:return None

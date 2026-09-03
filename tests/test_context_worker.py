@@ -1,6 +1,7 @@
 import json
 import os
 import signal
+import time
 import httpx
 import pytest
 from dsherp.context_mcp import BusinessRuntimeError
@@ -142,4 +143,21 @@ def test_event_writeback_failure_does_not_change_the_run_result(tmp_path,capsys)
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'ok'})
     assert calls==['claim_run','record_run_event','finish_run']
+    assert 'event_writeback_failed' in capsys.readouterr().err
+
+
+def test_event_writeback_timeout_does_not_change_the_run_result(tmp_path,capsys):
+    calls=[];timeouts=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];calls.append(method)
+        if method=='record_run_event':
+            timeouts.append(request.extensions['timeout'])
+            raise httpx.TimeoutException('synthetic slow event sink',request=request)
+        return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'f'*64,'capability':'cap'} if method=='claim_run' else {'status':'Succeeded'}})
+    started=time.monotonic()
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler),timeout=30) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'ok'})
+    assert calls==['claim_run','record_run_event','finish_run']
+    assert timeouts and set(timeouts[0].values())=={5.0}
+    assert time.monotonic()-started<10
     assert 'event_writeback_failed' in capsys.readouterr().err

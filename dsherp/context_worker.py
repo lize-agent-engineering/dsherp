@@ -67,7 +67,7 @@ def run_once(client,settings,state_root,*,business=None,execute=run_container):
     worker_log.log('claimed',run_id=cap['run_id'])
     started=time.monotonic()
     def writeback(items):
-        try:post(client,'record_run_event',**cap,events=items)
+        try:post(client,'record_run_event',timeout=5,**cap,events=items)
         except Exception as error:
             worker_log.log('event_writeback_failed',run_id=cap['run_id'],error_class=type(error).__name__)
     try:
