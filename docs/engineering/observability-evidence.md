@@ -97,12 +97,12 @@ daily 没有 Failed error 前缀。C4 的 T4.3 导出基准因此为 alpha 12 �
 `.venv/bin/python -m pytest tests --ignore=tests/integration -q` 在最终提交候选上退出 0：
 
 ```text
-........................................................................ [ 51%]
-...................................................................      [100%]
-139 passed in 48.46s
+........................................................................ [ 50%]
+.......................................................................  [100%]
+143 passed in 51.57s
 ```
 
-计划原命令 `node --test runtime/` 在本机 Node v26.7.0 把目录当作单个模块，退出 1，报 `Cannot find module '/Users/lize/Documents/ChatGPT/dsherp/runtime'`；这是命令行入口不兼容，不是测试断言失败。没有添加空入口伪造绿灯。实际测试文件命令 `node --test runtime/*.test.cjs` 退出 0，结果为 `tests 8, pass 8, fail 0`。因此 C2 的原样 Node 命令标准仍记为偏离，等待审计裁决。
+计划已由提交 `860f593` 把 Node v26 不支持的目录参数修订为测试文件通配。最终执行 `node --test runtime/*.test.cjs` 退出 0：`tests 8, pass 8, fail 0, duration_ms 61.943584`。
 
 完整门禁首次还发现 C1 新增的 `DS Run Event` 使用 `sort_order: ASC`，违反仓库全部自定义 DocType 的 `creation DESC` 契约；先取得 `1 failed, 15 passed`，再改为 `DESC` 后取得 `16 passed`。这是 C1 元数据遗漏，不属于 T2 行为。变更后按全局约束串行迁移 alpha、daily、beta，三次 `bench migrate` 退出码均为 0；三站 `table_exists('DS Run Event')` 均返回 `true`、退出码均为 0，DocType 的 `sort_order` 均为 `DESC`。每站迁移产生的 long queue 搜索索引任务均由对应 bench 串行 burst worker 完成并显示 `Job OK`。
 
@@ -112,7 +112,7 @@ daily 没有 Failed error 前缀。C4 的 T4.3 导出基准因此为 alpha 12 �
 
 ```text
 .venv/bin/python -m pytest tests/integration/test_context_worker_chain.py -q -s
-1 passed in 130.91s (0:02:10)
+1 passed in 94.55s (0:01:34)
 ```
 
 测试在 fixture 清理前通过所有者的 `list_run_events` 实际读取两次运行；两条结果均按 `seq` 返回以下完整 kind 序列：
@@ -131,9 +131,17 @@ container_finished, finished
 
 结论：固定 Runtime 的 finish chunk 只有 `type`、`reason` 顶层键，没有 `usage`；C2 如实记录 `usage: null`，不估算 token。模型地址固定为容器内本地替身 `127.0.0.1:38127/v1`，没有调用真实 provider。事件顺序也表明服务端 `tool_call` 在 runner 汇总 Runtime 通知形成的 `runtime_tool_call` 之前入库；两类事件都存在，未改写实际 `seq` 来迎合展示顺序。
 
+### C2 审计整改
+
+观测回写超时先以三条用例取得红灯：`timeout` 被错误放入业务 JSON；runner 没有受限 flush 入口；worker 的回写继承 client 的 30 秒超时。实现后，`context_mcp.post` 的可选 timeout 只传给 httpx，runner 与 worker 仅在 `record_run_event` 使用 5 秒，其他 RPC 不变。目标三条为 `3 passed in 1.77s`，相关四文件回归为 `32 passed in 8.05s`。MockTransport 抛 `httpx.TimeoutException` 时，flush 的 `error` 为 `TimeoutException`，模型与 worker 的成功结果均保持 Succeeded，总耗时小于 10 秒。
+
+事件映射异常用例先确认 `TypeError` 会逃逸并使成功运行失败；局部捕获后目标为 `1 passed in 1.00s`，相关 runner/runtime/model guard 为 `20 passed in 18.34s`。stderr 只写 `DSHERP_DIAGNOSTIC {"type":"EventMappingFailed","error":"TypeError"}`，记录中没有 `runtime_failed`，最终运行仍为 Succeeded。
+
+`rg` 对 `tests/integration` 的完整清单只有 `test_context_worker_chain.py` 两处 `worker.run_once`，没有其他文件调用 `worker.run_once` 或 `poll_once`。该测试开头现检查 `.runtime/agent-worker.pid` 对应 PID：PID `87290` 存活时，实测 fastfail 为 `常驻 worker 正在运行，会用真实 provider 抢先领取测试运行；先停止它再跑`，未创建测试运行；测试本身不停止 worker。显式 bootout 并复核 PID 文件不存在、进程计数 0 后，`-s` 运行得到上述 1 passed 与 `C2_EVENT_EVIDENCE`。
+
 ### worker 状态与 stderr
 
-旧日志可恢复地轮转到 `/Users/lize/Library/Logs/dsherp-agent-worker-v16.log.pre-c2-20260903140303`。替身测试 stderr 写入新日志；恢复前又以数据库只读 SQL 核验 alpha、daily、beta 的 Queued/Running/Cancelling 计数均为 `[[0]]`。随后从 `infra/render_context_worker_launch_agent.py` 重建 plist 并只 bootstrap 一次。最终实态为 launchd `state = running`、`properties = keepalive | runatload`，PID 文件权限 `-rw-------`，PID `87290` 与 launchd/进程表一致，`dsherp.context_worker` 精确计数为 1。
+旧日志可恢复地轮转到 `/Users/lize/Library/Logs/dsherp-agent-worker-v16.log.pre-c2-20260903140303`。替身测试 stderr 写入新日志；恢复前又以数据库只读 SQL 核验 alpha、daily、beta 的 Queued/Running/Cancelling 计数均为 `[[0]]`。整改验收结束后，从 `infra/render_context_worker_launch_agent.py` 重建 plist 并只 bootstrap 一次。最终实态为 launchd `state = running`、`properties = keepalive | runatload`，PID 文件权限 `-rw-------`，PID `202` 与 launchd/进程表一致，`dsherp.context_worker` 精确计数为 1。
 
 日志逐行 JSON 校验命令与输出：
 
