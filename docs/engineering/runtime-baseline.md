@@ -93,6 +93,10 @@ ERPNext/Frappe 切换到 v16 没有改动本节的 DSH 链：SDK/Runtime 仍为 
 
 `dsherp.context_worker` 的告警阈值定义在进程启动时导入的 `dsherp/alerts.py`，Prometheus 指标注册表也在模块导入时创建。因此 `alerts.py`、`metrics.py` 或其阈值发生版本变更后，必须重启唯一的 LaunchAgent worker 才能生效；不能把工作副本已更新当作运行进程已加载。provider `.env` 仍按每轮重读，其行为与代码/阈值加载边界不同。
 
+### 运行时文件清单变更
+
+计划 1 新增 `dsherp/run_events.py`，供容器 runner 与宿主 worker 共用事件映射、脱敏和批量回写逻辑。该文件已紧跟 `dsherp/context_runner.py` 加入 `config/runtime-files.json`；因此其任何内容变化都会进入 `runtime_revision` 指纹并按既有契约作废不匹配的在飞运行。`alerts.py`、`metrics.py` 与 `worker_log.py` 只由宿主常驻 worker 加载，不进入隔离容器的运行时修订清单；这三类代码变化必须通过精确重启唯一 LaunchAgent 生效。
+
 ## 本轮依赖与环境补充
 
 官方 MCP Python SDK 固定 `1.26.0`，httpx `0.28.1`；`pydantic-settings` 从自动解析的 2.15.0 固定到该 MCP tag 上游锁文件中的 2.10.1，解决 lifespan 前向引用警告；未修改第三方源码。重新锁定并验证共 36 个 Python 包。Docker 测试栈固定 MariaDB 10.6.28、Redis 6.2.24；Compose 5.0.2。

@@ -70,7 +70,7 @@
 **Interfaces:**
 - Produces: 证据文档中的"事件类型清单"表与"usage 字段结论"（T2.1 的映射、T2.4 的 usage 提取依据）。
 
-- [ ] **Step 1: 写探针脚本（只用本地模型替身，不打真实 provider）**
+- [x] **Step 1: 写探针脚本（只用本地模型替身，不打真实 provider）**
 
 ```python
 """Print the event/notification shapes emitted by the pinned runtime. Values are replaced by their types."""
@@ -106,16 +106,16 @@ def main(directory):
 if __name__=='__main__':main(sys.argv[1])
 ```
 
-- [ ] **Step 2: 运行探针并把输出落档**
+- [x] **Step 2: 运行探针并把输出落档**
 
 Run: `.venv/bin/python infra/probe_observability/t0_1_runtime_events.py work/probe-events`
 Expected: 输出 JSON，`event_types` 至少含 `tool/call`、`tool/result`、`turn/end`、`assistant/message`；若 `tests/conftest.py` 的 fixture 无法作为生成器复用，改为把探针写成 `tests/test_observability_probe.py` 里一个用 `model_server` fixture 的测试并用 `-s` 打印，两种方式二选一，证据文档写明用的哪种。
 
-- [ ] **Step 3: 写证据文档首节**
+- [x] **Step 3: 写证据文档首节**
 
 `docs/engineering/observability-evidence.md` 新建，包含：探针命令、`event_types` 全表、每类事件的顶层键名（不含值）、`tool/call` 与 `tool/result` 的键名、**usage 结论**：明确写出"哪个事件类型的哪个键携带 input/output token 计数"或"固定 Runtime 的根会话事件不携带 usage，T2.4 只记录 finish 与 chunk 顶层键名"。不得猜测。
 
-- [ ] **Step 4: 清理并提交**
+- [x] **Step 4: 清理并提交**
 
 ```bash
 rm -rf work/probe-events
@@ -128,7 +128,7 @@ git commit -m "docs: 探针固定 Runtime 事件形状"
 **Files:**
 - Modify: `docs/engineering/observability-evidence.md`
 
-- [ ] **Step 1: 在 alpha 站只读统计**
+- [x] **Step 1: 在 alpha 站只读统计**
 
 ```bash
 docker exec -i dsherp-validation-backend-1 /home/frappe/frappe-bench/env/bin/python - <<'PY'
@@ -144,11 +144,11 @@ frappe.destroy()
 PY
 ```
 
-- [ ] **Step 2: 结果入档**
+- [x] **Step 2: 结果入档**
 
 证据文档新增"历史运行基线"节：总数、按状态计数、Failed 的 error 前缀分布。daily 站（`dsherp-validation-daily-1` 不存在时用 `docker compose -p dsherp-validation ps` 找到 daily 所在容器与站名 `dsherp-daily.localhost`）同样统计一次。此数字是 T4.3 导出条数的验收基准。
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 git add docs/engineering/observability-evidence.md
@@ -173,7 +173,7 @@ git commit -m "docs: 记录历史运行基线"
 **Interfaces:**
 - Produces: `context_events.record(run: str, kind: str, payload: dict, *, source: str='server', error_class: str|None=None) -> str`（返回事件 name）；`context_events.record_many(run, items: list[dict]) -> dict{'recorded': int, 'last_seq': int}`；`context_events.list_events(run, page=1, page_length=200) -> list[dict]`；常量 `SERVER_KINDS`、`RUNNER_KINDS`、`SOURCES`、`SECRET_KEYS`、`MAX_STRING=2000`、`MAX_PAYLOAD=8192`、`MAX_BATCH=200`。
 
-- [ ] **Step 1: 写失败的集成测试**
+- [x] **Step 1: 写失败的集成测试**
 
 ```python
 """Run events are append-only, sequential, secret-free and owner-readable."""
@@ -236,12 +236,12 @@ finally:
     assert result.returncode==0 and 'OK' in result.stdout, result.stdout+result.stderr
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `.venv/bin/python -m pytest tests/integration/test_run_events.py -q`
 Expected: FAIL，stderr 含 `ModuleNotFoundError: dsherp_bridge.context_events` 或 `DoesNotExistError: DocType DS Run Event`。
 
-- [ ] **Step 3: 写 DocType JSON**
+- [x] **Step 3: 写 DocType JSON**
 
 `ds_run_event.json`：
 
@@ -282,7 +282,7 @@ class DSRunEvent(Document):
         frappe.throw("运行事件不可删除")
 ```
 
-- [ ] **Step 4: 写 `context_events.py`**
+- [x] **Step 4: 写 `context_events.py`**
 
 ```python
 """Append-only per-run event stream. Never stores credential values."""
@@ -358,7 +358,7 @@ def list_events(run,page=1,page_length=200):
              'payload':json.loads(r.payload or '{}'),'recorded_at':str(r.recorded_at)} for r in rows]
 ```
 
-- [ ] **Step 5: 让站点识别新 DocType 并重跑测试**
+- [x] **Step 5: 让站点识别新 DocType 并重跑测试**
 
 Run（装有 dsherp_bridge 的三个 Site 都要迁移：alpha 与 daily 同在 backend-1 一个 bench，beta 在 beta-backend-1）：
 ```bash
@@ -369,7 +369,7 @@ docker exec dsherp-validation-beta-backend-1 bench --site dsherp-beta.localhost 
 ```
 Expected: PASS；三站 `frappe.db.table_exists('DS Run Event')` 均为 True。若 `migrate` 报 `custom` 缺失类错误，说明 `configuration_locks.check_new_custom_record` 的容忍分支未覆盖新表，先修 hook 再继续，不绕过。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add frappe_app/dsherp_bridge/dsherp_bridge/doctype/ds_run_event frappe_app/dsherp_bridge/context_events.py tests/integration/test_run_events.py
@@ -387,7 +387,7 @@ git commit -m "feat: 新增只增不删的运行事件流"
 - Consumes: `context_events.record`。
 - Produces: 事件序列契约（T4.2 前端与 T4.3 导出依赖）：`queued` → `claimed` → (`model_call_reserved` | `tool_call`)* → `finished`；取消路径多一条 `cancel_requested`；过期回收多一条 `expired`。`tool_call` payload 固定键：`tool`、`arguments`、`duration_ms`、`result`（读工具为 `{'records':int,'fields':int}`，提案工具为 `{'proposal':str}`，配置工具为 `{'exists':bool}`）。
 
-- [ ] **Step 1: 写失败的集成测试（追加到 test_run_events.py）**
+- [x] **Step 1: 写失败的集成测试（追加到 test_run_events.py）**
 
 ```python
 def test_server_records_the_run_lifecycle_in_order():
@@ -439,12 +439,12 @@ finally:
 
 注意：`claim_run` 会因站上存在其他 Running 运行而返回 `None`；测试前用 `infra/v16_integration_queue.py` 既有的队列清理（`tests/integration/conftest.py` autouse 已做），若仍返回 None，断言信息要打印当前 Running 运行名，不重试。`from dsherp.runtime_revision import ...` 在容器内不可用，直接用 `'a'*64` 作为 runtime_revision（claim 只校验格式）。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `.venv/bin/python -m pytest tests/integration/test_run_events.py::test_server_records_the_run_lifecycle_in_order -q`
 Expected: FAIL，`kinds==[]`。
 
-- [ ] **Step 3: 埋点实现**
+- [x] **Step 3: 埋点实现**
 
 `context_execution.py` 顶部加 `import time` 与 `from dsherp_bridge import context_events as events`。
 
@@ -508,12 +508,12 @@ def _tool_summary(tool,result):
         events.record(run.name,'cancel_requested',{'to_status':run.status})
 ```
 
-- [ ] **Step 4: 运行测试**
+- [x] **Step 4: 运行测试**
 
 Run: `.venv/bin/python -m pytest tests/integration/test_run_events.py -q`
 Expected: 2 passed。
 
-- [ ] **Step 5: 更新既有集成测试的清理顺序**
+- [x] **Step 5: 更新既有集成测试的清理顺序**
 
 Run: `grep -rln "delete_doc('DS Model Run'" tests/integration`
 对每个命中的文件，在 `delete_doc('DS Model Run',name,...)` 所在循环体内、该行之前插入 `frappe.db.delete('DS Run Event',{'run':name})`（变量名按各文件实际）。然后：
@@ -521,7 +521,7 @@ Run: `grep -rln "delete_doc('DS Model Run'" tests/integration`
 Run: `.venv/bin/python -m pytest tests/integration/test_context_sessions.py tests/integration/test_context_transcript.py tests/integration/test_context_claim_cancel.py tests/integration/test_context_worker_chain.py -q`
 Expected: 全绿；若某文件因事件链接残留报 `LinkExistsError`，说明漏改，补上后重跑。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add frappe_app/dsherp_bridge/context_execution.py frappe_app/dsherp_bridge/context_api.py tests/integration
@@ -537,7 +537,7 @@ git commit -m "feat: 运行生命周期在服务端事务内落事件"
 **Interfaces:**
 - Produces: `POST /api/method/dsherp_bridge.context_execution.record_run_event`，参数 `run_id, capability, events: list[{kind, payload, source, error_class?}]`，返回 `{'recorded': int, 'last_seq': int}`；仅在运行 Running/Cancelling 且凭据有效时接受；`kind` 限 `RUNNER_KINDS`，`source` 限 `runner|worker`。
 
-- [ ] **Step 1: 写失败测试（追加）**
+- [x] **Step 1: 写失败测试（追加）**
 
 ```python
 def test_runner_batch_endpoint_requires_live_capability_and_runner_kinds():
@@ -585,9 +585,9 @@ finally:
     assert result.returncode==0 and 'OK' in result.stdout, result.stdout+result.stderr
 ```
 
-- [ ] **Step 2: 运行确认失败**（`ImportError: record_run_event`）
+- [x] **Step 2: 运行确认失败**（`ImportError: record_run_event`）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```python
 @frappe.whitelist(allow_guest=True,methods=['POST'])
@@ -600,9 +600,9 @@ def record_run_event(run_id,capability,events):
 
 端点参数名必须叫 `events`（runner、worker、model-guard 三处调用方都用这个键）；函数体内用局部导入避免与 T1.2 引入的模块别名 `events` 冲突。
 
-- [ ] **Step 4: 运行测试** → 3 passed。
+- [x] **Step 4: 运行测试** → 3 passed。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add frappe_app/dsherp_bridge/context_execution.py tests/integration/test_run_events.py
@@ -618,7 +618,7 @@ git commit -m "feat: 运行凭据可批量回写模型侧事件"
 **Interfaces:**
 - Produces: `GET /api/method/dsherp_bridge.context_api.list_run_events?run_id=&page=1` → `{'run_id','page','events':[...],'has_more':bool}`；运行所有者可读；持 `System Manager` 角色的用户可读任意运行（T4.1 报表复用）；其他用户 `PermissionError`。不进入 `_public`（避免加重 R1）。
 
-- [ ] **Step 1: 写失败测试（追加）**：以所有者读取得到 T1.1 同样结构；另一合成普通用户读取抛 `PermissionError`；`page=2` 且总数 ≤200 时 `events==[]` 且 `has_more` 为 False。测试骨架与 T1.3 相同（创建 run、记录 2 条事件、切换用户调用 `api.list_run_events`），断言：
+- [x] **Step 1: 写失败测试（追加）**：以所有者读取得到 T1.1 同样结构；另一合成普通用户读取抛 `PermissionError`；`page=2` 且总数 ≤200 时 `events==[]` 且 `has_more` 为 False。测试骨架与 T1.3 相同（创建 run、记录 2 条事件、切换用户调用 `api.list_run_events`），断言：
 
 ```python
     frappe.set_user(actor);page=api.list_run_events(run.name)
@@ -628,9 +628,9 @@ git commit -m "feat: 运行凭据可批量回写模型侧事件"
     except frappe.PermissionError:pass
 ```
 
-- [ ] **Step 2: 确认失败** → `AttributeError: list_run_events`。
+- [x] **Step 2: 确认失败** → `AttributeError: list_run_events`。
 
-- [ ] **Step 3: 实现（context_api.py 末尾）**
+- [x] **Step 3: 实现（context_api.py 末尾）**
 
 ```python
 @frappe.whitelist(methods=['GET'])
@@ -644,9 +644,9 @@ def list_run_events(run_id,page=1):
     return {'run_id':run.name,'page':page,'events':rows[:200],'has_more':len(rows)>200}
 ```
 
-- [ ] **Step 4: 运行测试** → 4 passed。
+- [x] **Step 4: 运行测试** → 4 passed。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add frappe_app/dsherp_bridge/context_api.py tests/integration/test_run_events.py
@@ -670,7 +670,7 @@ git commit -m "feat: 运行所有者与管理员可读取事件流"
 - Produces: `sanitize(value) -> value`（规则与服务端一致）；`from_runtime_events(events: list[dict], notifications: list) -> list[dict]`（每项 `{'kind','payload','source':'runner','error_class'?}`）；`flush(post, run_id, capability, items, *, batch=100) -> dict{'sent': int, 'error': str|None}`（永不抛出）；常量 `RUNNER_KINDS`、`SECRET_KEYS`、`MAX_STRING`。
 - Consumes: `dsherp.context_mcp.post(client, method, **data)`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 import ast,json
@@ -724,12 +724,12 @@ def test_flush_batches_and_never_raises():
     assert all(len(b['events'])<=100 and b['run_id']=='r' for b in seen)
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `.venv/bin/python -m pytest tests/test_run_events.py -q`
 Expected: FAIL，`ModuleNotFoundError: dsherp.run_events`。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```python
 """Runner/worker side event records. Mirrors frappe_app/dsherp_bridge/context_events.py constants."""
@@ -811,14 +811,14 @@ def flush(post,run_id,capability,items,*,batch=100):
 
 C0 证据：通知方法只有 `session.event`、`session.status`，不存在 `compaction/*` 通知，故压缩以事件类型含 `compact` 计数；`notifications` 参数保留但本任务不解析它。若 C2 替身链路中压缩事件的类型名不含 `compact`，以 `tests/test_context_compaction.py` 实测的类型名替换该判断并记入证据。
 
-- [ ] **Step 4: 加入运行时文件清单并重跑相关测试**
+- [x] **Step 4: 加入运行时文件清单并重跑相关测试**
 
 `config/runtime-files.json` 在 `"dsherp/context_runner.py",` 之后插入 `"dsherp/run_events.py",`。
 
 Run: `.venv/bin/python -m pytest tests/test_run_events.py tests/test_runtime_revision.py -q`
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add dsherp/run_events.py config/runtime-files.json tests/test_run_events.py
@@ -835,7 +835,7 @@ git commit -m "feat: 运行时事件映射与批量回写"
 - `monitored_run(runtime,question,session_id,status,*,poll_interval=2,record=None)`：`record(items: list[dict]) -> None` 由 `run_business` 提供；成功与失败都在返回/重抛前调用一次。
 - `run_business` 内 `record=lambda items: run_events.flush(lambda **kw:post(client,'record_run_event',**kw),cap['run_id'],cap['capability'],items)`；`flush` 的返回值若 `error` 非空，向 stderr 打印 `DSHERP_DIAGNOSTIC {"type":"EventFlushFailed","error":...}`（不影响结果）。
 
-- [ ] **Step 1: 写失败测试（追加到 tests/test_context_runner.py）**
+- [x] **Step 1: 写失败测试（追加到 tests/test_context_runner.py）**
 
 ```python
 def test_monitored_run_records_tool_and_turn_events_before_returning(model_server,tmp_path):
@@ -863,9 +863,9 @@ def test_monitored_run_records_runtime_failed_when_model_never_completes(model_s
     assert set(items[-1]['payload'])=={'type','frames'}
 ```
 
-- [ ] **Step 2: 确认失败** → `TypeError: unexpected keyword argument 'record'`。
+- [x] **Step 2: 确认失败** → `TypeError: unexpected keyword argument 'record'`。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `context_runner.py` 顶部加 `from dsherp import run_events`。`monitored_run` 改为：
 
@@ -917,12 +917,12 @@ def monitored_run(runtime,question,session_id,status,*,poll_interval=2,record=No
                 return monitored_run(runtime,prompt,config['native_session_id'],status,record=record)
 ```
 
-- [ ] **Step 4: 运行测试**
+- [x] **Step 4: 运行测试**
 
 Run: `.venv/bin/python -m pytest tests/test_context_runner.py tests/test_context_runtime.py tests/test_model_guard.py -q`
 Expected: PASS（含既有取消/撤销用例）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add dsherp/context_runner.py tests/test_context_runner.py
@@ -940,7 +940,7 @@ git commit -m "feat: runner 在结束前回写模型侧事件"
 - Produces: `worker_log.log(event: str, **fields) -> None`（stderr 一行 JSON：`{"ts": ISO8601, "event": ..., 其余字段}`）；`worker_log.redactor(values: list[str]) -> Callable[[dict],dict]`（把任何等于凭证值的字符串替换为 `[redacted]`）；`worker_log.configure(secrets: list[str])` 设置全局脱敏。
 - `run_once` 在 `finish_run` 之前调用 `post(client,'record_run_event',...)` 一次：成功为 `container_finished {'duration_ms','status'}`，失败为 `runtime_failed {'error_class','duration_ms'}`；回写失败只记日志。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `tests/test_worker_log.py`：
 
@@ -990,9 +990,9 @@ def test_event_writeback_failure_does_not_change_the_run_result(tmp_path,capsys)
     assert 'event_writeback_failed' in capsys.readouterr().err
 ```
 
-- [ ] **Step 2: 确认失败** → `ModuleNotFoundError: dsherp.worker_log`；worker 用例 `record_run_event` 缺失。
+- [x] **Step 2: 确认失败** → `ModuleNotFoundError: dsherp.worker_log`；worker 用例 `record_run_event` 缺失。
 
-- [ ] **Step 3: 实现 `worker_log.py`**
+- [x] **Step 3: 实现 `worker_log.py`**
 
 ```python
 """One JSON line per worker event on stderr; credential values never appear."""
@@ -1019,7 +1019,7 @@ def log(event,**fields):
     print(json.dumps(record,ensure_ascii=False,default=str),file=sys.stderr,flush=True)
 ```
 
-- [ ] **Step 4: 改 `context_worker.py`**
+- [x] **Step 4: 改 `context_worker.py`**
 
 顶部 `from dsherp import worker_log`。`main()` 里 `settings=load_settings(args.provider_env)` 之后加 `worker_log.configure([settings['DEEPSEEK_API_KEY'],profile['api_secret']])`。
 
@@ -1056,12 +1056,12 @@ def run_once(client,settings,state_root,*,business=None,execute=run_container):
 
 `poll_once` 与 `run_container` 中的 `print(json.dumps({...}),file=sys.stderr)` 全部改为 `worker_log.log('worker_error',error_class=...,status_code=...)` / `worker_log.log('runtime_diagnostic',**diagnostic)`。
 
-- [ ] **Step 5: 运行测试**
+- [x] **Step 5: 运行测试**
 
 Run: `.venv/bin/python -m pytest tests/test_worker_log.py tests/test_context_worker.py -q`
 Expected: PASS（既有 `test_worker_poll_survives_...` 断言 stderr 含 `ReadError` 与 `500` 仍成立）。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add dsherp/worker_log.py dsherp/context_worker.py tests/test_worker_log.py tests/test_context_worker.py
@@ -1077,7 +1077,7 @@ git commit -m "feat: worker 结构化日志与容器结果事件"
 **Interfaces:**
 - `createGuard(authorize, check=()=>{}, report=async()=>{})`：`report({kind:'model_response'|'model_error', payload, error_class?})` 在 finish 后 / 出错时各调用一次，永不影响流；`apply` 中的 `report` 把记录 POST 到 `record_run_event`（5 秒超时，失败静默）。`model_response.payload = {usage: chunk.usage ?? null, chunk_keys: Object.keys(chunk), purpose, model}`。C0 证据：根会话事件不携带 usage，因此 finish chunk 是唯一可能的来源；`chunk_keys` 只记键名不记值，用于在 C2 证据中确认固定 Runtime 是否提供 usage，禁止估算。
 
-- [ ] **Step 1: 写失败测试（追加）**
+- [x] **Step 1: 写失败测试（追加）**
 
 ```js
 test('finish and errors are reported without affecting the stream',async()=>{
@@ -1095,12 +1095,12 @@ test('finish and errors are reported without affecting the stream',async()=>{
 });
 ```
 
-- [ ] **Step 2: 确认失败**
+- [x] **Step 2: 确认失败**
 
 Run: `node --test runtime/model-guard.test.cjs`
 Expected: FAIL，`reports` 为空。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `createGuard`：
 
@@ -1140,12 +1140,12 @@ function createGuard(authorize,check=()=>{},report=async()=>{}){
   ctx.on('llm/stream',createGuard(async metadata=>{ ...原有 authorize 体不变... },check,report));
 ```
 
-- [ ] **Step 4: 运行测试**
+- [x] **Step 4: 运行测试**
 
 Run: `node --test runtime/model-guard.test.cjs && .venv/bin/python -m pytest tests/test_model_guard.py tests/test_context_compaction.py tests/test_runtime_revision.py -q`
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add runtime/model-guard.cjs runtime/model-guard.test.cjs
@@ -1171,11 +1171,11 @@ git commit -m "feat: 模型调用结果与错误回写事件流"
 - `ops_status()`：whitelisted GET，仅 `frappe.conf.dsherp_runtime_user` 或 System Manager 可调，返回最新快照 payload（无快照则即时 `collect_snapshot()`）。
 - hooks：`scheduler_events={"cron":{"*/5 * * * *":["dsherp_bridge.ops.collect_snapshot"]}}`。
 
-- [ ] **Step 1: 写失败集成测试**：创建一条 `expires_at` 过去 1 分钟的 Running 运行与一条 Queued 运行，调用 `collect_snapshot()`，断言 `running_stuck==1`、`queued>=1`、`queued_oldest_seconds>=0`、`'backup_age_hours' in snapshot`；再以 `dsherp_runtime_user` 调用 `ops_status()` 得到同样键；以普通合成用户调用抛 `PermissionError`。清理同 T1.x（先删事件再删运行）。
+- [x] **Step 1: 写失败集成测试**：创建一条 `expires_at` 过去 1 分钟的 Running 运行与一条 Queued 运行，调用 `collect_snapshot()`，断言 `running_stuck==1`、`queued>=1`、`queued_oldest_seconds>=0`、`'backup_age_hours' in snapshot`；再以 `dsherp_runtime_user` 调用 `ops_status()` 得到同样键；以普通合成用户调用抛 `PermissionError`。清理同 T1.x（先删事件再删运行）。
 
-- [ ] **Step 2: 确认失败** → `ModuleNotFoundError: dsherp_bridge.ops`。
+- [x] **Step 2: 确认失败** → `ModuleNotFoundError: dsherp_bridge.ops`。
 
-- [ ] **Step 3: 实现 `ops.py`**
+- [x] **Step 3: 实现 `ops.py`**
 
 ```python
 """Five-minute operational snapshot for the worker and administrators. Measures only; recovery belongs to plan 2."""
@@ -1222,14 +1222,14 @@ def ops_status():
 
 `DS Ops Snapshot` JSON：`autoname: hash`，字段 `collected_at`（Datetime，reqd，search_index）、`payload`（Long Text）；`permissions: []`；py 仅 `pass`（快照可被计划 4 的保留策略清理，不加 on_trash）。`collect_snapshot` 末尾另删除 7 天前的快照：`frappe.db.delete('DS Ops Snapshot',{'collected_at':['<',add_to_date(now,days=-7)]})`。
 
-- [ ] **Step 4: 注册 scheduler 并验证**
+- [x] **Step 4: 注册 scheduler 并验证**
 
 `hooks.py` 末尾加 `scheduler_events={"cron":{"*/5 * * * *":["dsherp_bridge.ops.collect_snapshot"]}}`。
 
 Run: `docker exec dsherp-validation-backend-1 bench --site dsherp-validation.localhost migrate && .venv/bin/python -m pytest tests/integration/test_ops_snapshot.py -q`
 Expected: PASS。再执行一次 `docker compose -f infra/compose.validation.yml -p dsherp-validation --profile scheduled up -d` 并在 5 分钟后核对 `DS Ops Snapshot` 新增一条、`Scheduled Job Log` 无 Failed。
 
-- [ ] **Step 5: 提交**：`git commit -m "feat: 五分钟运维快照与运行服务只读状态"`。
+- [x] **Step 5: 提交**：`git commit -m "feat: 五分钟运维快照与运行服务只读状态"`。
 
 ### Task 3.2：worker 指标 `/metrics`
 
@@ -1243,15 +1243,15 @@ Expected: PASS。再执行一次 `docker compose -f infra/compose.validation.yml
 - 指标名固定：`dsherp_claims_total`、`dsherp_runs_total{status}`、`dsherp_run_duration_seconds`（buckets 5,15,30,60,120,300）、`dsherp_worker_errors_total{error_class}`、`dsherp_consecutive_run_failures`、`dsherp_queue_depth`、`dsherp_running_stuck`、`dsherp_backup_age_hours`、`dsherp_orphan_containers`、`dsherp_last_claim_timestamp_seconds`、`dsherp_provider_call_failures_total`。
 - profile 新增可选键 `metrics_port`（默认 9109）；`--once` 模式不起 HTTP。
 
-- [ ] **Step 1: 写失败测试**：`Registry` 渲染包含 `# TYPE dsherp_runs_total counter`、`dsherp_runs_total{status="Succeeded"} 2`、直方图 `_bucket{le="+Inf"}`/`_sum`/`_count` 行；`serve` 后 `httpx.get('http://127.0.0.1:%d/metrics')` 返回 200 且 `content-type` 以 `text/plain` 开头；`/other` 返回 404。
+- [x] **Step 1: 写失败测试**：`Registry` 渲染包含 `# TYPE dsherp_runs_total counter`、`dsherp_runs_total{status="Succeeded"} 2`、直方图 `_bucket{le="+Inf"}`/`_sum`/`_count` 行；`serve` 后 `httpx.get('http://127.0.0.1:%d/metrics')` 返回 200 且 `content-type` 以 `text/plain` 开头；`/other` 返回 404。
 
-- [ ] **Step 2: 确认失败** → `ModuleNotFoundError`。
+- [x] **Step 2: 确认失败** → `ModuleNotFoundError`。
 
-- [ ] **Step 3: 实现**：无第三方依赖，`Registry` 内部用 `dict` + `threading.Lock`；直方图为累计桶；`serve` 用 `ThreadingHTTPServer` + daemon 线程，`log_message` 静默。worker：`main` 在进入循环前 `metrics.serve(REGISTRY, profile.get('metrics_port',9109))`（非 `--once`）；`run_once` 里 `claimed` 时 `dsherp_claims_total+1`、结束时 `dsherp_runs_total{status}` 与 `dsherp_run_duration_seconds.observe(duration/1000)`；`poll_once` 捕获处 `dsherp_worker_errors_total{error_class}`；连续失败计数在结果为 Failed 时 +1、Succeeded/Cancelled 时清零。
+- [x] **Step 3: 实现**：无第三方依赖，`Registry` 内部用 `dict` + `threading.Lock`；直方图为累计桶；`serve` 用 `ThreadingHTTPServer` + daemon 线程，`log_message` 静默。worker：`main` 在进入循环前 `metrics.serve(REGISTRY, profile.get('metrics_port',9109))`（非 `--once`）；`run_once` 里 `claimed` 时 `dsherp_claims_total+1`、结束时 `dsherp_runs_total{status}` 与 `dsherp_run_duration_seconds.observe(duration/1000)`；`poll_once` 捕获处 `dsherp_worker_errors_total{error_class}`；连续失败计数在结果为 Failed 时 +1、Succeeded/Cancelled 时清零。
 
-- [ ] **Step 4: 运行** `.venv/bin/python -m pytest tests/test_metrics.py tests/test_context_worker.py -q` → PASS。
+- [x] **Step 4: 运行** `.venv/bin/python -m pytest tests/test_metrics.py tests/test_context_worker.py -q` → PASS。
 
-- [ ] **Step 5: 提交**：`git commit -m "feat: worker 暴露 Prometheus 指标"`。
+- [x] **Step 5: 提交**：`git commit -m "feat: worker 暴露 Prometheus 指标"`。
 
 ### Task 3.3：告警规则、去重与输出（含孤儿容器与运维快照同步）
 
@@ -1265,7 +1265,7 @@ Expected: PASS。再执行一次 `docker compose -f infra/compose.validation.yml
 - 规则（阈值为常量，写在 `alerts.py` 顶部）：`consecutive_run_failures>=3` → `provider_or_runtime_failing`（critical）；`queue_depth>5 or queued_oldest_seconds>600` → `queue_backlog`（warning）；`running_stuck>0` → `run_stuck`（critical）；`backup_age_hours is None or >26` → `backup_stale`（critical）；`orphan_containers>0` → `orphan_containers`（warning）；`last_claim_age_seconds>120 and queue_depth>0` → `worker_not_claiming`（critical）；`snapshot is None`（拉取失败） → `ops_status_unavailable`（warning）。
 - profile 可选键 `alert_webhook`。
 
-- [ ] **Step 1: 写失败测试**（`tests/test_alerts.py`）
+- [x] **Step 1: 写失败测试**（`tests/test_alerts.py`）
 
 ```python
 import json,subprocess
@@ -1302,13 +1302,13 @@ def test_orphan_containers_counts_docker_ps_lines():
     assert alerts.orphan_containers(runner=fake)==2
 ````test_context_worker.py` 加：`poll_once` 循环中每 60 秒调用一次 `ops_status`（用可注入时钟），拉取失败产出 `ops_status_unavailable` 告警行。
 
-- [ ] **Step 2: 确认失败**。
+- [x] **Step 2: 确认失败**。
 
-- [ ] **Step 3: 实现**（`evaluate` 为纯函数；`Notifier` 持 `dict[key]->last_emit`）；worker `main` 循环：`if now-last_ops>=60: snapshot=fetch_ops(client); metrics 刷新; notifier.emit(evaluate(snapshot,REGISTRY.values(),now),now)`，其中 `fetch_ops` 用 `client.get('/api/method/dsherp_bridge.ops.ops_status')`，任何异常返回 None。
+- [x] **Step 3: 实现**（`evaluate` 为纯函数；`Notifier` 持 `dict[key]->last_emit`）；worker `main` 循环：`if now-last_ops>=60: snapshot=fetch_ops(client); metrics 刷新; notifier.emit(evaluate(snapshot,REGISTRY.values(),now),now)`，其中 `fetch_ops` 用 `client.get('/api/method/dsherp_bridge.ops.ops_status')`，任何异常返回 None。
 
-- [ ] **Step 4: 运行** `.venv/bin/python -m pytest tests/test_alerts.py tests/test_context_worker.py tests/test_metrics.py -q` → PASS。
+- [x] **Step 4: 运行** `.venv/bin/python -m pytest tests/test_alerts.py tests/test_context_worker.py tests/test_metrics.py -q` → PASS。
 
-- [ ] **Step 5: 提交**：`git commit -m "feat: worker 规则化告警与孤儿容器检测"`。
+- [x] **Step 5: 提交**：`git commit -m "feat: worker 规则化告警与孤儿容器检测"`。
 
 **C3 放行标准**：重启 LaunchAgent 后 `curl -s 127.0.0.1:9109/metrics | grep -c '^dsherp_'` ≥ 10；三项注入各在 5 分钟内出现 `"event": "alert"` 行：(a) 把 provider env 文件的 `DEEPSEEK_BASE_URL` 临时指到 `http://127.0.0.1:9`（worker 每轮重读 .env）后连发 3 条消息 → `provider_or_runtime_failing`；(b) `docker run -d --name dsherp-context-orphan-test alpine sleep 600` → `orphan_containers`（随后 `docker rm -f` 清理）；(c) 停 worker 后发 1 条消息等 2 分钟再启 worker → `worker_not_claiming`；恢复 .env 后 alpha 站正常运行 1 次成功。证据（告警行、时间戳）写入 `observability-evidence.md`。
 
@@ -1326,11 +1326,11 @@ def test_orphan_containers_counts_docker_ps_lines():
 **Interfaces:**
 - Produces: Script Report，`execute(filters) -> (columns, data)`；filters：`from_date`、`to_date`、`user`（可空）、`status`（可空）；每行：运行 `name`、`owner`、`creation`、`domain`、`status`、`model_calls`、`proposals`（该运行产生的提案数）、`executions`（Succeeded 执行记录数）、`events`（事件数）、`error`（前 80 字）。`roles: [System Manager]`，`is_standard: Yes`，`report_type: Script Report`，`ref_doctype: DS Model Run`。
 
-- [ ] **Step 1: 写失败集成测试**：以 Administrator 创建两个合成用户各一条运行（一条 Failed），调用 `frappe.desk.query_report.run('DS Agent Audit', filters={'from_date': today, 'to_date': today})`，断言两条运行都在 `result` 且 Failed 行 `error` 非空；再以其中一个普通用户调用同一报表抛 `PermissionError`。
+- [x] **Step 1: 写失败集成测试**：以 Administrator 创建两个合成用户各一条运行（一条 Failed），调用 `frappe.desk.query_report.run('DS Agent Audit', filters={'from_date': today, 'to_date': today})`，断言两条运行都在 `result` 且 Failed 行 `error` 非空；再以其中一个普通用户调用同一报表抛 `PermissionError`。
 
-- [ ] **Step 2: 确认失败** → 报表不存在。
+- [x] **Step 2: 确认失败** → 报表不存在。
 
-- [ ] **Step 3: 实现 `ds_agent_audit.py`**
+- [x] **Step 3: 实现 `ds_agent_audit.py`**
 
 ```python
 import frappe
@@ -1359,9 +1359,9 @@ def execute(filters=None):
 
 `ds_agent_audit.json`：`{"doctype":"Report","name":"DS Agent Audit","report_name":"DS Agent Audit","report_type":"Script Report","ref_doctype":"DS Model Run","module":"DSHERP Bridge","is_standard":"Yes","roles":[{"role":"System Manager"}]}`。`DS Model Run` 的 `permissions: []` 会让原生报表入口拒绝非 System Manager；System Manager 需要对 `DS Model Run` 有 read 权限才能打开报表，若 `query_report.run` 因此抛权限错，在 `ds_model_run.json` 增加 `{"role":"System Manager","read":1}`（只读，不给 write/delete），并把该变更写进证据文档。
 
-- [ ] **Step 4: 运行** `docker exec ... bench --site dsherp-validation.localhost migrate && .venv/bin/python -m pytest tests/integration/test_agent_audit_report.py -q` → PASS。
+- [x] **Step 4: 运行** `docker exec ... bench --site dsherp-validation.localhost migrate && .venv/bin/python -m pytest tests/integration/test_agent_audit_report.py -q` → PASS。
 
-- [ ] **Step 5: 提交**：`git commit -m "feat: 系统管理员跨用户 Agent 审计报表"`。
+- [x] **Step 5: 提交**：`git commit -m "feat: 系统管理员跨用户 Agent 审计报表"`。
 
 ### Task 4.2：前端事件流（按需加载，不进 `_public`）
 
@@ -1374,18 +1374,18 @@ def execute(filters=None):
 **Interfaces:**
 - `runEventRows(events) -> [{seq, time, label, detail, tone}]`：`label` 映射表——`queued`→"已排队"、`claimed`→"已领取"、`runtime_started`→"运行时启动"、`model_call_reserved`→"模型调用 #n"、`model_response`→"模型返回"、`model_error`→"模型错误"、`runtime_tool_call`→"调用工具 <name>"、`tool_call`→"服务端执行 <tool>（n ms）"、`tool_result`→"工具返回"、`tool_error`→"工具错误"、`compaction`→"上下文压缩"、`turn_end`→"回合结束（reason）"、`runtime_failed`→"运行失败（error_class）"、`container_finished`→"容器结束（status）"、`finished`→"运行结束（status）"、`expired`→"运行过期"、`cancel_requested`→"已请求取消"、`worker_error`→"worker 错误"；未知 kind 原样显示。`tone`：错误类为 `danger`，其余 `default`。
 
-- [ ] **Step 1: 写失败测试**：`runEventRows` 对上述每类各一条断言 label；`AgentRecords` 渲染一条消息，点击"事件流"后调用 `listRunEvents` 一次并显示行；接口失败显示服务端错误文本而非白屏（用 `vi.fn` 模拟 reject）。
+- [x] **Step 1: 写失败测试**：`runEventRows` 对上述每类各一条断言 label；`AgentRecords` 渲染一条消息，点击"事件流"后调用 `listRunEvents` 一次并显示行；接口失败显示服务端错误文本而非白屏（用 `vi.fn` 模拟 reject）。
 
-- [ ] **Step 2: 确认失败**：`cd frontend && npm test -- agent-transcript AgentRecords` 红。
+- [x] **Step 2: 确认失败**：`cd frontend && npm test -- agent-transcript AgentRecords` 红。
 
-- [ ] **Step 3: 实现**：`context-api.js` 复用既有 `apiFetch`（GET `dsherp_bridge.context_api.list_run_events`）；`AgentRecords.jsx` 用 antd `Collapse`，`onChange` 首次展开时 `useState` 记录 `{loading,error,rows}`；错误信息直接显示 `error.message`。
+- [x] **Step 3: 实现**：`context-api.js` 复用既有 `apiFetch`（GET `dsherp_bridge.context_api.list_run_events`）；`AgentRecords.jsx` 用 antd `Collapse`，`onChange` 首次展开时 `useState` 记录 `{loading,error,rows}`；错误信息直接显示 `error.message`。
 
-- [ ] **Step 4: 运行并重建产物**
+- [x] **Step 4: 运行并重建产物**
 
 Run: `cd frontend && npm test && node build.mjs && cd .. && .venv/bin/python -m pytest tests/test_desk_assets.py -q`
 Expected: 全绿；`git status` 显示 `frappe_app/dsherp_bridge/public/dist/*` 变更。
 
-- [ ] **Step 5: 提交**：`git add frontend/src frappe_app/dsherp_bridge/public/dist && git commit -m "feat: 工作台按需展示运行事件流"`。
+- [x] **Step 5: 提交**：`git add frontend/src frappe_app/dsherp_bridge/public/dist && git commit -m "feat: 工作台按需展示运行事件流"`。
 
 ### Task 4.3：失败运行导出为评估用例
 
@@ -1399,7 +1399,7 @@ Expected: 全绿；`git status` 显示 `frappe_app/dsherp_bridge/public/dist/*` 
 - `build_case` 返回 `{'schema_version':1,'site','run_id','domain','question','page_context','status','error','sources','events','proposals','created'}`；对 `question`、`page_context`、`events` 应用 `run_events.sanitize`；`proposals` 只保留 `id/status/summary` 三键。
 - `infra/export_eval_cases.py --site dsherp-validation.localhost --container dsherp-validation-backend-1 [--status Failed]`：容器内脚本用 `frappe.get_all` 读运行、`context_events.list_events` 读事件、`get_proposal` 读提案摘要，stdout 输出 JSON 行，宿主逐行写文件；已存在文件跳过（幂等）；结束打印 `{'exported': n, 'skipped': m}`。
 
-- [ ] **Step 1: 写失败测试**（`tests/test_eval_cases.py`）
+- [x] **Step 1: 写失败测试**（`tests/test_eval_cases.py`）
 
 ```python
 import json
@@ -1415,33 +1415,33 @@ def test_build_case_strips_secrets_and_trims_proposals():
     assert build_case({**run,'name':'r2'},[],[],site='alpha')['events']==[]
 ```
 
-- [ ] **Step 2: 确认失败** → `ModuleNotFoundError`。
+- [x] **Step 2: 确认失败** → `ModuleNotFoundError`。
 
-- [ ] **Step 3: 实现** 两个文件；`evals/README.md` 说明：用例来自隔离合成站，真实租户导出必须先经计划 4 的脱敏与授权；`evals/cases/` 入库，`evals/runs/` gitignore（本计划不建断言，断言与运行器属计划 6）。
+- [x] **Step 3: 实现** 两个文件；`evals/README.md` 说明：用例来自隔离合成站，真实租户导出必须先经计划 4 的脱敏与授权；`evals/cases/` 入库，`evals/runs/` gitignore（本计划不建断言，断言与运行器属计划 6）。
 
-- [ ] **Step 4: 执行导出**
+- [x] **Step 4: 执行导出**
 
 Run: `.venv/bin/python infra/export_eval_cases.py --site dsherp-validation.localhost --container dsherp-validation-backend-1 --status Failed` 与 daily 站同样一次。
 Expected: `exported` 之和等于 T0.2 记录的 Failed 数；`grep -rl "capability\|api_secret\|DEEPSEEK" evals/cases` 为 0。
 
-- [ ] **Step 5: 提交**：`git add dsherp/eval_cases.py infra/export_eval_cases.py evals tests/test_eval_cases.py .gitignore && git commit -m "feat: 失败运行导出为评估用例"`。
+- [x] **Step 5: 提交**：`git add dsherp/eval_cases.py infra/export_eval_cases.py evals tests/test_eval_cases.py .gitignore && git commit -m "feat: 失败运行导出为评估用例"`。
 
 ### Task 4.4：G6 演练与证据
 
 **Files:**
 - Modify: `docs/engineering/observability-evidence.md`
 
-- [ ] **Step 1: 失败回放演练**：在 alpha 站用替身链路（`tests/integration/test_context_mcp_chain.py` 的方式）制造一次工具权限失败（用无 Item 读权限的合成用户提问"读取测试物料"），取该运行 `run_id`，以所有者调用 `list_run_events`，把事件序列（kind、error_class、payload 键名）贴入证据文档，证明能看到 `tool_error` 的文本与 `runtime_failed`/`finished` 的先后。
-- [ ] **Step 2: 告警演练**：按 C3 放行标准的三项注入，记录每项从注入到告警行的时间差（须 < 5 分钟）。
-- [ ] **Step 3: 报表与前端**：截图 `DS Agent Audit` 跨两个用户的结果与工作台事件流面板，落档 `docs/engineering/evidence/observability/`。
-- [ ] **Step 4: 提交**：`git commit -m "docs: 可观测性 G6 演练证据"`。
+- [x] **Step 1: 失败回放演练**：在 alpha 站用替身链路（`tests/integration/test_context_mcp_chain.py` 的方式）制造一次工具权限失败（用无 Item 读权限的合成用户提问"读取测试物料"），取该运行 `run_id`，以所有者调用 `list_run_events`，把事件序列（kind、error_class、payload 键名）贴入证据文档，证明能看到 `tool_error` 的文本与 `runtime_failed`/`finished` 的先后。
+- [x] **Step 2: 告警演练**：按 C3 放行标准的三项注入，记录每项从注入到告警行的时间差（须 < 5 分钟）。
+- [x] **Step 3: 报表与前端**：截图 `DS Agent Audit` 跨两个用户的结果与工作台事件流面板，落档 `docs/engineering/evidence/observability/`。
+- [x] **Step 4: 提交**：`git commit -m "docs: 可观测性 G6 演练证据"`。
 
 ### Task 4.5：文档收口
 
-- [ ] README"当前状态"加一句：运行事件流、指标与告警已在隔离合成站落地，证据见 observability-evidence.md；测试数字更新为实际收集数。
-- [ ] `docs/engineering/runtime-baseline.md` 增加"运行时文件清单变更"节（新增 `dsherp/run_events.py`）。
-- [ ] `docs/superpowers/specs/2026-09-03-production-hardening-design.md` 实施顺序表计划 1 行后追加"（2026-xx-xx C4 通过）"。
-- [ ] 本计划复选框逐项勾选（勾选前对仓库文件核验），独立 `docs:` 提交。
+- [x] README"当前状态"加一句：运行事件流、指标与告警已在隔离合成站落地，证据见 observability-evidence.md；测试数字更新为实际收集数。
+- [x] `docs/engineering/runtime-baseline.md` 增加"运行时文件清单变更"节（新增 `dsherp/run_events.py`）。
+- [x] `docs/superpowers/specs/2026-09-03-production-hardening-design.md` 实施顺序表计划 1 行后追加"（2026-xx-xx C4 通过）"。
+- [x] 本计划复选框逐项勾选（勾选前对仓库文件核验），独立 `docs:` 提交。
 
 **C4 放行标准**：`DS Agent Audit` 由审计方以 Administrator 打开并按用户过滤成功；工作台事件流面板对一条真实运行可展开且行数等于 `list_run_events` 返回数；`evals/cases` 数量与 T0.2 基线一致且 grep 密钥为 0；证据文档三段演练齐全；全量门：`.venv/bin/python -m pytest tests --ignore=tests/integration -q` 全绿、`cd frontend && npm test` 全绿、`node --test runtime/*.test.cjs` 全绿、`.venv/bin/python -m pytest tests/integration -q` 全绿（集成全量约 12 分钟）。
 
