@@ -40,3 +40,34 @@
 ### usage 结论
 
 固定 Runtime 的根会话事件不携带 `usage`：上述 13 类事件的已观测形状都没有 input/output token 计数键。T2.4 不得从 `RunResult.events` 推断 token 用量；它只在 `llm/stream` 边界记录 `finish` 及其 chunk 顶层可观测键名，若该固定 Runtime 的 finish chunk 没有实际 usage，则持久事件中的 `usage` 必须为 `null`，不得估算。
+
+## C0：历史运行基线
+
+2026-09-03 只读盘点前，`dsherp-validation` compose 的既有容器均处于 `Exited (255)`；执行 `docker compose -f infra/compose.validation.yml -p dsherp-validation up -d` 恢复隔离验证栈后，`backend`、`beta-backend`、`db`、`frontend`、`platform-backend`、`platform-frontend`、`redis` 均为 `running`。alpha 与 daily Site 共用 `dsherp-validation-backend-1`，盘点通过容器内 Frappe ORM 读取 `DS Model Run`，没有修改运行记录。
+
+### alpha：`dsherp-validation.localhost`
+
+| 指标 | 数量 |
+| --- | ---: |
+| 总运行 | 54 |
+| `Succeeded` | 42 |
+| `Failed` | 12 |
+
+Failed 的 error 前缀分布：
+
+| error 前缀 | 数量 |
+| --- | ---: |
+| `业务运行失败：TimeoutExpired` | 1 |
+| `业务运行失败：RuntimeError` | 9 |
+| `运行已过期，未自动重试` | 1 |
+| `当前用户已无法读取会话来源` | 1 |
+
+### daily：`dsherp-daily.localhost`
+
+| 指标 | 数量 |
+| --- | ---: |
+| 总运行 | 1 |
+| `Succeeded` | 1 |
+| `Failed` | 0 |
+
+daily 没有 Failed error 前缀。C4 的 T4.3 导出基准因此为 alpha 12 条、daily 0 条，合计 12 条 Failed 运行；导出时仍须重新读取站点并报告与本基线之间是否出现新增失败运行。
