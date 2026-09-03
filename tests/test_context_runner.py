@@ -85,6 +85,23 @@ def test_event_writeback_timeout_does_not_change_successful_run(model_server,tmp
     assert time.monotonic()-started<10
 
 
+def test_event_mapping_failure_does_not_change_successful_run(model_server,tmp_path,monkeypatch,capsys):
+    import json
+    settings,_,_=model_server
+    recorded=[]
+    def fail_mapping(*args):
+        raise TypeError('synthetic event payload must not affect the run')
+    monkeypatch.setattr(context_runner.run_events,'from_runtime_events',fail_mapping)
+    with open_runtime(settings,tmp_path,'mapping-failure',resume=False) as runtime:
+        result=monitored_run(runtime,'hello','mapping-failure',lambda:'Running',record=recorded.append)
+    assert result=={'status':'Succeeded','answer':'DSHERP_OK'}
+    assert all(item['kind']!='runtime_failed' for batch in recorded for item in batch)
+    lines=capsys.readouterr().err.strip().splitlines()
+    assert len(lines)==1 and lines[0].startswith('DSHERP_DIAGNOSTIC ')
+    diagnostic=json.loads(lines[0].removeprefix('DSHERP_DIAGNOSTIC '))
+    assert diagnostic=={'type':'EventMappingFailed','error':'TypeError'}
+
+
 def test_cancel_state_stops_actual_model_request(model_server,tmp_path):
     settings,requests,state=model_server
     state.update(received=threading.Event(),release=threading.Event())

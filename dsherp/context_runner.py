@@ -74,7 +74,12 @@ def monitored_run(runtime,question,session_id,status,*,poll_interval=2,record=No
                     cancel();future.result(timeout=5)
                     emit([{'kind':'turn_end','source':'runner','payload':{'reason':'cancelled'}}])
                     return {'status':'Cancelled','answer':''}
-            emit(run_events.from_runtime_events(result.events,notifications))
+            try:
+                mapped=run_events.from_runtime_events(result.events,notifications)
+            except Exception as error:
+                print('DSHERP_DIAGNOSTIC '+json.dumps({'type':'EventMappingFailed','error':type(error).__name__}),file=sys.stderr)
+            else:
+                emit(mapped)
             if check()=='Cancelling':return {'status':'Cancelled','answer':''}
             if result.finish_reason!='completed' or not result.final_response.strip():
                 raise RuntimeError('Native Agent did not complete with an answer')
