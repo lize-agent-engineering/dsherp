@@ -77,4 +77,78 @@ export function buildTranscript(session) {
 
 export const pendingCount = (session) =>
   (session?.proposals ?? []).filter((item) => item.status === 'Pending').length +
-  (session?.configuration_confirmations ?? []).filter((item) => item.status === 'Pending').length;
+    (session?.configuration_confirmations ?? []).filter((item) => item.status === 'Pending').length;
+
+const eventTones = new Set(['model_error', 'tool_error', 'runtime_failed', 'worker_error']);
+
+function eventDetail(event, payload) {
+  const bits = [];
+  if (event.error_class) bits.push(event.error_class);
+  if (payload == null) return bits.join(' ');
+  if (typeof payload !== 'object') {
+    bits.push(String(payload));
+    return bits.join(' ');
+  }
+  if (typeof payload.text === 'string' && payload.text) bits.push(payload.text);
+  else if (typeof payload.error === 'string' && payload.error) bits.push(payload.error);
+  else if (Object.keys(payload).length) bits.push(JSON.stringify(payload));
+  return bits.join(' ');
+}
+
+function eventLabel(event, payload, reserved) {
+  switch (event.kind) {
+    case 'queued':
+      return '已排队';
+    case 'claimed':
+      return '已领取';
+    case 'runtime_started':
+      return '运行时启动';
+    case 'model_call_reserved':
+      return `模型调用 #${payload.model_calls ?? payload.call_index ?? reserved}`;
+    case 'model_response':
+      return '模型返回';
+    case 'model_error':
+      return '模型错误';
+    case 'runtime_tool_call':
+      return `调用工具 ${payload.tool}`;
+    case 'tool_call':
+      return `服务端执行 ${payload.tool}（${payload.duration_ms} ms）`;
+    case 'tool_result':
+      return '工具返回';
+    case 'tool_error':
+      return '工具错误';
+    case 'compaction':
+      return '上下文压缩';
+    case 'turn_end':
+      return `回合结束（${payload.reason}）`;
+    case 'runtime_failed':
+      return `运行失败（${event.error_class}）`;
+    case 'container_finished':
+      return `容器结束（${payload.status}）`;
+    case 'finished':
+      return `运行结束（${payload.status}）`;
+    case 'expired':
+      return '运行过期';
+    case 'cancel_requested':
+      return '已请求取消';
+    case 'worker_error':
+      return 'worker 错误';
+    default:
+      return event.kind;
+  }
+}
+
+export function runEventRows(events) {
+  let reserved = 0;
+  return events.map((event) => {
+    const payload = event.payload ?? {};
+    if (event.kind === 'model_call_reserved') reserved += 1;
+    return {
+      seq: event.seq,
+      time: event.recorded_at,
+      label: eventLabel(event, payload, reserved),
+      detail: eventDetail(event, event.payload),
+      tone: eventTones.has(event.kind) ? 'danger' : 'default',
+    };
+  });
+}

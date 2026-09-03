@@ -620,6 +620,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
             <TranscriptTurn
               turn={turn}
               cx={turnClasses}
+              api={api}
               labelContext={(context) => contextLabel(context) || "未绑定业务页面"}
               confirmations={<TurnConfirmations group={turn} api={api} />}
             />

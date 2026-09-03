@@ -87,6 +87,12 @@ it('工作台摘要列表只使用同源分页 GET',async()=>{
  await expect(api.contextApi('list_execution_records',{page:1})).rejects.toThrow();
  expect(fetch.mock.calls.every(call=>call[1].method===undefined)).toBe(true);
 });
+it('运行事件接口只使用同源 GET 与固定分页参数',async()=>{
+ const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{run_id:'M-1',events:[]}})}));vi.stubGlobal('fetch',fetch);
+ expect(await api.listRunEvents('M-1',2)).toEqual({run_id:'M-1',events:[]});
+ expect(fetch.mock.calls[0][0]).toBe('/api/method/dsherp_bridge.context_api.list_run_events?run_id=M-1&page=2');
+ expect(fetch.mock.calls[0][1].method).toBeUndefined();
+});
 it('发送必须使用 CSRF、POST 和完整快照；缺少 CSRF 不请求',async()=>{
  const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{id:'S-1'}})}));vi.stubGlobal('fetch',fetch);
  vi.stubGlobal('frappe',{});

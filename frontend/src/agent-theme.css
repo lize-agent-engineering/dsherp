@@ -137,6 +137,36 @@
 }
 .dsh-meta { color: var(--dsh-muted); font-size: var(--dsh-fs-micro); }
 
+.dsh-run-events { margin-top: 8px; }
+.dsh-run-events .ant-collapse-header { padding-inline: 0 !important; }
+.dsh-run-events .ant-collapse-content-box { padding-inline: 0 !important; }
+.dsh-run-event-count { margin: 0 0 8px; color: var(--dsh-muted); font-size: var(--dsh-fs-micro); }
+.dsh-run-event {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 0;
+  border-top: 1px solid var(--dsh-line);
+}
+.dsh-run-event-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dsh-run-event time {
+  color: var(--dsh-muted);
+  font-size: var(--dsh-fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+.dsh-run-event-detail {
+  color: var(--dsh-muted);
+  font-size: var(--dsh-fs-micro);
+  overflow-wrap: anywhere;
+}
+.dsh-run-event.dsh-is-danger,
+.dsh-run-event.dsh-is-danger .dsh-run-event-detail { color: var(--dsh-danger-ink); }
+.dsh-run-events-error { margin: 0; color: var(--dsh-danger-ink); }
+
 /* Model answers. GFM tables scroll inside their own container so a wide result
    never stretches the drawer or the conversation column. */
 .dsh-prose { line-height: 1.75; overflow-wrap: anywhere; }
