@@ -89,6 +89,10 @@ ERPNext/Frappe 切换到 v16 没有改动本节的 DSH 链：SDK/Runtime 仍为 
 
 当前 v16 隔离合成环境已分别取得自动化、真实 ERP、固定 DSH Runtime、本地模型替身、真实浏览器和经授权真实 DeepSeek 只读证据；这些证据不能互相替代，也不代表生产租户部署。C4/C5 完成情况与剩余边界见 [v16 迁移证据](v16-migration-evidence.md)；DSH 与 ERP 分层证据另见 [DSH 证据](dsh-validation-evidence.md) 和 [ERP 证据](erpnext-integration-evidence.md)。
 
+### C3 worker 配置加载边界
+
+`dsherp.context_worker` 的告警阈值定义在进程启动时导入的 `dsherp/alerts.py`，Prometheus 指标注册表也在模块导入时创建。因此 `alerts.py`、`metrics.py` 或其阈值发生版本变更后，必须重启唯一的 LaunchAgent worker 才能生效；不能把工作副本已更新当作运行进程已加载。provider `.env` 仍按每轮重读，其行为与代码/阈值加载边界不同。
+
 ## 本轮依赖与环境补充
 
 官方 MCP Python SDK 固定 `1.26.0`，httpx `0.28.1`；`pydantic-settings` 从自动解析的 2.15.0 固定到该 MCP tag 上游锁文件中的 2.10.1，解决 lifespan 前向引用警告；未修改第三方源码。重新锁定并验证共 36 个 Python 包。Docker 测试栈固定 MariaDB 10.6.28、Redis 6.2.24；Compose 5.0.2。

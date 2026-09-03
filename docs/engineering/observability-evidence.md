@@ -249,4 +249,6 @@ HTTP 状态为 200；`lsof` 显示 PID `18765` 只监听 `127.0.0.1:9109`。`--o
 
 从受版本控制的生成器重建 plist 并只 bootstrap 一次。最终 `launchctl state=running`，PID 文件、launchd 与进程表一致为 PID `18765`，`dsherp.context_worker` 精确计数 1，metrics 行数 17，孤儿容器 0；alpha、daily、beta 的 Queued/Running/Cancelling 均为 0。`.env` SHA-256 与注入前一致、权限 `0600`，临时备份 marker 与目录均不存在。worker 日志现有 23 行全部可 `json.loads`；真实 provider key 与运行服务 secret 的逐值 grep 均为 0（grep 退出 1）。scheduled profile 的 scheduler 与 scheduler-worker 在迁移后重新拉起，最终均为 running。
 
-最后一次 worker 重启时，`ops_status` 按设计返回了仍在五分钟窗口内、由第三项注入产生的最新快照，因此在 `08:43:54.217Z` 又输出一条 `worker_not_claiming`；这不是第二次注入，数据库当时活动运行已经为 0。该行未删除或改写。`08:47:52Z` 主动补采恢复态快照，值为 `queued=0`、`running=0`、`running_stuck=0`；等待 worker 下一轮 60 秒刷新后，Prometheus 的 `dsherp_queue_depth`、`dsherp_running_stuck`、`dsherp_orphan_containers`、`dsherp_consecutive_run_failures` 均为 0，且没有再产生该告警。此现象体现五分钟快照的最终一致性窗口，列为 C3 已知偏离，不把重复行误算成新的故障注入。
+最后一次 worker 重启时，`ops_status` 返回了第三项注入期间留下的旧快照，因此在 `08:43:54.217Z` 又输出一条 `worker_not_claiming`；这不是第二次注入，数据库当时活动运行已经为 0。根因不是正常的“五分钟最终一致性窗口”，而是 alpha scheduler 未启用、快照不会自然刷新，同时旧版 `ops_status` 没有返回新鲜度，worker 无法拒绝陈旧数据。该行未删除或改写。
+
+上一轮候选为消除该告警，于 `08:47:52Z` **手工调用 `collect_snapshot()`** 补采恢复态快照；该次放行证据依赖人工采集，不是 scheduler 自然执行，列为明确偏离。本轮整改将 `ops_status` 改为纯读取并返回服务端计算的 `age_seconds`，worker 对空快照或超过 900 秒的快照只发 `ops_snapshot_stale`，不再运行依赖快照的规则或孤儿容器探针；alpha 与 daily 的自然调度连续性另行记录在下方整改证据中。
