@@ -132,7 +132,9 @@ try:
     execution.finish_run(run_id=next_claim['run_id'],capability=next_claim['capability'],status='Failed',error='End synthetic run');frappe.db.commit()
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
-    for name in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
+    for name in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):
+        frappe.db.delete('DS Run Event',{'run':name})
+        frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
     frappe.delete_doc('DS Conversation',doc['id'],ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
 '''

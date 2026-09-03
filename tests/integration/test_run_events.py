@@ -69,3 +69,62 @@ finally:
         timeout=90,
     )
     assert result.returncode == 0 and "OK" in result.stdout, result.stdout + result.stderr
+
+
+def test_server_records_the_run_lifecycle_in_order():
+    script = r'''
+import os,uuid,json,frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import context_api as api,context_events as ev
+from dsherp_bridge.context_execution import claim_run,run_tool,reserve_model_call,finish_run
+conversation=None;actor=None;runs=[]
+try:
+    frappe.set_user('Administrator')
+    actor='lifecycle-'+uuid.uuid4().hex+'@example.invalid'
+    frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic lifecycle','enabled':1,'send_welcome_email':0,'roles':[{'role':'Item Manager'}]}).insert()
+    frappe.db.commit()
+    frappe.set_user(actor)
+    session=api.send_message('读取测试物料',{'schema_version':1,'page_type':'unknown','route':[]},uuid.uuid4().hex,domain='query')
+    conversation=session['id'];run_id=session['messages'][0]['id'];runs.append(run_id)
+    frappe.db.commit()
+    frappe.set_user(frappe.conf.get('dsherp_runtime_user'))
+    claim=claim_run('a'*64)
+    assert claim and claim['run_id']==run_id,claim
+    cap={'run_id':run_id,'capability':claim['capability']}
+    frappe.set_user('Guest')
+    reserve_model_call(**cap,input_bytes=100,max_output_tokens=512,provider='deepseek-official',model='deepseek-v4-flash',purpose='conversation',runtime_revision='a'*64,domain='query')
+    run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'})
+    finish_run(**cap,status='Succeeded',answer='完成')
+    frappe.db.commit()
+    kinds=[e['kind'] for e in ev.list_events(run_id)]
+    assert kinds==['queued','claimed','model_call_reserved','tool_call','finished'],kinds
+    tool=ev.list_events(run_id)[3]['payload']
+    assert tool['tool']=='erp_read_record' and tool['result']['records']==1 and isinstance(tool['result']['fields'],int),tool
+    assert isinstance(tool['duration_ms'],int)
+    assert all('capability' not in json.dumps(e['payload']) and claim['capability'] not in json.dumps(e['payload']) for e in ev.list_events(run_id))
+    print('OK')
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    for name in runs:
+        frappe.db.delete('DS Run Event',{'run':name})
+        frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
+    if conversation:frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
+    if actor and frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-i",
+            "dsherp-validation-backend-1",
+            "/home/frappe/frappe-bench/env/bin/python",
+            "-",
+        ],
+        input=script,
+        text=True,
+        capture_output=True,
+        timeout=120,
+    )
+    assert result.returncode == 0 and "OK" in result.stdout, result.stdout + result.stderr

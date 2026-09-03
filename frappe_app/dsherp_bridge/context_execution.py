@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import time
 import uuid
 import re
 
@@ -11,6 +12,7 @@ import frappe
 from frappe.utils import now_datetime,add_to_date,get_datetime
 from dsherp_bridge import api as erp
 from dsherp_bridge import context_api as conversations
+from dsherp_bridge import context_events as events
 from dsherp_bridge import context_permissions
 
 TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
@@ -84,6 +86,7 @@ def claim_run(runtime_revision):
     frappe.db.sql('SELECT name FROM `tabUser` WHERE name=%s FOR UPDATE',(user,))
     for name in frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']], 'expires_at':['<=',now_datetime()]},pluck='name',order_by='creation asc, name asc'):
         frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':'运行已过期，未自动重试','capability_hash':''})
+        events.record(name,'expired',{'reason':'lease_expired'})
     if frappe.db.exists('DS Model Run',{'status':['in',['Running','Cancelling']]}):return None
     names=frappe.get_all('DS Model Run',filters={'status':'Queued'},pluck='name',order_by='creation asc',limit_page_length=1)
     if not names:return None
@@ -108,6 +111,8 @@ def claim_run(runtime_revision):
         frappe.db.set_value('DS Conversation',conversation.name,{'runtime_session':conversation.runtime_session,'runtime_revision':combined_revision})
     frappe.db.set_value('DS Model Run',run.name,{'status':'Running','capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
         'expires_at':add_to_date(now_datetime(),seconds=180),'permission_revision':permission_revision,'runtime_revision':runtime_revision})
+    events.record(run.name,'claimed',{'domain':domain,'permission_revision':permission_revision,
+        'runtime_revision':runtime_revision,'native_session_id':conversation.runtime_session})
     return {'run_id':run.name,'session_id':run.conversation,'native_session_id':conversation.runtime_session,
             'permission_revision':permission_revision,
             'runtime_revision':runtime_revision,'domain':domain,
@@ -149,12 +154,33 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
     # Reserve before provider dispatch; uncertain/failed calls are not refunded.
     frappe.db.set_value('DS Model Run',run.name,{'model_calls':calls+1,
         'model_input_bytes':total_input,'model_output_tokens_reserved':total_output})
+    events.record(run.name,'model_call_reserved',{'call_index':calls+1,'input_bytes':input_bytes,
+        'max_output_tokens':max_output_tokens,'purpose':purpose,'model':model})
     return {'allowed':True}
 
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def run_tool(run_id,capability,tool,arguments):
     run=_run(run_id,capability)
+    started=time.perf_counter()
+    result=_run_tool(run,tool,arguments)
+    summary=_tool_summary(tool,result)
+    events.record(run.name,'tool_call',{'tool':tool,
+        'arguments':arguments if isinstance(arguments,dict) else {'raw':str(arguments)[:200]},
+        'duration_ms':int((time.perf_counter()-started)*1000),'result':summary})
+    return result
+
+
+def _tool_summary(tool,result):
+    if tool=='erp_read_schema':return {'records':0,'fields':len(result.get('fields',[]))}
+    if tool=='erp_read_record':return {'records':1,'fields':len(result.get('fields',{}))}
+    if tool=='erp_search_records':return {'records':len(result),'fields':len(result[0]) if result else 0}
+    if tool=='erp_read_configuration':return {'exists':bool(result.get('exists'))}
+    if isinstance(result,dict) and result.get('id'):return {'proposal':result['id']}
+    return {'keys':sorted(result)[:20] if isinstance(result,dict) else type(result).__name__}
+
+
+def _run_tool(run,tool,arguments):
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')
     if run.domain=='configuration':
         from dsherp_bridge.configuration_tools import read_configuration
@@ -285,6 +311,8 @@ def finish_run(run_id,capability,status,answer='',error=''):
             context_permissions.require_revision(run)
             conversations._public(conversations._conversation(run.conversation))
     if status=='Cancelled' and run.status!='Cancelling':frappe.throw('运行未请求取消')
+    events.record(run.name,'finished',{'status':status,'answer_chars':len(answer) if isinstance(answer,str) else 0,
+        'error':(error or '')[:500],'model_calls':run.model_calls or 0})
     frappe.db.set_value('DS Model Run',run.name,{'status':status,'answer':answer if status=='Succeeded' else '',
         'error':error if status=='Failed' else '', 'capability_hash':''})
     return {'run_id':run.name,'status':status}

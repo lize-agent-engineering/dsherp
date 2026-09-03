@@ -48,6 +48,7 @@ finally:
         for name in frappe.get_all('DS Operation Proposal',filters={'conversation':conversation.name},pluck='name'):
             frappe.delete_doc('DS Operation Proposal',name,ignore_permissions=True)
         for name in frappe.get_all('DS Model Run',filters={'conversation':conversation.name},pluck='name'):
+            frappe.db.delete('DS Run Event',{'run':name})
             frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
         frappe.delete_doc('DS Conversation',conversation.name,ignore_permissions=True)
     if actor and frappe.db.exists('User',actor):
