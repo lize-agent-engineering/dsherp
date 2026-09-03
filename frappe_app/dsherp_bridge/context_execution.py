@@ -88,7 +88,11 @@ def claim_run(runtime_revision):
     now=now_datetime()
     frappe.cache().set_value('dsherp_worker_heartbeat',now.isoformat(),expires_in_sec=3600)
     queued_expiry_filters=[['status','=','Queued'],['queue_expires_at','is','set'],['queue_expires_at','<=',now]]
-    for name in frappe.get_all('DS Model Run',filters=queued_expiry_filters,pluck='name',order_by='creation asc, name asc'):
+    expired_names=frappe.get_all('DS Model Run',filters=queued_expiry_filters,pluck='name',order_by='creation asc, name asc',limit_page_length=0)
+    for name in expired_names:
+        expired=frappe.get_doc('DS Model Run',name,for_update=True)
+        if (expired.status!='Queued' or not expired.queue_expires_at
+            or get_datetime(expired.queue_expires_at)>now):continue
         error='系统繁忙，排队超时，请稍后重试'
         frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':error})
         events.record_safely(name,'expired',{'reason':'queue_expired'})
@@ -96,9 +100,9 @@ def claim_run(runtime_revision):
     for name in frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']], 'expires_at':['<=',now]},pluck='name',order_by='creation asc, name asc'):
         frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':'运行已过期，未自动重试','capability_hash':''})
         events.record_safely(name,'expired',{'reason':'lease_expired'})
-    active=frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']]},fields=['owner'])
+    active=frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']]},fields=['owner'],limit_page_length=0)
     busy_owners={row.owner for row in active}
-    candidates=frappe.get_all('DS Model Run',filters={'status':'Queued'},fields=['name','owner','domain'],order_by='creation asc, name asc',limit_page_length=50)
+    candidates=frappe.get_all('DS Model Run',filters={'status':'Queued'},fields=['name','owner','domain'],order_by='creation asc, name asc',limit_page_length=0)
     names=[row.name for row in candidates if row.owner not in busy_owners]
     if not names:return None
     if len(active)>=run_budget(candidates[0].domain)['site_concurrency']:return None
