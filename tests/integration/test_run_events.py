@@ -130,6 +130,72 @@ finally:
     assert result.returncode == 0 and "OK" in result.stdout, result.stdout + result.stderr
 
 
+def test_server_event_write_failure_does_not_change_business_results():
+    script = r'''
+import os,uuid,json,hashlib,frappe
+from frappe.utils import now_datetime,add_to_date
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import context_api as api,context_events as ev
+from dsherp_bridge.context_execution import finish_run,run_tool
+from dsherp_bridge.context_permissions import run_revision
+conversation=None;run_id=None;actor=None;created_logs=[];original_insert=ev._insert
+title='dsherp run event write failed'
+try:
+    frappe.set_user('Administrator')
+    actor='event-failure-'+uuid.uuid4().hex+'@example.invalid'
+    frappe.get_doc({'doctype':'User','email':actor,'first_name':'Synthetic event failure','enabled':1,'send_welcome_email':0,'roles':[{'role':'Item Manager'}]}).insert()
+    frappe.db.commit()
+    existing=set(frappe.get_all('Error Log',filters={'method':title},pluck='name'))
+    def fail_insert(*args,**kwargs):
+        raise RuntimeError('synthetic event insert failure')
+    ev._insert=fail_insert
+    frappe.set_user(actor)
+    session=api.send_message('事件失败不影响发送',{'schema_version':1,'page_type':'unknown','route':[]},uuid.uuid4().hex,domain='query')
+    conversation=session['id'];run_id=session['messages'][0]['id']
+    assert frappe.db.exists('DS Model Run',run_id),run_id
+    capability=uuid.uuid4().hex
+    frappe.db.set_value('DS Model Run',run_id,{
+        'status':'Running','capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
+        'expires_at':add_to_date(now_datetime(),minutes=3),'permission_revision':run_revision(actor,'query')})
+    frappe.set_user('Guest')
+    ev._insert=original_insert
+    assert run_tool(run_id,capability,'erp_read_record',{'doctype':'Item','name':'DSHERP-TEST-ITEM'})['name']=='DSHERP-TEST-ITEM'
+    ev._insert=fail_insert
+    assert finish_run(run_id,capability,'Succeeded',answer='事件写入失败但业务完成')=={'run_id':run_id,'status':'Succeeded'}
+    frappe.db.commit()
+    assert frappe.db.get_value('DS Model Run',run_id,'status')=='Succeeded'
+    created_logs=[name for name in frappe.get_all('Error Log',filters={'method':title},pluck='name') if name not in existing]
+    assert created_logs,frappe.get_all('Error Log',filters={'method':title},fields=['name','method'])
+    print('OK')
+finally:
+    ev._insert=original_insert
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if run_id:
+        frappe.db.delete('DS Run Event',{'run':run_id})
+        if frappe.db.exists('DS Model Run',run_id):frappe.delete_doc('DS Model Run',run_id,ignore_permissions=True)
+    if conversation and frappe.db.exists('DS Conversation',conversation):frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
+    if actor and frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)
+    for name in created_logs:frappe.db.delete('Error Log',{'name':name})
+    frappe.db.commit();frappe.destroy()
+'''
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-i",
+            "dsherp-validation-backend-1",
+            "/home/frappe/frappe-bench/env/bin/python",
+            "-",
+        ],
+        input=script,
+        text=True,
+        capture_output=True,
+        timeout=90,
+    )
+    assert result.returncode == 0 and "OK" in result.stdout, result.stdout + result.stderr
+
+
 def test_runner_batch_endpoint_requires_live_capability_and_runner_kinds():
     script = r'''
 import os,uuid,json,hashlib,frappe

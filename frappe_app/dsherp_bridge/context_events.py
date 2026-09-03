@@ -120,6 +120,14 @@ def record(run, kind, payload, *, source="server", error_class=None):
         return _insert(run, seq, kind, payload, source, error_class)
 
 
+def record_safely(run, kind, payload, **kwargs):
+    try:
+        return record(run, kind, payload, **kwargs)
+    except Exception:
+        frappe.log_error(title="dsherp run event write failed")
+        return None
+
+
 def record_many(run, items):
     if not isinstance(items, list) or not 0 < len(items) <= MAX_BATCH:
         frappe.throw("运行事件批次无效")

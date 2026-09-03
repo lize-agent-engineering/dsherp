@@ -329,7 +329,7 @@ def send_message(question, context, request_id, session_id=None, domain='query')
         'request_id':request_id,'request_digest':digest,'question':question.strip(),
         'page_context':_json(snapshot),'status':'Queued','sources':'[]'}).insert(ignore_permissions=True,set_name=run_id)
     from dsherp_bridge import context_events as events
-    events.record(run_id,'queued',{'domain':domain,'question_chars':len(question.strip()),'page_type':snapshot.get('page_type')})
+    events.record_safely(run_id,'queued',{'domain':domain,'question_chars':len(question.strip()),'page_type':snapshot.get('page_type')})
     return _public(doc)
 
 
@@ -347,7 +347,7 @@ def cancel_run(session_id,run_id,request_id):
         run.cancel_request_id=request_id
         run.save(ignore_permissions=True)
         from dsherp_bridge import context_events as events
-        events.record(run.name,'cancel_requested',{'to_status':run.status})
+        events.record_safely(run.name,'cancel_requested',{'to_status':run.status})
     return _public(doc)
 
 
