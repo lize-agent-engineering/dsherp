@@ -91,5 +91,11 @@
       "fieldtype": "Data"
     }
   ],
-  "permissions": []
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "report": 1
+    }
+  ]
 }

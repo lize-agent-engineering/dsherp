@@ -30,8 +30,8 @@ from frappe.desk import query_report
 from frappe.utils import add_to_date,now_datetime,today
 os.chdir('/home/frappe/frappe-bench/sites')
 frappe.init(site='dsherp-validation.localhost');frappe.connect()
-from dsherp_bridge import context_events
-actors=[];conversations=[];runs=[];proposal=None;execution=None
+from dsherp_bridge import context_api,context_events
+actors=[];conversations=[];runs=[];proposal=None;execution=None;operator=None
 try:
     frappe.set_user('Administrator')
     for suffix in ('failed','succeeded'):
@@ -47,6 +47,10 @@ try:
             'status':status,'question':'synthetic audit '+suffix,'page_context':'{}','sources':'[]',
             'error':'E'*100 if status=='Failed' else '', 'model_calls':2 if status=='Failed' else 1}).insert(ignore_permissions=True)
         runs.append(run)
+    frappe.set_user('Administrator')
+    operator='audit-system-manager-'+uuid.uuid4().hex+'@example.invalid';actors.append(operator)
+    frappe.get_doc({'doctype':'User','email':operator,'first_name':'Synthetic audit operator','enabled':1,
+        'send_welcome_email':0,'roles':[{'role':'System Manager'}]}).insert()
     run=runs[0];actor=actors[0];conversation=conversations[0]
     context_events.record(run.name,'queued',{'domain':'operation'})
     proposal=frappe.get_doc({'doctype':'DS Operation Proposal','model_run':run.name,
@@ -68,6 +72,14 @@ try:
     filtered=query_report.run('DS Agent Audit',filters={
         'from_date':today(),'to_date':today(),'user':actor,'status':'Failed'})['result']
     assert [item['name'] for item in filtered]==[run.name],filtered
+
+    frappe.set_user(operator)
+    operator_rows=query_report.run(
+        'DS Agent Audit',filters={'from_date':today(),'to_date':today()})['result']
+    expected={item.name for item in runs}
+    assert {item['name'] for item in operator_rows if item['name'] in expected}==expected,operator_rows
+    other_events=context_api.list_run_events(run.name)
+    assert other_events['run_id']==run.name and [item['kind'] for item in other_events['events']]==['queued'],other_events
 
     frappe.set_user(actor)
     try:
