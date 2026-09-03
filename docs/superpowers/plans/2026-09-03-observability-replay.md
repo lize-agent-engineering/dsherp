@@ -1150,7 +1150,7 @@ git add runtime/model-guard.cjs runtime/model-guard.test.cjs
 git commit -m "feat: 模型调用结果与错误回写事件流"
 ```
 
-**C2 放行标准**：`.venv/bin/python -m pytest tests --ignore=tests/integration -q` 全绿且收集数比基线（130）增加 ≥ 7；替身链路中至少一条 `model_response` 事件的 `chunk_keys` 写入证据文档并给出 usage 有无的结论；`node --test runtime/` 全绿；用替身跑一次 `tests/integration/test_context_worker_chain.py` 后，该运行的 `list_run_events` 含 `queued, claimed, runtime_started, model_call_reserved, runtime_tool_call, tool_call, model_response, turn_end, container_finished, finished`（顺序按 seq，缺哪一类要说明原因）；worker 的 stderr（`~/Library/Logs/dsherp-agent-worker-v16.log`）每行可被 `json.loads`，grep provider key 为 0。
+**C2 放行标准**：`.venv/bin/python -m pytest tests --ignore=tests/integration -q` 全绿且收集数比基线（130）增加 ≥ 7；替身链路中至少一条 `model_response` 事件的 `chunk_keys` 写入证据文档并给出 usage 有无的结论；`node --test runtime/*.test.cjs` 全绿；用替身跑一次 `tests/integration/test_context_worker_chain.py` 后，该运行的 `list_run_events` 含 `queued, claimed, runtime_started, model_call_reserved, runtime_tool_call, tool_call, model_response, turn_end, container_finished, finished`（顺序按 seq，缺哪一类要说明原因）；worker 的 stderr（`~/Library/Logs/dsherp-agent-worker-v16.log`）每行可被 `json.loads`，grep provider key 为 0。
 
 ---
 
@@ -1441,12 +1441,12 @@ Expected: `exported` 之和等于 T0.2 记录的 Failed 数；`grep -rl "capabil
 - [ ] `docs/superpowers/specs/2026-09-03-production-hardening-design.md` 实施顺序表计划 1 行后追加"（2026-xx-xx C4 通过）"。
 - [ ] 本计划复选框逐项勾选（勾选前对仓库文件核验），独立 `docs:` 提交。
 
-**C4 放行标准**：`DS Agent Audit` 由审计方以 Administrator 打开并按用户过滤成功；工作台事件流面板对一条真实运行可展开且行数等于 `list_run_events` 返回数；`evals/cases` 数量与 T0.2 基线一致且 grep 密钥为 0；证据文档三段演练齐全；全量门：`.venv/bin/python -m pytest tests --ignore=tests/integration -q` 全绿、`cd frontend && npm test` 全绿、`node --test runtime/` 全绿、`.venv/bin/python -m pytest tests/integration -q` 全绿（集成全量约 12 分钟）。
+**C4 放行标准**：`DS Agent Audit` 由审计方以 Administrator 打开并按用户过滤成功；工作台事件流面板对一条真实运行可展开且行数等于 `list_run_events` 返回数；`evals/cases` 数量与 T0.2 基线一致且 grep 密钥为 0；证据文档三段演练齐全；全量门：`.venv/bin/python -m pytest tests --ignore=tests/integration -q` 全绿、`cd frontend && npm test` 全绿、`node --test runtime/*.test.cjs` 全绿、`.venv/bin/python -m pytest tests/integration -q` 全绿（集成全量约 12 分钟）。
 
 ## 验证方式汇总
 
 - 非集成：`.venv/bin/python -m pytest tests --ignore=tests/integration -q`
-- runtime 插件：`node --test runtime/`
+- runtime 插件：`node --test runtime/*.test.cjs`
 - 前端：`cd frontend && npm test && node build.mjs`
 - 集成：`.venv/bin/python -m pytest tests/integration -q`（需四站运行与 `.runtime/` 凭证）
 - 运行态：`curl -s 127.0.0.1:9109/metrics`、LaunchAgent 日志 `~/Library/Logs/dsherp-agent-worker-v16.log`、`DS Ops Snapshot` 列表、`Scheduled Job Log`
