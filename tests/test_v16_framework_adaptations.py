@@ -62,6 +62,10 @@ def test_all_custom_doctype_json_files_make_creation_sorting_explicit():
     assert not missing, missing
 
 
+def test_daily_backup_verifier_compares_run_event_audit_count():
+    assert "'DS Run Event'" in DAILY_BACKUP_VERIFIER
+
+
 def test_both_apps_register_a_native_v16_apps_screen_route():
     hooks = {
         "bridge": (ROOT / "frappe_app/dsherp_bridge/hooks.py").read_text(),

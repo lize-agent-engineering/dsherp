@@ -339,8 +339,11 @@ try:
     second=api.list_run_events(run.name,page=2)
     assert [e['seq'] for e in second['events']]==[201] and second['has_more'] is False
     frappe.set_user(other)
-    try:api.list_run_events(run.name);raise AssertionError('other user read events')
-    except frappe.PermissionError:pass
+    errors=[]
+    for candidate in (run.name,'missing-'+uuid.uuid4().hex):
+        try:api.list_run_events(candidate);raise AssertionError('other user read events')
+        except frappe.PermissionError as exc:errors.append(str(exc))
+    assert errors==['运行不属于当前用户','运行不属于当前用户'],errors
     print('OK')
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
