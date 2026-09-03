@@ -46,8 +46,13 @@ def evaluate(snapshot,metrics,now):
 
 
 def orphan_containers(runner=subprocess.run):
-    result=runner(['docker','ps','--filter','name=dsherp-context-','--format','{{.Names}}'],
-        capture_output=True,text=True,check=True,timeout=10)
+    try:
+        result=runner(['docker','ps','--filter','name=dsherp-context-','--format','{{.Names}}'],
+            capture_output=True,text=True,check=False,timeout=10)
+        result.check_returncode()
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError) as error:
+        worker_log.log('orphan_probe_failed',error_class=type(error).__name__)
+        return None
     return sum(1 for line in result.stdout.splitlines() if line.strip())
 
 

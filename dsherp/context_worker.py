@@ -42,7 +42,11 @@ def set_consecutive_failures(value):
 
 def start_metrics(profile,once):
     if once:return None
-    return metrics.serve(REGISTRY,profile.get('metrics_port',9109))
+    try:
+        return metrics.serve(REGISTRY,profile.get('metrics_port',9109))
+    except OSError as error:
+        worker_log.log('metrics_start_failed',error_class=type(error).__name__)
+        return None
 
 
 def fetch_ops(client):
@@ -74,7 +78,7 @@ def monitor_ops(client,notifier,state,now=None):
         if claim_age is not None:LAST_CLAIM.set(now-claim_age)
         if snapshot.get('running')==0:
             orphan=alerts.orphan_containers()
-        ORPHAN_CONTAINERS.set(orphan)
+        if orphan is not None:ORPHAN_CONTAINERS.set(orphan)
     notifier.emit(alerts.evaluate(status,{
         'consecutive_run_failures':_consecutive,'orphan_containers':orphan},now),now)
 

@@ -2,6 +2,7 @@ import json
 import subprocess
 
 import httpx
+import pytest
 
 from dsherp import alerts
 
@@ -82,3 +83,24 @@ def test_orphan_containers_counts_docker_ps_lines():
     command = calls[0][0][0]
     assert command == ["docker", "ps", "--filter", "name=dsherp-context-", "--format", "{{.Names}}"]
     assert calls[0][1]["timeout"] == 10
+    assert calls[0][1]["check"] is False
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        subprocess.CalledProcessError(1, ["docker", "ps"]),
+        subprocess.TimeoutExpired(["docker", "ps"], 10),
+        OSError("synthetic docker unavailable"),
+    ],
+)
+def test_orphan_probe_failures_only_log_and_skip(error, capsys):
+    def failing(*args, **kwargs):
+        raise error
+
+    assert alerts.orphan_containers(runner=failing) is None
+    lines = [json.loads(line) for line in capsys.readouterr().err.strip().splitlines()]
+    assert len(lines) == 1
+    assert lines[0]["event"] == "orphan_probe_failed"
+    assert lines[0]["error_class"] == type(error).__name__
+    assert "synthetic docker unavailable" not in json.dumps(lines)

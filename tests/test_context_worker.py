@@ -176,6 +176,15 @@ def test_metrics_server_defaults_to_9109_and_once_mode_never_starts_it(monkeypat
     assert calls==[(worker.REGISTRY,9201)]
 
 
+def test_metrics_bind_failure_only_logs_and_worker_can_continue(monkeypatch,capsys):
+    monkeypatch.setattr(worker.metrics,'serve',lambda registry,port:(_ for _ in ()).throw(OSError('synthetic occupied port')))
+    assert worker.start_metrics({},once=False) is None
+    lines=[json.loads(line) for line in capsys.readouterr().err.strip().splitlines()]
+    assert len(lines)==1
+    assert lines[0]['event']=='metrics_start_failed' and lines[0]['error_class']=='OSError'
+    assert 'synthetic occupied port' not in json.dumps(lines)
+
+
 def test_run_once_updates_claim_result_and_duration_metrics(tmp_path,monkeypatch):
     class Counter:
         def __init__(self):self.calls=[]
@@ -284,3 +293,17 @@ def test_ops_monitor_does_not_overwrite_optional_gauges_with_missing_values(monk
         def emit(self,items,now):pass
     worker.monitor_ops(object(),Notifier(),{},now=1000)
     assert backup==[] and claims==[]
+
+
+def test_ops_monitor_skips_orphan_metric_when_probe_fails(monkeypatch):
+    current={'snapshot':{'queued':0,'running':0,'running_stuck':0,'backup_age_hours':1,
+        'last_claim_age_seconds':10},'age_seconds':0}
+    monkeypatch.setattr(worker,'fetch_ops',lambda client:current)
+    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:None)
+    writes=[]
+    monkeypatch.setattr(worker.ORPHAN_CONTAINERS,'set',writes.append)
+    class Notifier:
+        def emit(self,items,now):
+            assert [item.key for item in items]==[]
+    worker.monitor_ops(object(),Notifier(),{},now=1000)
+    assert writes==[]
