@@ -110,7 +110,7 @@ function eventLabel(event, payload, reserved) {
     case 'model_error':
       return '模型错误';
     case 'runtime_tool_call':
-      return `调用工具 ${payload.tool}`;
+      return `调用工具 ${payload.name}`;
     case 'tool_call':
       return `服务端执行 ${payload.tool}（${payload.duration_ms} ms）`;
     case 'tool_result':

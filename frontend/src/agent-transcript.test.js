@@ -129,7 +129,7 @@ it('配置读取事件带回模块、角色与配置基线，而不是只剩参�
 it('运行事件逐类翻译且错误类使用 danger 语气', () => {
  const events = [
   ['queued',{}],['claimed',{}],['runtime_started',{}],['model_call_reserved',{model_calls:2}],
-  ['model_response',{}],['model_error',{}],['runtime_tool_call',{tool:'erp_read_record'}],
+  ['model_response',{}],['model_error',{}],['runtime_tool_call',{name:'erp_read_record'}],
   ['tool_call',{tool:'erp_read_record',duration_ms:7}],['tool_result',{}],['tool_error',{}],
   ['compaction',{}],['turn_end',{reason:'completed'}],['runtime_failed',{},'RuntimeError'],
   ['container_finished',{status:'Succeeded'}],['finished',{status:'Succeeded'}],['expired',{}],
