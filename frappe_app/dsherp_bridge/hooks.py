@@ -22,3 +22,9 @@ doc_events = {
 doc_events["*"]={"before_insert":"dsherp_bridge.configuration_locks.check_new_custom_record"}
 doc_events.update({doctype: {"before_validate": "dsherp_bridge.preview.prevent_external_configuration"}
                    for doctype in ("Webhook", "Email Account", "Notification")})
+
+scheduler_events = {
+    "cron": {
+        "*/5 * * * *": ["dsherp_bridge.ops.collect_snapshot"],
+    }
+}

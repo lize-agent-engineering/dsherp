@@ -1,0 +1,19 @@
+{
+  "doctype": "DocType",
+  "name": "DS Ops Snapshot",
+  "module": "DSHERP Bridge",
+  "custom": 0,
+  "engine": "InnoDB",
+  "autoname": "hash",
+  "sort_field": "collected_at",
+  "sort_order": "DESC",
+  "field_order": [
+    "collected_at",
+    "payload"
+  ],
+  "fields": [
+    {"fieldname":"collected_at","label":"Collected at","fieldtype":"Datetime","reqd":1,"search_index":1},
+    {"fieldname":"payload","label":"Payload","fieldtype":"Long Text"}
+  ],
+  "permissions": []
+}
