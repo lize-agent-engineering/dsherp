@@ -1,15 +1,31 @@
 """Real service identity, business queue, containers and two separate runs."""
 import json
+import os
 from pathlib import Path
 import uuid
 import httpx
+import pytest
 import dsherp.context_worker as worker
 from dsherp.runtime_host import ROOT
 from test_context_sessions import clients,created,API
 from test_context_mcp_chain import CONTAINER_TEST
 
 
+def _require_stopped_agent_worker():
+    pid_file=Path('.runtime/agent-worker.pid')
+    if not pid_file.exists():return
+    try:
+        pid=int(pid_file.read_text())
+        os.kill(pid,0)
+    except ProcessLookupError:
+        return
+    except (OSError,ValueError):
+        pytest.fail('常驻 worker PID 状态无效；先停止它再跑')
+    pytest.fail('常驻 worker 正在运行，会用真实 provider 抢先领取测试运行；先停止它再跑')
+
+
 def test_service_worker_runs_two_messages_in_same_native_session(clients,created,tmp_path,monkeypatch):
+    _require_stopped_agent_worker()
     original=worker.docker_command
     def command(root,secret,directory,name):
         args=original(root,secret,directory,name)
