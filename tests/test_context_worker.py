@@ -499,6 +499,10 @@ def test_coordinator_failed_probe_keeps_open_circuit_from_claiming(tmp_path):
         assert coordinator.tick(now=60)==0 and probes==[False]
         assert executions==['first'] and claims==['second']
         assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN._value==1
+        clock[0]=63
+        assert coordinator.tick(now=63)==0 and probes==[False]
+        assert executions==['first'] and claims==['second']
+        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN._value==1
 
 
 def test_circuit_open_period_starts_when_slow_run_finishes(tmp_path):
@@ -528,32 +532,6 @@ def test_circuit_open_period_starts_when_slow_run_finishes(tmp_path):
         assert coordinator.tick(now=179)==0 and executed==['first']
 
 
-def test_half_open_tick_claims_only_one_trial_across_sites(tmp_path):
-    from dsherp.context_worker import Coordinator
-    from dsherp.provider_circuit import CircuitBreaker
-
-    clients=[];claimed=[]
-    def make_client(site):
-        def handler(request):
-            method=request.url.path.rsplit('.',1)[-1]
-            if method=='claim_run':
-                claimed.append(site)
-                return httpx.Response(200,json={'message':{'run_id':site,'scope_id':site*64,'capability':'c',
-                    'domain':'query','budget':{'run_total_seconds':300}}})
-            return httpx.Response(200,json={'message':{'status':'Succeeded','provider_failures':0}})
-        client=httpx.Client(base_url='http://'+site,transport=httpx.MockTransport(handler));clients.append(client)
-        return client
-    breaker=CircuitBreaker(threshold=1,open_seconds=60);breaker.record('provider_failure',now=0)
-    sites=[{'site':site,'client':make_client(site),'business':{}} for site in ('a','b','c')]
-    try:
-        coordinator=Coordinator(sites,lambda:SETTINGS,3,
-            lambda *args:{'status':'Succeeded','answer':'ok'},breaker,lambda:False,tmp_path,clock=lambda:60)
-        assert coordinator.tick(now=60)==1 and len(claimed)==1
-        coordinator.wait_idle()
-    finally:
-        for client in clients:client.close()
-
-
 def test_coordinator_initializes_claim_metric_for_every_site(tmp_path,monkeypatch):
     from dsherp.context_worker import Coordinator
 
@@ -564,31 +542,6 @@ def test_coordinator_initializes_claim_metric_for_every_site(tmp_path,monkeypatc
     sites=[{'site':'alpha','client':object(),'business':{}},{'site':'daily','client':object(),'business':{}}]
     Coordinator(sites,lambda:SETTINGS,1,lambda *args:None,None,lambda:False,tmp_path)
     assert claims.calls==[(0,{'site':'alpha'}),(0,{'site':'daily'})]
-
-
-def test_half_open_empty_poll_releases_trial_for_next_tick(tmp_path):
-    from dsherp.context_worker import Coordinator
-    from dsherp.provider_circuit import CircuitBreaker
-
-    queue=[];executed=[]
-    def handler(request):
-        method=request.url.path.rsplit('.',1)[-1]
-        if method=='claim_run':
-            run_id=queue.pop(0) if queue else None
-            return httpx.Response(200,json={'message':None if run_id is None else {
-                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
-                'budget':{'run_total_seconds':300}}})
-        return httpx.Response(200,json={'message':{'status':'Succeeded','provider_failures':0}})
-    breaker=CircuitBreaker(threshold=1,open_seconds=60);breaker.record('provider_failure',now=0)
-    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
-        coordinator=Coordinator([{'site':'a','client':client,'business':{}}],lambda:SETTINGS,1,
-            lambda task,*args:executed.append(task['run_id']) or {'status':'Succeeded','answer':'ok'},
-            breaker,lambda:False,tmp_path,clock=lambda:61)
-        assert coordinator.tick(now=60)==0 and breaker.state=='half_open'
-        queue.append('trial')
-        assert coordinator.tick(now=61)==1
-        coordinator.wait_idle()
-        assert executed==['trial'] and breaker.state=='closed'
 
 
 def test_tick_refreshes_site_heartbeats_while_circuit_open(tmp_path):

@@ -2223,3 +2223,58 @@ active_query_exit=0
 ```
 
 `git diff --check` 退出码 0、stdout 为空。
+
+第一次复审进一步把失败探针路径推进到下一轮 tick：`t=60` 虽然被第一轮修复拒绝，`t=63` 仍依据 breaker 原始 `_opened_at` 转为 half-open 并领取。扩展同一个失败路径测试后，第二轮 RED 原始输出：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_coordinator_failed_probe_keeps_open_circuit_from_claiming ________
+>           assert coordinator.tick(now=63)==0 and probes==[False]
+E           assert (1 == 0)
+E            +  where 1 = tick(now=63)
+E            +    where tick = <dsherp.context_worker.Coordinator object at 0x107b93b90>.tick
+
+tests/test_context_worker.py:503: AssertionError
+----------------------------- Captured stderr call -----------------------------
+{"ts": "2026-09-04T06:53:16.400+00:00", "event": "claimed", "site": "a", "run_id": "first"}
+{"ts": "2026-09-04T06:53:16.400+00:00", "event": "runtime_failed", "run_id": "first", "error_class": "RuntimeError", "duration_ms": 0}
+{"ts": "2026-09-04T06:53:16.402+00:00", "event": "claimed", "site": "a", "run_id": "second"}
+{"ts": "2026-09-04T06:53:16.402+00:00", "event": "runtime_failed", "run_id": "second", "error_class": "RuntimeError", "duration_ms": 0}
+=========================== short test summary info ============================
+FAILED tests/test_context_worker.py::test_coordinator_failed_probe_keeps_open_circuit_from_claiming
+1 failed in 0.37s
+```
+
+第二轮实现让 Coordinator 在 breaker 仍为 open 且尚未到下一探针时直接拒绝领取；只有 `probe()` 返回 True 才 reset。扩展目标测试 GREEN：
+
+```text
+.                                                                        [100%]
+1 passed in 0.23s
+```
+
+相关回归最初暴露两条旧 Coordinator 测试仍要求“探针 False 后执行 half-open 业务试跑”：
+
+```text
+.............................F.F..........................               [100%]
+=================================== FAILURES ===================================
+____________ test_half_open_tick_claims_only_one_trial_across_sites ____________
+>           assert coordinator.tick(now=60)==1 and len(claimed)==1
+E           assert (0 == 1)
+____________ test_half_open_empty_poll_releases_trial_for_next_tick ____________
+>           assert coordinator.tick(now=60)==0 and breaker.state=='half_open'
+E           AssertionError: assert (0 == 0 and 'open' == 'half_open'
+=========================== short test summary info ============================
+FAILED tests/test_context_worker.py::test_half_open_tick_claims_only_one_trial_across_sites
+FAILED tests/test_context_worker.py::test_half_open_empty_poll_releases_trial_for_next_tick
+2 failed, 56 passed in 9.41s
+```
+
+这两条旧断言与计划指定的“open 期只探针，True 才 reset”冲突，已删除；`CircuitBreaker` 自身的 half-open 纯逻辑测试保留。最终相关门原始输出：
+
+```text
+........................................................                 [100%]
+56 passed in 8.48s
+```
+
+同一失败路径在第二次修复后转绿，未触发“两次修复仍红”的停止条件。
