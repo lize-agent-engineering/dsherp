@@ -98,6 +98,6 @@ print(frappe.db.get_value('DS Model Run',RUN,'model_calls'));frappe.destroy()
         secret.unlink()
     assert result=={'status':'Succeeded','answer':'DSHERP_OK'}
     if isolated:return
-    assert {t['function']['name'] for t in requests[0]['tools']}=={'skill','mcp__erp__erp_read_record','mcp__erp__erp_read_schema','mcp__erp__erp_search_records'}
+    assert {t['function']['name'] for t in requests[0]['tools']}=={'skill','mcp__erp__erp_read_record','mcp__erp__erp_read_schema','mcp__erp__erp_search_records','mcp__erp__erp_request_input'}
     results=[m for m in requests[1]['messages'] if m['role']=='tool']
     assert results and 'DSHERP-TEST-ITEM' in str(results)

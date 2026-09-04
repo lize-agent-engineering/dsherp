@@ -2849,3 +2849,41 @@ FAILED tests/integration/test_configuration_apply.py::test_concurrent_preview_co
 ```
 
 本修复只触及 `tests/integration/test_configuration_apply.py`，少于计划外文件停止阈值；没有产品、DocType、Report、hooks 或 compose 变更，无需 migrate；没有 provider 调用。DB OOM 属计划 3 容量/部署规格 Deferred，最终集成门必须在健康栈重新完整执行，不能把本轮当作通过。
+
+DB 冷启动后残留了上次 OOM 时 teardown 未能删除的两条 alpha 合成运行：一条 Running、一条 Queued，owner 均为 `dsherp-reader@example.invalid`、问题均为 `Read test item`。控制器只按已核验的两个 run/conversation ID 调用精确清理，原始结果：
+
+```text
+{'runs': 0, 'conversations': 0}
+{'dsherp-validation.localhost': 0, 'dsherp-daily.localhost': 0}
+```
+
+健康低占用 DB（启动前 `303.3MiB / 1GiB`）第二次执行完整集成门；DB 中途抽样 `327.7MiB`、`472.2MiB`，保持 running、`OOMKilled=false`。完整原始尾部：
+
+```text
+=================================== FAILURES ===================================
+______ test_configuration_native_runtime_reads_then_proposes_without_ddl _______
+E         dsherp_bridge.context_api.WorkerUnavailableError: 助手服务暂不可用，请稍后再试
+__ test_native_context_runtime_reads_actual_erp_through_run_capability[False] __
+E       AssertionError: assert {'mcp__erp__e...rds', 'skill'} == {'mcp__erp__e...rds', 'skill'}
+E         Extra items in the left set:
+E         'mcp__erp__erp_request_input'
+_________ test_service_worker_runs_two_messages_in_same_native_session _________
+E               assert 503 == 200
+----------------------------- Captured stderr call -----------------------------
+{"ts": "2026-09-04T15:19:52.950+00:00", "event": "claimed", "site": "dsherp-validation.localhost", "run_id": "1d518611f2eecc4293c5624c47129c6d47aab3db05620cd14cba348fc46a6d4f"}
+{"ts": "2026-09-04T15:20:53.130+00:00", "event": "container_finished", "run_id": "1d518611f2eecc4293c5624c47129c6d47aab3db05620cd14cba348fc46a6d4f", "status": "Succeeded", "duration_ms": 60180}
+=========================== short test summary info ============================
+FAILED tests/integration/test_configuration_mcp_chain.py::test_configuration_native_runtime_reads_then_proposes_without_ddl
+FAILED tests/integration/test_context_mcp_chain.py::test_native_context_runtime_reads_actual_erp_through_run_capability[False]
+FAILED tests/integration/test_context_worker_chain.py::test_service_worker_runs_two_messages_in_same_native_session
+3 failed, 184 passed in 939.53s (0:15:39)
+```
+
+三项都是 S1/S4 后的测试契约缺口，不改产品：beta 配置链在发送前为 beta Site 写合成 worker heartbeat；配置域和查询域旧工具集合补入已交付的 `mcp__erp__erp_request_input`；直接调用 `run_once` 的测试在每轮发送前用服务身份调用真实 `worker_heartbeat`，模拟生产 Coordinator 忙时 tick。测试开头 `_require_stopped_agent_worker()` 仍是第一条行为语句；没有改变 60 秒阈值，没有 retry/sleep/ignore。Cursor 目标 GREEN 后，控制器独立原始结果：
+
+```text
+...                                                                      [100%]
+3 passed in 166.85s (0:02:46)
+```
+
+三个修复恰好只改三个测试文件，没有超过计划外文件停止阈值。没有产品、DocType、Report、hooks 或 compose 变更，无需 migrate；所有模型请求仍是本地 SSE 替身。最终完整集成门尚须重新执行。
