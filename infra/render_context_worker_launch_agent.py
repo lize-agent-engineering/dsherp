@@ -23,7 +23,7 @@ def render_launch_agent(root=ROOT, *, target=None):
             "-m",
             "dsherp.context_worker",
             "--profile",
-            str(root / ".runtime/context-worker.json"),
+            str(root / ".runtime/context-worker-sites.json"),
             "--provider-env",
             str(root / ".env"),
         ],
