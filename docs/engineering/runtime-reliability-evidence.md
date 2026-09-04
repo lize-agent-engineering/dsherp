@@ -1548,3 +1548,240 @@ S5_FINAL_QUEUE={}
 ```
 
 最终 scheduler 与 scheduler-worker 均停止，调度记录、Job Type 与 C0 的 Expired 状态保留。常驻 agent worker 仍停止，为后续集成隔离。没有调用真实 provider。
+
+## S6
+
+### Task 6.1 RED→GREEN
+
+服务端业务原因透传、错误类型和可重试描述实现前，定向测试原始摘要：
+
+```text
+Test Files  1 failed (1)
+Tests  6 failed | 14 passed (20)
+```
+
+首次实现后，控制器审查发现通用 `*Error` exception 会把 `RuntimeError: PRIVATE SECRET` 暴露到 UI。先补回归测试的原始摘要：
+
+```text
+Test Files  1 failed (1)
+Tests  1 failed | 20 passed (21)
+```
+
+exception 回退收窄为明确列举的 ValidationError 类型后，控制器定向重跑：
+
+```text
+Test Files  1 passed (1)
+Tests  21 passed (21)
+```
+
+退出码：0。提交：`9af5c70`。
+
+### Task 6.2 RED→GREEN
+
+ErrorBoundary、两个 Desk 根与 PreviewTransfer 根均先由缺少组件/包裹产生 RED；最初三个套件原始摘要：
+
+```text
+Test Files  3 failed (3)
+Tests  no tests
+```
+
+控制器补查 PreviewTransfer 根时的行为红灯：
+
+```text
+FAIL  src/desk-context.test.jsx > PreviewTransfer 根包在 ErrorBoundary 中，现有挂载句柄语义不变
+AssertionError: expected [Function PreviewTransfer] to be [Function ErrorBoundary]
+- Expected: [Function ErrorBoundary]
++ Received: [Function PreviewTransfer]
+Tests  1 failed | 3 passed (4)
+```
+
+错误界面改为复用 Ant Design Result/Button 前，组件约束红灯：
+
+```text
+FAIL  src/ErrorBoundary.test.jsx > 捕获子树渲染错误后显示固定文案和重新加载按钮，不泄露原始错误或堆栈
+AssertionError: expected null to be truthy
+Tests  1 failed | 2 passed (3)
+```
+
+三个根节点最终定向 GREEN：
+
+```text
+Test Files  3 passed (3)
+Tests  11 passed (11)
+```
+
+拒绝端点、按钮与上层调用先分别因缺少 `reject_operation`/拒绝按钮产生 RED：
+
+```text
+FAIL  src/context-api.test.js > 操作拒绝仅向同源拒绝端点 POST 提案绑定和 CSRF，不接受正文、身份或 URL
+Error: 不支持的会话操作
+Tests  1 failed | 21 passed (22)
+```
+
+```text
+FAIL  src/OperationProposal.test.jsx > Pending 未过期提案显示拒绝，点击只提交绑定且不重复
+FAIL  src/OperationProposal.test.jsx > 拒绝成功后不可再确认，确认与拒绝互斥
+FAIL  src/OperationProposal.test.jsx > 拒绝失败不伪造已拒绝，展示错误并保持确认禁用且不重试写入
+TestingLibraryElementError: Unable to find an accessible element with the role "button" and name "拒绝"
+Tests  3 failed | 13 passed (16)
+```
+
+```text
+FAIL  src/ContextSidebar.test.jsx > 会话提案拒绝实际调用 reject_operation，不走确认
+TestingLibraryElementError: Unable to find an accessible element with the role "button" and name "拒绝"
+Tests  1 failed | 24 passed (25)
+```
+
+控制器审查发现非 Rejected 响应会被伪造成已拒绝，回归测试先红：
+
+```text
+FAIL  src/OperationProposal.test.jsx > 拒绝响应不完整或意外时不伪造已拒绝，要求刷新核实且不重试写入
+TestingLibraryElementError: Unable to find an element with the text: 拒绝结果尚未核实，请刷新记录核实
+提案已拒绝
+Tests  1 failed | 16 passed (17)
+```
+
+修复后该组件 17/17，通过后拒绝链路组合测试 63/63。
+
+状态映射、事件标签及 NeedsInput/完成自述警告的 RED 摘要：
+
+```text
+FAIL  src/agent-format.test.js > NeedsInput、Rejected、Expired 使用准确文案与色调
+AssertionError: expected 'NeedsInput' to be '需要你补充信息'
+Tests  1 failed | 9 passed (10)
+```
+
+```text
+FAIL  src/agent-transcript.test.js > 新增运行事件按精确标签翻译，未核实完成自述用 danger
+-   "租约续期", "请求用户补充", "提案已拒绝", "提案已过期", "完成自述未经核实"
++   "lease_renewed", "needs_input", "proposal_rejected", "proposal_expired", "unverified_completion_claim"
+Tests  1 failed | 11 passed (12)
+```
+
+```text
+FAIL  AgentWorkbench > NeedsInput 把回答显示为待补充问题并聚焦本页业务问题输入框
+FAIL  AgentWorkbench > answer_flagged 在回答旁给出准确警告且不泄漏其他字段
+FAIL  ContextSidebar > NeedsInput 把回答显示为待补充问题并聚焦侧栏业务问题输入框
+Test Files  2 failed (2)
+Tests  3 failed | 53 passed (56)
+```
+
+实现后这四个套件组合输出：
+
+```text
+Test Files  4 passed (4)
+Tests  78 passed (78)
+Duration  9.96s
+```
+
+轮询保留/退避/可重试发送与排队撤回的行为测试先红。原始摘要：
+
+```text
+Tests  3 failed | 1 passed | 26 skipped (30)
+```
+
+```text
+Tests  2 failed | 30 skipped (32)
+```
+
+实现后两套件组合输出：
+
+```text
+Test Files  2 passed (2)
+Tests  62 passed (62)
+Duration  10.69s
+```
+
+源码与 dist 首次一起提交：`a2dd73d`。真实浏览器断网随后复现 transport reject 原样暴露且不可重试；补测试时原始 RED：
+
+```text
+FAIL  src/context-api.test.js > fetch 网络中断只抛安全可重试错误，不泄漏原异常且不重试
+AssertionError: expected TypeError: PRIVATE Failed to fetch to match object { message: '网络连接中断，请检查连接后重试', …(2) }
+Test Files  1 failed (1)
+Tests  1 failed | 23 passed (24)
+```
+
+只把非 Abort transport reject 转成单次、安全的 transient 错误；修复后：
+
+```text
+Test Files  1 passed (1)
+Tests  24 passed (24)
+Duration  125ms
+```
+
+修复提交：`a3163a1`。
+
+alpha backend 正常重启并从新进程提供 Desk：
+
+```text
+Container dsherp-validation-backend-1 Restarting
+Container dsherp-validation-backend-1 Started
+alpha_login_http=200
+```
+
+浏览器只使用 alpha 隔离站点和合成普通用户；提案与 NeedsInput 直接按真实服务端状态机建档，没有启动 agent worker、没有调用 provider。点击“拒绝”、显示 NeedsInput、真实断网超过 5 秒并保留侧栏之后，清理前对 alpha 实际状态的原始核验：
+
+```text
+{"proposal_status": "Rejected", "proposal_rejected_by": "dsherp-writer@example.invalid", "proposal_request_bound": true, "needs_input_status": "NeedsInput", "needs_input_question": "请指定要查询的仓库", "offline_conversation_title": "S6-BROWSER-OFFLINE-8c51136e"}
+```
+
+断网修复后的页面同时显示“网络连接中断，请检查连接后重试”、原历史“侧栏保留验证历史”、可编辑内容“断网时保留输入”，发送按钮可用但未自动发送。三张截图：
+
+- `docs/engineering/evidence/runtime-reliability/s6-proposal-rejected.png`
+- `docs/engineering/evidence/runtime-reliability/s6-needs-input-focused.png`
+- `docs/engineering/evidence/runtime-reliability/s6-sidebar-offline-retains-session.png`
+
+截图文件原始识别：
+
+```text
+docs/engineering/evidence/runtime-reliability/s6-proposal-rejected.png: PNG image data, 1200 x 1279, 8-bit/color RGB, non-interlaced
+docs/engineering/evidence/runtime-reliability/s6-needs-input-focused.png: PNG image data, 1200 x 1279, 8-bit/color RGB, non-interlaced
+docs/engineering/evidence/runtime-reliability/s6-sidebar-offline-retains-session.png: PNG image data, 1200 x 1279, 8-bit/color RGB, non-interlaced
+```
+
+验收夹具与专用用户删除后再查为空；清理输出：
+
+```text
+S6_BROWSER_CLEANUP conversations=3 proposals=1 runs=3 users=1
+```
+
+既有 writer 的会话列表包含一条早前合成会话，其来源指向已删除的销售订单，`search_sessions` 按 fastfail 返回 not found；本轮没有删除或改写该范围外数据。拒绝与 NeedsInput 通过显式 session URL 验证；侧栏断网改用本轮创建且已清理的专用普通用户验证。
+
+## S6 自检门
+
+`cd frontend && npm test` 原始输出：
+
+```text
+
+> dsherp-desk@0.1.0 test
+> NODE_OPTIONS=--no-experimental-webstorage vitest run
+
+
+ RUN  v4.1.11 /Users/lize/Documents/ChatGPT/dsherp/frontend
+
+
+ Test Files  22 passed (22)
+      Tests  200 passed (200)
+   Start at  13:06:11
+   Duration  13.55s (transform 1.68s, setup 550ms, import 27.30s, tests 24.40s, environment 7.97s)
+
+```
+
+退出码：0。
+
+`cd frontend && node build.mjs` 原始输出为空，退出码 0。
+
+`git diff --exit-code frappe_app/dsherp_bridge/public/dist` 原始输出为空，退出码 0。
+
+S6 没有 DocType/Report/hooks 变更，无需 migrate。发出阶段状态前再次核验容器与 alpha 站点清理结果：
+
+```text
+dsherp-validation-backend-1 Up 9 minutes
+dsherp-agent-worker=STOPPED
+dsherp-scheduler=STOPPED
+dsherp-scheduler-worker=STOPPED
+0
+0
+```
+
+最后两行依次为 alpha 上 `title LIKE "S6-%"` 的会话数量、临时用户 `s6-browser-8c51136e@example.invalid` 的数量；查询退出码 0。常驻 agent worker、scheduler、scheduler-worker 均保持停止；没有调用真实 provider。
