@@ -87,9 +87,9 @@
 - Produces: `budget(domain: str) -> dict`，键固定：`model_request_timeout_seconds`（90）、`run_total_seconds`（query/configuration 300，operation 600）、`lease_seconds`（180）、`lease_renew_below_seconds`（90）、`queue_expires_seconds`（600）、`site_concurrency`（`frappe.conf.dsherp_site_concurrency`，默认 1）、`model`（`frappe.conf.dsherp_model_policy.model`，默认 `deepseek-v4-flash`）、`provider`（默认 `deepseek-official`）；`frappe.conf.dsherp_run_budget` 为 dict 时逐键覆盖（只接受 int，非法值 fastfail）。
 - 服务端其他模块只从这里读预算，禁止再散落常量。
 
-- [ ] **Step 1: 写失败集成测试**（docker exec 模式，同计划 1）：`budget('query')['run_total_seconds']==300`、`budget('operation')['run_total_seconds']==600`、默认 `site_concurrency==1`、`model=='deepseek-v4-flash'`；monkeypatch `frappe.conf.dsherp_run_budget={'run_total_seconds':'x'}` 抛 `frappe.ValidationError`；未知 domain 抛。
-- [ ] **Step 2: 确认失败** → `ModuleNotFoundError`。
-- [ ] **Step 3: 实现**
+- [x] **Step 1: 写失败集成测试**（docker exec 模式，同计划 1）：`budget('query')['run_total_seconds']==300`、`budget('operation')['run_total_seconds']==600`、默认 `site_concurrency==1`、`model=='deepseek-v4-flash'`；monkeypatch `frappe.conf.dsherp_run_budget={'run_total_seconds':'x'}` 抛 `frappe.ValidationError`；未知 domain 抛。
+- [x] **Step 2: 确认失败** → `ModuleNotFoundError`。
+- [x] **Step 3: 实现**
 
 ```python
 """Single source of truth for run time/lease/queue budgets. Values come from site_config overrides."""
@@ -116,13 +116,13 @@ def budget(domain):
     return values
 ```
 
-- [ ] **Step 4: 运行测试** → PASS。
-- [ ] **Step 5: 提交** `feat: 服务端统一运行预算表`。
+- [x] **Step 4: 运行测试** → PASS。
+- [x] **Step 5: 提交** `feat: 服务端统一运行预算表`。
 
 ### Task 0.2：基线入档
 
-- [ ] 新建 `docs/engineering/runtime-reliability-evidence.md`，"基线"节记录：当前 `claim_run` 单运行闸门位置（`context_execution.py` 中 `frappe.db.exists(... Running/Cancelling)` 行号）、`expires_at` 固定 180s 位置、`context_worker.run_container` 的 140s、`session_runtime._request_timeout_seconds` 的 120/90、worker `time.sleep(3)`；alpha 站当前 `DS Model Run` 各状态计数与 `DS Operation Proposal` Pending 且 `expires_at` 已过的条数（只读查询）。
-- [ ] 提交 `docs: 运行底座可靠性基线`。
+- [x] 新建 `docs/engineering/runtime-reliability-evidence.md`，"基线"节记录：当前 `claim_run` 单运行闸门位置（`context_execution.py` 中 `frappe.db.exists(... Running/Cancelling)` 行号）、`expires_at` 固定 180s 位置、`context_worker.run_container` 的 140s、`session_runtime._request_timeout_seconds` 的 120/90、worker `time.sleep(3)`；alpha 站当前 `DS Model Run` 各状态计数与 `DS Operation Proposal` Pending 且 `expires_at` 已过的条数（只读查询）。
+- [x] 提交 `docs: 运行底座可靠性基线`。
 
 **S0 自检门**：`tests/integration/test_run_budget.py` 全绿；非集成与 Node 门禁尾部入档。
 
@@ -136,9 +136,9 @@ def budget(domain):
 - Modify: `frappe_app/dsherp_bridge/dsherp_bridge/doctype/ds_model_run/ds_model_run.json`
 - Modify: `tests/test_v16_framework_adaptations.py`（若断言字段计数或 options，需同步）
 
-- [ ] `status` options 改为 `Queued\nRunning\nCancelling\nCancelled\nSucceeded\nFailed\nNeedsInput`；新增字段 `queue_expires_at`（Datetime）、`needs_input`（Long Text，模型向用户提出的问题）、`provider_failures`（Int，默认 0）、`answer_flagged`（Check，默认 0）；`field_order` 同步。
-- [ ] 三站 `bench migrate`，退出码入档。
-- [ ] 提交 `feat: 运行记录增加 NeedsInput 与队列过期字段`。
+- [x] `status` options 改为 `Queued\nRunning\nCancelling\nCancelled\nSucceeded\nFailed\nNeedsInput`；新增字段 `queue_expires_at`（Datetime）、`needs_input`（Long Text，模型向用户提出的问题）、`provider_failures`（Int，默认 0）、`answer_flagged`（Check，默认 0）；`field_order` 同步。
+- [x] 三站 `bench migrate`，退出码入档。
+- [x] 提交 `feat: 运行记录增加 NeedsInput 与队列过期字段`。
 
 ### Task 1.2：`claim_run` 并发闸门与队列过期清扫
 
@@ -152,9 +152,9 @@ def budget(domain):
 - 心跳：每次 `claim_run` 调用（含返回 None）执行 `frappe.cache().set_value('dsherp_worker_heartbeat', now_datetime().isoformat(), expires_in_sec=3600)`。
 - 返回值新增 `budget`（`run_budget.budget(domain)` 全量 dict）与 `site`（`frappe.local.site`）。
 
-- [ ] **Step 1: 写失败集成测试**：以 Administrator 临时 `update_site_config('dsherp_site_concurrency',2)`（finally 恢复删除）；两个合成用户各 send_message → 两次 claim 都返回运行且状态 Running；第三个用户第三条 claim 返回 None；同一用户第二条消息（第一条仍 Running）claim 返回 None 且第一条不受影响；把一条 Queued 的 `queue_expires_at` 改为过去 → claim 后该运行 Failed 且最后事件 kind=expired、payload.reason=queue_expired；`frappe.cache().get_value('dsherp_worker_heartbeat')` 非空。清理：先删事件再删运行（计划 1 规则）。
-- [ ] **Step 2: 确认失败**（并发 2 下第二次 claim 仍 None）。
-- [ ] **Step 3: 实现**：把 `if frappe.db.exists('DS Model Run',{'status':['in',['Running','Cancelling']]}):return None` 替换为：
+- [x] **Step 1: 写失败集成测试**：以 Administrator 临时 `update_site_config('dsherp_site_concurrency',2)`（finally 恢复删除）；两个合成用户各 send_message → 两次 claim 都返回运行且状态 Running；第三个用户第三条 claim 返回 None；同一用户第二条消息（第一条仍 Running）claim 返回 None 且第一条不受影响；把一条 Queued 的 `queue_expires_at` 改为过去 → claim 后该运行 Failed 且最后事件 kind=expired、payload.reason=queue_expired；`frappe.cache().get_value('dsherp_worker_heartbeat')` 非空。清理：先删事件再删运行（计划 1 规则）。
+- [x] **Step 2: 确认失败**（并发 2 下第二次 claim 仍 None）。
+- [x] **Step 3: 实现**：把 `if frappe.db.exists('DS Model Run',{'status':['in',['Running','Cancelling']]}):return None` 替换为：
 
 ```python
     from dsherp_bridge.run_budget import budget as run_budget
@@ -174,8 +174,8 @@ def budget(domain):
 
 `site_concurrency` 与领域无关，取任一 domain 的预算即可；`expires_at` 改为 `add_to_date(now,seconds=budget['lease_seconds'])`；返回 dict 增加 `'budget':run_budget(domain),'site':frappe.local.site`。
 
-- [ ] **Step 4: 运行测试** → PASS；并跑 `tests/integration/test_run_events.py`、`test_context_claim_cancel.py`、`test_context_claim_rejection.py` 确认既有语义不变。
-- [ ] **Step 5: 提交** `feat: 站内并发闸门与队列过期清扫`。
+- [x] **Step 4: 运行测试** → PASS；并跑 `tests/integration/test_run_events.py`、`test_context_claim_cancel.py`、`test_context_claim_rejection.py` 确认既有语义不变。
+- [x] **Step 5: 提交** `feat: 站内并发闸门与队列过期清扫`。
 
 ### Task 1.3：`run_status` 廉价化与租约续期
 
@@ -188,9 +188,9 @@ def budget(domain):
 - 权限修订检查保留在 `run_tool`、`reserve_model_call`、`finish_run`（已有），不在状态轮询里做。
 - 新增 `lease_renewed` 到两侧 `SERVER_KINDS`（服务端）并在前端 label 表加"租约续期"。
 
-- [ ] **Step 1: 写失败集成测试**：创建 Running 运行，`expires_at=now+60s`；调用 `run_status` → 返回 `lease_remaining_seconds` 约 180 且最后事件 `lease_renewed`；`expires_at=now+150s` 时调用不续期、无新事件；对不存在/错误凭据抛 PermissionError；用 `frappe.db.sql('SHOW ENGINE INNODB STATUS')` 不可行，改为断言函数源码不含 `for_update=True`（`inspect.getsource(run_status)`）。
-- [ ] **Step 2: 确认失败** → 缺少 `lease_remaining_seconds`。
-- [ ] **Step 3: 实现**（`_run` 保留给写端点；`run_status` 独立实现）：
+- [x] **Step 1: 写失败集成测试**：创建 Running 运行，`expires_at=now+60s`；调用 `run_status` → 返回 `lease_remaining_seconds` 约 180 且最后事件 `lease_renewed`；`expires_at=now+150s` 时调用不续期、无新事件；对不存在/错误凭据抛 PermissionError；用 `frappe.db.sql('SHOW ENGINE INNODB STATUS')` 不可行，改为断言函数源码不含 `for_update=True`（`inspect.getsource(run_status)`）。
+- [x] **Step 2: 确认失败** → 缺少 `lease_remaining_seconds`。
+- [x] **Step 3: 实现**（`_run` 保留给写端点；`run_status` 独立实现）：
 
 ```python
 @frappe.whitelist(allow_guest=True,methods=['POST'])
@@ -211,8 +211,8 @@ def run_status(run_id,capability):
     return {'run_id':run.name,'status':run.status,'lease_remaining_seconds':remaining}
 ```
 
-- [ ] **Step 4: 运行测试** → PASS；`tests/test_run_events.py` 常量一致性若因 SERVER_KINDS 新增而红，同步 `dsherp/run_events.py` 注释与 `context_events.SERVER_KINDS`（runner 侧不发该事件，只需服务端加入）。
-- [ ] **Step 5: 提交** `feat: 状态轮询只读并续期租约`。
+- [x] **Step 4: 运行测试** → PASS；`tests/test_run_events.py` 常量一致性若因 SERVER_KINDS 新增而红，同步 `dsherp/run_events.py` 注释与 `context_events.SERVER_KINDS`（runner 侧不发该事件，只需服务端加入）。
+- [x] **Step 5: 提交** `feat: 状态轮询只读并续期租约`。
 
 ### Task 1.4：`send_message` 队列过期与 worker 不可用背压
 
@@ -225,11 +225,11 @@ def run_status(run_id,capability):
 - 发送前读取 `frappe.cache().get_value('dsherp_worker_heartbeat')`：缺失或超过 `heartbeat_stale_seconds` → `frappe.throw('助手服务暂不可用，请稍后再试', exc=frappe.ValidationError)` 并设置 `frappe.local.response['http_status_code']=503`；不创建运行。测试环境里为了让既有测试通过，`claim_run` 之外允许测试用 `frappe.cache().set_value` 预置心跳（集成 conftest 的 `validation_queue_hygiene` fixture 在 yield 前写一次心跳）。
 - `cancel_run` 对 Queued 的撤回保持现状（已有），前端排队态显示"撤回"按钮（S6）。
 
-- [ ] **Step 1: 写失败集成测试**：清空心跳键 → send_message 抛 ValidationError 且 `frappe.local.response.http_status_code==503`、无新运行；写入心跳 → 成功且 `queue_expires_at` 约为 now+600s。
-- [ ] **Step 2: 确认失败**。
-- [ ] **Step 3: 实现** + 更新 `tests/integration/conftest.py` 的 session fixture 写心跳（通过 docker exec 一行脚本，与 purge 一起）。
-- [ ] **Step 4: 运行** 本测试 + `tests/integration/test_context_sessions.py` → PASS。
-- [ ] **Step 5: 提交** `feat: 排队过期与助手不可用背压`。
+- [x] **Step 1: 写失败集成测试**：清空心跳键 → send_message 抛 ValidationError 且 `frappe.local.response.http_status_code==503`、无新运行；写入心跳 → 成功且 `queue_expires_at` 约为 now+600s。
+- [x] **Step 2: 确认失败**。
+- [x] **Step 3: 实现** + 更新 `tests/integration/conftest.py` 的 session fixture 写心跳（通过 docker exec 一行脚本，与 purge 一起）。
+- [x] **Step 4: 运行** 本测试 + `tests/integration/test_context_sessions.py` → PASS。
+- [x] **Step 5: 提交** `feat: 排队过期与助手不可用背压`。
 
 **S1 自检门**：`tests/integration/test_claim_concurrency.py tests/integration/test_run_lease.py tests/integration/test_queue_backpressure.py tests/integration/test_run_events.py -q` 全绿；三站 migrate 退出码；非集成与 Node 门禁尾部；证据文档记录并发 2 下两运行同时 Running 的 `list_run_events` 序列。
 
@@ -248,7 +248,7 @@ def run_status(run_id,capability):
 - `probe_models(base_url: str, api_key: str, *, timeout=5, client=None) -> bool`：`GET {base_url}/models`，`Authorization: Bearer`，`trust_env=False`，200 → True，其余/异常 → False；永不抛出；不打印 key。
 - 熔断打开期间 worker 每 60s 调 `probe_models`，True → `breaker.reset()`（closed）；half_open 的下一次真实运行 ok → closed，provider_failure → 重新 open。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 import httpx
@@ -278,10 +278,10 @@ def test_probe_models_is_free_quiet_and_never_raises():
     assert probe_models('http://provider.invalid/v1','sk-synthetic-key',client=broken) is False
 ```
 
-- [ ] **Step 2: 确认失败** → `ModuleNotFoundError`。
-- [ ] **Step 3: 实现**（纯逻辑，`time` 不在内部读取，全部由调用方传 `now`；`probe_models` 内部 `client or httpx.Client(trust_env=False)`，`timeout=timeout`，任何异常返回 False）。
-- [ ] **Step 4: 运行** → PASS。
-- [ ] **Step 5: 提交** `feat: provider 熔断器与免费模型探针`。
+- [x] **Step 2: 确认失败** → `ModuleNotFoundError`。
+- [x] **Step 3: 实现**（纯逻辑，`time` 不在内部读取，全部由调用方传 `now`；`probe_models` 内部 `client or httpx.Client(trust_env=False)`，`timeout=timeout`，任何异常返回 False）。
+- [x] **Step 4: 运行** → PASS。
+- [x] **Step 5: 提交** `feat: provider 熔断器与免费模型探针`。
 
 ### Task 2.2：多站 profile 与槽位并发的协调器主循环
 
@@ -301,7 +301,7 @@ def test_probe_models_is_free_quiet_and_never_raises():
 - `main`：flock 与 pid 不变（仍单进程）；一个 httpx client per site；`monitor_ops` 只对 `sites[0]`（alpha）执行（快照按站，其余站在 S7 的 Deferred 说明）；主循环 `while True: try: coordinator.tick(); poll 3s except Exception: log worker_error` —— **主循环永不退出**（SIGTERM 除外）。
 - 指标：新增 `dsherp_slots_busy`（gauge）、`dsherp_provider_circuit_open`（gauge 0/1）、`dsherp_claims_total{site}` 改带 site 标签；`dsherp_provider_call_failures_total` 在 `provider_failure` 时自增（计划 1 预留）。
 
-- [ ] **Step 1: 写失败测试（tests/test_context_worker.py 追加）**
+- [x] **Step 1: 写失败测试（tests/test_context_worker.py 追加）**
 
 ```python
 def test_coordinator_round_robins_sites_and_respects_slots(tmp_path):
@@ -352,16 +352,16 @@ def test_run_claimed_never_escapes_and_records_provider_failure(tmp_path):
 
 第二个用例要求 `finish_run` 响应 `provider_failures` 缺失且执行异常时把 outcome 记为 `provider_failure`——**约定**：runner 异常（容器非零退出）在服务端事件里若有 `model_error`，`finish_run` 会回传 `provider_failures>=1`；执行方在 S1 未做该统计，因此本任务同时在 `finish_run` 返回值加 `provider_failures`（`frappe.db.count('DS Run Event',{'run':run.name,'kind':'model_error'})`）。测试里 `finish_run` 返回 403 的路径以 `RuntimeError` 兜底判为 `provider_failure`，与实现约定一致：**执行异常且无法拿到服务端计数 → 按 provider_failure 计**（保守，宁可早熔断）。
 
-- [ ] **Step 2: 确认失败** → `ImportError: Coordinator`。
-- [ ] **Step 3: 实现**：`normalize_profile`、`Coordinator`（`ThreadPoolExecutor`、`wait_idle()` 等待全部 future、每站 `last_claim` 与轮转索引、`busy` 计数）；`run_once`/`poll_once` 保留为单站兼容包装（`--once` 与既有集成测试用），内部改调 `Coordinator` 的 `run_claimed`。`main` 使用 `normalize_profile`，为每站建 client；`worker_log.configure` 加入全部站的 `api_secret`。
-- [ ] **Step 4: 运行** `.venv/bin/python -m pytest tests/test_context_worker.py tests/test_v16_deployment_contract.py -q` → PASS（LaunchAgent 契约测试不需要改参数）。
-- [ ] **Step 5: 提交** `feat: worker 多站槽位协调与崩溃安全主循环`。
+- [x] **Step 2: 确认失败** → `ImportError: Coordinator`。
+- [x] **Step 3: 实现**：`normalize_profile`、`Coordinator`（`ThreadPoolExecutor`、`wait_idle()` 等待全部 future、每站 `last_claim` 与轮转索引、`busy` 计数）；`run_once`/`poll_once` 保留为单站兼容包装（`--once` 与既有集成测试用），内部改调 `Coordinator` 的 `run_claimed`。`main` 使用 `normalize_profile`，为每站建 client；`worker_log.configure` 加入全部站的 `api_secret`。
+- [x] **Step 4: 运行** `.venv/bin/python -m pytest tests/test_context_worker.py tests/test_v16_deployment_contract.py -q` → PASS（LaunchAgent 契约测试不需要改参数）。
+- [x] **Step 5: 提交** `feat: worker 多站槽位协调与崩溃安全主循环`。
 
 ### Task 2.3：合并本机两份 profile 并重启 worker
 
-- [ ] 写 `infra/merge_context_worker_profiles.py`：读取 `.runtime/context-worker.json` 与 `.runtime/context-worker-daily.json`，输出 `.runtime/context-worker-sites.json`（0600，`sites` 两项，`slots:3`）；不改旧文件。
-- [ ] `infra/render_context_worker_launch_agent.py` 的 `--profile` 指向新文件；按计划 1 的做法停止旧 LaunchAgent、重建 plist、bootstrap 一次；核对 pid 唯一、`/metrics` 含 `dsherp_slots_busy`。
-- [ ] 提交 `feat: 本机 worker 服务 alpha 与 daily 两站`。
+- [x] 写 `infra/merge_context_worker_profiles.py`：读取 `.runtime/context-worker.json` 与 `.runtime/context-worker-daily.json`，输出 `.runtime/context-worker-sites.json`（0600，`sites` 两项，`slots:3`）；不改旧文件。
+- [x] `infra/render_context_worker_launch_agent.py` 的 `--profile` 指向新文件；按计划 1 的做法停止旧 LaunchAgent、重建 plist、bootstrap 一次；核对 pid 唯一、`/metrics` 含 `dsherp_slots_busy`。
+- [x] 提交 `feat: 本机 worker 服务 alpha 与 daily 两站`。
 
 **S2 自检门**：非集成全绿；`curl -s 127.0.0.1:9109/metrics | grep -E '^dsherp_(slots_busy|provider_circuit_open|claims_total)'` 三行入档；停常驻 worker 后跑 `tests/integration/test_context_worker_chain.py`（单站兼容路径）绿；恢复 worker 并记录 pid。
 
@@ -377,11 +377,11 @@ def test_run_claimed_never_escapes_and_records_provider_failure(tmp_path):
 - Modify: `config/runtime-files.json` 无需变（文件已在清单）
 - Test: `tests/test_session_runtime.py`
 
-- [ ] **Step 1: 写失败测试**：`open_runtime(settings,dir,'s',resume=False,run_config=path)` 中 run.json 无 `budget` → `ValueError('Missing run budget')`；有 `budget.model_request_timeout_seconds=90` → `DeepSeekHarness` 收到 `request_timeout_seconds=90`（monkeypatch `dsherp.session_runtime.DeepSeekHarness` 捕获 kwargs）。
-- [ ] **Step 2: 确认失败**。
-- [ ] **Step 3: 实现**：`_request_timeout_seconds(domain)` 删除，改 `_budget(run_config)`；无 `run_config`（纯上下文模式）保持 90。
-- [ ] **Step 4: 运行** `tests/test_session_runtime.py tests/test_runtime_revision.py -q` → PASS。
-- [ ] **Step 5: 提交** `feat: 模型请求超时由服务端预算下发`。
+- [x] **Step 1: 写失败测试**：`open_runtime(settings,dir,'s',resume=False,run_config=path)` 中 run.json 无 `budget` → `ValueError('Missing run budget')`；有 `budget.model_request_timeout_seconds=90` → `DeepSeekHarness` 收到 `request_timeout_seconds=90`（monkeypatch `dsherp.session_runtime.DeepSeekHarness` 捕获 kwargs）。
+- [x] **Step 2: 确认失败**。
+- [x] **Step 3: 实现**：`_request_timeout_seconds(domain)` 删除，改 `_budget(run_config)`；无 `run_config`（纯上下文模式）保持 90。
+- [x] **Step 4: 运行** `tests/test_session_runtime.py tests/test_runtime_revision.py -q` → PASS。
+- [x] **Step 5: 提交** `feat: 模型请求超时由服务端预算下发`。
 
 ### Task 3.2：总时长 deadline、daemon 线程与 5 秒取消
 
@@ -396,7 +396,7 @@ def test_run_claimed_never_escapes_and_records_provider_failure(tmp_path):
   - `status()` 回调改为返回完整 dict（`run_status` 响应），`check()` 取 `['status']`。
 - `run_business`：`deadline=time.monotonic()+config['budget']['run_total_seconds']`；容器 `main()` 在返回前若有 daemon 线程未结束，直接 `os._exit(code)`（在 `print` 与 `flush` 之后），避免解释器等待。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 def test_cancel_returns_within_grace_even_if_model_hangs(model_server,tmp_path):
@@ -438,10 +438,10 @@ def test_needs_input_status_stops_gracefully(model_server,tmp_path):
     finally:state['release'].set()
 ```
 
-- [ ] **Step 2: 确认失败** → `TypeError: unexpected keyword 'deadline'`/`grace`。
-- [ ] **Step 3: 实现**；既有用例里 `status` 回调返回字符串的，改为 dict 形式（同一提交内更新测试）。
-- [ ] **Step 4: 运行** `tests/test_context_runner.py tests/test_context_runtime.py tests/test_model_guard.py tests/test_context_compaction.py -q` → PASS。
-- [ ] **Step 5: 提交** `feat: runner 总时长预算与五秒取消`。
+- [x] **Step 2: 确认失败** → `TypeError: unexpected keyword 'deadline'`/`grace`。
+- [x] **Step 3: 实现**；既有用例里 `status` 回调返回字符串的，改为 dict 形式（同一提交内更新测试）。
+- [x] **Step 4: 运行** `tests/test_context_runner.py tests/test_context_runtime.py tests/test_model_guard.py tests/test_context_compaction.py -q` → PASS。
+- [x] **Step 5: 提交** `feat: runner 总时长预算与五秒取消`。
 
 ### Task 3.3：worker 侧容器超时与 NeedsInput 结果
 
@@ -450,11 +450,11 @@ def test_needs_input_status_stops_gracefully(model_server,tmp_path):
 - Modify: `frappe_app/dsherp_bridge/context_execution.py`（`finish_run` 接受 `NeedsInput`：要求 `run.status=='NeedsInput'`，把 `answer` 写入 `needs_input` 字段并保持 status；`_run` 允许 NeedsInput 状态通过凭据校验以便 finish）
 - Test: `tests/test_context_worker.py`、`tests/integration/test_needs_input.py`（S5 完整链路，此处只做单测）
 
-- [ ] **Step 1: 写失败测试**：`run_container` 对 `{'status':'NeedsInput','answer':'问'}` 不再抛 `Invalid business runtime result`；`run_claimed` 把 NeedsInput 结果原样 `finish_run` 且 `_note_run('NeedsInput',...)` 清零连续失败。
-- [ ] **Step 2: 确认失败**。
-- [ ] **Step 3: 实现**。
-- [ ] **Step 4: 运行** → PASS。
-- [ ] **Step 5: 提交** `feat: worker 接受 NeedsInput 结果并按预算设容器超时`。
+- [x] **Step 1: 写失败测试**：`run_container` 对 `{'status':'NeedsInput','answer':'问'}` 不再抛 `Invalid business runtime result`；`run_claimed` 把 NeedsInput 结果原样 `finish_run` 且 `_note_run('NeedsInput',...)` 清零连续失败。
+- [x] **Step 2: 确认失败**。
+- [x] **Step 3: 实现**。
+- [x] **Step 4: 运行** → PASS。
+- [x] **Step 5: 提交** `feat: worker 接受 NeedsInput 结果并按预算设容器超时`。
 
 **S3 自检门**：非集成全绿；停常驻 worker 后跑 `tests/integration/test_context_worker_chain.py` 绿并记录事件序列里的 `lease_renewed`（若运行短于 90s 不会出现，注明）；恢复 worker。
 
@@ -473,7 +473,7 @@ def test_needs_input_status_stops_gracefully(model_server,tmp_path):
 - `classify_failure(status_code: int, body: dict|None, transport_error: Exception|None) -> dict`：返回 `{'error_class': 'validation'|'permission'|'transient', 'message': str, 'retryable': bool, 'http_status': int|None}`。规则：transport 异常/超时/5xx/502-504 → transient（retryable True）；401/403 或 `exc_type=='PermissionError'` → permission（False）；417/400 及其他 4xx → validation（False）。`message` 取 Frappe 响应的 `_server_messages` 首条 `message` 字段，其次 `exception` 冒号后的文本，截断 500 字，不含栈。
 - `post(...)` 在非 200 时抛 `ToolFailure(classification)`，其 `str()` 为一行 JSON：`{"error_class":..,"message":..,"retryable":..}`——FastMCP 会把异常文本作为 `isError=true` 的工具结果返回给模型；worker/runner 侧对 `claim_run`/`finish_run` 的既有 `BusinessRuntimeError` 语义保留（`ToolFailure` 继承 `BusinessRuntimeError` 并保留 `status_code`）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 def test_tool_failures_are_classified_and_serialized():
@@ -489,10 +489,10 @@ def test_tool_failures_are_classified_and_serialized():
     assert payload=={'error_class':'validation','message':'仓库不存在','retryable':False} and caught.value.status_code==417
 ```
 
-- [ ] **Step 2: 确认失败**。
-- [ ] **Step 3: 实现**（`_server_messages` 是 JSON 字符串数组，每项又是 JSON 字符串；解析失败回退到 `exception`）。
-- [ ] **Step 4: 运行** `tests/test_context_mcp.py tests/test_context_worker.py -q` → PASS。
-- [ ] **Step 5: 提交** `feat: 工具错误三分类透传给模型`。
+- [x] **Step 2: 确认失败**。
+- [x] **Step 3: 实现**（`_server_messages` 是 JSON 字符串数组，每项又是 JSON 字符串；解析失败回退到 `exception`）。
+- [x] **Step 4: 运行** `tests/test_context_mcp.py tests/test_context_worker.py -q` → PASS。
+- [x] **Step 5: 提交** `feat: 工具错误三分类透传给模型`。
 
 ### Task 4.2：`erp_request_input` 工具与服务端 NeedsInput 落地
 
@@ -502,11 +502,11 @@ def test_tool_failures_are_classified_and_serialized():
 - Modify: `config/dsh-context.yml` 无需改（工具由 MCP server 暴露）
 - Test: `tests/test_context_mcp.py`（工具面契约）、`tests/integration/test_needs_input.py`
 
-- [ ] **Step 1: 写失败测试**：MCP 服务器三个领域都列出 `erp_request_input` 且 `additionalProperties:false`（沿用 `_forbid_extra_tool_arguments`）；集成：Running 运行调用 `run_tool(...,'erp_request_input',{'question':'请指定仓库'})` 后状态 NeedsInput、`needs_input` 字段落库、`run_status` 返回 `{'status':'NeedsInput','needs_input':'请指定仓库',...}`；随后 `finish_run(status='NeedsInput',answer='请指定仓库')` 成功且 `capability_hash` 清空；`_public` 的 `active_run` 为 None（用户可继续发消息）。
-- [ ] **Step 2: 确认失败**。
-- [ ] **Step 3: 实现**（`run_status` 响应增加 `needs_input` 文本；`_public` 的消息里 `answer` 为空时若 `needs_input` 非空则 `answer=needs_input` 并附 `status='NeedsInput'`）。
-- [ ] **Step 4: 运行** → PASS；三站 migrate 若 S1 已加字段则无需再迁移。
-- [ ] **Step 5: 提交** `feat: 模型可用 erp_request_input 向用户索取信息`。
+- [x] **Step 1: 写失败测试**：MCP 服务器三个领域都列出 `erp_request_input` 且 `additionalProperties:false`（沿用 `_forbid_extra_tool_arguments`）；集成：Running 运行调用 `run_tool(...,'erp_request_input',{'question':'请指定仓库'})` 后状态 NeedsInput、`needs_input` 字段落库、`run_status` 返回 `{'status':'NeedsInput','needs_input':'请指定仓库',...}`；随后 `finish_run(status='NeedsInput',answer='请指定仓库')` 成功且 `capability_hash` 清空；`_public` 的 `active_run` 为 None（用户可继续发消息）。
+- [x] **Step 2: 确认失败**。
+- [x] **Step 3: 实现**（`run_status` 响应增加 `needs_input` 文本；`_public` 的消息里 `answer` 为空时若 `needs_input` 非空则 `answer=needs_input` 并附 `status='NeedsInput'`）。
+- [x] **Step 4: 运行** → PASS；三站 migrate 若 S1 已加字段则无需再迁移。
+- [x] **Step 5: 提交** `feat: 模型可用 erp_request_input 向用户索取信息`。
 
 ### Task 4.3：模型侧规则进 skill 并更新清单
 
@@ -515,18 +515,18 @@ def test_tool_failures_are_classified_and_serialized():
 - Modify: `config/business-skills.json`（三条 version 与 sha256）
 - Test: `tests/test_business_skills.py`、`tests/test_model_guard.py`
 
-- [ ] 在三份 SKILL.md 增加同一节"工具错误与做不了的出口"：`error_class=validation` → 修正参数最多重试一次，仍失败则用 `erp_request_input` 向用户说明；`permission` → 不得重试，直接告知用户无权并结束；`transient` → 原样重试一次，再失败则结束并说明；不能自行猜测缺失信息，用 `erp_request_input` 索取。
-- [ ] 重新计算 sha256 写入清单；`tests/test_business_skills.py` 中断言 version 字符串的用例同步更新（`1.4.0`、`2.2.0`、`1.1.0`）。
-- [ ] 运行 `tests/test_business_skills.py tests/test_model_guard.py tests/test_runtime_revision.py -q` → PASS。
-- [ ] 提交 `feat: skill 增加错误分类与索取信息规则`。
+- [x] 在三份 SKILL.md 增加同一节"工具错误与做不了的出口"：`error_class=validation` → 修正参数最多重试一次，仍失败则用 `erp_request_input` 向用户说明；`permission` → 不得重试，直接告知用户无权并结束；`transient` → 原样重试一次，再失败则结束并说明；不能自行猜测缺失信息，用 `erp_request_input` 索取。
+- [x] 重新计算 sha256 写入清单；`tests/test_business_skills.py` 中断言 version 字符串的用例同步更新（`1.4.0`、`2.2.0`、`1.1.0`）。
+- [x] 运行 `tests/test_business_skills.py tests/test_model_guard.py tests/test_runtime_revision.py -q` → PASS。
+- [x] 提交 `feat: skill 增加错误分类与索取信息规则`。
 
 ### Task 4.4：模型收到每类错误后的行为测试（替身）
 
 **Files:**
 - Test: `tests/test_error_taxonomy_behavior.py`
 
-- [ ] 用 `model_server` 与容器外的 `create_server` + `httpx.MockTransport`（同 `tests/test_context_mcp.py` 的方式）构造三类工具失败；断言模型收到的下一次请求（`requests[1]['messages']` 中最后一条 tool 结果）文本包含 `"error_class":"validation"`/`permission`/`transient` 与服务端 `message`；每类一条用例。此处不断言模型如何反应（那是评估集，计划 6）。
-- [ ] 提交 `test: 三类工具错误进入模型上下文`。
+- [x] 用 `model_server` 与容器外的 `create_server` + `httpx.MockTransport`（同 `tests/test_context_mcp.py` 的方式）构造三类工具失败；断言模型收到的下一次请求（`requests[1]['messages']` 中最后一条 tool 结果）文本包含 `"error_class":"validation"`/`permission`/`transient` 与服务端 `message`；每类一条用例。此处不断言模型如何反应（那是评估集，计划 6）。
+- [x] 提交 `test: 三类工具错误进入模型上下文`。
 
 **S4 自检门**：非集成全绿；`node --test runtime/*.test.cjs` 绿；`tests/integration/test_needs_input.py` 绿；证据文档记录一条真实（替身）NeedsInput 运行的事件序列。
 
@@ -549,11 +549,11 @@ def test_tool_failures_are_classified_and_serialized():
 - `confirm`：`status in ('Rejected','Expired')` → `frappe.throw('提案已被拒绝/已过期，请重新提出操作')`（分别）。
 - `get_proposal` 输出 `status` 原样；前端标签 S6 补。
 
-- [ ] **Step 1: 写失败集成测试**：合成用户创建 Pending 提案（沿用 `test_operation_proposals.py` 的构造方式）→ `reject` 成功且 status Rejected、事件 `proposal_rejected`；再次 `confirm` 抛 `已被拒绝`；另一用户 `reject` 抛 PermissionError；构造 `expires_at` 过去的 Pending 提案 → `expire_proposals()` 返回 1 且状态 Expired、事件 `proposal_expired`；`confirm` 抛 `已过期`。
-- [ ] **Step 2: 确认失败**。
-- [ ] **Step 3: 实现**；三站 migrate（DocType 变更）退出码入档。
-- [ ] **Step 4: 运行** 本测试 + `tests/integration/test_operation_proposals.py -q` → PASS。
-- [ ] **Step 5: 提交** `feat: 提案可拒绝并定时过期`。
+- [x] **Step 1: 写失败集成测试**：合成用户创建 Pending 提案（沿用 `test_operation_proposals.py` 的构造方式）→ `reject` 成功且 status Rejected、事件 `proposal_rejected`；再次 `confirm` 抛 `已被拒绝`；另一用户 `reject` 抛 PermissionError；构造 `expires_at` 过去的 Pending 提案 → `expire_proposals()` 返回 1 且状态 Expired、事件 `proposal_expired`；`confirm` 抛 `已过期`。
+- [x] **Step 2: 确认失败**。
+- [x] **Step 3: 实现**；三站 migrate（DocType 变更）退出码入档。
+- [x] **Step 4: 运行** 本测试 + `tests/integration/test_operation_proposals.py -q` → PASS。
+- [x] **Step 5: 提交** `feat: 提案可拒绝并定时过期`。
 
 ### Task 5.2：完成判定交叉校验
 
@@ -566,11 +566,11 @@ def test_tool_failures_are_classified_and_serialized():
 - `finish_run(status='Succeeded')` 计算：`proposals = count(DS Operation Proposal where model_run=run)`、`executions = count(DS Execution Record Succeeded whose proposal.model_run=run)`、`sources = len(run.sources)`；若 `answer` 匹配完成自述正则 `(已|成功)(创建|提交|保存|完成|生成|录入|执行)` 且 `executions==0` → `answer_flagged=1`，事件 `unverified_completion_claim {'proposals':..,'executions':..}`；不改变 status（不把回答判为失败，只标记）。`finished` 事件 payload 加 `proposals/executions/sources`。
 - `_public` 每条消息带 `answer_flagged`；前端 S6 显示提示"回答声称已完成，但没有对应的执行记录；请以待确认/执行记录为准"。
 
-- [ ] **Step 1: 写失败集成测试**：Running 运行读一次记录后 `finish_run(Succeeded, answer='已创建销售订单 SO-001')` → `answer_flagged==1`、最后事件 `unverified_completion_claim`；同样运行 `answer='共找到 3 条物料'` → `answer_flagged==0`；`get_session` 消息含 `answer_flagged`。
-- [ ] **Step 2: 确认失败**。
-- [ ] **Step 3: 实现**。
-- [ ] **Step 4: 运行** → PASS；`tests/integration/test_run_events.py` 仍绿。
-- [ ] **Step 5: 提交** `feat: 完成自述与执行记录交叉校验`。
+- [x] **Step 1: 写失败集成测试**：Running 运行读一次记录后 `finish_run(Succeeded, answer='已创建销售订单 SO-001')` → `answer_flagged==1`、最后事件 `unverified_completion_claim`；同样运行 `answer='共找到 3 条物料'` → `answer_flagged==0`；`get_session` 消息含 `answer_flagged`。
+- [x] **Step 2: 确认失败**。
+- [x] **Step 3: 实现**。
+- [x] **Step 4: 运行** → PASS；`tests/integration/test_run_events.py` 仍绿。
+- [x] **Step 5: 提交** `feat: 完成自述与执行记录交叉校验`。
 
 ### Task 5.3：运维快照与告警补充
 
@@ -579,7 +579,7 @@ def test_tool_failures_are_classified_and_serialized():
 - Modify: `dsherp/alerts.py`（规则：`queue_expired_24h>10` → `queue_expiring`（warning））
 - Test: `tests/integration/test_ops_snapshot.py`、`tests/test_alerts.py`
 
-- [ ] 测试先红后绿；提交 `feat: 快照与告警覆盖排队过期与待补充输入`。
+- [x] 测试先红后绿；提交 `feat: 快照与告警覆盖排队过期与待补充输入`。
 
 **S5 自检门**：`tests/integration/test_proposal_exits.py tests/integration/test_completion_crosscheck.py tests/integration/test_needs_input.py tests/integration/test_ops_snapshot.py -q` 全绿；三站 migrate 退出码；scheduled profile 下 10 分钟内 `Scheduled Job Type` 出现 `expire_proposals` 且 alpha 上 C0 基线里的过期 Pending 提案变为 Expired（数量入档）。
 
@@ -593,11 +593,11 @@ def test_tool_failures_are_classified_and_serialized():
 - Modify: `frontend/src/context-api.js`（`contextApi` 非 2xx 分支）
 - Test: `frontend/src/context-api.test.js`
 
-- [ ] **Step 1: 写失败测试**：mock `fetch` 返回 417 JSON `{exc_type:'ValidationError',_server_messages:JSON.stringify([JSON.stringify({message:'库存不足'})])}` → 抛出 `Error('库存不足')` 且 `error.kind==='validation'`；503 且 `_server_messages` 含"助手服务暂不可用" → `error.kind==='unavailable'`；无 JSON 的 502 → 保留现文案且 `kind==='transient'`；401/403 行为不变（`kind==='permission'`）。
-- [ ] **Step 2: 确认失败**。
-- [ ] **Step 3: 实现**：解析 `_server_messages`/`exception`，构造 `Error` 并附 `kind`、`httpStatus`；导出 `describeError(error)` 供组件决定是否允许重试（`transient`/`unavailable` 可重试，其余不可）。
-- [ ] **Step 4: 运行** `cd frontend && npm test -- context-api` → PASS。
-- [ ] **Step 5: 提交** `feat: 前端展示服务端业务原因`。
+- [x] **Step 1: 写失败测试**：mock `fetch` 返回 417 JSON `{exc_type:'ValidationError',_server_messages:JSON.stringify([JSON.stringify({message:'库存不足'})])}` → 抛出 `Error('库存不足')` 且 `error.kind==='validation'`；503 且 `_server_messages` 含"助手服务暂不可用" → `error.kind==='unavailable'`；无 JSON 的 502 → 保留现文案且 `kind==='transient'`；401/403 行为不变（`kind==='permission'`）。
+- [x] **Step 2: 确认失败**。
+- [x] **Step 3: 实现**：解析 `_server_messages`/`exception`，构造 `Error` 并附 `kind`、`httpStatus`；导出 `describeError(error)` 供组件决定是否允许重试（`transient`/`unavailable` 可重试，其余不可）。
+- [x] **Step 4: 运行** `cd frontend && npm test -- context-api` → PASS。
+- [x] **Step 5: 提交** `feat: 前端展示服务端业务原因`。
 
 ### Task 6.2：ErrorBoundary、轮询退避、新状态标签与拒绝按钮
 
@@ -611,8 +611,8 @@ def test_tool_failures_are_classified_and_serialized():
 - Modify: `frontend/src/AgentWorkbench.jsx`（排队态"撤回"按钮调用既有 `cancel_run`）
 - Test: `ErrorBoundary.test.jsx`、`ContextSidebar.test.jsx`、`OperationProposal.test.jsx`、`agent-format.test.js`、`AgentWorkbench.test.jsx`
 
-- [ ] 每项先写失败测试再实现；`node build.mjs` 重建 dist 并与源码一起提交；重启 alpha backend 后真实浏览器验证：拒绝一条提案、NeedsInput 问题显示、断网 5 秒后侧栏不清空会话，截图落档 `docs/engineering/evidence/runtime-reliability/`。
-- [ ] 提交 `feat: 前端错误降级、拒绝提案与新状态`。
+- [x] 每项先写失败测试再实现；`node build.mjs` 重建 dist 并与源码一起提交；重启 alpha backend 后真实浏览器验证：拒绝一条提案、NeedsInput 问题显示、断网 5 秒后侧栏不清空会话，截图落档 `docs/engineering/evidence/runtime-reliability/`。
+- [x] 提交 `feat: 前端错误降级、拒绝提案与新状态`。
 
 **S6 自检门**：`cd frontend && npm test` 全绿；dist 重建后 `git diff --exit-code frappe_app/dsherp_bridge/public/dist` 为 0；三张截图路径入档。
 
@@ -626,23 +626,23 @@ def test_tool_failures_are_classified_and_serialized():
 - Create: `infra/load_runs.py`
 - Create: `docs/engineering/runtime-reliability-evidence.md`（"G5 负载"节）
 
-- [ ] 脚本：读取 `.runtime/erp-users.json` 里的 3 个合成用户（`reader`/`writer` 等既有），对 alpha 各发 1 条只读问题（`request_id` 唯一）；对 daily 用 daily 的合成用户发 1 条；替身模型（把 worker 的 provider env 临时指向 `tests/conftest` 同款本地 SSE 替身，做法沿用计划 1 C3 演练：以专用 provider-env 文件启动一次性 worker，不动 `.env`）；轮询直到全部终态；输出每条运行的 `queued→claimed` 等待、总时长、状态，以及 `list_run_events` 的 kind 序列；断言：alpha 三条按序执行且无 Failed，daily 一条与 alpha 并行（其 `claimed` 时间早于 alpha 第二条），`run_status` 在 100 轮历史会话上的延迟与历史无关且满足预算——**2026-09-04 审计修订**：并发度取 worker 槽位数（`slots`，试点为 3）而不是 20，采样 20 次，nearest-rank P95 < 1s；同时在一个 0 轮历史的新会话上以同样方法采样，两者 P95 之比 ≤ 1.5。修订依据：验证栈 backend 为 0.5 CPU、1 worker × 2 threads，空操作 `ping` 在 20 并发下 P95 已达 0.40s，20 并发使请求在 CPU 上串行化，尾延迟 ≈ 20 × 单请求 55–60ms ≈ 1.0–1.2s，与 `run_status` 实现无关；20 并发是网页层容量测试，属计划 3 的部署规格。脚本仍须把 20 并发的 P95 作为"容量基线"打印并入档，但不作为门。失败分支必须先打印全部样本与 P95 再抛错。
-- [ ] 结果表入档；提交 `test: G5 负载脚本与证据`。
+- [x] 脚本：读取 `.runtime/erp-users.json` 里的 3 个合成用户（`reader`/`writer` 等既有），对 alpha 各发 1 条只读问题（`request_id` 唯一）；对 daily 用 daily 的合成用户发 1 条；替身模型（把 worker 的 provider env 临时指向 `tests/conftest` 同款本地 SSE 替身，做法沿用计划 1 C3 演练：以专用 provider-env 文件启动一次性 worker，不动 `.env`）；轮询直到全部终态；输出每条运行的 `queued→claimed` 等待、总时长、状态，以及 `list_run_events` 的 kind 序列；断言：alpha 三条按序执行且无 Failed，daily 一条与 alpha 并行（其 `claimed` 时间早于 alpha 第二条），`run_status` 在 100 轮历史会话上的延迟与历史无关且满足预算——**2026-09-04 审计修订**：并发度取 worker 槽位数（`slots`，试点为 3）而不是 20，采样 20 次，nearest-rank P95 < 1s；同时在一个 0 轮历史的新会话上以同样方法采样，两者 P95 之比 ≤ 1.5。修订依据：验证栈 backend 为 0.5 CPU、1 worker × 2 threads，空操作 `ping` 在 20 并发下 P95 已达 0.40s，20 并发使请求在 CPU 上串行化，尾延迟 ≈ 20 × 单请求 55–60ms ≈ 1.0–1.2s，与 `run_status` 实现无关；20 并发是网页层容量测试，属计划 3 的部署规格。脚本仍须把 20 并发的 P95 作为"容量基线"打印并入档，但不作为门。失败分支必须先打印全部样本与 P95 再抛错。
+- [x] 结果表入档；提交 `test: G5 负载脚本与证据`。
 
 ### Task 7.2：混沌演练
 
-- [ ] 三项各做一次并记录时间线：
+- [x] 三项各做一次并记录时间线：
   1. 运行中 `kill -9` 一次性 worker → 运行租约到期后被下一个 worker 清扫为 Failed（`expired lease_expired`），会话可继续发消息；
   2. provider env 指向 `127.0.0.1:9` 连发 3 条 → 熔断打开（`dsherp_provider_circuit_open 1`、告警 `provider_circuit_open`），恢复地址后 60s 内探针关闭熔断并成功处理 1 条；
   3. `docker stop dsherp-validation-backend-1` 10 秒后恢复 → worker 主循环不退出（pid 不变），日志出现 `worker_error` 后恢复领取。
-- [ ] 写入 `infra/chaos_drills.md`（可重复步骤）与证据文档；提交 `docs: 运行底座混沌演练证据`。
+- [x] 写入 `infra/chaos_drills.md`（可重复步骤）与证据文档；提交 `docs: 运行底座混沌演练证据`。
 
 ### Task 7.3：文档收口与终验
 
-- [ ] `docs/engineering/runtime-baseline.md`：预算表与配置键（`dsherp_run_budget`、`dsherp_site_concurrency`、`dsherp_model_policy`、worker profile `sites/slots`）。
-- [ ] README 当前状态与测试数字；spec 实施顺序表计划 2 行标注"实施完成，待审计"；生产就绪审计文档把 R1–R9、A1 标为"计划 2 已处理"。
-- [ ] 全量门：非集成、前端、Node、`tests/integration -q` 全量（常驻 worker 停止状态下），三站 migrate 退出码，恢复 worker 并记录 pid。
-- [ ] 本计划复选框逐项核验后勾选；提交 `docs: 收口运行底座可靠性计划`。
+- [x] `docs/engineering/runtime-baseline.md`：预算表与配置键（`dsherp_run_budget`、`dsherp_site_concurrency`、`dsherp_model_policy`、worker profile `sites/slots`）。
+- [x] README 当前状态与测试数字；spec 实施顺序表计划 2 行标注"实施完成，待审计"；生产就绪审计文档把 R1–R9、A1 标为"计划 2 已处理"。
+- [x] 全量门：非集成、前端、Node、`tests/integration -q` 全量（常驻 worker 停止状态下），三站 migrate 退出码，恢复 worker 并记录 pid。
+- [x] 本计划复选框逐项核验后勾选；提交 `docs: 收口运行底座可靠性计划`。
 
 **S7 自检门 / 终验报告模板**（停下并原样提交给审计方）：
 

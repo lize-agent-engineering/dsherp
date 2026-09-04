@@ -2887,3 +2887,219 @@ FAILED tests/integration/test_context_worker_chain.py::test_service_worker_runs_
 ```
 
 三个修复恰好只改三个测试文件，没有超过计划外文件停止阈值。没有产品、DocType、Report、hooks 或 compose 变更，无需 migrate；所有模型请求仍是本地 SSE 替身。最终完整集成门尚须重新执行。
+
+## Task 7.3 最终完整集成门
+
+在同一健康验证栈、常驻 worker 已停止且 `tests/integration/test_context_worker_chain.py` 开头 fastfail 生效的前提下，第三次完整执行：
+
+```text
+........................................................................ [ 38%]
+........................................................................ [ 77%]
+...........................................                              [100%]
+187 passed in 972.56s (0:16:12)
+```
+
+退出码：0。DB 全程保持 running；本轮模型请求均走本地 SSE 替身，没有调用真实 provider。
+
+## Task 7.3 三站最后一次 migrate
+
+文档收口前重新逐站执行 `bench --site <site> migrate`，保留每站尾部与明确退出码。三个命令均同步 DocType、移除孤立 Desk 元数据、同步 portal menu、更新 installed applications、执行 `after_migrate`，并分别排队重建搜索索引。原始尾部：
+
+```text
+alpha_migrate_tail_begin
+Removing orphan Dashboards
+Removing orphan Pages
+Removing orphan Reports
+Removing orphan Notifications
+Removing orphan Workspace Sidebars
+Removing orphan Desktop Icons
+Syncing portal menu...
+Updating installed applications...
+Executing `after_migrate` hooks...
+
+Queued rebuilding of search index for dsherp-validation.localhost
+
+alpha_migrate_tail_end
+alpha_migrate_exit=0
+daily_migrate_tail_begin
+Removing orphan Dashboards
+Removing orphan Pages
+Removing orphan Reports
+Removing orphan Notifications
+Removing orphan Workspace Sidebars
+Removing orphan Desktop Icons
+Syncing portal menu...
+Updating installed applications...
+Executing `after_migrate` hooks...
+
+Queued rebuilding of search index for dsherp-daily.localhost
+
+daily_migrate_tail_end
+daily_migrate_exit=0
+beta_migrate_tail_begin
+Removing orphan Dashboards
+Removing orphan Pages
+Removing orphan Reports
+Removing orphan Notifications
+Removing orphan Workspace Sidebars
+Removing orphan Desktop Icons
+Syncing portal menu...
+Updating installed applications...
+Executing `after_migrate` hooks...
+
+Queued rebuilding of search index for dsherp-beta.localhost
+
+beta_migrate_tail_end
+beta_migrate_exit=0
+```
+
+## Task 7.3 alpha 实际预算与最终 worker 状态
+
+只读取 alpha `site_config.json` 的三个公开配置键，未输出数据库或 API 凭据：
+
+```text
+{
+  "dsherp_run_budget": null,
+  "dsherp_site_concurrency": null,
+  "dsherp_model_policy": null
+}
+```
+
+因此实际使用服务端默认值。逐领域调用 `dsherp_bridge.run_budget.budget` 的原始输出：
+
+```text
+{"model_request_timeout_seconds": 90, "lease_seconds": 180, "lease_renew_below_seconds": 90, "queue_expires_seconds": 600, "heartbeat_stale_seconds": 60, "model_max_input_bytes_per_call": 131072, "model_max_input_bytes_total": 524288, "run_total_seconds": 300, "model_max_calls": 8, "model_max_output_tokens_per_call": 2048, "model_max_output_tokens_total": 16384, "site_concurrency": 1, "provider": "deepseek-official", "model": "deepseek-v4-flash"}
+{"model_request_timeout_seconds": 90, "lease_seconds": 180, "lease_renew_below_seconds": 90, "queue_expires_seconds": 600, "heartbeat_stale_seconds": 60, "model_max_input_bytes_per_call": 131072, "model_max_input_bytes_total": 524288, "run_total_seconds": 300, "model_max_calls": 8, "model_max_output_tokens_per_call": 3072, "model_max_output_tokens_total": 16384, "site_concurrency": 1, "provider": "deepseek-official", "model": "deepseek-v4-flash"}
+{"model_request_timeout_seconds": 90, "lease_seconds": 180, "lease_renew_below_seconds": 90, "queue_expires_seconds": 600, "heartbeat_stale_seconds": 60, "model_max_input_bytes_per_call": 131072, "model_max_input_bytes_total": 524288, "run_total_seconds": 600, "model_max_calls": 10, "model_max_output_tokens_per_call": 3072, "model_max_output_tokens_total": 30720, "site_concurrency": 1, "provider": "deepseek-official", "model": "deepseek-v4-flash"}
+```
+
+先重新合并双站 profile 并重渲染 plist，再 bootstrap。合并、渲染、bootstrap 退出码均为 0；最终状态原始摘要：
+
+```text
+launchctl_print_before=113
+merge_exit=0
+render_exit=0
+bootstrap_exit=0
+worker_ready_attempt=1
+dsherp_claims_total{site="dsherp-validation.localhost"} 0
+dsherp_claims_total{site="dsherp-daily.localhost"} 0
+dsherp_orphan_containers 0
+dsherp_provider_call_failures_total 0
+dsherp_slots_busy 0
+dsherp_provider_circuit_open 0
+state = running
+runs = 1
+pid = 80473
+last exit code = (never exited)
+pidfile_mode=600
+worker_process_count=1
+TCP 127.0.0.1:9109 (LISTEN)
+slots=3
+sites=["dsherp-validation.localhost","dsherp-daily.localhost"]
+orphan_container_count=0
+model_container_count=0
+db_status=running db_running=true db_oom=false db_exit=0
+alpha_active_count=0
+daily_active_count=0
+```
+
+当前 worker 使用真实 `.env` 读取 provider 配置，但两站没有 Queued/Running/Cancelling 运行、熔断关闭且没有探针条件，因此恢复及核验过程没有调用 provider。
+
+## S7 最终快速门（最终文档树）
+
+非集成，命令 `.venv/bin/python -m pytest tests --ignore=tests/integration -q`：
+
+```text
+........................................................................ [ 26%]
+........................................................................ [ 52%]
+........................................................................ [ 78%]
+..........................................................               [100%]
+274 passed in 62.64s (0:01:02)
+```
+
+退出码：0。
+
+Node，命令 `node --test runtime/*.test.cjs`：
+
+```text
+✔ dispose waits for native creation and releases exactly the completed handle (1.716167ms)
+✔ failed creation remains a request error but cannot break cleanup (1.32725ms)
+✔ business catalog rejects unlisted skill directories (5.089583ms)
+✔ ordinary and direct compaction requests both require authorization (0.7065ms)
+✔ a swallowed compaction denial still poisons all subsequent model calls (0.190458ms)
+✔ runtime drift rejects subsequent streams even if the file is restored (1.006167ms)
+✔ drift during a response cannot produce a successful terminal chunk (0.650166ms)
+✔ finish and errors are reported without affecting the stream (0.31575ms)
+✔ an in-stream provider error finish is reported as model_error (0.159167ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 61.831333
+```
+
+退出码：0。计划模板仍写 Node 8/8；实现新增一条 provider in-stream 错误回归后，实际门为 9/9，本报告按实际值记录。
+
+前端，命令 `cd frontend && npm test && node build.mjs && git diff --exit-code ../frappe_app/dsherp_bridge/public/dist`：
+
+```text
+> dsherp-desk@0.1.0 test
+> NODE_OPTIONS=--no-experimental-webstorage vitest run
+
+ RUN  v4.1.11 /Users/lize/Documents/ChatGPT/dsherp/frontend
+
+ Test Files  22 passed (22)
+      Tests  200 passed (200)
+   Start at  00:06:28
+   Duration  15.15s (transform 2.17s, setup 585ms, import 34.79s, tests 25.51s, environment 11.88s)
+```
+
+整条命令退出码：0；`node build.mjs` 无 stdout，tracked dist 检查无差异。
+
+计划复选项核验结果：共 95 项，剩余未勾选 0。状态依据为本证据中的逐任务 RED→GREEN、阶段自检、三站 migrate、S6 三张真实浏览器截图、G5、三项混沌、最终全量门和现场 worker 核验；没有仅凭台账声明完成。
+
+三站 migrate 后直接读取各站数据库元数据，原始结果相同：
+
+```text
+alpha_doctype_fields
+DS Model Run:queue_expires_at:Datetime
+DS Model Run:needs_input:Long Text
+DS Model Run:provider_failures:Int
+DS Model Run:answer_flagged:Check
+DS Operation Proposal:rejected_by:Data
+DS Operation Proposal:rejected_request_id:Data
+alpha_status_options
+Queued|Running|Cancelling|Cancelled|Succeeded|Failed|NeedsInput
+Pending|Authorized|Succeeded|Failed|Unknown|Rejected|Expired
+alpha_scheduler
+1
+daily_doctype_fields
+DS Model Run:queue_expires_at:Datetime
+DS Model Run:needs_input:Long Text
+DS Model Run:provider_failures:Int
+DS Model Run:answer_flagged:Check
+DS Operation Proposal:rejected_by:Data
+DS Operation Proposal:rejected_request_id:Data
+daily_status_options
+Queued|Running|Cancelling|Cancelled|Succeeded|Failed|NeedsInput
+Pending|Authorized|Succeeded|Failed|Unknown|Rejected|Expired
+daily_scheduler
+1
+beta_doctype_fields
+DS Model Run:queue_expires_at:Datetime
+DS Model Run:needs_input:Long Text
+DS Model Run:provider_failures:Int
+DS Model Run:answer_flagged:Check
+DS Operation Proposal:rejected_by:Data
+DS Operation Proposal:rejected_request_id:Data
+beta_status_options
+Queued|Running|Cancelling|Cancelled|Succeeded|Failed|NeedsInput
+Pending|Authorized|Succeeded|Failed|Unknown|Rejected|Expired
+beta_scheduler
+1
+```
+
+最终仓库/运行产物核验：分支 `codex/runtime-reliability`，普通 checkout（`git_dir=.git`、`git_common_dir=.git`），`.runtime` 与 `work` 下 tracked 文件数 0，`work/context-run-*` / `run.json` stdout 为空，严格命名 context 容器 0、G5 model 容器 0。计划 2 全分支 diff 的凭据值扫描仅命中测试夹具 `DEEPSEEK_API_KEY=synthetic` 与 `https://provider.invalid`，没有真实 key 或 secret。
