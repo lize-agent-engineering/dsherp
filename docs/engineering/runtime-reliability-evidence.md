@@ -3215,3 +3215,10 @@ E AssertionError: old request input context allowed
 该残留同时复证了生产就绪审计 Q3：集成清理写在容器脚本的 finally 里，外层 `subprocess.run` 超时会直接杀掉脚本。修复属计划 5 的质量门禁，本计划只记录。
 
 **今后的规则**：改动 `frappe_app/` 下的代码后，走 HTTP 的集成门必须先重载 backend 再跑，否则测的是旧模块。
+
+重载后的权威全量集成为 `3 failed, 188 passed in 1116.32s`，三项都不是产品缺陷，逐项定根因：
+
+- `test_work_order_operations.py::test_work_order_chain_updates_stock` 报 `QueueOverloaded: Too many queued background jobs (600)`。事后查三个队列 `short/default/long` 计数均为 0，说明是长跑期间的瞬时堆积：`scheduled` profile 的 scheduler 与 scheduler-worker 当时未运行，测试自身入队的作业无人消费，撞上 Frappe 的 600 上限。清空队列后单独复跑 2 项全绿。
+- `test_translation_pack.py` 两项的根因是 `run_alpha(script, timeout=30)`：该脚本本身就要约 29.5 秒，站点稍有负载即触发外层 `subprocess.run` 超时，容器内进程被杀，`finally` 里的 `frappe.delete_doc` 来不及执行，留下 `Trial Balance → 企业科目余额表` 的夹具；下一轮的前置断言因此必红，形成每轮重现。已把超时提到 90 秒，并让前置检查只回收与夹具逐字相同的残留（`language/source_text/translated_text/context` 四项全等），任何其它企业级 Trial Balance 翻译仍然让测试失败。复跑 3 项全绿。
+
+这条与生产就绪审计 Q3 是同一个洞：集成清理写在容器脚本的 `finally` 里，外层超时会连清理一起杀掉。系统性修复（先登记后创建、session 级 finalizer 按登记表清理）属计划 5 的质量门禁；本计划只修掉这一处使全量门可信，并把根因记录在案。
