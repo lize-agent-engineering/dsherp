@@ -1209,3 +1209,164 @@ dsherp_provider_circuit_open 0
 ```
 
 S3 没有新增 DocType/Report/hooks，无需 migrate。没有调用真实 provider。
+
+## S4
+
+### Task 4.1 RED→GREEN
+
+先加入三类业务 HTTP 失败的分类与序列化测试。实现前，缺失 `classify_failure`/`ToolFailure` 的首个目标为 1 failed in 0.34s；展开三类契约后为 5 failed, 5 passed in 0.36s。实现纯分类器、Frappe 安全消息提取、紧凑 JSON `ToolFailure` 与单次非 200 处理后，审查发现曾通过改写 `ToolFailure.__name__` 隐藏真实诊断类型。先把 worker 行为断言改为真实类型，得到 1 failed in 0.36s；删除别名后目标 1 passed in 0.34s。控制器最终运行 MCP + worker：
+
+```text
+...............................................                          [100%]
+47 passed in 0.39s
+```
+
+`ToolFailure` 保持真实类名且是 `BusinessRuntimeError` 子类；响应正文只保留 `error_class/message/retryable`，HTTP 状态只留在对象诊断字段。没有 provider 请求。提交：`c6c9f12`。
+
+### Task 4.2 RED→GREEN
+
+集成测试首语句确认常驻 worker 已停止：停止前 PID `99647`，bootout 退出 0，随后 pidfile 不存在且旧 PID 已死亡。工具面测试实现前：
+
+```text
+FFFF.......                                                              [100%]
+4 failed, 7 passed in 0.36s
+```
+
+真实站点在实现前拒绝新工具，目标为 1 failed in 29.47s。实现三个领域的严格 `erp_request_input`、Running→NeedsInput 状态、问题落库、事件、状态读取、清空 capability 的结束路径和公开消息回退后，控制器最终单元组：
+
+```text
+...............                                                          [100%]
+15 passed in 0.27s
+```
+
+最终真实站点 NeedsInput + run-events + context-execution：
+
+```text
+.........                                                                [100%]
+9 passed in 60.96s
+```
+
+退出码均为 0。Cursor Grok 4.6 Extra High Fast 只读复审：`CLEAN`。没有 provider 请求；worker 为后续 S4 集成保持停止。提交：`0c93aff`。
+
+### Task 4.3 RED→GREEN
+
+三份 skill 的版本与错误出口断言先落地，首次计划命令原始尾部：
+
+```text
+.F...FF.F..FFF...                                                        [100%]
+=========================== short test summary info ============================
+FAILED tests/test_business_skills.py::test_configuration_skill_is_pinned_and_in_runtime_identity
+FAILED tests/test_business_skills.py::test_query_skill_plans_bom_then_batches_warehouse_scoped_bins
+FAILED tests/test_business_skills.py::test_operation_skill_discovers_dynamic_capabilities_and_manufacturing_routes
+FAILED tests/test_business_skills.py::test_business_skills_share_tool_error_and_impossible_exit_rules
+FAILED tests/test_model_guard.py::test_business_denial_prevents_actual_provider_request[allow]
+FAILED tests/test_model_guard.py::test_business_denial_prevents_actual_provider_request[skill]
+FAILED tests/test_model_guard.py::test_business_denial_prevents_actual_provider_request[operation]
+7 failed, 10 passed in 8.52s
+```
+
+其中后三条是 Task 4.2 已增加工具、旧工具目录期望未同步；同步 `erp_request_input` 后仍以版本和 skill 正文缺节保持 6 failed, 11 passed。三份 skill 加入完全相同的“工具错误与做不了的出口”，版本更新为 1.4.0/2.2.0/1.1.0，并按原始文件字节更新既有 SHA-256 清单。控制器逐份复算摘要后独立运行：
+
+```text
+.................                                                        [100%]
+17 passed in 8.25s
+```
+
+退出码：0。模型流量只到本地 fixture，没有 provider 请求。提交：`cff7b41`。
+
+### Task 4.4 行为覆盖
+
+此任务按计划只新增测试；单一 validation 探测落地时，Task 4.1 已实现该行为，因此首次即绿，没有制造伪红灯：
+
+```text
+.                                                                        [100%]
+1 passed in 1.59s
+```
+
+补齐 validation/permission/transient 三类后，控制器独立运行真实 pinned Runtime + 本地 `model_server` + `create_server`/`httpx.MockTransport`：
+
+```text
+...                                                                      [100%]
+3 passed in 3.66s
+```
+
+退出码：0。第二次模型请求最后一条 tool 结果包含服务端 message 与精确 `error_class`。临时 mode-0600 spec/cordis 均由测试清理，没有 provider 请求。提交：`c20b62a`。
+
+## S4 自检门
+
+自检前现场：`launchctl print` 返回 113，`.runtime/agent-worker.pid` 不存在，进程列表与回环 9109 均没有常驻 worker；`tests/integration/test_needs_input.py` 的首语句 fastfail 未触发。非集成完整门原始尾部：
+
+```text
+........................................................................ [ 34%]
+........................................................................ [ 68%]
+..................................................................       [100%]
+210 passed in 57.92s
+```
+
+退出码：0。Node 门原始输出：
+
+```text
+✔ dispose waits for native creation and releases exactly the completed handle (1.812625ms)
+✔ failed creation remains a request error but cannot break cleanup (1.3245ms)
+✔ business catalog rejects unlisted skill directories (5.961833ms)
+✔ ordinary and direct compaction requests both require authorization (0.939458ms)
+✔ a swallowed compaction denial still poisons all subsequent model calls (0.216875ms)
+✔ runtime drift rejects subsequent streams even if the file is restored (1.081416ms)
+✔ drift during a response cannot produce a successful terminal chunk (0.746459ms)
+✔ finish and errors are reported without affecting the stream (0.355ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 67.081459
+```
+
+退出码：0。NeedsInput 集成原始输出：
+
+```text
+.
+1 passed in 27.86s
+```
+
+退出码：0。随后在 alpha 站直接运行并清理的真实（替身）NeedsInput 状态链原始输出：
+
+```text
+{"run_id":"f4c98b325358c9021c43d01061edbc07b005085d414d44dcc300d02cf3beeadf","tool_result":{"status":"NeedsInput"},"finish_result":{"run_id":"f4c98b325358c9021c43d01061edbc07b005085d414d44dcc300d02cf3beeadf","status":"NeedsInput","provider_failures":0},"active_run":null,"message":{"id":"f4c98b325358c9021c43d01061edbc07b005085d414d44dcc300d02cf3beeadf","question":"S4 替身：需要用户指定仓库","answer":"请指定仓库","error":"","status":"NeedsInput","context":{"page_type":"unknown","route":[],"schema_version":1},"domain":"query","sources":[]},"events":[{"seq":1,"kind":"queued","payload":{"domain":"query","question_chars":14,"page_type":"unknown"}},{"seq":2,"kind":"claimed","payload":{"domain":"query","permission_revision":"c15895236ae33232509e84fdd863345395c2e50cfcf46b97d8cd54c056c20532","runtime_revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","native_session_id":"7feec14554a44cf7b0cc2ca39c4d0f25"}},{"seq":3,"kind":"needs_input","payload":{"question_chars":5}},{"seq":4,"kind":"tool_call","payload":{"tool":"erp_request_input","arguments":{"question":"请指定仓库"},"duration_ms":4,"result":{"keys":["status"]}}},{"seq":5,"kind":"finished","payload":{"status":"NeedsInput","answer_chars":5,"error":"","model_calls":0,"provider_failures":0}}]}
+```
+
+测试行已清理。S4 没有 DocType/Report/hooks 变更，因此无需 migrate。正常 backend 代码重载与两站 HTTP 核验：
+
+```text
+dsherp-validation-backend-1
+backend_restart_exit=0
+sites_ready_attempt=1
+dsherp-validation.localhost heartbeat_status=200 message_keys=heartbeat
+dsherp-daily.localhost heartbeat_status=200 message_keys=heartbeat
+```
+
+首次恢复虽 bootstrap 退出 0，但 240 秒内没有达到双站指标门。只读核验发现磁盘 plist 自 S2 后未重新渲染，实际参数仍指向旧 `context-worker.json`；launchd 一直 `running`、`runs=1`、`last exit code=(never exited)`，不是崩溃。第 1 次修复循环只刷新本地运行态：停止、用已提交渲染器重建 plist、复核参数后重新 bootstrap。关键输出摘录：
+
+```text
+/Users/lize/Documents/ChatGPT/dsherp/.runtime/com.dsherp.agent-worker-v16.plist
+repair1_bootout_exit=0
+repair1_render_exit=0
+    3 => "--profile"
+    4 => "/Users/lize/Documents/ChatGPT/dsherp/.runtime/context-worker-sites.json"
+    5 => "--provider-env"
+repair1_bootstrap_exit=0
+repair1_worker_ready_attempt=1
+state=running
+pidfile=37215
+pidfile_mode=600
+37215     1 S    00:08 /Users/lize/Documents/ChatGPT/dsherp/.venv/bin/python -m dsherp.context_worker --profile /Users/lize/Documents/ChatGPT/dsherp/.runtime/context-worker-sites.json --provider-env /Users/lize/Documents/ChatGPT/dsherp/.env
+python3.1 37215 lize 4u IPv4 TCP 127.0.0.1:9109 (LISTEN)
+dsherp_claims_total{site="dsherp-validation.localhost"} 0
+dsherp_claims_total{site="dsherp-daily.localhost"} 0
+dsherp_slots_busy 0
+dsherp_provider_circuit_open 0
+```
+
+最终 worker PID `37215` 唯一、pidfile 0600、仅回环监听、加载双站 profile。没有调用真实 provider。
