@@ -648,3 +648,41 @@ def test_run_claimed_contains_malformed_claim_errors(tmp_path,monkeypatch):
         lambda *args:pytest.fail('malformed claim executed'),None,lambda:False,tmp_path)
     coordinator.run_claimed(coordinator.sites[0],{'run_id':'missing-capability'},SETTINGS)
     assert errors.calls==[(1,{'error_class':'KeyError'})]
+
+
+def test_three_provider_failure_runs_emit_one_provider_circuit_open_alert(tmp_path,capsys):
+    from dsherp import alerts
+    from dsherp.context_worker import Coordinator
+    from dsherp.provider_circuit import CircuitBreaker
+
+    claims=['r1','r2','r3']
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='claim_run':
+            run_id=claims.pop(0) if claims else None
+            return httpx.Response(200,json={'message':None if run_id is None else {
+                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'budget':{'run_total_seconds':300}}})
+        if method=='finish_run':
+            return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        breaker=CircuitBreaker()
+        notifier=alerts.Notifier()
+        sites=[{'site':'a','client':client,'business':{}}]
+        execute=lambda *args:{'status':'Succeeded','answer':'ok'}
+        try:
+            coordinator=Coordinator(sites,lambda:SETTINGS,1,execute,breaker,lambda:False,tmp_path,
+                notifier=notifier)
+        except TypeError as error:
+            if 'notifier' not in str(error):
+                raise
+            coordinator=Coordinator(sites,lambda:SETTINGS,1,execute,breaker,lambda:False,tmp_path)
+        for current in range(3):
+            assert coordinator.tick(now=current)==1
+            coordinator.wait_idle()
+        assert breaker.state=='open' and coordinator.tick(now=3)==0
+    records=[json.loads(line) for line in capsys.readouterr().err.splitlines() if line.strip()]
+    opened=[line for line in records if line.get('event')=='alert'
+            and line.get('key')=='provider_circuit_open' and line.get('severity')=='critical']
+    assert len(opened)==1

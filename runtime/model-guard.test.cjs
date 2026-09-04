@@ -71,3 +71,15 @@ test('finish and errors are reported without affecting the stream',async()=>{
   assert.equal(reports.at(-1).kind,'model_error');assert.equal(reports.at(-1).error_class,'Error');
   assert.ok(!JSON.stringify(reports).includes('provider down'));
 });
+test('an in-stream provider error finish is reported as model_error',async()=>{
+  const reports=[];
+  const secret='private provider body ECONNREFUSED 127.0.0.1:9';
+  const finish={type:'finish',reason:{kind:'error',failure:{message:secret,code:'TRANSPORT'}}};
+  const guard=createGuard(async()=>{},()=>{},async record=>{reports.push(record);});
+  const delivered=[];for await(const item of guard(request,async function*(){yield finish;}))delivered.push(item);
+  assert.deepEqual(delivered,[finish]);
+  assert.equal(reports.length,1);
+  assert.equal(reports[0].kind,'model_error');
+  assert.equal(reports[0].error_class,'TRANSPORT');
+  assert.ok(!JSON.stringify(reports).includes(secret));
+});

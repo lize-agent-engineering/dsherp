@@ -19,7 +19,12 @@ function createGuard(authorize,check=()=>{},report=async()=>{}){
       for await(const chunk of next()){
         if(chunk.type==='finish'){
           check();
-          await safeReport({kind:'model_response',payload:{usage:chunk.usage??null,chunk_keys:Object.keys(chunk),purpose:options.purpose??'conversation',model:options.model}});
+          if(chunk.reason?.kind==='error'){
+            const code=chunk.reason.failure?.code;
+            await safeReport({kind:'model_error',error_class:typeof code==='string'&&code?code:'ProviderError',payload:{purpose:options.purpose??'conversation'}});
+          }else{
+            await safeReport({kind:'model_response',payload:{usage:chunk.usage??null,chunk_keys:Object.keys(chunk),purpose:options.purpose??'conversation',model:options.model}});
+          }
         }
         yield chunk;
       }

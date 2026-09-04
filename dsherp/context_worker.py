@@ -166,7 +166,7 @@ def run_container(task,settings,directory,timeout=170):
 
 
 class Coordinator:
-    def __init__(self,sites,settings_loader,slots,execute,breaker,probe,state_root,clock=time.monotonic):
+    def __init__(self,sites,settings_loader,slots,execute,breaker,probe,state_root,clock=time.monotonic,notifier=None):
         if not isinstance(sites,list) or not sites:raise ValueError('Missing coordinator sites')
         if type(slots) is not int or slots<1:raise ValueError('Invalid coordinator slots')
         if not callable(settings_loader) or not callable(execute) or not callable(probe) or not callable(clock):
@@ -178,6 +178,7 @@ class Coordinator:
         self.breaker=breaker
         self.probe=probe
         self.clock=clock
+        self.notifier=notifier
         self.state_root=Path(state_root)
         self.last_claim={site['site']:None for site in sites}
         self._executor=ThreadPoolExecutor(max_workers=slots,thread_name_prefix='dsherp-run')
@@ -205,11 +206,16 @@ class Coordinator:
     def _record_outcome(self,outcome,now):
         if outcome=='provider_failure':PROVIDER_FAILURES.inc()
         if self.breaker is None:return
+        opened=False
         with self._circuit_lock:
             before=self.breaker.state
             self.breaker.record(outcome,now)
-            if self.breaker.state=='open' and before!='open':self._last_probe=now
+            if self.breaker.state=='open' and before!='open':
+                self._last_probe=now
+                opened=True
             PROVIDER_CIRCUIT_OPEN.set(1 if self.breaker.state=='open' else 0)
+        if opened and self.notifier is not None:
+            self.notifier.emit([alerts.Alert('provider_circuit_open','critical','模型服务熔断已打开')],now)
 
     def _heartbeat_sites(self):
         for site in self.sites:
@@ -416,7 +422,7 @@ def main():
                 def probe():
                     current=settings_loader()
                     return probe_models(current['DEEPSEEK_BASE_URL'],current['DEEPSEEK_API_KEY'])
-                coordinator=Coordinator(sites,settings_loader,profile['slots'],run_container,CircuitBreaker(),probe,state_root)
+                coordinator=Coordinator(sites,settings_loader,profile['slots'],run_container,CircuitBreaker(),probe,state_root,notifier=notifier)
                 while True:
                     if args.once:
                         run_once(sites[0]['client'],settings,state_root,business=sites[0]['business'])

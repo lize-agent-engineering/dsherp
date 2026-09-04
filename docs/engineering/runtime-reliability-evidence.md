@@ -1879,3 +1879,235 @@ model_container_count=0
 ```
 
 后四个 0 依次是 alpha 本轮问题/探针残留、alpha 活动运行、daily 本轮问题残留、daily 活动运行。Task 7.1 没有 DocType/Report/hooks 变更，无需 migrate；整个负载只调用本地 SSE 替身，没有读取 `.env`、没有调用真实 provider。
+
+## S7 / Task 7.2：混沌演练
+
+### 项 1：worker SIGKILL 与租约清扫
+
+演练前 fastfail 的原始输出：
+
+```text
+CHAOS1_FASTFAIL_OK resident_worker=0 active_alpha_daily=0
+CHAOS1_CONTAINERS_CLEAR
+```
+
+第一次演练已经取得 SIGKILL→租约到期→下一 worker 清扫的核心路径，但继续会话时误用了运行服务 client，服务端按权限边界返回 `HTTP 403`。该轮 finally 精确清理后核验 pid/worker/本轮记录与活动运行均为 0；没有把 403 当成产品失败。改为 conversation owner 的 reader client 后，从零状态完整重演。
+
+成功演练的原始输出：
+
+```text
+CHAOS1_RUNTIME_STARTED=2026-09-04T05:48:51.097+00:00
+CHAOS1_WORKER_KILLED=2026-09-04T05:48:51.100+00:00 pid=86460
+CHAOS1_POST_KILL_STATUS=Running at=2026-09-04T05:48:53.195+00:00
+CHAOS1_WAITING_LEASE status=Running expires_at=2026-09-04 13:51:32.844162
+CHAOS1_WAITING_LEASE status=Running expires_at=2026-09-04 13:51:32.844162
+CHAOS1_WAITING_LEASE status=Running expires_at=2026-09-04 13:51:32.844162
+CHAOS1_WAITING_LEASE status=Running expires_at=2026-09-04 13:51:32.844162
+CHAOS1_WAITING_LEASE status=Running expires_at=2026-09-04 13:51:32.844162
+CHAOS1_LEASE_READY=2026-09-04T05:51:39.531+00:00 expires_at=2026-09-04 13:51:32.844162
+CHAOS1_SWEEP_FAILED=2026-09-04T05:51:41.534+00:00 sweeper_pid=91433
+CHAOS1_CONTINUED=Cancelled at=2026-09-04T05:51:41.648+00:00
+CHAOS1_RESULT={"runtime_started_at":"2026-09-04T05:48:51.097+00:00","worker_killed_at":"2026-09-04T05:48:51.100+00:00","worker_pid":86460,"post_kill_status":"Running","lease_expires_at":"2026-09-04 13:51:32.844162","lease_ready_at":"2026-09-04T05:51:39.531+00:00","swept_failed_at":"2026-09-04T05:51:41.534+00:00","sweeper_pid":91433,"expired_event":{"kind":"expired","payload":{"reason":"lease_expired"},"recorded_at":"2026-09-04 13:51:40.097471"},"first_kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","expired"],"continued_run_id":"424c0d1dcd713b14a49d5ac0bdd82a100f43c64ebe692a9b5261239cbce147ce","continued_status":"Cancelled","continued_at":"2026-09-04T05:51:41.648+00:00","local_provider_requests":2,"orphan_context_containers":0,"cleanup":{"runs":0,"conversations":0},"final_active":{"dsherp-validation.localhost":0,"dsherp-daily.localhost":0},"pidfile_exists":false,"worker_process_count":0,"model_container_count":0}
+```
+
+演练结论：`runtime_started` 后 3ms 对一次性 worker 发 SIGKILL；运行仍为 Running，没有假完成。原 180 秒租约到期后，第二 worker 在约 2 秒内清扫为 Failed，事件序列以唯一 `expired {"reason":"lease_expired"}` 结束。同一会话立即接受下一条消息并可撤回为 Cancelled；没有自动重试旧运行。模型请求仅到本地 SSE。
+
+落档前再次核验原始状态：
+
+```text
+PIDFILE_ABSENT
+worker_process_count=0
+context_container_count=0
+model_container_count=0
+dsherp-validation-backend-1 Up 53 minutes
+0
+0
+0
+```
+
+三个 0 依次为 alpha 本轮问题记录、alpha 活动运行、daily 活动运行。项 1 没有 DocType/Report/hooks 变更，无需 migrate。项 2 的真实-key `GET /models` 探针及项 3 的 alpha backend 约 10 秒短停尚未执行，等待计划末尾要求的用户授权。
+
+### 项 2：provider 三连失败与熔断恢复
+
+最终用户/系统结果：一次性双站 worker 在专用 provider-env 指向 `127.0.0.1:9` 时连续完成恰好三条 Failed 运行并打开熔断；真实 key 只进入熔断已打开且两站活动运行 0/0 的一次性 0600 provider-env 窗口，最多一次获授权 GET /models、真实窗口零 claim，且不发生 chat/completions；切回本地 SSE 后才创建恢复运行并 Succeeded；`.env` 未变，本轮夹具全部清除。两次分类修复前的 live RED 已清理且未到达真实 provider。
+
+Alert TDD RED 原始输出：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_three_provider_failure_runs_emit_one_provider_circuit_open_alert _____
+E       assert 0 == 1
+E        +  where 0 = len([])
+=========================== short test summary info ============================
+FAILED tests/test_context_worker.py::test_three_provider_failure_runs_emit_one_provider_circuit_open_alert
+1 failed in 0.27s
+```
+
+Alert TDD GREEN 原始输出：
+
+```text
+.                                                                        [100%]
+1 passed in 0.26s
+```
+
+```text
+....................................................                     [100%]
+52 passed in 0.42s
+```
+
+第一次 live chaos RED（分类修复前）原始输出：
+
+```text
+Traceback (most recent call last):
+  File "/Users/lize/Documents/ChatGPT/dsherp/work/runtime-reliability-chaos2.py", line 343, in <module>
+    main()
+  File "/Users/lize/Documents/ChatGPT/dsherp/work/runtime-reliability-chaos2.py", line 187, in main
+    raise RuntimeError("failed provider run lacks model_error")
+RuntimeError: failed provider run lacks model_error
+```
+
+诊断重跑暴露的 value-safe 事件序列（第二条 live RED）：
+
+```text
+RuntimeError: failed provider run lacks model_error: {"site":"dsherp-validation.localhost","run_id":"45162690e1d538833d5e946cc8b3b03ed1e496f225c2f32a18ed7e00ce7ffc80","status":"Failed","kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","model_call_reserved","model_response","model_call_reserved","model_response","model_call_reserved","model_response","model_call_reserved","model_response","model_call_reserved","model_response","turn_end","runtime_failed","runtime_failed","finished"]}
+```
+
+两次诊断运行均按确切记录、会话、worker 与容器清理，且从未到达真实 provider 探针。
+
+固定 DSH 0.1.1rc1 源码确认 provider 失败可带内到达为 `finish.reason.kind=error`：https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/llm/llm-pi-ai/src/stream.ts#L183-L196
+
+In-stream provider 分类 TDD RED 原始输出：
+
+```text
+✔ business catalog rejects unlisted skill directories (4.767792ms)
+✔ ordinary and direct compaction requests both require authorization (0.704792ms)
+✔ a swallowed compaction denial still poisons all subsequent model calls (0.19ms)
+✔ runtime drift rejects subsequent streams even if the file is restored (1.419042ms)
+✔ drift during a response cannot produce a successful terminal chunk (0.659375ms)
+✔ finish and errors are reported without affecting the stream (0.302125ms)
+✖ an in-stream provider error finish is reported as model_error (0.734708ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 6
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 61.331958
+
+✖ failing tests:
+
+test at runtime/model-guard.test.cjs:74:1
+✖ an in-stream provider error finish is reported as model_error (0.734708ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'model_response'
+  - 'model_error'
+           ^
+```
+
+In-stream provider 分类 GREEN 原始输出：
+
+```text
+✔ dispose waits for native creation and releases exactly the completed handle (3.298417ms)
+✔ failed creation remains a request error but cannot break cleanup (1.383541ms)
+✔ business catalog rejects unlisted skill directories (5.526334ms)
+✔ ordinary and direct compaction requests both require authorization (0.685792ms)
+✔ a swallowed compaction denial still poisons all subsequent model calls (0.188334ms)
+✔ runtime drift rejects subsequent streams even if the file is restored (1.117792ms)
+✔ drift during a response cannot produce a successful terminal chunk (0.777292ms)
+✔ finish and errors are reported without affecting the stream (0.35ms)
+✔ an in-stream provider error finish is reported as model_error (0.187041ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 68.166917
+```
+
+```text
+.........................................................                [100%]
+57 passed in 8.47s
+```
+
+CHAOS2 最终原始输出：
+
+```text
+CHAOS2_RESULT={"queued_at":"2026-09-04T06:20:28.101+00:00","failures":[{"site":"dsherp-validation.localhost","run_id":"aded9bfa009115709fa5feae0a25c23e2a23ff3035bd9fd6a389fa26986fcb79","status":"Failed","model_error_count":6,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","turn_end","runtime_failed","runtime_failed","finished"]},{"site":"dsherp-validation.localhost","run_id":"26b36126c867339f2c4d4c30db22f07c4f17600f9d24979f7ed4aa1cfb522148","status":"Failed","model_error_count":6,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","turn_end","runtime_failed","runtime_failed","finished"]},{"site":"dsherp-daily.localhost","run_id":"9270fefafa00e74f724bbb8652e8339427d9096a00f3562e3bcb11bfa102241c","status":"Failed","model_error_count":6,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","model_call_reserved","model_error","turn_end","runtime_failed","runtime_failed","finished"]}],"circuit_opened_at":"2026-09-04T06:21:46.927+00:00","open_metric_line":"dsherp_provider_circuit_open 1","provider_failures_metric_line":"dsherp_provider_call_failures_total 3","real_probe_window_started_at":"2026-09-04T06:21:59.698+00:00","real_probe_window_ended_at":"2026-09-04T06:22:48.004+00:00","probe_closed_seconds_after_restore":48.306,"closed_metric_line":"dsherp_provider_circuit_open 0","real_probe_contract":{"method":"GET","path":"/models","maximum_calls":1},"active_during_real_probe":{"dsherp-validation.localhost":0,"dsherp-daily.localhost":0},"local_provider_restored_at":"2026-09-04T06:22:50.900+00:00","recovery_run":{"run_id":"5e7c2cb34957dc8dcccf519b584f509eac16e6045737d0142031295ff1366221","status":"Succeeded","kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"]},"local_provider_requests":2,"alert_line":{"ts":"2026-09-04T06:21:44.879+00:00","event":"alert","key":"provider_circuit_open","severity":"critical","message":"模型服务熔断已打开"},"worker_pid":26829,"worker_returncode":0,"claims_during_real_probe":0,"env_file_unchanged":true,"cleanup":{"dsherp-validation.localhost":{"runs":0,"conversations":0},"dsherp-daily.localhost":{"runs":0,"conversations":0}},"session_paths_removed":4,"final_active":{"dsherp-validation.localhost":0,"dsherp-daily.localhost":0},"pidfile_exists":false,"worker_process_count":0,"context_container_count":0,"model_container_count":0}
+```
+
+演练结论：两次 TDD 修复后本项 PASS。恰好三条 provider-failure 运行，每条 6 个 `model_error`；worker 级指标为 `dsherp_provider_call_failures_total 3`，熔断 gauge 为 `dsherp_provider_circuit_open 1`。恰好一条 critical `provider_circuit_open` 告警，时间为 `2026-09-04T06:21:44.879+00:00`。真实-key 窗口仅在熔断已打开且两站活动运行精确 0/0 之后开始（`2026-09-04T06:21:59.698+00:00` 至 `2026-09-04T06:22:48.004+00:00`）；探针契约为最多一次获授权 GET /models，真实窗口零 claim。gauge 在恢复后 48.306 秒关闭为 `dsherp_provider_circuit_open 0`。`local_provider_restored_at` 为 `2026-09-04T06:22:50.900+00:00`，之后才创建恢复运行 `5e7c2cb34957dc8dcccf519b584f509eac16e6045737d0142031295ff1366221` 并 Succeeded。恢复阶段本地 SSE `local_provider_requests` 为 2。真实 provider 只发生这一次探针，不发生 chat/completions。`.env` 未变（`env_file_unchanged` true）。cleanup 为两站 `runs` 0、`conversations` 0，`session_paths_removed` 4，`final_active` 0/0，`pidfile_exists` false，`worker_process_count` 0，`context_container_count` 0，`model_container_count` 0。两次 live RED 不计入成功演练，已完整清理，从未到达真实 provider。Task 7.2 无 DocType/Report/hooks 变更，因而不 migrate。
+
+### 项 3：alpha backend 短停与 worker 自恢复
+
+最终用户/系统结果：一次性 worker 先 SIGSTOP，再排入合成运行并保持 Queued，然后 stop 同一 alpha backend，再 SIGCONT，避免领取竞态；同一 PID 在停机窗口存活并写出 `worker_error`，两站不可用；约 10.005 秒后 finally 优先恢复同一 backend，两站 readiness 200；同一 PID 领取该运行并经本地 SSE Succeeded；backend 最终 running，夹具全部清除。
+
+CHAOS3 preflight 原始输出：
+
+```text
+CHAOS3_FASTFAIL_OK resident_worker=0 active_alpha_daily=0
+backend_running=true status=running
+context_container_count=0
+model_container_count=0
+```
+
+CHAOS3 最终原始输出：
+
+```text
+CHAOS3_RESULT={"worker_pid_before":27734,"worker_paused_at":"2026-09-04T06:23:56.118+00:00","queued_run_id":"b2424adeef2a0813c94f88fa10d30cf48daf9999aef194ceb1f17736982dc007","queued_status_before_stop":"Queued","docker_stop_invoked_at":"2026-09-04T06:23:57.516+00:00","backend_stopped_at":"2026-09-04T06:23:58.452+00:00","docker_stop_exit":0,"docker_stop_stdout":"dsherp-validation-backend-1","worker_continued_at":"2026-09-04T06:23:58.472+00:00","worker_alive_mid_outage_at":"2026-09-04T06:23:58.474+00:00","outage_observations":{"dsherp-validation.localhost":"ConnectError","dsherp-daily.localhost":"ConnectError"},"docker_start_invoked_at":"2026-09-04T06:24:08.458+00:00","backend_downtime_seconds":10.005,"backend_started_at":"2026-09-04T06:24:08.639+00:00","docker_start_exit":0,"docker_start_stdout":"dsherp-validation-backend-1","backend_ready_at":"2026-09-04T06:24:10.251+00:00","readiness":{"dsherp-validation.localhost":"200","dsherp-daily.localhost":"200"},"recovery_status":"Succeeded","recovery_kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"worker_pid_after":27734,"local_provider_requests":2,"worker_error_count":16,"first_worker_error":{"ts":"2026-09-04T06:23:58.546+00:00","event":"worker_error","site":"dsherp-validation.localhost","error_class":"ConnectError"},"claimed_line":{"ts":"2026-09-04T06:24:11.417+00:00","event":"claimed","site":"dsherp-validation.localhost","run_id":"b2424adeef2a0813c94f88fa10d30cf48daf9999aef194ceb1f17736982dc007"},"worker_returncode":0,"cleanup":{"dsherp-validation.localhost":{"runs":0,"conversations":0},"dsherp-daily.localhost":{"runs":0,"conversations":0}},"session_paths_removed":1,"backend_running_final":true,"final_active":{"dsherp-validation.localhost":0,"dsherp-daily.localhost":0},"pidfile_exists":false,"worker_process_count":0,"context_container_count":0,"model_container_count":0}
+```
+
+演练结论：本项 PASS。同一 worker pid 27734 在停机前后保持不变。两站停机观察均为 `ConnectError`。`backend_downtime_seconds` 为 10.005。首条 `worker_error` 于 `2026-09-04T06:23:58.546+00:00`，`worker_error_count` 为 16。同一 pid 于 `2026-09-04T06:24:11.417+00:00` claimed 运行 `b2424adeef2a0813c94f88fa10d30cf48daf9999aef194ceb1f17736982dc007`，经本地 SSE Succeeded；`local_provider_requests` 为 2。`docker_stop_stdout` 与 `docker_start_stdout` 均为 `dsherp-validation-backend-1`，退出码均为 0。恢复后两站 readiness 均为 `200`。`backend_running_final` true。cleanup 为两站 `runs` 0、`conversations` 0，`session_paths_removed` 1，`final_active` 0/0，`pidfile_exists` false，`worker_process_count` 0，`context_container_count` 0，`model_container_count` 0。Task 7.2 无 DocType/Report/hooks 变更，因而不 migrate。
+
+### Task 7.2 提交前复核
+
+Node 完整 runtime 门原始输出：
+
+```text
+✔ dispose waits for native creation and releases exactly the completed handle (2.654333ms)
+✔ failed creation remains a request error but cannot break cleanup (1.378416ms)
+✔ business catalog rejects unlisted skill directories (5.040666ms)
+✔ ordinary and direct compaction requests both require authorization (0.779084ms)
+✔ a swallowed compaction denial still poisons all subsequent model calls (0.208917ms)
+✔ runtime drift rejects subsequent streams even if the file is restored (1.598708ms)
+✔ drift during a response cannot produce a successful terminal chunk (0.769209ms)
+✔ finish and errors are reported without affecting the stream (0.302375ms)
+✔ an in-stream provider error finish is reported as model_error (0.152334ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 64.667084
+```
+
+相关 Python 回归原始输出：
+
+```text
+.........................................................                [100%]
+57 passed in 8.53s
+```
+
+`git diff --check` 退出码为 0、stdout 为空。发出 Task 7.2 状态前，对仓库与站点实际状态再次核验；原始输出：
+
+```text
+branch=codex/runtime-reliability
+backend=running
+pidfile_exists=false
+worker_process_count=0
+context_container_count=0
+model_container_count=0
+metrics_9109_reachable=false
+active_query_exit=0
+{"active_runs": 0, "site": "dsherp-validation.localhost"}
+{"active_runs": 0, "site": "dsherp-daily.localhost"}
+```
+
+Task 7.2 的修改不包含 DocType、Report 或 hooks，阶段末无需 migrate。获授权的真实 provider 行为仍只有熔断打开期的一次 `GET /models`；提交前复核没有调用 provider。
