@@ -668,3 +668,47 @@ def test_three_provider_failure_runs_emit_one_provider_circuit_open_alert(tmp_pa
     opened=[line for line in records if line.get('event')=='alert'
             and line.get('key')=='provider_circuit_open' and line.get('severity')=='critical']
     assert len(opened)==1
+
+
+def test_cleanup_stale_runtime_artifacts_after_lock_removes_only_owned_leftovers(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'ROOT',tmp_path)
+    work=tmp_path/'work'
+    work.mkdir()
+    stale_a=work/'context-run-aaaa'
+    stale_b=work/'context-run-bbbb'
+    stale_a.mkdir();(stale_a/'run.json').write_text('{"marker":"stale-a"}')
+    stale_b.mkdir();(stale_b/'run.json').write_text('{"marker":"stale-b"}')
+    keeper=work/'keeper'
+    keeper.mkdir();(keeper/'keep.txt').write_text('keep')
+    similar=work/'context-run-notes.txt'
+    similar.write_text('not-a-temp-dir')
+    owned='dsherp-context-'+'ab'*16
+    neighbor='dsherp-context-orphan-test'
+    short='dsherp-context-abc'
+    uppercase='dsherp-context-'+'AB'*16
+    commands=[]
+    def fake_run(args,**kwargs):
+        commands.append(list(args))
+        if list(args)[:2]==['docker','ps']:
+            return subprocess.CompletedProcess(args,0,'\n'.join((owned,neighbor,short,uppercase))+'\n','')
+        if list(args)[:3]==['docker','rm','-f']:
+            return subprocess.CompletedProcess(args,0,'','')
+        raise AssertionError('unexpected '+str(args))
+    worker.cleanup_stale_runtime_artifacts(runner=fake_run)
+    listed=next(cmd for cmd in commands if cmd[:2]==['docker','ps'])
+    assert '-a' in listed or '--all' in listed
+    assert 'name=dsherp-context-' in listed
+    assert [cmd[3] for cmd in commands if cmd[:3]==['docker','rm','-f']]==[owned]
+    assert not stale_a.exists() and not stale_b.exists()
+    assert (keeper/'keep.txt').read_text()=='keep'
+    assert similar.read_text()=='not-a-temp-dir'
+    def fail_list(args,**kwargs):
+        return subprocess.CompletedProcess(args,1,'','synthetic enumerate failed')
+    with pytest.raises((subprocess.CalledProcessError,RuntimeError)):
+        worker.cleanup_stale_runtime_artifacts(runner=fail_list)
+    def fail_rm(args,**kwargs):
+        if list(args)[:2]==['docker','ps']:
+            return subprocess.CompletedProcess(args,0,owned+'\n','')
+        return subprocess.CompletedProcess(args,1,'','synthetic rm failed')
+    with pytest.raises((subprocess.CalledProcessError,RuntimeError)):
+        worker.cleanup_stale_runtime_artifacts(runner=fail_rm)

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 from tempfile import TemporaryDirectory
@@ -133,6 +134,28 @@ def normalize_profile(profile):
     if webhook is not None and (not isinstance(webhook,str) or not webhook.strip()):
         raise ValueError('Invalid alert webhook')
     return {'slots':slots,'metrics_port':metrics_port,'alert_webhook':webhook,'sites':sites}
+
+
+def cleanup_stale_runtime_artifacts(runner=subprocess.run):
+    listed=runner(['docker','ps','-a','--filter','name=dsherp-context-','--format','{{.Names}}'],
+                  capture_output=True,text=True)
+    listed.check_returncode()
+    for raw in listed.stdout.splitlines():
+        name=raw.strip()
+        if not re.fullmatch('dsherp-context-[0-9a-f]{32}',name):
+            continue
+        removed=runner(['docker','rm','-f',name],capture_output=True,text=True)
+        removed.check_returncode()
+    work=ROOT/'work'
+    if not work.is_dir():
+        return
+    for path in list(work.iterdir()):
+        if not path.name.startswith('context-run-'):
+            continue
+        if path.is_symlink():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
 
 
 def run_container(task,settings,directory,timeout=170):
@@ -411,6 +434,7 @@ def main():
         with worker_pid(ROOT/'.runtime'/'agent-worker.pid'):
             subprocess.run(['docker','image','inspect',IMAGE],check=True,stdout=subprocess.DEVNULL)
             subprocess.run(['docker','volume','inspect','dsherp-v16-agent-runtime'],check=True,stdout=subprocess.DEVNULL)
+            cleanup_stale_runtime_artifacts()
             with ExitStack() as stack:
                 sites=[]
                 for item in profile['sites']:

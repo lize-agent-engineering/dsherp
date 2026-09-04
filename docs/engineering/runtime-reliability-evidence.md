@@ -2749,3 +2749,37 @@ pidfile_absent_exit=0
 ```
 
 worker 进程、9109 listener、context/G5/model 临时容器查询 stdout 均为空。没有调用真实 provider，没有改 `.env`，没有修改 DocType、Report 或 hooks，因此无需 migrate。
+
+## Task 7.3 状态核验补漏：R9 SIGKILL 临时凭据扫尾
+
+在把生产就绪审计的 R9 标为“计划 2 已处理”前，控制器按仓库与本机实际状态复核，发现 `work/` 尚有两份 Task 7.2 SIGKILL 后遗留的 `context-run-*` 目录。只查看元数据、不读取内容：两目录各含一个 0600、1208 字节的 `run.json`，时间分别为 2026-09-04 13:44:35 与 13:48:33。这复现了 2026-09-03 审计 R9 的具体故障，不能仅凭正常路径 `TemporaryDirectory` 与 `finally docker rm -f` 宣称已处理。
+
+本修复涉及计划未在 Task 7.3 列出的 `dsherp/context_worker.py` 与 `tests/test_context_worker.py` 两个文件，少于停止阈值“超过 3 个文件”。Cursor Grok 4.6 Extra High Fast 只写行为测试，控制器确认实现前 RED 原始输出：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_cleanup_stale_runtime_artifacts_after_lock_removes_only_owned_leftovers _
+>       worker.cleanup_stale_runtime_artifacts(runner=fake_run)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'dsherp.context_worker' has no attribute 'cleanup_stale_runtime_artifacts'
+
+tests/test_context_worker.py:697: AttributeError
+=========================== short test summary info ============================
+FAILED tests/test_context_worker.py::test_cleanup_stale_runtime_artifacts_after_lock_removes_only_owned_leftovers
+1 failed in 0.37s
+```
+
+最小实现只在成功取得 `agent-worker.lock` 后、创建业务客户端与领取运行前执行：先 `docker ps -a` 枚举名称，严格 fullmatch `dsherp-context-[0-9a-f]{32}` 才逐名 `docker rm -f`；任一 Docker 操作非零即 fastfail；容器处理成功后删除 `ROOT/work` 顶层 `context-run-*` 目录/符号链接，保留相似普通文件和其他目录。实现不读取或打印 `run.json`。控制器 GREEN：
+
+```text
+.                                                                        [100%]
+1 passed, 37 deselected in 0.28s
+```
+
+```text
+......................................                                   [100%]
+38 passed in 0.38s
+```
+
+常驻 worker 停止、pidfile 不存在的前提下执行一次真实清理，命令退出 0；随后 `find work -maxdepth 1 -type d -name 'context-run-*'` 与严格匹配的 Docker 容器查询 stdout 均为空。两份临时目录及其中敏感 `run.json` 已永久删除，没有建立恢复副本。没有调用 provider；没有 DocType、Report 或 hooks 变更，无需 migrate。
