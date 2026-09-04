@@ -131,7 +131,8 @@ def _public(doc):
         # actual ERP reads in the run that made them, instead of a flat list.
         sources=json.loads(run.sources or '[]')
         authorize_sources(sources)
-        messages.append({'id':run.name,'question':run.question,'answer':run.answer or '',
+        messages.append({'id':run.name,'question':run.question,
+                         'answer':run.answer or (run.needs_input if run.status=='NeedsInput' else '') or '',
                          'error':run.error or '', 'status':run.status,'context':context,'domain':run.domain,
                          'sources':sources})
         if run.status in ('Queued','Running','Cancelling'):active=run.name

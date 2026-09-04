@@ -13,6 +13,7 @@ SERVER_KINDS = (
     "expired",
     "lease_renewed",
     "cancel_requested",
+    "needs_input",
     "model_call_reserved",
     "tool_call",
     "finished",

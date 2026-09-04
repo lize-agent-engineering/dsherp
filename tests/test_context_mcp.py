@@ -15,7 +15,8 @@ def test_configuration_domain_has_only_native_configuration_read_and_proposal_to
     with httpx.Client(base_url='http://synthetic',transport=httpx.MockTransport(handler)) as client:
         server=context_mcp.create_server(client,'R','C',domain='configuration')
         catalog=asyncio.run(server.list_tools())
-        assert {tool.name for tool in catalog}=={'erp_read_configuration','erp_propose_configuration'}
+        assert {tool.name for tool in catalog}=={
+            'erp_read_configuration','erp_propose_configuration','erp_request_input'}
         assert all(not {'site','user','url','grant','session_id','model_run'}&set(tool.inputSchema['properties']) for tool in catalog)
         asyncio.run(server.call_tool('erp_read_configuration',{'doctype':'New Inspection'}))
         asyncio.run(server.call_tool('erp_propose_configuration',{'package':{'version':1}}))
@@ -31,7 +32,9 @@ def test_operation_domain_can_propose_but_cannot_confirm_business_writes():
     with httpx.Client(base_url='http://synthetic',transport=httpx.MockTransport(handler)) as client:
         server=context_mcp.create_server(client,'RUN-1','CAP-1',domain='operation')
         catalog=asyncio.run(server.list_tools())
-        assert {tool.name for tool in catalog}=={'erp_read_schema','erp_read_record','erp_search_records','erp_propose_update','erp_propose_create','erp_propose_action','erp_propose_fill','erp_propose_make'}
+        assert {tool.name for tool in catalog}=={'erp_read_schema','erp_read_record','erp_search_records',
+            'erp_propose_update','erp_propose_create','erp_propose_action','erp_propose_fill','erp_propose_make',
+            'erp_request_input'}
         assert all(tool.inputSchema['properties']['doctype']=={'title':'Doctype','type':'string'}
                    for tool in catalog if 'doctype' in tool.inputSchema['properties'])
         proposal=next(tool for tool in catalog if tool.name=='erp_propose_update')
@@ -63,9 +66,10 @@ def test_tools_send_only_bound_run_capability_and_named_arguments():
     with httpx.Client(base_url='http://synthetic',transport=httpx.MockTransport(handler)) as client:
         server=context_mcp.create_server(client,'RUN-1','CAP-1')
         tools=asyncio.run(server.list_tools())
-        assert {t.name for t in tools}=={'erp_read_schema','erp_read_record','erp_search_records'}
+        assert {t.name for t in tools}=={'erp_read_schema','erp_read_record','erp_search_records','erp_request_input'}
         assert all(not {'user','site','url','capability'} & set(t.inputSchema['properties']) for t in tools)
-        assert all(t.inputSchema['properties']['doctype']=={'title':'Doctype','type':'string'} for t in tools)
+        assert all(t.inputSchema['properties']['doctype']=={'title':'Doctype','type':'string'}
+                   for t in tools if 'doctype' in t.inputSchema['properties'])
         search=next(tool for tool in tools if tool.name=='erp_search_records')
         assert set(search.inputSchema['properties'])=={'doctype','query','filters','fields'}
         assert search.inputSchema['required']==['doctype']
@@ -171,3 +175,12 @@ def test_post_preserves_raw_transport_errors():
     with httpx.Client(base_url='http://synthetic',transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(httpx.ReadTimeout):
             context_mcp.post(client,'run_tool',run_id='RUN',capability='CAP')
+
+
+def test_every_business_domain_exposes_strict_request_input_tool():
+    for domain in ('query','operation','configuration'):
+        server=context_mcp.create_server(None,'RUN','CAP',domain=domain)
+        tool=next(item for item in asyncio.run(server.list_tools()) if item.name=='erp_request_input')
+        assert tool.inputSchema['properties']=={'question':{'title':'Question','type':'string'}}
+        assert tool.inputSchema['required']==['question']
+        assert tool.inputSchema['additionalProperties'] is False

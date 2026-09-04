@@ -156,7 +156,7 @@ def claim_run(runtime_revision):
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def run_status(run_id,capability):
     run=frappe.db.get_value('DS Model Run',run_id,
-        ['name','status','capability_hash','expires_at','domain'],as_dict=True)
+        ['name','status','capability_hash','expires_at','domain','needs_input'],as_dict=True)
     if (not run or run.status not in ('Running','Cancelling','NeedsInput') or not run.capability_hash
         or not run.expires_at or not isinstance(capability,str)
         or not hmac.compare_digest(run.capability_hash,hashlib.sha256(capability.encode()).hexdigest())):
@@ -170,7 +170,8 @@ def run_status(run_id,capability):
         frappe.db.set_value('DS Model Run',run.name,'expires_at',new_expiry)
         events.record_safely(run.name,'lease_renewed',{'expires_at':str(new_expiry)})
         remaining=plan['lease_seconds']
-    return {'run_id':run.name,'status':run.status,'lease_remaining_seconds':remaining}
+    return {'run_id':run.name,'status':run.status,'needs_input':run.needs_input or '',
+            'lease_remaining_seconds':remaining}
 
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
@@ -224,6 +225,16 @@ def _tool_summary(tool,result):
 
 
 def _run_tool(run,tool,arguments):
+    if tool=='erp_request_input':
+        if run.status!='Running':raise frappe.PermissionError('运行正在取消')
+        if isinstance(arguments,str):arguments=json.loads(arguments)
+        question=arguments.get('question') if isinstance(arguments,dict) and set(arguments)=={'question'} else None
+        if not isinstance(question,str) or not 1<=len(question.strip())<=2000:
+            frappe.throw('补充信息问题必须包含 1–2000 个字符')
+        question=question.strip()
+        frappe.db.set_value('DS Model Run',run.name,{'status':'NeedsInput','needs_input':question})
+        events.record_safely(run.name,'needs_input',{'question_chars':len(question)})
+        return {'status':'NeedsInput'}
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')
     if run.domain=='configuration':
         from dsherp_bridge.configuration_tools import read_configuration
