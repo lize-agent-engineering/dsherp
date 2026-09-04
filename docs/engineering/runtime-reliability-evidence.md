@@ -2783,3 +2783,69 @@ FAILED tests/test_context_worker.py::test_cleanup_stale_runtime_artifacts_after_
 ```
 
 常驻 worker 停止、pidfile 不存在的前提下执行一次真实清理，命令退出 0；随后 `find work -maxdepth 1 -type d -name 'context-run-*'` 与严格匹配的 Docker 容器查询 stdout 均为空。两份临时目录及其中敏感 `run.json` 已永久删除，没有建立恢复副本。没有调用 provider；没有 DocType、Report 或 hooks 变更，无需 migrate。
+
+## Task 7.3 全量集成首轮：DB OOM 与并发配置测试清理修复
+
+最终门前常驻 worker 状态原始输出：
+
+```text
+launchctl_exit=113
+pidfile_absent_exit=0
+worker_process_count=0
+metrics_listener_count=0
+{'dsherp-validation.localhost': 0, 'dsherp-daily.localhost': 0}
+```
+
+第一次全量集成运行到 33 分 36 秒时，验证 DB 已在中途退出，最终原始摘要：
+
+```text
+124 failed, 62 passed, 2 errors in 2016.86s (0:33:36)
+```
+
+级联错误的共同原始根因：
+
+```text
+MySQLdb.OperationalError: (2005, "Unknown server host 'db' (-2)")
+```
+
+只读 Docker 核验原始状态：
+
+```text
+dsherp-validation-db-1 ... Exited (137) 13 minutes ago
+{"Status":"exited","Running":false,"Paused":false,"Restarting":false,"OOMKilled":true,"Dead":false,"Pid":0,"ExitCode":137,"Error":""}
+memory=1073741824 memory_swap=1073741824 oom_kill_disable=<nil> restart=no network_mode=dsherp-validation_validation
+```
+
+因此后续 124 项不是 124 个产品红灯。未修改 compose 或资源规格；以原配置 `docker compose -f infra/compose.validation.yml up -d db` 启动同一 DB，alpha/daily/beta 在第一次检查均恢复 HTTP 200：
+
+```text
+Container dsherp-validation-db-1 Starting
+Container dsherp-validation-db-1 Started
+ready_attempt=1 alpha=200 daily=200 beta=200
+```
+
+健康 DB 下重跑最早失败文件，稳定暴露一个独立测试清理红灯。业务并发确认断言已通过，但 finally 使用并发 HTTP 认证前的旧 Frappe 连接删除 User，MariaDB 返回 1020；清理中断使下一参数化用例再被残留 User 阻断。RED 原始摘要：
+
+```text
+E     frappe.exceptions.QueryTimeoutError: This document can not be deleted right now as it's being modified by another user. Please try again after some time.
+E   assert 1 == 0
+E     frappe.exceptions.DuplicateEntryError: ('User', 'dsherp-config-concurrency@example.invalid', IntegrityError(1062, "Duplicate entry 'dsherp-config-concurrency@example.invalid' for key 'PRIMARY'"))
+FAILED tests/integration/test_configuration_apply.py::test_concurrent_preview_confirmations_create_one_execution_and_one_native_config[normal]
+FAILED tests/integration/test_configuration_apply.py::test_concurrent_preview_confirmations_create_one_execution_and_one_native_config[early-failure]
+2 failed, 2 passed in 44.61s
+```
+
+修复只改该测试 finally：先登记本轮精确 ID，rollback 并 destroy 旧 Frappe 上下文，再 init/connect 同一 beta Site，以 Administrator 按原顺序清理；没有 retry、sleep、ignore 或宽删，early-failure 的原异常与残留断言保留。两次失败遗留的 2 组 conversation/bundle/confirmation/execution 已先逐 ID 核验 owner 与父子关系再精确删除，清理原始结果：
+
+```text
+{"DS Configuration Bundle": 0, "DS Configuration Confirmation": 0, "DS Configuration Execution": 0, "DS Conversation": 0}
+```
+
+控制器独立 GREEN：
+
+```text
+....                                                                     [100%]
+4 passed in 45.81s
+```
+
+本修复只触及 `tests/integration/test_configuration_apply.py`，少于计划外文件停止阈值；没有产品、DocType、Report、hooks 或 compose 变更，无需 migrate；没有 provider 调用。DB OOM 属计划 3 容量/部署规格 Deferred，最终集成门必须在健康栈重新完整执行，不能把本轮当作通过。
