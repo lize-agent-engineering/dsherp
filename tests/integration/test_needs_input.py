@@ -7,6 +7,17 @@ import subprocess
 import pytest
 
 
+def _require_resident_worker_stopped():
+    path=Path('.runtime/agent-worker.pid')
+    if not path.exists():return
+    try:
+        os.kill(int(path.read_text()),0)
+    except (OSError,ValueError):
+        return
+    raise AssertionError('常驻 worker 正在运行；进程内集成测试必须先停止它')
+
+
+
 def _require_stopped_agent_worker():
     pid_file=Path('.runtime/agent-worker.pid')
     if not pid_file.exists():return
@@ -72,3 +83,67 @@ finally:
         '/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=60)
     assert result.returncode==0,result.stdout+result.stderr
     assert 'NEEDS_INPUT_OK queued,claimed,needs_input,tool_call,finished' in result.stdout
+
+
+def test_needs_input_run_stays_the_single_executor_until_it_hands_the_session_back():
+    """capability 仍有效时 NeedsInput 必须算在飞：否则同一 native session 会被第二个执行者领走。"""
+    _require_resident_worker_stopped()
+    script=r'''
+import os,uuid,json,frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import context_api as api
+from dsherp_bridge import context_execution as execution
+actor='dsherp-reader@example.invalid'
+payload={'schema_version':1,'page_type':'form','route':['Form','Item','DSHERP-TEST-ITEM'],'doctype':'Item','name':'DSHERP-TEST-ITEM','version':None,'dirty':False}
+had_runtime_user='dsherp_runtime_user' in frappe.conf
+original_runtime_user=frappe.conf.get('dsherp_runtime_user')
+asking=None;waiting=None
+try:
+    frappe.set_user('Administrator')
+    active=frappe.get_all('DS Model Run',filters={'status':['in',['Queued','Running','Cancelling']]},pluck='name')
+    assert not active,('validation site has active runs; stop the resident worker first',active)
+    frappe.set_user(actor)
+    asking=api.send_message('入库到哪个仓库',payload,uuid.uuid4().hex)
+    frappe.db.commit()
+    frappe.conf.dsherp_runtime_user=actor
+    claim=execution.claim_run('a'*64);frappe.db.commit()
+    cap={'run_id':claim['run_id'],'capability':claim['capability']}
+    frappe.set_user('Guest')
+    assert execution.run_tool(**cap,tool='erp_request_input',arguments={'question':'请指定入库仓库'})=={'status':'NeedsInput'}
+    frappe.db.commit()
+
+    # 旧执行者还没退出（capability 仍在），此刻不得放第二个执行者进来。
+    frappe.set_user(actor)
+    waiting=api.send_message('另一个问题',payload,uuid.uuid4().hex)
+    frappe.db.commit()
+    assert execution.claim_run('a'*64) is None,'second executor claimed while NeedsInput still held the session'
+    frappe.db.rollback()
+    assert api.get_session(asking['id'])['active_run']==cap['run_id']
+
+    # 执行者回写后才交还会话。
+    frappe.set_user('Guest')
+    execution.finish_run(**cap,status='NeedsInput',answer='请指定入库仓库');frappe.db.commit()
+    assert not frappe.db.get_value('DS Model Run',cap['run_id'],'capability_hash')
+    frappe.set_user(actor)
+    assert api.get_session(asking['id'])['active_run'] is None
+    released=execution.claim_run('a'*64);frappe.db.commit()
+    assert released and released['run_id']==waiting['active_run'],released
+    frappe.set_user('Guest')
+    execution.finish_run(run_id=released['run_id'],capability=released['capability'],status='Failed',error='测试收尾')
+    frappe.db.commit()
+    print('OK')
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if had_runtime_user:frappe.conf.dsherp_runtime_user=original_runtime_user
+    else:frappe.conf.pop('dsherp_runtime_user',None)
+    for doc in (asking,waiting):
+        if not doc:continue
+        for name in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):
+            frappe.db.delete('DS Run Event',{'run':name})
+            frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
+        frappe.delete_doc('DS Conversation',doc['id'],ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=60)
+    assert result.returncode==0 and 'OK' in result.stdout,result.stdout+result.stderr

@@ -135,7 +135,7 @@ def _public(doc):
                          'answer':run.answer or (run.needs_input if run.status=='NeedsInput' else '') or '',
                          'error':run.error or '', 'status':run.status,'context':context,'domain':run.domain,
                          'sources':sources,'answer_flagged':bool(run.answer_flagged)})
-        if run.status in ('Queued','Running','Cancelling'):active=run.name
+        if run.status in ('Queued','Running','Cancelling') or (run.status=='NeedsInput' and run.capability_hash):active=run.name
     from dsherp_bridge.operations import get_proposal
     proposals=[get_proposal(name) for name in frappe.get_all('DS Operation Proposal',
         filters={'conversation':doc.name},pluck='name',order_by='creation asc')]

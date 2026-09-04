@@ -285,3 +285,73 @@ finally:
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=40)
     assert result.returncode==0,result.stderr
+
+
+def test_refused_tool_lets_the_model_explain_instead_of_hanging_until_the_lease_expires():
+    """skill 要求模型在 permission/transient 失败后说明并结束；服务端必须接受这个终局。"""
+    _require_resident_worker_stopped()
+    script=r'''
+import os,uuid,json,frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import context_api as api
+from dsherp_bridge import context_execution as execution
+from dsherp_bridge import context_events as events
+actor='dsherp-reader@example.invalid'
+payload={'schema_version':1,'page_type':'form','route':['Form','Item','DSHERP-TEST-ITEM'],'doctype':'Item','name':'DSHERP-TEST-ITEM','version':None,'dirty':False}
+had_runtime_user='dsherp_runtime_user' in frappe.conf
+original_runtime_user=frappe.conf.get('dsherp_runtime_user')
+refused=None;silent=None
+try:
+    frappe.set_user('Administrator')
+    active=frappe.get_all('DS Model Run',filters={'status':['in',['Queued','Running','Cancelling']]},pluck='name')
+    assert not active,('validation site has active runs; stop the resident worker first',active)
+    frappe.set_user(actor)
+    refused=api.send_message('读取我无权的单据',payload,uuid.uuid4().hex)
+    frappe.db.commit()
+    frappe.conf.dsherp_runtime_user=actor
+    claim=execution.claim_run('a'*64);frappe.db.commit()
+    cap={'run_id':claim['run_id'],'capability':claim['capability']}
+    frappe.set_user('Guest')
+    # 本轮第一次工具调用就被服务端拒绝：事务回滚，sources 保持为空，只留下 runner 回写的 tool_error。
+    execution.record_run_event(cap['run_id'],cap['capability'],[
+        {'kind':'runtime_started','source':'runner','payload':{'session_id':'s'}},
+        {'kind':'tool_error','source':'runner','error_class':'ToolError',
+         'payload':{'text':'{"error_class":"permission","message":"无权读取","retryable":false}'}}])
+    frappe.db.commit()
+    assert json.loads(frappe.db.get_value('DS Model Run',cap['run_id'],'sources') or '[]')==[]
+    explained='我无权读取该单据，请联系管理员开通权限。'
+    finished=execution.finish_run(**cap,status='Succeeded',answer=explained)
+    frappe.db.commit()
+    assert finished['status']=='Succeeded',finished
+    saved=frappe.db.get_value('DS Model Run',cap['run_id'],['status','answer'],as_dict=True)
+    assert saved.status=='Succeeded' and saved.answer==explained,saved
+
+    # 既无来源也无工具错误：模型凭空作答仍必须被拒。
+    frappe.set_user(actor)
+    silent=api.send_message('什么都不做就回答',payload,uuid.uuid4().hex)
+    frappe.db.commit()
+    quiet=execution.claim_run('a'*64);frappe.db.commit()
+    quiet_cap={'run_id':quiet['run_id'],'capability':quiet['capability']}
+    frappe.set_user('Guest')
+    try:
+        execution.finish_run(**quiet_cap,status='Succeeded',answer='已创建销售订单 SO-0001')
+        raise AssertionError('fabricated answer without any server-recorded attempt was accepted')
+    except frappe.ValidationError:
+        pass
+    frappe.db.rollback()
+    print('OK')
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if had_runtime_user:frappe.conf.dsherp_runtime_user=original_runtime_user
+    else:frappe.conf.pop('dsherp_runtime_user',None)
+    for doc in (refused,silent):
+        if not doc:continue
+        for name in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):
+            frappe.db.delete('DS Run Event',{'run':name})
+            frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
+        frappe.delete_doc('DS Conversation',doc['id'],ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=60)
+    assert result.returncode==0 and 'OK' in result.stdout,result.stdout+result.stderr

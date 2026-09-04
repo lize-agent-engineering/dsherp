@@ -19,6 +19,8 @@ TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
        'erp_read_record':(erp.read_record,{'doctype','name'}),
        'erp_search_records':(erp.search_records,{'doctype','query','filters','fields'})}
 PROVIDER_FAILURE_ERROR_CLASSES=('TRANSPORT','TIMEOUT','SERVER')
+# 积压最严重时清扫最长，而清扫排在领取之前：不封顶会让 claim 越慢越领不到，形成正反馈。
+SWEEP_LIMIT=50
 
 
 @contextmanager
@@ -101,7 +103,7 @@ def claim_run(runtime_revision):
     now=now_datetime()
     _set_worker_heartbeat(now)
     queued_expiry_filters=[['status','=','Queued'],['queue_expires_at','is','set'],['queue_expires_at','<=',now]]
-    expired_names=frappe.get_all('DS Model Run',filters=queued_expiry_filters,pluck='name',order_by='creation asc, name asc',limit_page_length=0)
+    expired_names=frappe.get_all('DS Model Run',filters=queued_expiry_filters,pluck='name',order_by='creation asc, name asc',limit_page_length=SWEEP_LIMIT)
     for name in expired_names:
         expired=frappe.get_doc('DS Model Run',name,for_update=True)
         if (expired.status!='Queued' or not expired.queue_expires_at
@@ -110,10 +112,18 @@ def claim_run(runtime_revision):
         frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':error})
         events.record_safely(name,'expired',{'reason':'queue_expired'})
         events.record_safely(name,'finished',{'status':'Failed','error':'queue_expired'})
-    for name in frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']], 'expires_at':['<=',now]},pluck='name',order_by='creation asc, name asc'):
+    for name in frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']], 'expires_at':['<=',now]},pluck='name',order_by='creation asc, name asc',limit_page_length=SWEEP_LIMIT):
         frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':'运行已过期，未自动重试','capability_hash':''})
         events.record_safely(name,'expired',{'reason':'lease_expired'})
+    # 执行者在交还会话前死掉时，问题本身仍然有效：只收回凭据，不把用户的问题作废。
+    for name in frappe.get_all('DS Model Run',filters={'status':'NeedsInput','capability_hash':['!=',''],'expires_at':['<=',now]},
+                               pluck='name',order_by='creation asc, name asc',limit_page_length=SWEEP_LIMIT):
+        frappe.db.set_value('DS Model Run',name,{'capability_hash':''})
+        events.record_safely(name,'expired',{'reason':'needs_input_executor_lost'})
+    # NeedsInput 在执行者回写前仍持有 capability 与同一个 native session：此时它就是
+    # 在飞运行，放第二个执行者进来会让两个容器抢同一个会话目录（终审第 4 项）。
     active=frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']]},fields=['owner'],limit_page_length=0)
+    active+=frappe.get_all('DS Model Run',filters={'status':'NeedsInput','capability_hash':['!=','']},fields=['owner'],limit_page_length=0)
     busy_owners={row.owner for row in active}
     candidates=frappe.get_all('DS Model Run',filters={'status':'Queued'},fields=['name','owner','domain'],order_by='creation asc, name asc',limit_page_length=0)
     candidates=[row for row in candidates if row.owner not in busy_owners]
@@ -374,8 +384,12 @@ def finish_run(run_id,capability,status,answer='',error=''):
     requested_success=status=='Succeeded'
     if requested_success:
         if run.status not in ('Running','Cancelling'):raise frappe.PermissionError('运行不能成功完成')
-        if not isinstance(answer,str) or not answer.strip() or not json.loads(run.sources or '[]'):
-            frappe.throw('成功结果必须包含实际读取及回答')
+        # 完成仍只由外部可核验的事实判定，但"服务端拒绝了这次工具调用"和"读到了记录"
+        # 一样是服务端自己记录的事实。少了它，被权限拒绝的运行既不能成功也没有出口，
+        # 模型写好的解释会随租约过期一起丢掉（见 runtime-reliability-evidence 终审第 1 项）。
+        attempted=bool(json.loads(run.sources or '[]')) or bool(frappe.db.count('DS Run Event',{'run':run.name,'kind':'tool_error'}))
+        if not isinstance(answer,str) or not answer.strip() or not attempted:
+            frappe.throw('成功结果必须包含实际读取或服务端记录的工具失败')
         with _actor(run):
             context_permissions.require_revision(run)
             conversations._public(conversations._conversation(run.conversation))
