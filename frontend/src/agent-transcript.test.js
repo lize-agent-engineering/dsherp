@@ -145,3 +145,15 @@ it('运行事件逐类翻译且错误类使用 danger 语气', () => {
  expect(rows.filter(row=>row.tone==='danger').map(row=>row.seq)).toEqual([6,10,13,18]);
  expect(rows[0]).toMatchObject({seq:1,time:'2026-09-03 10:00:00'});
 });
+
+it('新增运行事件按精确标签翻译，未核实完成自述用 danger', () => {
+ const events = [
+  ['lease_renewed',{}],['needs_input',{}],['proposal_rejected',{}],
+  ['proposal_expired',{}],['unverified_completion_claim',{}],
+ ].map(([kind,payload],index)=>({seq:index+1,kind,payload,recorded_at:'2026-09-04 12:00:00'}));
+ const rows=runEventRows(events);
+ expect(rows.map(row=>row.label)).toEqual([
+  '租约续期','请求用户补充','提案已拒绝','提案已过期','完成自述未经核实',
+ ]);
+ expect(rows.map(row=>row.tone)).toEqual(['default','default','default','default','danger']);
+});

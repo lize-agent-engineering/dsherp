@@ -79,7 +79,7 @@ export const pendingCount = (session) =>
   (session?.proposals ?? []).filter((item) => item.status === 'Pending').length +
     (session?.configuration_confirmations ?? []).filter((item) => item.status === 'Pending').length;
 
-const eventTones = new Set(['model_error', 'tool_error', 'runtime_failed', 'worker_error']);
+const eventTones = new Set(['model_error', 'tool_error', 'runtime_failed', 'worker_error', 'unverified_completion_claim']);
 
 function eventDetail(event, payload) {
   const bits = [];
@@ -133,6 +133,16 @@ function eventLabel(event, payload, reserved) {
       return '已请求取消';
     case 'worker_error':
       return 'worker 错误';
+    case 'lease_renewed':
+      return '租约续期';
+    case 'needs_input':
+      return '请求用户补充';
+    case 'proposal_rejected':
+      return '提案已拒绝';
+    case 'proposal_expired':
+      return '提案已过期';
+    case 'unverified_completion_claim':
+      return '完成自述未经核实';
     default:
       return event.kind;
   }

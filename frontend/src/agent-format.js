@@ -12,7 +12,9 @@ const statuses = {
   Succeeded: ['已成功', 'success'],
   Partial: ['部分成功', 'warning'],
   Unknown: ['结果不明', 'warning'],
-  Expired: ['已过期', 'neutral'],
+  Expired: ['已过期', 'default'],
+  NeedsInput: ['需要你补充信息', 'warning'],
+  Rejected: ['已拒绝', 'default'],
   Failed: ['执行失败', 'danger'],
 };
 export const statusText = (status) => statuses[status]?.[0] ?? String(status ?? '');

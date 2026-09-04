@@ -644,6 +644,103 @@ it("自己发消息刷新列表后，正在看的会话不会标成有新消息"
   expect(within(rail()).queryByRole("button", { name: /有新消息/ })).toBeNull();
 });
 
+it("NeedsInput 把回答显示为待补充问题并聚焦本页业务问题输入框", async () => {
+  const api = apiFactory();
+  api.mockImplementation(async (method) => {
+    if (method === "search_sessions")
+      return { items: [{ id: "S-1", title: active.title, modified: "2026-08-29" }], has_more: false };
+    if (method === "get_session")
+      return {
+        ...active,
+        messages: [{ ...active.messages[0], answer: "请指定仓库", status: "NeedsInput", sources: [] }],
+      };
+    return { items: [] };
+  });
+  render(<AgentWorkbench api={api} initialSession="S-1" />);
+  const question = await screen.findByText("请指定仓库");
+  expect(screen.getByText("需要你补充信息")).toBeTruthy();
+  expect(screen.getAllByText("请指定仓库")).toHaveLength(1);
+  expect(question.closest(".dsh-wb-answer")).toBeNull();
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "业务问题" })),
+  );
+});
+
+it("answer_flagged 在回答旁给出准确警告且不泄漏其他字段", async () => {
+  const api = apiFactory();
+  api.mockImplementation(async (method) => {
+    if (method === "search_sessions")
+      return { items: [{ id: "S-1", title: active.title, modified: "2026-08-29" }], has_more: false };
+    if (method === "get_session")
+      return {
+        ...active,
+        messages: [{
+          ...active.messages[0],
+          answer: "已创建销售订单",
+          answer_flagged: true,
+          provider_failures: 2,
+          needs_input: "内部问题不应泄漏",
+        }],
+      };
+    return { items: [] };
+  });
+  render(<AgentWorkbench api={api} initialSession="S-1" />);
+  const turn = (await screen.findByText("已创建销售订单")).closest("article");
+  expect(within(turn).getByText("回答声称已完成，但没有对应的执行记录；请以待确认/执行记录为准")).toBeTruthy();
+  expect(screen.queryByText("内部问题不应泄漏")).toBeNull();
+  expect(screen.queryByText(/provider_failures/)).toBeNull();
+});
+
+it("排队中的活动运行显示撤回，点击只调用既有 cancel_run 且带齐绑定", async () => {
+  const queued = {
+    ...active,
+    active_run: "M-2",
+    messages: [
+      active.messages[0],
+      { id: "M-2", question: "排队中的查询", answer: "", status: "Queued", context, sources: [] },
+    ],
+  };
+  const api = apiFactory();
+  api.mockImplementation(async (method) => {
+    if (method === "search_sessions")
+      return { items: [{ id: "S-1", title: active.title, modified: "2026-08-29" }], has_more: false };
+    if (method === "get_session") return queued;
+    if (method === "cancel_run") return { ...queued, active_run: null };
+    return { items: [] };
+  });
+  render(<AgentWorkbench api={api} />);
+  const withdraw = await screen.findByRole("button", { name: "撤回" });
+  expect(withdraw.textContent.replace(/\s/g, "")).toBe("撤回");
+  expect(screen.queryByRole("button", { name: "停止运行" })).toBeNull();
+  fireEvent.click(withdraw);
+  await waitFor(() =>
+    expect(api).toHaveBeenCalledWith("cancel_run", {
+      session_id: "S-1",
+      run_id: "M-2",
+      request_id: expect.any(String),
+    }),
+  );
+  expect(api.mock.calls.filter((call) => call[0] === "cancel_run")).toHaveLength(1);
+});
+
+it("Running 活动运行仍显示停止运行，不改成撤回", async () => {
+  const running = {
+    ...active,
+    active_run: "M-2",
+    messages: [{ ...active.messages[0], id: "M-2", answer: "", status: "Running" }],
+  };
+  const api = apiFactory();
+  api.mockImplementation(async (method) => {
+    if (method === "search_sessions")
+      return { items: [{ id: "S-1", title: active.title, modified: "2026-08-29" }], has_more: false };
+    if (method === "get_session") return running;
+    return { items: [] };
+  });
+  render(<AgentWorkbench api={api} />);
+  expect(await screen.findByRole("button", { name: "停止运行" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "撤回" })).toBeNull();
+});
+
 it("其他会话新出现的待确认在轮询后点亮橙点，不用切换会话", async () => {
   let pendingReady = false;
   const api = vi.fn(async (method) => {

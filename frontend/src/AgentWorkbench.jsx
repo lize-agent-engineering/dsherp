@@ -81,6 +81,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
   const [title, setTitle] = useState("");
   const [atBottom, setAtBottom] = useState(true);
   const timeline = useRef(null);
+  const questionInput = useRef(null);
   const fileInput = useRef(null);
   const shell = useRef(null);
   const sending = useRef(false);
@@ -377,6 +378,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
   const transcript = useMemo(() => buildTranscript(session), [session]);
   const pending = pendingCount(session);
   const lastContext = session?.messages?.length ? session.messages[session.messages.length - 1].context : null;
+  const queuedRun = session?.messages?.some((message) => message.id === session.active_run && message.status === "Queued");
 
   const rail = (
     <nav className="dsh-rail" aria-label="会话">
@@ -452,6 +454,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
       )}
       {attachmentError && <small className="dsh-wb-attachment-error">{attachmentError}</small>}
       <Input.TextArea
+        ref={questionInput}
         aria-label="业务问题"
         value={question}
         onChange={(event) => setQuestion(event.target.value)}
@@ -491,8 +494,8 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
           />
         </div>
         {session?.active_run ? (
-          <Button aria-label="停止运行" danger shape="round" onClick={cancel} loading={busy}>
-            停止
+          <Button aria-label={queuedRun ? "撤回" : "停止运行"} danger shape="round" onClick={cancel} loading={busy}>
+            {queuedRun ? "撤回" : "停止"}
           </Button>
         ) : (
           <Button
@@ -621,6 +624,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
               turn={turn}
               cx={turnClasses}
               api={api}
+              onNeedsInput={() => questionInput.current?.focus()}
               labelContext={(context) => contextLabel(context) || "未绑定业务页面"}
               confirmations={<TurnConfirmations group={turn} api={api} />}
             />

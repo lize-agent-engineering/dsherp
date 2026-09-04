@@ -8,6 +8,7 @@ const methods = {
   send_message:['session_id','question','context','request_id','domain'],
   cancel_run:['session_id','run_id','request_id'],
   confirm_operation:['proposal_id','digest','request_id'],
+  reject_operation:['proposal_id','digest','request_id'],
   confirm_configuration:['proposal_id','digest','request_id'],
   confirm_configuration_publish:['proposal_id','digest','request_id'],
   prepare_configuration_preview:['bundle_id','digest'],
@@ -72,7 +73,7 @@ export async function contextApi(method,params={},signal){
   if(!Object.hasOwn(methods,method))throw new Error('不支持的会话操作');
   if(Object.keys(params).some(key=>!methods[method].includes(key)))throw new Error('会话参数不正确');
   const options={credentials:'same-origin',signal};
-  let url=method==='confirm_operation'?'/api/method/dsherp_bridge.operations.confirm':'/api/method/dsherp_bridge.context_api.'+method;
+  let url=method==='confirm_operation'?'/api/method/dsherp_bridge.operations.confirm':method==='reject_operation'?'/api/method/dsherp_bridge.operations.reject':'/api/method/dsherp_bridge.context_api.'+method;
   if(method==='verify_operation')url='/api/method/dsherp_bridge.operations.verify_execution';
   if(method==='verify_configuration')url='/api/method/dsherp_bridge.configuration_execution.verify_execution';
   if(method==='confirm_configuration')url='/api/method/dsherp_bridge.configuration_execution.confirm_preview';

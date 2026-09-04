@@ -3,7 +3,7 @@ import React from 'react';
 import {afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import ContextSidebar from './ContextSidebar.jsx';
-afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();cleanup();});
+afterEach(()=>{vi.useRealTimers();vi.restoreAllMocks();vi.unstubAllGlobals();cleanup();});
 const snapshot={schema_version:1,route:['Form','Item','I-1'],page_type:'form',doctype:'Item',name:'I-1',version:'v1',dirty:true};
 const session={id:'S-1',title:'查询物料',messages:[{id:'M-1',question:'旧问题',answer:'历史回答',status:'Succeeded',context:snapshot}],active_run:null};
 const open=()=>fireEvent.click(screen.getByRole('button',{name:'打开 Agent'}));
@@ -91,6 +91,17 @@ it('会话提案显示冻结差异，切页后确认仍只提交原提案，且�
  fireEvent.click(screen.getByRole('button',{name:'确认执行'}));
  await screen.findByText('执行成功，已读取业务结果');
  expect(api.mock.calls.find(c=>c[0]==='confirm_operation')[1]).toEqual({proposal_id:'P1',digest:'d1',request_id:expect.any(String)});
+});
+it('会话提案拒绝实际调用 reject_operation，不走确认',async()=>{
+ const proposal={id:'P1',digest:'d1',action:'update',doctype:'Item',name:'I-1',version:'v1',expires_at:'2099-01-01T00:00:00Z',status:'Pending',changes:[{field:'item_name',label:'物料名称',before:'原物料名',after:'建议物料名'}]};
+ const api=vi.fn(async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:method==='reject_operation'?{status:'Rejected'}:{...session,proposals:[proposal]});
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();await screen.findByText('建议物料名');
+ expect(api.mock.calls.some(c=>c[0]==='reject_operation')).toBe(false);
+ fireEvent.click(screen.getByRole('button',{name:'拒绝'}));
+ await screen.findByText('提案已拒绝');
+ expect(api.mock.calls.find(c=>c[0]==='reject_operation')[1]).toEqual({proposal_id:'P1',digest:'d1',request_id:expect.any(String)});
+ expect(api.mock.calls.some(c=>c[0]==='confirm_operation')).toBe(false);
+ expect(screen.getByRole('button',{name:'确认执行'}).disabled).toBe(true);
 });
 it('未保存字段显式选择后才发送，切换对象不能沿用选择',async()=>{
  let page=snapshot;const api=vi.fn(apiDefault);const captureSelected=vi.fn(()=>({...page,unsaved:{item_name:'建议名称'}}));
@@ -249,6 +260,126 @@ it('运行阶段来自真实运行状态，不编造执行步骤', async () => {
  expect(await screen.findByText('正在处理')).toBeTruthy();
  expect(screen.queryByText(/调用模型|读取 ERP/)).toBeNull();
  expect(screen.getByRole('button',{name:'停止运行'})).toBeTruthy();
+});
+
+it('NeedsInput 把回答显示为待补充问题并聚焦侧栏业务问题输入框', async () => {
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{
+  ...session,
+  messages:[{...session.messages[0],answer:'请指定仓库',status:'NeedsInput'}],
+ };
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ const question=await screen.findByText('请指定仓库');
+ expect(screen.getByText('需要你补充信息')).toBeTruthy();
+ expect(screen.getAllByText('请指定仓库')).toHaveLength(1);
+ expect(question.closest('.dsh-agent-answer')).toBeNull();
+ await waitFor(()=>expect(document.activeElement).toBe(screen.getByRole('textbox',{name:'业务问题'})));
+});
+
+it('打开会话后轮询失败不清空已显示的历史和会话列表', async () => {
+ let failPoll=false;
+ const api=vi.fn(async method=>{
+  if(method==='list_sessions')return [{id:'S-1',title:'查询物料'}];
+  if(method==='get_session'){
+   if(failPoll)throw Object.assign(new Error('请求未完成（HTTP 502）'),{kind:'transient',httpStatus:502});
+   return session;
+  }
+  return session;
+ });
+ render(<ContextSidebar api={api} capture={()=>snapshot} pollInterval={20}/>);open();
+ await screen.findByText('历史回答');
+ failPoll=true;
+ expect(await screen.findByText('请求未完成（HTTP 502）')).toBeTruthy();
+ expect(screen.getByText('历史回答')).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'打开会话历史'}));
+ expect(screen.getByRole('button',{name:'查询物料'})).toBeTruthy();
+});
+
+it('轮询连续失败按 5s→10s→20s→30s 退避并封顶，成功后恢复 5s', async () => {
+ vi.useFakeTimers();
+ const polls=[];
+ let failPoll=false;
+ const api=vi.fn(async method=>{
+  if(method==='list_sessions')return [{id:'S-1',title:'查询物料'}];
+  if(method==='get_session'){
+   polls.push(Date.now());
+   if(failPoll)throw Object.assign(new Error('请求未完成（HTTP 502）'),{kind:'transient',httpStatus:502});
+   return session;
+  }
+  return session;
+ });
+ render(<ContextSidebar api={api} capture={()=>snapshot} pollInterval={5000}/>);open();
+ await act(async()=>{await Promise.resolve();await Promise.resolve();await Promise.resolve();await Promise.resolve();});
+ expect(screen.getByText('历史回答')).toBeTruthy();
+ const afterRestore=polls.length;
+ failPoll=true;
+ await act(async()=>{await vi.advanceTimersByTimeAsync(4999);});
+ expect(polls.length).toBe(afterRestore);
+ await act(async()=>{await vi.advanceTimersByTimeAsync(1);});
+ expect(polls.length).toBe(afterRestore+1);
+ await act(async()=>{await vi.advanceTimersByTimeAsync(9999);});
+ expect(polls.length).toBe(afterRestore+1);
+ await act(async()=>{await vi.advanceTimersByTimeAsync(1);});
+ expect(polls.length).toBe(afterRestore+2);
+ await act(async()=>{await vi.advanceTimersByTimeAsync(19999);});
+ expect(polls.length).toBe(afterRestore+2);
+ await act(async()=>{await vi.advanceTimersByTimeAsync(1);});
+ expect(polls.length).toBe(afterRestore+3);
+ await act(async()=>{await vi.advanceTimersByTimeAsync(29999);});
+ expect(polls.length).toBe(afterRestore+3);
+ await act(async()=>{await vi.advanceTimersByTimeAsync(1);});
+ expect(polls.length).toBe(afterRestore+4);
+ failPoll=false;
+ await act(async()=>{await vi.advanceTimersByTimeAsync(30000);});
+ expect(polls.length).toBe(afterRestore+5);
+ expect(screen.queryByText('请求未完成（HTTP 502）')).toBeNull();
+ await act(async()=>{await vi.advanceTimersByTimeAsync(4999);});
+ expect(polls.length).toBe(afterRestore+5);
+ await act(async()=>{await vi.advanceTimersByTimeAsync(1);});
+ expect(polls.length).toBe(afterRestore+6);
+});
+
+it('可重试轮询错误仍允许编辑并发送，发送时清除旧错误且不自动重试写请求', async () => {
+ let failPoll=false;
+ const api=vi.fn(async method=>{
+  if(method==='list_sessions')return [{id:'S-1',title:'查询物料'}];
+  if(method==='get_session'){
+   if(failPoll)throw Object.assign(new Error('请求未完成（HTTP 502）'),{kind:'transient',httpStatus:502});
+   return session;
+  }
+  if(method==='send_message')return session;
+  return session;
+ });
+ render(<ContextSidebar api={api} capture={()=>snapshot} pollInterval={20}/>);open();
+ await screen.findByText('历史回答');
+ failPoll=true;
+ expect(await screen.findByText('请求未完成（HTTP 502）')).toBeTruthy();
+ const box=screen.getByRole('textbox',{name:'业务问题'});
+ fireEvent.change(box,{target:{value:'再问一次'}});
+ expect(box.value).toBe('再问一次');
+ fireEvent.click(screen.getByRole('button',{name:'发送问题'}));
+ await waitFor(()=>expect(api.mock.calls.filter(c=>c[0]==='send_message')).toHaveLength(1));
+ expect(screen.queryByText('请求未完成（HTTP 502）')).toBeNull();
+ await act(async()=>{await new Promise(resolve=>setTimeout(resolve,50));});
+ expect(api.mock.calls.filter(c=>c[0]==='send_message')).toHaveLength(1);
+});
+
+it('permission 轮询错误禁止发送，可重试错误不阻断发送', async () => {
+ const denied=Object.assign(new Error('当前身份或业务权限已失效，请重新登录或联系管理员'),{kind:'permission',httpStatus:403});
+ let revoke=false;
+ const api=vi.fn(async method=>{
+  if(method==='list_sessions')return [{id:'S-1',title:'查询物料'}];
+  if(method==='get_session'){
+   if(revoke)throw denied;
+   return session;
+  }
+  return session;
+ });
+ render(<ContextSidebar api={api} capture={()=>snapshot} pollInterval={20}/>);open();
+ await screen.findByText('历史回答');
+ revoke=true;
+ expect(await screen.findByText('当前身份或业务权限已失效，请重新登录或联系管理员')).toBeTruthy();
+ fireEvent.change(screen.getByRole('textbox',{name:'业务问题'}),{target:{value:'继续提问'}});
+ expect(screen.getByRole('button',{name:'发送问题'}).disabled).toBe(true);
 });
 
 it('本轮实际发生的 ERP 读取跟着它那条消息显示，提案落在同一轮下', async () => {
