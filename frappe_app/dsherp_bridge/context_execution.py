@@ -231,6 +231,8 @@ def _tool_summary(tool,result):
 def _run_tool(run,tool,arguments):
     if tool=='erp_request_input':
         if run.status!='Running':raise frappe.PermissionError('运行正在取消')
+        with _actor(run):
+            context_permissions.require_revision(run)
         if isinstance(arguments,str):arguments=json.loads(arguments)
         question=arguments.get('question') if isinstance(arguments,dict) and set(arguments)=={'question'} else None
         if not isinstance(question,str) or not 1<=len(question.strip())<=2000:
@@ -369,13 +371,15 @@ def record_run_event(run_id,capability,events):
 def finish_run(run_id,capability,status,answer='',error=''):
     run=_run(run_id,capability)
     if status not in ('Succeeded','Failed','Cancelled','NeedsInput'):frappe.throw('无效运行结束状态')
-    if status=='Succeeded':
-        if run.status!='Running':raise frappe.PermissionError('取消中的运行不能成功完成')
+    requested_success=status=='Succeeded'
+    if requested_success:
+        if run.status not in ('Running','Cancelling'):raise frappe.PermissionError('运行不能成功完成')
         if not isinstance(answer,str) or not answer.strip() or not json.loads(run.sources or '[]'):
             frappe.throw('成功结果必须包含实际读取及回答')
         with _actor(run):
             context_permissions.require_revision(run)
             conversations._public(conversations._conversation(run.conversation))
+        if run.status=='Cancelling':status='Cancelled'
     if status=='Cancelled' and run.status!='Cancelling':frappe.throw('运行未请求取消')
     if status=='NeedsInput' and run.status!='NeedsInput':frappe.throw('运行未请求补充信息')
     provider_failures=frappe.db.count('DS Run Event',{
@@ -390,10 +394,10 @@ def finish_run(run_id,capability,status,answer='',error=''):
     events.record_safely(run.name,'finished',{'status':status,'answer_chars':len(answer) if isinstance(answer,str) else 0,
         'error':(error or '')[:500],'model_calls':run.model_calls or 0,'provider_failures':provider_failures,
         'proposals':proposals,'executions':executions,'sources':len(sources)})
-    values={'status':status,'answer':answer if status=='Succeeded' else '',
+    values={'status':status,'answer':answer if requested_success else '',
         'error':error if status=='Failed' else '','capability_hash':'','provider_failures':provider_failures}
     if status=='NeedsInput':values['needs_input']=answer
-    if status=='Succeeded':
+    if requested_success:
         flagged=executions==0 and bool(re.search(r'(已|成功)(创建|提交|保存|完成|生成|录入|执行)',answer))
         values['answer_flagged']=1 if flagged else 0
         if flagged:

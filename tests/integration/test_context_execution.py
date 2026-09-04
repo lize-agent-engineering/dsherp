@@ -228,3 +228,60 @@ finally:
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=40)
     assert result.returncode==0,result.stderr
+
+
+def test_cancelling_run_finish_succeeded_persists_cancelled_answer():
+    _require_resident_worker_stopped()
+    script=r'''
+import os,uuid,json,frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import context_api as api
+from dsherp_bridge import context_execution as execution
+from dsherp_bridge import context_events as events
+actor='dsherp-reader@example.invalid'
+payload={'schema_version':1,'page_type':'form','route':['Form','Item','DSHERP-TEST-ITEM'],'doctype':'Item','name':'DSHERP-TEST-ITEM','version':None,'dirty':False}
+had_runtime_user='dsherp_runtime_user' in frappe.conf
+original_runtime_user=frappe.conf.get('dsherp_runtime_user')
+doc=None
+try:
+    frappe.set_user('Administrator')
+    active=frappe.get_all('DS Model Run',filters={'status':['in',['Queued','Running','Cancelling']]},pluck='name')
+    assert not active,('validation site has active runs; stop the resident worker and clean the queue first',active)
+    frappe.set_user(actor)
+    doc=api.send_message('Cancel after sourced answer',payload,uuid.uuid4().hex)
+    frappe.db.commit()
+    frappe.conf.dsherp_runtime_user=actor
+    claim=execution.claim_run('a'*64);frappe.db.commit()
+    assert claim['run_id']==doc['active_run']
+    cap={'run_id':claim['run_id'],'capability':claim['capability']}
+    frappe.set_user('Guest')
+    read=execution.run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'})
+    assert read['name']=='DSHERP-TEST-ITEM'
+    sources=json.loads(frappe.db.get_value('DS Model Run',claim['run_id'],'sources'))
+    assert sources and sources[-1]['record_versions']=={'DSHERP-TEST-ITEM':str(read['modified'])}
+    frappe.db.commit()
+    frappe.set_user(actor)
+    api.cancel_run(doc['id'],claim['run_id'],uuid.uuid4().hex);frappe.db.commit()
+    frappe.set_user('Guest')
+    assert execution.run_status(**cap)['status']=='Cancelling'
+    finished=execution.finish_run(**cap,status='Succeeded',answer='read completed')
+    frappe.db.commit()
+    assert finished['status']=='Cancelled',finished
+    stored=frappe.db.get_value('DS Model Run',claim['run_id'],['status','answer','capability_hash'],as_dict=True)
+    assert stored.status=='Cancelled' and stored.answer=='read completed' and not stored.capability_hash,stored
+    last=[item for item in events.list_events(claim['run_id']) if item['kind']=='finished']
+    assert last and last[-1]['payload']['status']=='Cancelled',last
+finally:
+    if had_runtime_user:frappe.conf.dsherp_runtime_user=original_runtime_user
+    else:frappe.conf.pop('dsherp_runtime_user',None)
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if doc:
+        for run in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):
+            frappe.db.delete('DS Run Event',{'run':run})
+            frappe.delete_doc('DS Model Run',run,ignore_permissions=True)
+        frappe.delete_doc('DS Conversation',doc['id'],ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=40)
+    assert result.returncode==0,result.stderr
