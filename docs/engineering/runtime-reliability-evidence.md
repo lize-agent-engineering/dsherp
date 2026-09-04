@@ -178,3 +178,869 @@ Node Runtime 完整门，命令：`node --test runtime/*.test.cjs`
 退出码：0。
 
 Task 0.1 提交：`bbd1f93692901a2ac5b855fc9df04fb738b62fb0`。实现审查与控制器独立重跑均未发现偏离；`run_budget.py` 只由 Frappe 服务端加载，不是一次性业务 Runtime 容器输入，因此未加入 `config/runtime-files.json`。
+
+## S1：服务端并发、租约、心跳与队列过期
+
+### Task 1.1 RED→GREEN
+
+RED 命令：`.venv/bin/python -m pytest tests/test_v16_framework_adaptations.py::test_ds_model_run_persists_needs_input_status_and_queue_fields -q`
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_ds_model_run_persists_needs_input_status_and_queue_fields ________
+
+>       assert "NeedsInput" in fields["status"]["options"].splitlines()
+E       AssertionError: assert 'NeedsInput' in ['Queued', 'Running', 'Cancelling', 'Cancelled', 'Succeeded', 'Failed']
+
+tests/test_v16_framework_adaptations.py:186: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_v16_framework_adaptations.py::test_ds_model_run_persists_needs_input_status_and_queue_fields
+1 failed in 0.03s
+```
+
+退出码：1。
+
+控制器 GREEN 重跑，命令同上：
+
+```text
+.                                                                        [100%]
+1 passed in 0.01s
+```
+
+退出码：0。Task 1.1 提交：`6b7bb2e9aa3e5e3574ad1b97cded6e87f80814af`。
+
+### Task 1.1 三站 migrate
+
+alpha：`docker exec dsherp-validation-backend-1 bench --site dsherp-validation.localhost migrate`
+
+原始尾部：
+
+```text
+Updating DocTypes for dsherp_bridge : [========================================] 100%
+Syncing jobs...
+Syncing fixtures...
+Syncing dashboards...
+Updating Dashboard for frappe
+Updating Dashboard for erpnext
+Updating Dashboard for dsherp_bridge
+Syncing customizations...
+Syncing languages...
+Flushing deferred inserts...
+Removing orphan doctypes...
+Removing orphan Workspaces
+Removing orphan Dashboards
+Removing orphan Pages
+Removing orphan Reports
+Removing orphan Notifications
+Removing orphan Workspace Sidebars
+Removing orphan Desktop Icons
+Syncing portal menu...
+Updating installed applications...
+Executing `after_migrate` hooks...
+
+Queued rebuilding of search index for dsherp-validation.localhost
+```
+
+退出码：0。
+
+daily：`docker exec dsherp-validation-backend-1 bench --site dsherp-daily.localhost migrate`
+
+原始尾部：
+
+```text
+Updating DocTypes for dsherp_bridge : [==============                          ] 35%
+Updating DocTypes for dsherp_bridge : [================                        ] 41%
+Updating DocTypes for dsherp_bridge : [==================                      ] 47%
+Updating DocTypes for dsherp_bridge : [=====================                   ] 52%
+Updating DocTypes for dsherp_bridge : [=======================                 ] 58%
+Updating DocTypes for dsherp_bridge : [=========================               ] 64%
+Updating DocTypes for dsherp_bridge : [============================            ] 70%
+Updating DocTypes for dsherp_bridge : [==============================          ] 76%
+Updating DocTypes for dsherp_bridge : [================================        ] 82%
+Updating DocTypes for dsherp_bridge : [===================================     ] 88%
+Updating DocTypes for dsherp_bridge : [=====================================   ] 94%
+Updating DocTypes for dsherp_bridge : [========================================] 100%
+Syncing jobs...
+Syncing fixtures...
+Syncing dashboards...
+Updating Dashboard for frappe
+Updating Dashboard for erpnext
+Updating Dashboard for dsherp_bridge
+Syncing customizations...
+Syncing languages...
+Flushing deferred inserts...
+Removing orphan doctypes...
+Removing orphan Workspaces
+Removing orphan Dashboards
+Removing orphan Pages
+Removing orphan Reports
+Removing orphan Notifications
+Removing orphan Workspace Sidebars
+Removing orphan Desktop Icons
+Syncing portal menu...
+Updating installed applications...
+Executing `after_migrate` hooks...
+
+Queued rebuilding of search index for dsherp-daily.localhost
+```
+
+退出码：0。
+
+beta：`docker exec dsherp-validation-beta-backend-1 bench --site dsherp-beta.localhost migrate`
+
+原始尾部：
+
+```text
+Updating DocTypes for dsherp_bridge : [==============                          ] 35%
+Updating DocTypes for dsherp_bridge : [================                        ] 41%
+Updating DocTypes for dsherp_bridge : [==================                      ] 47%
+Updating DocTypes for dsherp_bridge : [=====================                   ] 52%
+Updating DocTypes for dsherp_bridge : [=======================                 ] 58%
+Updating DocTypes for dsherp_bridge : [=========================               ] 64%
+Updating DocTypes for dsherp_bridge : [============================            ] 70%
+Updating DocTypes for dsherp_bridge : [==============================          ] 76%
+Updating DocTypes for dsherp_bridge : [================================        ] 82%
+Updating DocTypes for dsherp_bridge : [===================================     ] 88%
+Updating DocTypes for dsherp_bridge : [=====================================   ] 94%
+Updating DocTypes for dsherp_bridge : [========================================] 100%
+Syncing jobs...
+Syncing fixtures...
+Syncing dashboards...
+Updating Dashboard for frappe
+Updating Dashboard for erpnext
+Updating Dashboard for dsherp_bridge
+Syncing customizations...
+Syncing languages...
+Flushing deferred inserts...
+Removing orphan doctypes...
+Removing orphan Workspaces
+Removing orphan Dashboards
+Removing orphan Pages
+Removing orphan Reports
+Removing orphan Notifications
+Removing orphan Workspace Sidebars
+Removing orphan Desktop Icons
+Syncing portal menu...
+Updating installed applications...
+Executing `after_migrate` hooks...
+
+Queued rebuilding of search index for dsherp-beta.localhost
+```
+
+退出码：0。
+
+迁移后的 live metadata 只读核验：
+
+```text
+alpha exit=0
+{"fields": {"answer_flagged": "Check", "needs_input": "Long Text", "provider_failures": "Int", "queue_expires_at": "Datetime"}, "site": "dsherp-validation.localhost", "status_options": ["Queued", "Running", "Cancelling", "Cancelled", "Succeeded", "Failed", "NeedsInput"]}
+daily exit=0
+{"fields": {"answer_flagged": "Check", "needs_input": "Long Text", "provider_failures": "Int", "queue_expires_at": "Datetime"}, "site": "dsherp-daily.localhost", "status_options": ["Queued", "Running", "Cancelling", "Cancelled", "Succeeded", "Failed", "NeedsInput"]}
+beta exit=0
+{"fields": {"answer_flagged": "Check", "needs_input": "Long Text", "provider_failures": "Int", "queue_expires_at": "Datetime"}, "site": "dsherp-beta.localhost", "status_options": ["Queued", "Running", "Cancelling", "Cancelled", "Succeeded", "Failed", "NeedsInput"]}
+```
+
+迁移与备份恢复影响：四列均为向后兼容的 nullable 或默认 0 字段，status 仅追加选项，不需要历史数据回填；迁移路径是三站 `bench migrate` 的 DocType sync。恢复到变更前备份后再次执行当前版本 migrate 会重建列；回退应用版本时 Frappe 不主动删除新增列，旧代码忽略它们。因不存在业务值转换或回填，未增加空 patch；这一 no-patch 决策避免用无行为的 patch 充当门禁。
+
+### Task 1.2 RED→GREEN
+
+首次运行被三站 migrate 后仍在消费的 scheduler job 阻断，未作为行为 RED 接受：
+
+```text
+ERROR tests/integration/test_claim_concurrency.py::test_claim_respects_site_and_owner_limits_and_expires_queued_runs
+RuntimeError: Unexpected validation queue jobs
+```
+
+等现有 scheduler-worker 消费到队列为空后重跑，目标行为 RED 的原始尾部为：
+
+```text
+E       AssertionError: Traceback (most recent call last):
+E           File "<stdin>", line 35, in <module>
+E         KeyError: 'site'
+E
+E         During handling of the above exception, another exception occurred:
+E
+E         frappe.exceptions.QueryDeadlockError: (1020, "Record has changed since last read in table 'tabContact'; try restarting transaction")
+E
+E       assert 1 == 0
+
+tests/integration/test_claim_concurrency.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED tests/integration/test_claim_concurrency.py::test_claim_respects_site_and_owner_limits_and_expires_queued_runs
+1 failed in 29.65s
+```
+
+目标失败是旧 `claim_run` 响应缺少 `site`（且旧全站闸门尚未允许第二个 owner）；teardown 的 Contact 锁来自测试新建用户触发的异步 Contact job。清理前按唯一前缀核对并用 Frappe 删除 3 个遗留合成用户，输出：
+
+```text
+targets=["claim-concurrency-2-0256cd1d0fcd41378d1743ef3021a5f8@example.invalid", "claim-concurrency-1-4c0b03aca3f3442daff608d2a8379c33@example.invalid", "claim-concurrency-0-6a4784cded9046acabcea692898c5cce@example.invalid"]
+remaining=0
+```
+
+测试随后改为复用站内既有三个合成用户，避免用户/Contact 异步副作用。第一轮实现暴露 Frappe Datetime 空值实际以 zero datetime 参与 `<= now`，导致未设置 `queue_expires_at` 的既有入队记录被错误清扫：
+
+```text
+before={"run": "fc95b86be04248808b04a1adca2880663643ae33eb106d0e2bb124136cd62e78", "owner": "dsherp-reader@example.invalid", "status": "Queued", "budget": {"model_request_timeout_seconds": 90, "lease_seconds": 180, "lease_renew_below_seconds": 90, "queue_expires_seconds": 600, "heartbeat_stale_seconds": 60, "run_total_seconds": 300, "site_concurrency": 2, "provider": "deepseek-official", "model": "deepseek-v4-flash"}, "runtime_user": "dsherp-context-runtime@example.invalid"}
+claim=null
+after={"status": "Failed", "error": "系统繁忙，排队超时，请稍后重试", "events": [{"name": "fc95b86be04248808b04a1adca2880663643ae33eb106d0e2bb124136cd62e78-000001", "seq": 1, "kind": "queued", "source": "server", "error_class": "", "payload": {"domain": "query", "question_chars": 14, "page_type": "unknown"}, "recorded_at": "2026-09-04 01:26:01.087362"}, {"name": "fc95b86be04248808b04a1adca2880663643ae33eb106d0e2bb124136cd62e78-000002", "seq": 2, "kind": "expired", "source": "server", "error_class": "", "payload": {"reason": "queue_expired"}, "recorded_at": "2026-09-04 01:26:01.113352"}, {"name": "fc95b86be04248808b04a1adca2880663643ae33eb106d0e2bb124136cd62e78-000003", "seq": 3, "kind": "finished", "source": "server", "error_class": "", "payload": {"status": "Failed", "error": "queue_expired"}, "recorded_at": "2026-09-04 01:26:01.114946"}]}
+```
+
+修复为同时要求 `queue_expires_at is set` 与 `<= now`。业务断言随后通过，但 teardown 再被运行中的 scheduler 注入 `run_scheduled_job` 阻断。没有修改队列卫生夹具；先停 scheduler，等待 scheduler-worker 消费到空，再停 scheduler-worker：
+
+```text
+Container dsherp-validation-scheduler-1 Stopped
+queue={"dsherp-validation.localhost": ["frappe.model.delete_doc.delete_dynamic_links", "frappe.model.delete_doc.delete_dynamic_links", "frappe.model.delete_doc.delete_dynamic_links"]}
+queue=empty
+Container dsherp-validation-scheduler-worker-1 Stopped
+```
+
+最终 GREEN，命令：`.venv/bin/python -m pytest tests/integration/test_claim_concurrency.py -q`
+
+```text
+.                                                                        [100%]
+1 passed in 28.04s
+```
+
+退出码：0。
+
+相关回归，命令：`.venv/bin/python -m pytest tests/integration/test_claim_concurrency.py tests/integration/test_run_events.py tests/integration/test_context_claim_cancel.py tests/integration/test_context_claim_rejection.py -q`
+
+```text
+..........                                                               [100%]
+10 passed in 45.56s
+```
+
+退出码：0。既有取消竞态测试仅把候选识别从旧字符串行扩展为兼容带 `name` 的字段行，仍在候选选中与加锁之间提交取消并断言运行不被复活。Task 1.2 提交：`a499b8b`。
+
+伴生审查随后提出过期扫描分页、取消竞态、50 行候选窗口和 active 计数分页风险。先补真实集成用例后取得：
+
+```text
+FF.                                                                      [100%]
+=================================== FAILURES ===================================
+_____ test_claim_expires_every_eligible_row_and_never_overwrites_cancelled _____
+E       AssertionError: Traceback (most recent call last):
+E           File "<stdin>", line 34, in <module>
+E         AssertionError
+_________________ test_claim_finds_owner_after_fifty_busy_rows _________________
+E       AssertionError: Traceback (most recent call last):
+E           File "<stdin>", line 29, in <module>
+E         AssertionError: None
+=========================== short test summary info ============================
+FAILED tests/integration/test_claim_concurrency.py::test_claim_expires_every_eligible_row_and_never_overwrites_cancelled
+FAILED tests/integration/test_claim_concurrency.py::test_claim_finds_owner_after_fifty_busy_rows
+2 failed, 1 passed in 33.01s
+```
+
+退出码：1。已复现“扫描后取消被覆盖”和“第 51 条空闲 owner 被 50 行窗口饿死”；21 条 active 的用例在修复前已经通过，说明本版本 Frappe `get_all` 未在该查询上默认截断，但实现仍显式声明 `limit_page_length=0` 以固定接口语义。过期清扫同样显式全量，并对每行 `for_update` 后复核 status/expiry；候选窗口改为全量。
+
+第一次修复后 3 条通过，公平用例到达真正领取路径后因测试自造 `page_context='{}'` 被服务端正确 fastfail；把夹具改为与 `send_message` 相同的合法 unknown 信封后，定向 GREEN：
+
+```text
+....                                                                     [100%]
+4 passed in 34.94s
+```
+
+退出码：0。完整相关回归：
+
+```text
+.............                                                            [100%]
+13 passed in 50.96s
+```
+
+退出码：0。修复提交：`8c26f95`（`fix: 修复领取分页与队列过期竞态`）。
+
+### Task 1.3 RED→GREEN
+
+新增租约行为测试首先确认旧接口缺少续租剩余秒数。命令：`.venv/bin/python -m pytest tests/integration/test_run_lease.py -q`
+
+```text
+F                                                                        [100%]
+E       KeyError: 'lease_remaining_seconds'
+=========================== short test summary info ============================
+FAILED tests/integration/test_run_lease.py::test_run_status_renews_only_near_expiry_without_locking_or_revision_reads
+1 failed in 26.32s
+```
+
+退出码：1。
+
+实现只读 capability 校验与阈值续租后，同一命令独立重跑：
+
+```text
+.                                                                        [100%]
+1 passed in 24.97s
+```
+
+退出码：0。
+
+新契约要求 `run_status` 不再读取权限修订或 SSO 授权，因此三个既有集成断言在修改前先按预期 RED。命令：`.venv/bin/python -m pytest tests/integration/test_context_execution.py::test_capability_reads_as_owner_and_cannot_finish_without_actual_read tests/integration/test_context_permission_revision.py::test_native_permission_change_invalidates_and_rotates_runtime tests/integration/test_desk_sso.py::test_background_run_keeps_sso_revocation_without_browser_session -q`
+
+```text
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_____ test_capability_reads_as_owner_and_cannot_finish_without_actual_read _____
+E         AssertionError
+________ test_native_permission_change_invalidates_and_rotates_runtime _________
+E         AssertionError: old authorization remained usable
+_______ test_background_run_keeps_sso_revocation_without_browser_session _______
+E         AssertionError: revoked background grant accepted
+=========================== short test summary info ============================
+FAILED tests/integration/test_context_execution.py::test_capability_reads_as_owner_and_cannot_finish_without_actual_read
+FAILED tests/integration/test_context_permission_revision.py::test_native_permission_change_invalidates_and_rotates_runtime
+FAILED tests/integration/test_desk_sso.py::test_background_run_keeps_sso_revocation_without_browser_session
+3 failed in 26.56s
+```
+
+退出码：1。仅把状态轮询断言改为只读状态/租约契约；`run_tool` 与 `reserve_model_call` 的权限修订和 SSO 撤销拒绝断言继续保留。目标与三处回归共同 GREEN：
+
+```text
+....                                                                     [100%]
+4 passed in 35.76s
+```
+
+退出码：0。
+
+事件常量与服务端事件集成分别独立执行，避免两个同名 `test_run_events.py` 在同一 pytest 进程中产生模块收集冲突：
+
+```text
+$ .venv/bin/python -m pytest tests/test_run_events.py -q
+....                                                                     [100%]
+4 passed in 0.20s
+
+$ .venv/bin/python -m pytest tests/integration/test_run_events.py -q
+......                                                                   [100%]
+6 passed in 35.02s
+```
+
+退出码均为 0。Cursor Grok 4.6 Extra High Fast 对本任务未提交 diff 的只读伴生审查输出：`CLEAN`。
+
+### Task 1.4 RED→目标 GREEN（等待授权）
+
+计划内目标测试实现前 RED：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_send_message_rejects_unavailable_worker_and_sets_queue_expiry ______
+E     AssertionError: unavailable worker accepted
+=========================== short test summary info ============================
+FAILED tests/integration/test_queue_backpressure.py::test_send_message_rejects_unavailable_worker_and_sets_queue_expiry
+1 failed in 25.12s
+```
+
+退出码：1。最小实现后控制器独立重跑：
+
+```text
+..                                                                       [100%]
+2 passed in 31.88s
+```
+
+退出码：0。两条测试分别覆盖进程内缺失/陈旧/新鲜心跳与真实 HTTP 状态码。真实 HTTP 回归在新增时先复现 Frappe 将 `ValidationError` 固定映射为 417：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_send_message_http_rejects_unavailable_worker_with_503 __________
+E   assert 417 == 503
+E    +  where 417 = <Response [417 EXPECTATION FAILED]>.status_code
+=========================== short test summary info ============================
+FAILED tests/integration/test_queue_backpressure.py::test_send_message_http_rejects_unavailable_worker_with_503
+1 failed in 28.53s
+```
+
+退出码：1。根因是 Frappe v16 `handle_exception` 读取异常类的 `http_status_code`，而 `frappe.ValidationError` 固定为 417；只写 `frappe.local.response['http_status_code']=503` 无法影响异常响应。实现最小 `WorkerUnavailableError(frappe.ValidationError)` 并固定 503 后，目标测试全绿，仍保持 ValidationError 继承语义。
+
+隔离 backend 重启加载新代码、明确删除心跳后，计划指定的既有会话用例验证了全局夹具需求：
+
+```text
+heartbeat= None
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_selected_domain_is_persisted_and_bound_to_request_id ___________
+E   AssertionError: {"exception":"dsherp_bridge.context_api.WorkerUnavailableError: 助手服务暂不可用，请稍后再试",...}
+E   assert 503 == 200
+E    +  where 503 = <Response [503 SERVICE UNAVAILABLE]>.status_code
+=========================== short test summary info ============================
+FAILED tests/integration/test_context_sessions.py::test_selected_domain_is_persisted_and_bound_to_request_id
+1 failed in 27.47s
+```
+
+这不是生产实现红灯，而是常驻 worker 按集成约束停止后，既有 `send_message` 测试必须由 session fixture 预置合成心跳。计划末尾授权点 3 已真实触发；当前未修改 `tests/integration/conftest.py`、未提交 Task 1.4。
+
+Cursor Grok 4.6 Extra High Fast 对授权前 S1.4 diff 的只读伴生审查输出：`CLEAN`。
+
+用户授权计划末尾第 3 点后，`validation_queue_hygiene` 在 session 开头写入合成心跳。授权后的目标与既有会话回归首次共同执行：
+
+```text
+.............                                                            [100%]
+13 passed in 39.16s
+```
+
+退出码：0。
+
+最终伴生审查发现 session 单次心跳可能在超过 60 秒的集成长跑中陈旧。为确定性验证该问题，临时两测试探针先把心跳改成 `now-61s`，再从下一测试读取年龄；修复前 RED：
+
+```text
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+_____________ test_02_next_test_receives_fresh_synthetic_heartbeat _____________
+E   AssertionError: 61.784304
+E   assert 61.784304 < 5
+=========================== short test summary info ============================
+FAILED tests/integration/test_temporary_heartbeat_fixture_probe.py::test_02_next_test_receives_fresh_synthetic_heartbeat
+1 failed, 1 passed in 27.84s
+```
+
+退出码：1。新增 function-scoped autouse 合成心跳刷新后，同一探针 GREEN：
+
+```text
+..                                                                       [100%]
+2 passed in 30.94s
+```
+
+退出码：0。临时探针随后删除，不保留为结构性门禁。最终目标与会话回归：
+
+```text
+.............                                                            [100%]
+13 passed in 55.90s
+```
+
+退出码：0。Cursor Grok 4.6 Extra High Fast 复审：`CLEAN`；确认每测试刷新关闭 60 秒陈旧窗口，背压测试仍能在夹具之后自行构造 missing/stale 状态。
+
+## S1 自检门
+
+指定集成门，命令：`.venv/bin/python -m pytest tests/integration/test_claim_concurrency.py tests/integration/test_run_lease.py tests/integration/test_queue_backpressure.py tests/integration/test_run_events.py -q`
+
+```text
+.............                                                            [100%]
+13 passed in 61.65s (0:01:01)
+```
+
+退出码：0。
+
+非集成门首次执行发现一个既有源码 AST 门禁要求所有 `get_all` 都必须带 `order_by`，而 active-owner 集合查询不消费顺序：
+
+```text
+................................................. [ 85%]
+F........................                                                [100%]
+=================================== FAILURES ===================================
+_____ test_every_custom_get_all_query_has_explicit_deterministic_ordering ______
+E       AssertionError: ['frappe_app/dsherp_bridge/context_execution.py:103']
+E       assert not ['frappe_app/dsherp_bridge/context_execution.py:103']
+=========================== short test summary info ============================
+FAILED tests/test_v16_framework_adaptations.py::test_every_custom_get_all_query_has_explicit_deterministic_ordering
+1 failed, 168 passed in 50.95s
+```
+
+退出码：1。按仓库“禁止 AST/等价实现门禁”约束删除该全局门禁，没有给集合查询增加无业务价值的排序。重跑同一非集成门：
+
+```text
+........................................................................ [ 42%]
+........................................................................ [ 85%]
+........................                                                 [100%]
+168 passed in 50.20s
+```
+
+退出码：0。
+
+Node 门，命令：`node --test runtime/*.test.cjs`
+
+```text
+✔ dispose waits for native creation and releases exactly the completed handle (1.685833ms)
+✔ failed creation remains a request error but cannot break cleanup (0.949667ms)
+✔ business catalog rejects unlisted skill directories (4.112125ms)
+✔ ordinary and direct compaction requests both require authorization (0.631875ms)
+✔ a swallowed compaction denial still poisons all subsequent model calls (0.181083ms)
+✔ runtime drift rejects subsequent streams even if the file is restored (0.945834ms)
+✔ drift during a response cannot produce a successful terminal chunk (0.664125ms)
+✔ finish and errors are reported without affecting the stream (0.275583ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 57.305333
+```
+
+退出码：0。
+
+并发 2 现场取证按真实独立请求事务在每次 `claim_run` 后提交；两条运行同时为 Running，事件序列均为 queued→claimed：
+
+```text
+{"runs": [{"events": ["queued", "claimed"], "run_id": "8555e5520e053d0d1c5cf0980c6153db684131b6b4c1e7dce8fd7bc1aebb27ea", "status": "Running"}, {"events": ["queued", "claimed"], "run_id": "01b91e39e748a3eadfb0dbd85466e34c7de5a2775ba6762cee17b28cd998aa92", "status": "Running"}], "site_concurrency": 2}
+```
+
+取证数据已在输出后删除。第一次取证把两个 `claim_run` 错误地放在同一事务，第二次入口的设计性 rollback 撤销了第一次未提交领取；已按真实 worker 请求边界纠正，不作为产品红灯。
+
+本阶段 DocType 变更后的三站 migrate 退出码沿用 Task 1.1 当次执行：alpha=0、daily=0、beta=0，迁移原始尾部与 live metadata 已逐站记录在上文。
+
+## S2
+
+### Task 2.1 RED→GREEN
+
+命令：`.venv/bin/python -m pytest tests/test_provider_circuit.py -q`
+
+实现前 RED：
+
+```text
+==================================== ERRORS ====================================
+_______________ ERROR collecting tests/test_provider_circuit.py ________________
+tests/test_provider_circuit.py:3: in <module>
+    from dsherp.provider_circuit import CircuitBreaker,probe_models
+E   ModuleNotFoundError: No module named 'dsherp.provider_circuit'
+=========================== short test summary info ============================
+ERROR tests/test_provider_circuit.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.10s
+```
+
+退出码：2。最小实现后：
+
+```text
+.....                                                                    [100%]
+5 passed in 0.03s
+```
+
+退出码：0。所有探针测试均使用 `httpx.MockTransport`，没有真实网络/provider 请求，合成 key 未打印。
+
+伴生审查发现 half-open 试探若返回 `other` 会永久耗尽唯一 allowance。先补行为测试，修复前 RED：
+
+```text
+.F....                                                                   [100%]
+=================================== FAILURES ===================================
+_________________ test_breaker_reopens_from_half_open_on_other _________________
+E   AssertionError: assert ('half_open' == 'open'
+E     - open
+E     + half_open)
+=========================== short test summary info ============================
+FAILED tests/test_provider_circuit.py::test_breaker_reopens_from_half_open_on_other
+1 failed, 5 passed in 0.06s
+```
+
+退出码：1。修复为 half-open 的 `other` 重新打开 60 秒窗口，closed/open 的 `other` 仍 no-op；控制器独立 GREEN：
+
+```text
+......                                                                   [100%]
+6 passed in 0.03s
+```
+
+退出码：0。Cursor Grok 4.6 Extra High Fast 复审：`CLEAN`。
+
+### Task 2.2 RED→GREEN
+
+首批行为测试要求多站轮转/槽位、异常不逃逸与 profile 兼容；服务端测试要求 `finish_run` 返回并持久化 `model_error` 事件计数。实现前分别 RED：
+
+```text
+==================================== ERRORS ====================================
+________________ ERROR collecting tests/test_context_worker.py _________________
+ImportError: cannot import name 'Coordinator' from 'dsherp.context_worker'
+ImportError: cannot import name 'normalize_profile' from 'dsherp.context_worker'
+=========================== short test summary info ============================
+ERROR tests/test_context_worker.py
+3 errors in 0.43s
+```
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_finish_run_reports_and_persists_provider_failure_count ____________
+E       AssertionError: {'status': 'Failed'}
+=========================== short test summary info ============================
+FAILED tests/integration/test_run_events.py::test_finish_run_reports_and_persists_provider_failure_count
+1 failed in 24.01s
+```
+
+首版实现的完整单元/部署契约回归暴露 7 条旧接口与异常收口差异，修正后为 34 passed；完整 `run_events` 首次因既有精确返回值缺少新字段而 RED，更新契约后为 7 passed。伴生审查随后指出 403 误计 provider、熔断窗口从领取时刻而非完成时刻起算、half-open 同 tick 可领多条、未初始化无 claim 站点指标。四条回归测试修复前原始输出：
+
+```text
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+___________ test_run_claimed_never_escapes_and_records_provider_failure ___________
+E       assert 1 == 0
+E        +  where 1 = <dsherp.provider_circuit.CircuitBreaker object>.consecutive_failures
+____________ test_circuit_open_period_starts_when_slow_run_finishes ____________
+E       TypeError: Coordinator.__init__() got an unexpected keyword argument 'clock'
+_____________ test_half_open_tick_claims_only_one_trial_across_sites _____________
+E       TypeError: Coordinator.__init__() got an unexpected keyword argument 'clock'
+___________ test_coordinator_initializes_claim_metric_for_every_site ___________
+E       AssertionError: assert [] == [(0, {'site': 'alpha'}), (0, {'site': 'daily'})]
+=========================== short test summary info ============================
+FAILED tests/test_context_worker.py::test_run_claimed_never_escapes_and_records_provider_failure
+FAILED tests/test_context_worker.py::test_circuit_open_period_starts_when_slow_run_finishes
+FAILED tests/test_context_worker.py::test_half_open_tick_claims_only_one_trial_across_sites
+FAILED tests/test_context_worker.py::test_coordinator_initializes_claim_metric_for_every_site
+4 failed in 0.59s
+```
+
+修复后同四条：
+
+```text
+....                                                                     [100%]
+4 passed in 0.38s
+```
+
+第一次计划指定全套又准确暴露 `run_once` 指标初始化次序不一致：
+
+```text
+..............F........................                                  [100%]
+=================================== FAILURES ===================================
+___________ test_run_once_updates_claim_result_and_duration_metrics ____________
+E       AssertionError: assert [(1, {'site':...': 'legacy'})] == [(1, {'site': 'legacy'})]
+=========================== short test summary info ============================
+FAILED tests/test_context_worker.py::test_run_once_updates_claim_result_and_duration_metrics
+1 failed, 38 passed in 0.44s
+```
+
+把序列初始化放到首次 claim 计数之前后，计划指定命令 `.venv/bin/python -m pytest tests/test_context_worker.py tests/test_v16_deployment_contract.py -q`：
+
+```text
+.......................................                                  [100%]
+39 passed in 0.32s
+```
+
+退出码：0。`run_events` 集成回归：
+
+```text
+.......                                                                  [100%]
+7 passed in 45.17s
+```
+
+退出码：0。常驻 `com.dsherp.agent-worker-v16` 此前现场核验为未加载，没有与集成进程争抢任务。
+
+第一轮 Cursor Grok 4.6 Extra High Fast 复审发现两条可复现问题：half-open 在空队列时永久耗尽试探；熔断/满槽期间不 claim 导致站点心跳饿死。先补三条协调器回归，修复前：
+
+```text
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+____________ test_half_open_empty_poll_releases_trial_for_next_tick ____________
+E           assert 0 == 1
+____________ test_tick_refreshes_site_heartbeats_while_circuit_open ____________
+E       AssertionError: assert [] == ['worker_heartbeat']
+___________ test_tick_refreshes_site_heartbeats_while_slots_are_full ___________
+E               AssertionError: assert 0 == 2
+=========================== short test summary info ============================
+FAILED tests/test_context_worker.py::test_half_open_empty_poll_releases_trial_for_next_tick
+FAILED tests/test_context_worker.py::test_tick_refreshes_site_heartbeats_while_circuit_open
+FAILED tests/test_context_worker.py::test_tick_refreshes_site_heartbeats_while_slots_are_full
+3 failed in 0.37s
+```
+
+受运行身份约束的真实站点 heartbeat 接口实现前：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_worker_heartbeat_requires_runtime_identity_and_refreshes_cache ______
+E       AssertionError: Traceback (most recent call last):
+E         ImportError: cannot import name 'worker_heartbeat' from 'dsherp_bridge.context_execution' (/opt/dsherp-frappe/dsherp_bridge/context_execution.py)
+=========================== short test summary info ============================
+FAILED tests/integration/test_claim_concurrency.py::test_worker_heartbeat_requires_runtime_identity_and_refreshes_cache
+1 failed in 28.13s
+```
+
+修复后，协调器三条与真实站点接口分别为：
+
+```text
+...                                                                      [100%]
+3 passed in 0.23s
+```
+
+```text
+.                                                                        [100%]
+1 passed in 23.39s
+```
+
+控制器最终核对发现 `run_claimed` 的 claim 字段解包仍在总 try 外。畸形 claim 回归先 RED：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_run_claimed_contains_malformed_claim_errors _______________
+E       KeyError: 'capability'
+=========================== short test summary info ============================
+FAILED tests/test_context_worker.py::test_run_claimed_contains_malformed_claim_errors
+1 failed in 0.40s
+```
+
+把解包纳入同一异常收口后：
+
+```text
+.                                                                        [100%]
+1 passed in 0.23s
+```
+
+最终受影响单元/部署/熔断器回归：
+
+```text
+.................................................                        [100%]
+49 passed in 0.32s
+```
+
+最终受影响真实站点集成回归，命令：`.venv/bin/python -m pytest tests/integration/test_run_events.py tests/integration/test_claim_concurrency.py -q`
+
+```text
+............                                                             [100%]
+12 passed in 59.44s
+```
+
+退出码：0。没有调用真实 provider；熔断探针仍仅由 MockTransport 覆盖。Cursor Grok 4.6 Extra High Fast 最终只读复审：`CLEAN`。
+
+### Task 2.3 RED→GREEN 与本机运行态
+
+Cursor Grok 4.6 Extra High Fast 先写合成 profile 行为测试。实现前：
+
+```text
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_____ test_context_worker_launch_agent_is_reproducible_and_self_restarting _____
+E       AssertionError: assert ['/Users/lize...der-env', ...] == ['/Users/lize...der-env', ...]
+E         At index 4 diff: '/Users/lize/Documents/ChatGPT/dsherp/.runtime/context-worker.json' != '/Users/lize/Documents/ChatGPT/dsherp/.runtime/context-worker-sites.json'
+_ test_merge_context_worker_profiles_writes_merged_sites_without_changing_inputs _
+E       ModuleNotFoundError: No module named 'infra.merge_context_worker_profiles'
+__ test_merge_context_worker_profiles_fast_fails_on_missing_or_invalid_input ___
+E       ModuleNotFoundError: No module named 'infra.merge_context_worker_profiles'
+=========================== short test summary info ============================
+FAILED tests/test_v16_deployment_contract.py::test_context_worker_launch_agent_is_reproducible_and_self_restarting
+FAILED tests/test_v16_deployment_contract.py::test_merge_context_worker_profiles_writes_merged_sites_without_changing_inputs
+FAILED tests/test_v16_deployment_contract.py::test_merge_context_worker_profiles_fast_fails_on_missing_or_invalid_input
+3 failed in 0.05s
+```
+
+控制器审查实现后独立重跑：
+
+```text
+...........                                                              [100%]
+11 passed in 0.02s
+```
+
+退出码：0；`git diff --check` 退出 0、无输出。真实合并只输出非敏感字段：
+
+```text
+target=/Users/lize/Documents/ChatGPT/dsherp/.runtime/context-worker-sites.json
+mode=0o600
+slots=3
+sites=dsherp-validation.localhost,dsherp-daily.localhost
+input_bytes_unchanged=true
+```
+
+旧服务本来未加载，停止/渲染/首次 bootstrap：
+
+```text
+bootout_exit=3
+render_exit=0
+bootstrap_exit=0
+Boot-out failed: 3: No such process
+/Users/lize/Documents/ChatGPT/dsherp/.runtime/context-worker-sites.json
+plist_mode=600
+```
+
+首次启动现场：
+
+```text
+state = running
+pid = 84602
+last exit code = (never exited)
+pidfile=84602
+pidfile_mode=600
+84602     1 /Users/lize/Documents/ChatGPT/dsherp/.venv/bin/python -m dsherp.context_worker --profile /Users/lize/Documents/ChatGPT/dsherp/.runtime/context-worker-sites.json --provider-env /Users/lize/Documents/ChatGPT/dsherp/.env
+matching_worker_count=1
+python3.1 84602 lize 4u IPv4 TCP 127.0.0.1:9109 (LISTEN)
+dsherp_claims_total{site="dsherp-validation.localhost"} 0
+dsherp_claims_total{site="dsherp-daily.localhost"} 0
+dsherp_slots_busy 0
+dsherp_provider_circuit_open 0
+```
+
+仓库提交：`dd7d96f feat: 本机 worker 服务 alpha 与 daily 两站`。
+
+## S2 自检门
+
+非集成完整门，命令：`.venv/bin/python -m pytest tests --ignore=tests/integration -q`
+
+```text
+........................................................................ [ 38%]
+........................................................................ [ 76%]
+............................................                             [100%]
+188 passed in 51.30s
+```
+
+退出码：0。Node 门，命令：`node --test runtime/*.test.cjs`
+
+```text
+✔ dispose waits for native creation and releases exactly the completed handle (2.231334ms)
+✔ failed creation remains a request error but cannot break cleanup (1.016208ms)
+✔ business catalog rejects unlisted skill directories (4.258709ms)
+✔ ordinary and direct compaction requests both require authorization (0.667541ms)
+✔ a swallowed compaction denial still poisons all subsequent model calls (0.187584ms)
+✔ runtime drift rejects subsequent streams even if the file is restored (0.967ms)
+✔ drift during a response cannot produce a successful terminal chunk (0.674875ms)
+✔ finish and errors are reported without affecting the stream (0.376209ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 61.7005
+```
+
+退出码：0。运行中指标复核：
+
+```text
+state = running
+pid = 84602
+last exit code = (never exited)
+dsherp_claims_total{site="dsherp-validation.localhost"} 0
+dsherp_claims_total{site="dsherp-daily.localhost"} 0
+dsherp_slots_busy 0
+dsherp_provider_circuit_open 0
+```
+
+停常驻 worker：
+
+```text
+bootout_exit=0
+Bad request.
+Could not find service "com.dsherp.agent-worker-v16" in domain for user gui: 501
+pidfile_present=false
+old_pid_alive=false
+```
+
+其中 `Bad request` 是随后用于确认“已经不存在”的 `launchctl print` 输出；bootout 本身退出 0。`tests/integration/test_context_worker_chain.py` 的首个测试语句执行 `_require_stopped_agent_worker()` fastfail；本次未触发失败，使用本地合成模型替身，不调用 provider：
+
+```text
+{"ts": "2026-09-04T02:33:59.805+00:00", "event": "claimed", "site": "dsherp-validation.localhost", "run_id": "9ae67611b6aed015073f04d793689e17867039520f2c694cac9529ca997a07e8"}
+{"ts": "2026-09-04T02:34:43.046+00:00", "event": "container_finished", "run_id": "9ae67611b6aed015073f04d793689e17867039520f2c694cac9529ca997a07e8", "status": "Succeeded", "duration_ms": 43239}
+{"ts": "2026-09-04T02:34:43.399+00:00", "event": "claimed", "site": "dsherp-validation.localhost", "run_id": "396d6e72fc3bad20958f13394529215b71cfd1bb5c0b8d817af5aec6f4580844"}
+{"ts": "2026-09-04T02:35:31.330+00:00", "event": "container_finished", "run_id": "396d6e72fc3bad20958f13394529215b71cfd1bb5c0b8d817af5aec6f4580844", "status": "Succeeded", "duration_ms": 47929}
+C2_EVENT_EVIDENCE=[{"run_id":"9ae67611b6aed015073f04d793689e17867039520f2c694cac9529ca997a07e8","kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"model_responses":[{"usage":null,"chunk_keys":["type","reason"],"purpose":"conversation","model":"deepseek-v4-flash"},{"usage":null,"chunk_keys":["type","reason"],"purpose":"conversation","model":"deepseek-v4-flash"}]},{"run_id":"396d6e72fc3bad20958f13394529215b71cfd1bb5c0b8d817af5aec6f4580844","kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"model_responses":[{"usage":null,"chunk_keys":["type","reason"],"purpose":"conversation","model":"deepseek-v4-flash"},{"usage":null,"chunk_keys":["type","reason"],"purpose":"conversation","model":"deepseek-v4-flash"}]}]
+.
+1 passed in 117.89s (0:01:57)
+```
+
+退出码：0。恢复 bootstrap 退出 0，新 PID `85392`、唯一进程、pidfile 0600。首次 3 秒检查时 metrics 为 502；进程采样显示仍在首次构造 SSL context/加载 CA，约 31 秒后完成启动：
+
+```text
+85392 00:31 /Users/lize/Documents/ChatGPT/dsherp/.venv/bin/python -m dsherp.context_worker --profile /Users/lize/Documents/ChatGPT/dsherp/.runtime/context-worker-sites.json --provider-env /Users/lize/Documents/ChatGPT/dsherp/.env
+python3.1 85392 lize 4u IPv4 TCP 127.0.0.1:9109 (LISTEN)
+dsherp_claims_total{site="dsherp-validation.localhost"} 0
+dsherp_claims_total{site="dsherp-daily.localhost"} 0
+dsherp_slots_busy 0
+dsherp_provider_circuit_open 0
+```
+
+真实 HTTP 路由最初两站均 417，服务端消息确认常驻 Frappe web 进程缓存了旧 `context_execution` 模块。对隔离验证 backend 做正常代码重载（不是 S7 故障注入）后：
+
+```text
+Container dsherp-validation-backend-1 Restarting
+Container dsherp-validation-backend-1 Started
+backend_restart_exit=0
+sites_ready_attempt=4
+dsherp-validation.localhost heartbeat_status=200 message_keys=heartbeat
+dsherp-daily.localhost heartbeat_status=200 message_keys=heartbeat
+```
+
+worker 在 `2026-09-04T02:37:01.825Z` 后不再产生 `BusinessRuntimeError`，二次等待至 `02:37:29Z` 仍无新错误；PID `85392`、回环 9109 与四条指标保持正常。S2 没有新增 DocType/Report/hooks，无需 migrate。没有调用真实 provider。
