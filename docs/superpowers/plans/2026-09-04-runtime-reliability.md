@@ -626,7 +626,7 @@ def test_tool_failures_are_classified_and_serialized():
 - Create: `infra/load_runs.py`
 - Create: `docs/engineering/runtime-reliability-evidence.md`（"G5 负载"节）
 
-- [ ] 脚本：读取 `.runtime/erp-users.json` 里的 3 个合成用户（`reader`/`writer` 等既有），对 alpha 各发 1 条只读问题（`request_id` 唯一）；对 daily 用 daily 的合成用户发 1 条；替身模型（把 worker 的 provider env 临时指向 `tests/conftest` 同款本地 SSE 替身，做法沿用计划 1 C3 演练：以专用 provider-env 文件启动一次性 worker，不动 `.env`）；轮询直到全部终态；输出每条运行的 `queued→claimed` 等待、总时长、状态，以及 `list_run_events` 的 kind 序列；断言：alpha 三条按序执行且无 Failed，daily 一条与 alpha 并行（其 `claimed` 时间早于 alpha 第二条），`run_status` P95 < 1s（脚本内并发 20 次调用计时）。
+- [ ] 脚本：读取 `.runtime/erp-users.json` 里的 3 个合成用户（`reader`/`writer` 等既有），对 alpha 各发 1 条只读问题（`request_id` 唯一）；对 daily 用 daily 的合成用户发 1 条；替身模型（把 worker 的 provider env 临时指向 `tests/conftest` 同款本地 SSE 替身，做法沿用计划 1 C3 演练：以专用 provider-env 文件启动一次性 worker，不动 `.env`）；轮询直到全部终态；输出每条运行的 `queued→claimed` 等待、总时长、状态，以及 `list_run_events` 的 kind 序列；断言：alpha 三条按序执行且无 Failed，daily 一条与 alpha 并行（其 `claimed` 时间早于 alpha 第二条），`run_status` 在 100 轮历史会话上的延迟与历史无关且满足预算——**2026-09-04 审计修订**：并发度取 worker 槽位数（`slots`，试点为 3）而不是 20，采样 20 次，nearest-rank P95 < 1s；同时在一个 0 轮历史的新会话上以同样方法采样，两者 P95 之比 ≤ 1.5。修订依据：验证栈 backend 为 0.5 CPU、1 worker × 2 threads，空操作 `ping` 在 20 并发下 P95 已达 0.40s，20 并发使请求在 CPU 上串行化，尾延迟 ≈ 20 × 单请求 55–60ms ≈ 1.0–1.2s，与 `run_status` 实现无关；20 并发是网页层容量测试，属计划 3 的部署规格。脚本仍须把 20 并发的 P95 作为"容量基线"打印并入档，但不作为门。失败分支必须先打印全部样本与 P95 再抛错。
 - [ ] 结果表入档；提交 `test: G5 负载脚本与证据`。
 
 ### Task 7.2：混沌演练
