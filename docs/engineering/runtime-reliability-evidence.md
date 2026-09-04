@@ -1044,3 +1044,168 @@ dsherp-daily.localhost heartbeat_status=200 message_keys=heartbeat
 ```
 
 worker 在 `2026-09-04T02:37:01.825Z` 后不再产生 `BusinessRuntimeError`，二次等待至 `02:37:29Z` 仍无新错误；PID `85392`、回环 9109 与四条指标保持正常。S2 没有新增 DocType/Report/hooks，无需 migrate。没有调用真实 provider。
+
+## S3
+
+### Task 3.1 RED→GREEN
+
+Cursor Grok 4.6 Extra High Fast 先把业务 runtime 超时测试改为消费服务端预算。实现前：
+
+```text
+FF.FFFFFF                                                                [100%]
+FAILED tests/test_session_runtime.py::test_run_config_without_budget_fails_before_harness
+FAILED tests/test_session_runtime.py::test_claimed_budget_timeout_reaches_harness
+FAILED tests/test_session_runtime.py::test_invalid_budget_timeout_is_missing_run_budget[True]
+FAILED tests/test_session_runtime.py::test_invalid_budget_timeout_is_missing_run_budget[False]
+FAILED tests/test_session_runtime.py::test_invalid_budget_timeout_is_missing_run_budget[90]
+FAILED tests/test_session_runtime.py::test_invalid_budget_timeout_is_missing_run_budget[90.0]
+FAILED tests/test_session_runtime.py::test_invalid_budget_timeout_is_missing_run_budget[0]
+FAILED tests/test_session_runtime.py::test_invalid_budget_timeout_is_missing_run_budget[-1]
+8 failed, 1 passed in 0.15s
+```
+
+控制器审查后独立运行 `.venv/bin/python -m pytest tests/test_session_runtime.py tests/test_runtime_revision.py -q`：
+
+```text
+.................                                                        [100%]
+17 passed in 2.91s
+```
+
+退出码：0。业务 `request_timeout_seconds` 只接受 `budget.model_request_timeout_seconds` 的正整数；缺失/非法值在 Harness 构造前 fastfail；无 `run_config` 的纯上下文仍为 90 秒。没有 provider 请求。提交：`2141c3f`。
+
+### Task 3.2 RED→GREEN
+
+新增 cancel grace、总 deadline、NeedsInput 三条行为测试，生产实现前：
+
+```text
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_____________ test_cancel_returns_within_grace_even_if_model_hangs _____________
+E       TypeError: monitored_run() got an unexpected keyword argument 'grace'
+__________________ test_run_total_deadline_cancels_and_fails ___________________
+E       TypeError: monitored_run() got an unexpected keyword argument 'deadline'
+___________________ test_needs_input_status_stops_gracefully ___________________
+E       TypeError: monitored_run() got an unexpected keyword argument 'grace'
+=========================== short test summary info ============================
+FAILED tests/test_context_runner.py::test_cancel_returns_within_grace_even_if_model_hangs
+FAILED tests/test_context_runner.py::test_run_total_deadline_cancels_and_fails
+FAILED tests/test_context_runner.py::test_needs_input_status_stops_gracefully
+3 failed in 1.82s
+```
+
+实现 daemon 模型线程、Queue 结果通道、grace join、deadline 事件后，三条目标：
+
+```text
+...                                                                      [100%]
+3 passed in 3.57s
+```
+
+完整相关门首次暴露 3.1 后两个既有测试文件仍手工构造无 budget 的 `run.json`：
+
+```text
+..................FFFFFFFFF                                              [100%]
+9 failed, 18 passed in 22.83s
+```
+
+只给这两个直接消费者补合成预算。第一次机械编辑引入两处缩进错误，收集结果为 `2 errors in 0.62s`；立即纠正后同一计划门：
+
+```text
+...........................                                              [100%]
+27 passed in 30.43s
+```
+
+退出码：0。Cursor Grok 4.6 Extra High Fast 只读复审：`CLEAN`。提交：`3a3c103`。
+
+### Task 3.3 RED→GREEN
+
+Cursor 先写 worker 行为测试；最初测试 scope 使用非十六进制字符，被现有校验正确拒绝，纠正测试数据后接受的 RED：
+
+```text
+F.F                                                                      [100%]
+=================================== FAILURES ===================================
+________________ test_run_container_accepts_needs_input_result _________________
+E   RuntimeError: Invalid business runtime result
+______ test_run_once_finishes_needs_input_and_clears_consecutive_failures ______
+E   assert [] == [0]
+=========================== short test summary info ============================
+FAILED tests/test_context_worker.py::test_run_container_accepts_needs_input_result
+FAILED tests/test_context_worker.py::test_run_once_finishes_needs_input_and_clears_consecutive_failures
+2 failed, 1 passed in 0.31s
+```
+
+实现后控制器独立重跑：
+
+```text
+.....................................                                    [100%]
+37 passed in 0.30s
+```
+
+退出码：0。`NeedsInput` 容器结果原样回写、清零连续失败；服务端 finish 只写 `needs_input`，不写普通 `answer`，并清空能力凭据。`erp_request_input` 与完整集成链未提前实现。提交：`9f06d65`。
+
+## S3 自检门
+
+非集成完整门：
+
+```text
+........................................................................ [ 35%]
+........................................................................ [ 71%]
+..........................................................               [100%]
+202 passed in 54.67s
+```
+
+退出码：0。Node 门：
+
+```text
+✔ dispose waits for native creation and releases exactly the completed handle (1.685042ms)
+✔ failed creation remains a request error but cannot break cleanup (1.065709ms)
+✔ business catalog rejects unlisted skill directories (3.842041ms)
+✔ ordinary and direct compaction requests both require authorization (0.591417ms)
+✔ a swallowed compaction denial still poisons all subsequent model calls (0.163791ms)
+✔ runtime drift rejects subsequent streams even if the file is restored (1.185625ms)
+✔ drift during a response cannot produce a successful terminal chunk (0.2605ms)
+✔ finish and errors are reported without affecting the stream (0.314542ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 58.209667
+```
+
+退出码：0。进程内 worker 链前停止常驻进程：
+
+```text
+pre_stop_pid=85392
+bootout_exit=0
+pidfile_present=false
+old_pid_alive=false
+```
+
+测试文件开头的 `_require_stopped_agent_worker()` 未触发，说明 fastfail 前提满足。本地模型替身集成链原始输出：
+
+```text
+{"ts": "2026-09-04T03:02:01.952+00:00", "event": "claimed", "site": "dsherp-validation.localhost", "run_id": "642763d8e892fc79755383951a68dd80fd5766ea9df6085cb84158821f3261fa"}
+{"ts": "2026-09-04T03:02:36.799+00:00", "event": "container_finished", "run_id": "642763d8e892fc79755383951a68dd80fd5766ea9df6085cb84158821f3261fa", "status": "Succeeded", "duration_ms": 34846}
+{"ts": "2026-09-04T03:02:37.149+00:00", "event": "claimed", "site": "dsherp-validation.localhost", "run_id": "b36ef25428800dc74bc8ac67aacb3d287f7dba3e9ae7d001b04187ff66224fc4"}
+{"ts": "2026-09-04T03:03:12.318+00:00", "event": "container_finished", "run_id": "b36ef25428800dc74bc8ac67aacb3d287f7dba3e9ae7d001b04187ff66224fc4", "status": "Succeeded", "duration_ms": 35168}
+C2_EVENT_EVIDENCE=[{"run_id":"642763d8e892fc79755383951a68dd80fd5766ea9df6085cb84158821f3261fa","kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"model_responses":[{"usage":null,"chunk_keys":["type","reason"],"purpose":"conversation","model":"deepseek-v4-flash"},{"usage":null,"chunk_keys":["type","reason"],"purpose":"conversation","model":"deepseek-v4-flash"}]},{"run_id":"b36ef25428800dc74bc8ac67aacb3d287f7dba3e9ae7d001b04187ff66224fc4","kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"model_responses":[{"usage":null,"chunk_keys":["type","reason"],"purpose":"conversation","model":"deepseek-v4-flash"},{"usage":null,"chunk_keys":["type","reason"],"purpose":"conversation","model":"deepseek-v4-flash"}]}]
+.
+1 passed in 96.03s (0:01:36)
+```
+
+退出码：0。两次运行各约 35 秒，均高于 90 秒续租阈值之外，因此事件序列没有 `lease_renewed`，符合计划允许说明。
+
+worker 停止期间正常重载验证 backend，`backend_restart_exit=0`，两站第 4 次半秒轮询恢复；`restore_bootstrap_exit=0`。这次冷启动较慢：35 秒时进程仍在模块导入且无 pidfile/9109，约 75 秒建立 pidfile，约 119 秒完成 TLS 初始化与指标监听；launchd 始终 `runs=1`、`last exit code=(never exited)`，不是崩溃循环。最终现场：
+
+```text
+99647 01:59 S /Users/lize/Documents/ChatGPT/dsherp/.venv/bin/python -m dsherp.context_worker --profile /Users/lize/Documents/ChatGPT/dsherp/.runtime/context-worker-sites.json --provider-env /Users/lize/Documents/ChatGPT/dsherp/.env
+python3.1 99647 lize 4u IPv4 TCP 127.0.0.1:9109 (LISTEN)
+dsherp_claims_total{site="dsherp-validation.localhost"} 0
+dsherp_claims_total{site="dsherp-daily.localhost"} 0
+dsherp_slots_busy 0
+dsherp_provider_circuit_open 0
+```
+
+S3 没有新增 DocType/Report/hooks，无需 migrate。没有调用真实 provider。
