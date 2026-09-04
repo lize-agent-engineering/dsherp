@@ -136,6 +136,18 @@ def normalize_profile(profile):
     return {'slots':slots,'metrics_port':metrics_port,'alert_webhook':webhook,'sites':sites}
 
 
+def prepare_host(runner=subprocess.run,cleanup=None):
+    """Reclaim crash leftovers before checking dependencies.
+
+    A leftover container still holds the run.json mount and therefore the provider
+    key; if a dependency check fails first it keeps holding it while the worker
+    refuses to start.
+    """
+    (cleanup or cleanup_stale_runtime_artifacts)(runner=runner)
+    runner(['docker','image','inspect',IMAGE],check=True,stdout=subprocess.DEVNULL)
+    runner(['docker','volume','inspect','dsherp-v16-agent-runtime'],check=True,stdout=subprocess.DEVNULL)
+
+
 def cleanup_stale_runtime_artifacts(runner=subprocess.run):
     listed=runner(['docker','ps','-a','--filter','name=dsherp-context-','--format','{{.Names}}'],
                   capture_output=True,text=True)
@@ -156,6 +168,55 @@ def cleanup_stale_runtime_artifacts(runner=subprocess.run):
             path.unlink()
         elif path.is_dir():
             shutil.rmtree(path)
+
+
+# A tick must not cost the sum of every site's timeout, and a site that keeps
+# failing must stop being contacted at all.
+CLAIM_TIMEOUT_SECONDS=10
+HEARTBEAT_TIMEOUT_SECONDS=5
+SITE_SKIP_THRESHOLD=3
+SITE_SKIP_SECONDS=60
+SHUTDOWN_DRAIN_SECONDS=15
+# SIGTERM asks for a drain; tearing the HTTP clients down under in-flight runs
+# loses the answer of every run that has not written its result yet.
+STOPPING=threading.Event()
+# A container that survives its removal still holds the run.json mount, and that
+# file carries the provider key.
+PENDING_REMOVALS=set()
+# A name that can never be removed must not be retried forever; the orphan container
+# gauge and its alert are the standing signal for anything left behind.
+REMOVAL_ATTEMPTS={}
+MAX_REMOVAL_ATTEMPTS=5
+
+
+def _removal_failed(name,**fields):
+    attempts=REMOVAL_ATTEMPTS.get(name,0)+1
+    REMOVAL_ATTEMPTS[name]=attempts
+    worker_log.log('container_removal_failed',container=name,attempts=attempts,**fields)
+    if attempts>=MAX_REMOVAL_ATTEMPTS:
+        PENDING_REMOVALS.discard(name);REMOVAL_ATTEMPTS.pop(name,None)
+        worker_log.log('container_removal_abandoned',container=name,attempts=attempts)
+    else:
+        PENDING_REMOVALS.add(name)
+    return False
+
+
+def remove_container(name,*,runner=subprocess.run):
+    try:
+        removal=runner(['docker','rm','-f',name],capture_output=True,text=True,timeout=15)
+    except Exception as error:
+        return _removal_failed(name,error_class=type(error).__name__)
+    if removal.returncode:
+        return _removal_failed(name,returncode=removal.returncode)
+    PENDING_REMOVALS.discard(name);REMOVAL_ATTEMPTS.pop(name,None)
+    return True
+
+
+def retry_pending_removals(*,runner=subprocess.run):
+    cleared=0
+    for name in tuple(PENDING_REMOVALS):
+        if remove_container(name,runner=runner):cleared+=1
+    return cleared
 
 
 def run_container(task,settings,directory,timeout=170):
@@ -185,7 +246,8 @@ def run_container(task,settings,directory,timeout=170):
                 raise RuntimeError('Missing business answer')
             return output
         finally:
-            subprocess.run(['docker','rm','-f',name],capture_output=True,timeout=15)
+            # Never let a removal failure discard an already parsed result.
+            remove_container(name)
 
 
 class Coordinator:
@@ -204,6 +266,8 @@ class Coordinator:
         self.notifier=notifier
         self.state_root=Path(state_root)
         self.last_claim={site['site']:None for site in sites}
+        self._site_failures={}
+        self._site_skip_until={}
         self._executor=ThreadPoolExecutor(max_workers=slots,thread_name_prefix='dsherp-run')
         self._futures=set()
         self._futures_lock=threading.Lock()
@@ -240,12 +304,57 @@ class Coordinator:
         if opened and self.notifier is not None:
             self.notifier.emit([alerts.Alert('provider_circuit_open','critical','模型服务熔断已打开')],now)
 
-    def _heartbeat_sites(self):
-        for site in self.sites:
-            try:post(site['client'],'worker_heartbeat')
+    def _site_available(self,site,now):
+        return self._site_skip_until.get(site['site'],0)<=now
+
+    def _note_site(self,site,ok,now):
+        name=site['site']
+        if ok:
+            self._site_failures.pop(name,None);self._site_skip_until.pop(name,None);return
+        failures=self._site_failures.get(name,0)+1
+        self._site_failures[name]=failures
+        if failures>=SITE_SKIP_THRESHOLD:
+            self._site_skip_until[name]=now+SITE_SKIP_SECONDS
+            self._site_failures[name]=0
+            worker_log.log('site_skipped',site=name,seconds=SITE_SKIP_SECONDS)
+
+    def _fan_out(self,work,items):
+        if len(items)<=1:return [work(item) for item in items]
+        with ThreadPoolExecutor(max_workers=len(items),thread_name_prefix='dsherp-site') as pool:
+            return list(pool.map(work,items))
+
+    def _heartbeat_sites(self,now):
+        def beat(site):
+            try:
+                post(site['client'],'worker_heartbeat',timeout=HEARTBEAT_TIMEOUT_SECONDS)
+                return True
             except Exception as error:
                 WORKER_ERRORS.inc(error_class=type(error).__name__)
                 worker_log.log('worker_error',site=site['site'],error_class=type(error).__name__)
+                return False
+        live=[site for site in self.sites if self._site_available(site,now)]
+        for site,ok in zip(live,self._fan_out(beat,live)):self._note_site(site,ok,now)
+
+    def _claim_site(self,site,settings,now):
+        try:
+            task=post(site['client'],'claim_run',timeout=CLAIM_TIMEOUT_SECONDS,
+                      runtime_revision=configuration_revision(settings))
+        except Exception as error:
+            WORKER_ERRORS.inc(error_class=type(error).__name__)
+            worker_log.log('worker_error',site=site['site'],error_class=type(error).__name__)
+            return None,False
+        return task,True
+
+    def drain(self,timeout):
+        deadline=time.monotonic()+timeout
+        while True:
+            with self._futures_lock:futures=tuple(self._futures)
+            if not futures:return 0
+            remaining=deadline-time.monotonic()
+            if remaining<=0:
+                worker_log.log('shutdown_drain_incomplete',in_flight=len(futures))
+                return len(futures)
+            wait(futures,timeout=remaining);self._reap()
 
     def _release_trial(self,trial):
         if not trial or self.breaker is None:return
@@ -334,7 +443,8 @@ class Coordinator:
             self._record_outcome(outcome,self.clock())
 
     def tick(self,now):
-        self._heartbeat_sites()
+        self._heartbeat_sites(now)
+        retry_pending_removals()
         busy=self._reap()
         allowed,trial=self._circuit_allows(now)
         if busy>=self.slots:
@@ -345,15 +455,10 @@ class Coordinator:
         try:
             settings=self.settings_loader()
             start=self._next_site
-            for offset in range(len(self.sites)):
-                if claimed>=capacity:break
-                site=self.sites[(start+offset)%len(self.sites)]
-                try:
-                    task=post(site['client'],'claim_run',runtime_revision=configuration_revision(settings))
-                except Exception as error:
-                    WORKER_ERRORS.inc(error_class=type(error).__name__)
-                    worker_log.log('worker_error',site=site['site'],error_class=type(error).__name__)
-                    continue
+            rotated=[self.sites[(start+offset)%len(self.sites)] for offset in range(len(self.sites))]
+            chosen=[site for site in rotated if self._site_available(site,now)][:capacity]
+            for site,(task,ok) in zip(chosen,self._fan_out(lambda site:self._claim_site(site,settings,now),chosen)):
+                self._note_site(site,ok,now)
                 if not task:continue
                 CLAIMS_TOTAL.inc(site=site['site']);self.last_claim[site['site']]=now
                 worker_log.log('claimed',site=site['site'],run_id=task['run_id'])
@@ -415,7 +520,26 @@ def worker_pid(path):
 
 
 def exit_on_signal(_signum, _frame):
-    raise SystemExit(0)
+    # Ask the loop to stop. Raising here would unwind the ExitStack under the
+    # in-flight runs and close the very clients they need to write their result.
+    STOPPING.set()
+
+
+def serve_once(coordinator,sites,notifier,ops_state,now=None):
+    """One supervision step. An observability failure must never skip the business tick:
+    the heartbeat lives inside it, and losing it makes every site answer 503."""
+    if now is None:now=time.monotonic()
+    try:
+        monitor_ops(sites[0]['client'],notifier,ops_state)
+    except Exception as error:
+        WORKER_ERRORS.inc(error_class=type(error).__name__)
+        worker_log.log('worker_error',stage='monitor_ops',error_class=type(error).__name__)
+    try:
+        coordinator.tick(now)
+    except Exception as error:
+        WORKER_ERRORS.inc(error_class=type(error).__name__)
+        worker_log.log('worker_error',stage='tick',error_class=type(error).__name__)
+    return not STOPPING.is_set()
 
 
 def main():
@@ -433,9 +557,7 @@ def main():
     with (ROOT/'.runtime'/'agent-worker.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         with worker_pid(ROOT/'.runtime'/'agent-worker.pid'):
-            subprocess.run(['docker','image','inspect',IMAGE],check=True,stdout=subprocess.DEVNULL)
-            subprocess.run(['docker','volume','inspect','dsherp-v16-agent-runtime'],check=True,stdout=subprocess.DEVNULL)
-            cleanup_stale_runtime_artifacts()
+            prepare_host()
             with ExitStack() as stack:
                 sites=[]
                 for item in profile['sites']:
@@ -454,17 +576,14 @@ def main():
                     current=settings_loader()
                     return probe_models(current['DEEPSEEK_BASE_URL'],current['DEEPSEEK_API_KEY'])
                 coordinator=Coordinator(sites,settings_loader,profile['slots'],run_container,CircuitBreaker(),probe,state_root,notifier=notifier)
-                while True:
-                    if args.once:
-                        run_once(sites[0]['client'],settings,state_root,business=sites[0]['business'])
-                        return 0
-                    try:
-                        monitor_ops(sites[0]['client'],notifier,ops_state)
-                        coordinator.tick(time.monotonic())
-                    except Exception as error:
-                        WORKER_ERRORS.inc(error_class=type(error).__name__)
-                        worker_log.log('worker_error',error_class=type(error).__name__)
-                    time.sleep(3)
+                if args.once:
+                    run_once(sites[0]['client'],settings,state_root,business=sites[0]['business'])
+                    return 0
+                STOPPING.clear()
+                while serve_once(coordinator,sites,notifier,ops_state):
+                    if STOPPING.wait(3):break
+                coordinator.drain(SHUTDOWN_DRAIN_SECONDS)
+                return 0
 
 
 if __name__=='__main__':raise SystemExit(main())

@@ -125,14 +125,19 @@ def test_worker_pid_file_replaces_stale_value_and_is_removed_on_exit(tmp_path):
     assert not target.exists()
 
 
-def test_sigterm_exits_through_worker_pid_cleanup(tmp_path):
+def test_sigterm_drains_then_releases_the_worker_pid(tmp_path):
+    """SIGTERM 请求排空而不是就地抛 SystemExit；pid 仍在循环正常退出时释放。"""
     target=tmp_path/'worker.pid'
-    with pytest.raises(SystemExit) as caught:
+    worker.STOPPING.clear()
+    try:
         with worker.worker_pid(target):
             assert target.exists()
             worker.exit_on_signal(signal.SIGTERM,None)
-    assert caught.value.code==0
-    assert not target.exists()
+            assert worker.STOPPING.is_set()
+            assert worker.STOPPING.wait(0) is True
+        assert not target.exists()
+    finally:
+        worker.STOPPING.clear()
 
 
 def test_worker_records_container_outcome_before_finishing(tmp_path):
@@ -432,7 +437,8 @@ def test_coordinator_never_claims_beyond_free_slots(tmp_path):
            for site in ('a','b','c')]
     try:
         coordinator=Coordinator(sites,lambda:SETTINGS,2,execute,None,lambda:True,tmp_path)
-        assert coordinator.tick(now=0)==2 and claim_calls==['a','b']
+        # 站点领取是并行的，顺序不做承诺；受约束的是"只联系轮转中前 capacity 个站"。
+        assert coordinator.tick(now=0)==2 and sorted(claim_calls)==['a','b']
         assert coordinator.tick(now=1)==0 and len(started)==2
         release.set();coordinator.wait_idle()
         assert coordinator.tick(now=2)==1
@@ -744,3 +750,101 @@ def test_probe_recovery_risks_exactly_one_trial_run_not_a_full_slate(tmp_path):
         coordinator.wait_idle()
         assert breaker.state=='open','a failed trial must reopen the circuit immediately'
         assert executions==['a1','a2']
+
+
+def _site_client(name,handler):
+    return httpx.Client(base_url='http://'+name,transport=httpx.MockTransport(handler))
+
+
+def test_a_black_hole_site_is_skipped_and_never_starves_a_healthy_one(tmp_path):
+    """故障站不得按串行 25s 超时逐个拖住健康站，并且连续失败后应被跳过。"""
+    from dsherp.context_worker import Coordinator
+    contacted=[];executed=[]
+    def dead(request):
+        contacted.append('dead');raise httpx.ReadTimeout('black hole')
+    healthy=iter(['h1','h2','h3','h4','h5','h6'])
+    def alive(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        contacted.append('alive')
+        if method=='claim_run':
+            run_id=next(healthy,None)
+            return httpx.Response(200,json={'message':None if run_id is None else {
+                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'budget':{'run_total_seconds':300}}})
+        if method=='finish_run':return httpx.Response(200,json={'message':{'status':'Succeeded','provider_failures':0}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    with _site_client('dead',dead) as bad, _site_client('alive',alive) as good:
+        sites=[{'site':'dead','client':bad,'business':{}},{'site':'alive','client':good,'business':{}}]
+        coordinator=Coordinator(sites,lambda:SETTINGS,2,
+            lambda task,settings,directory,timeout:executed.append(task['run_id']) or {'status':'Succeeded','answer':'ok'},
+            None,lambda:True,tmp_path)
+        for round_index in range(4):
+            coordinator.tick(now=round_index);coordinator.wait_idle()
+    assert executed==['h1','h2','h3','h4'],executed
+    assert contacted.count('dead')<=3,'a repeatedly failing site must stop being contacted every tick'
+
+
+def test_failed_container_removal_is_reported_and_retried(tmp_path,capsys):
+    """docker rm 失败不得静默：容器仍挂着含 provider key 的 run.json。"""
+    from dsherp import context_worker
+    attempts=[]
+    def runner(command,**kwargs):
+        attempts.append(command)
+        code=1 if len([c for c in attempts if c[:3]==['docker','rm','-f']])==1 else 0
+        return subprocess.CompletedProcess(command,code,stdout='',stderr='no such container')
+    context_worker.PENDING_REMOVALS.clear()
+    assert context_worker.remove_container('dsherp-context-abc',runner=runner) is False
+    assert 'dsherp-context-abc' in context_worker.PENDING_REMOVALS
+    logged=capsys.readouterr().err
+    assert 'container_removal_failed' in logged
+    assert context_worker.retry_pending_removals(runner=runner)==1
+    assert not context_worker.PENDING_REMOVALS
+
+    # 永远删不掉的名字必须被放弃，否则重试集合与 docker 调用无界增长。
+    context_worker.REMOVAL_ATTEMPTS.clear()
+    always_fails=lambda command,**kwargs:subprocess.CompletedProcess(command,1,stdout='',stderr='no such container')
+    for _ in range(context_worker.MAX_REMOVAL_ATTEMPTS):
+        context_worker.remove_container('dsherp-context-ghost',runner=always_fails)
+    assert not context_worker.PENDING_REMOVALS and not context_worker.REMOVAL_ATTEMPTS
+    assert 'container_removal_abandoned' in capsys.readouterr().err
+
+
+def test_observability_failure_never_stops_claiming(tmp_path,monkeypatch):
+    """monitor_ops 抛出不得跳过 tick：心跳停 60s 会让所有站对真实用户返回 503。"""
+    from dsherp import context_worker
+    context_worker.STOPPING.clear()
+    beats=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='worker_heartbeat':beats.append(1)
+        return httpx.Response(200,json={'message':{}})
+    monkeypatch.setattr(context_worker,'monitor_ops',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('ops shape changed')))
+    with _site_client('alive',handler) as client:
+        coordinator=context_worker.Coordinator([{'site':'alive','client':client,'business':{}}],lambda:SETTINGS,1,
+            lambda *a,**k:{'status':'Succeeded','answer':'ok'},None,lambda:True,tmp_path)
+        assert context_worker.serve_once(coordinator,[{'site':'alive','client':client}],None,{},now=0) is True
+    assert beats,'heartbeat must survive an observability failure'
+
+
+def test_sigterm_requests_a_drain_instead_of_tearing_down_in_flight_runs():
+    """SIGTERM 直接抛 SystemExit 会在在飞运行回写前关掉 client，答案必然丢失。"""
+    from dsherp import context_worker
+    context_worker.STOPPING.clear()
+    try:
+        context_worker.exit_on_signal(15,None)
+        assert context_worker.STOPPING.is_set()
+    finally:
+        context_worker.STOPPING.clear()
+
+
+def test_crash_leftovers_are_reclaimed_before_dependency_checks(monkeypatch):
+    """依赖检查失败时若清理还没跑，残留容器会继续挂着含 provider key 的 run.json。"""
+    from dsherp import context_worker
+    order=[]
+    def runner(command,**kwargs):
+        order.append(command[1])
+        if command[1]=='image':raise subprocess.CalledProcessError(1,command)
+        return subprocess.CompletedProcess(command,0,stdout='',stderr='')
+    with pytest.raises(subprocess.CalledProcessError):
+        context_worker.prepare_host(runner=runner,cleanup=lambda runner:order.append('cleanup'))
+    assert order[0]=='cleanup' and 'image' in order
