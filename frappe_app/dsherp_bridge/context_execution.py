@@ -18,7 +18,9 @@ from dsherp_bridge import context_permissions
 TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
        'erp_read_record':(erp.read_record,{'doctype','name'}),
        'erp_search_records':(erp.search_records,{'doctype','query','filters','fields'})}
-PROVIDER_FAILURE_ERROR_CLASSES=('TRANSPORT','TIMEOUT','SERVER')
+# 判据是"provider 是否不可用"，不是"是否 5xx"：换错 key、限流、配额耗尽同样让每条
+# 运行必败，熔断必须打开。由本轮输入造成的失败（上下文超长、请求非法、空响应）不算。
+PROVIDER_FAILURE_ERROR_CLASSES=('TRANSPORT','TIMEOUT','SERVER','AUTH','RATE_LIMIT','QUOTA_EXCEEDED')
 # 积压最严重时清扫最长，而清扫排在领取之前：不封顶会让 claim 越慢越领不到，形成正反馈。
 SWEEP_LIMIT=50
 

@@ -267,7 +267,8 @@ class Coordinator:
             if not self.probe():
                 with self._circuit_lock:PROVIDER_CIRCUIT_OPEN.set(1)
                 return False,False
-            with self._circuit_lock:self.breaker.reset()
+            # 探针成功只让电路进入试探态：下一条真实运行成功才算恢复，失败立即重新打开。
+            with self._circuit_lock:self.breaker.half_open()
         with self._circuit_lock:
             allowed=self.breaker.allow(now)
             trial=allowed and self.breaker.state=='half_open'

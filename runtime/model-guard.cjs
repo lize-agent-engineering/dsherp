@@ -4,6 +4,20 @@ const path=require('node:path');
 exports.name='dsherp-model-authorization';
 exports.inject=['llm'];
 
+// The runtime reports in-stream failures with a code; a thrown failure only carries a
+// JS error name. Both must land in one vocabulary or the server cannot tell a dead
+// provider from a bad request, and the circuit never opens.
+const THROWN_ERROR_CLASSES={TimeoutError:'TIMEOUT',AbortError:'TIMEOUT',ConnectTimeoutError:'TIMEOUT',
+  HeadersTimeoutError:'TIMEOUT',BodyTimeoutError:'TIMEOUT',SocketError:'TRANSPORT',ConnectionRefusedError:'TRANSPORT'};
+function thrownErrorClass(error){
+  const name=error?.name;
+  if(THROWN_ERROR_CLASSES[name])return THROWN_ERROR_CLASSES[name];
+  // undici surfaces a network failure as a TypeError carrying the socket error as cause.
+  if(name==='TypeError'&&error?.cause)return 'TRANSPORT';
+  return name??'Error';
+}
+exports.thrownErrorClass=thrownErrorClass;
+
 function createGuard(authorize,check=()=>{},report=async()=>{}){
   let disabled=false;
   const safeReport=async record=>{try{await report(record);}catch{}};
@@ -31,7 +45,7 @@ function createGuard(authorize,check=()=>{},report=async()=>{}){
       check();
     }catch(error){
       disabled=true;
-      await safeReport({kind:'model_error',error_class:error?.name??'Error',payload:{purpose:options.purpose??'conversation'}});
+      await safeReport({kind:'model_error',error_class:thrownErrorClass(error),payload:{purpose:options.purpose??'conversation'}});
       throw error;
     }
   };

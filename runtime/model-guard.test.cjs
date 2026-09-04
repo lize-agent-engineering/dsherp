@@ -83,3 +83,17 @@ test('an in-stream provider error finish is reported as model_error',async()=>{
   assert.equal(reports[0].error_class,'TRANSPORT');
   assert.ok(!JSON.stringify(reports).includes(secret));
 });
+test('thrown provider failures are normalised into the observable failure vocabulary',async()=>{
+  // A guard poisons itself after any failure, so each case needs its own instance.
+  const classify=async error=>{
+    const seen=[];
+    const guard=createGuard(async()=>{},()=>{},async r=>{seen.push(r);});
+    await assert.rejects(consume(guard(request,async function*(){throw error;})));
+    assert.equal(seen.length,1);assert.equal(seen[0].kind,'model_error');
+    return seen[0].error_class;
+  };
+  assert.equal(await classify(Object.assign(new Error('timed out'),{name:'TimeoutError'})),'TIMEOUT');
+  assert.equal(await classify(Object.assign(new TypeError('fetch failed'),{cause:new Error('ECONNREFUSED')})),'TRANSPORT');
+  // A real programming bug must stay itself; only network-shaped failures open the circuit.
+  assert.equal(await classify(new TypeError('options.messages is not iterable')),'TypeError');
+});

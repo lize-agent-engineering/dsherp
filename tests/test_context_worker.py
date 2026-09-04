@@ -712,3 +712,35 @@ def test_cleanup_stale_runtime_artifacts_after_lock_removes_only_owned_leftovers
         return subprocess.CompletedProcess(args,1,'','synthetic rm failed')
     with pytest.raises((subprocess.CalledProcessError,RuntimeError)):
         worker.cleanup_stale_runtime_artifacts(runner=fail_rm)
+
+
+def test_probe_recovery_risks_exactly_one_trial_run_not_a_full_slate(tmp_path):
+    """探针只证明 /models 活着；恢复应当只赌一条运行，而不是同一 tick 灌满槽位。"""
+    from dsherp.context_worker import Coordinator
+    from dsherp.provider_circuit import CircuitBreaker
+
+    clock=[0];claims=['a1','a2','a3','a4'];executions=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='claim_run':
+            run_id=claims.pop(0) if claims else None
+            return httpx.Response(200,json={'message':None if run_id is None else {
+                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'budget':{'run_total_seconds':300}}})
+        if method=='finish_run':
+            return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    def execute(task,settings,directory,timeout):
+        executions.append(task['run_id']);raise RuntimeError('synthetic provider failure')
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        breaker=CircuitBreaker(threshold=1,open_seconds=60)
+        coordinator=Coordinator([{'site':'a','client':client,'business':{}}],lambda:SETTINGS,3,
+            execute,breaker,lambda:True,tmp_path,clock=lambda:clock[0])
+        assert coordinator.tick(now=0)==1;coordinator.wait_idle()
+        assert breaker.state=='open'
+        clock[0]=60
+        assert coordinator.tick(now=60)==1,'probe recovery must risk a single trial run'
+        assert breaker.state=='half_open'
+        coordinator.wait_idle()
+        assert breaker.state=='open','a failed trial must reopen the circuit immediately'
+        assert executions==['a1','a2']

@@ -67,6 +67,11 @@ class CircuitBreaker:
         self._half_open_used=True
         return True
 
+    def half_open(self):
+        """A successful probe only proves /models answers; risk one real run, not a slate."""
+        self._state='half_open'
+        self._half_open_used=False
+
     def release_trial(self):
         if self._state=='half_open':self._half_open_used=False
 

@@ -395,8 +395,10 @@ try:
         events.record(run.name,'model_error',{'attempt':attempt},source='runner',error_class=error_class)
     frappe.set_user('Guest')
     result=finish_run(run.name,capability,'Failed',error='provider unavailable')
-    assert result=={'run_id':run.name,'status':'Failed','provider_failures':3},result
-    assert frappe.db.get_value('DS Model Run',run.name,'provider_failures')==3
+    # provider 不可用的六类都要计数：换错 key(AUTH)、限流(RATE_LIMIT)、配额耗尽
+    # (QUOTA_EXCEEDED) 同样让每条运行必败。只有本轮输入造成的失败不计。
+    assert result=={'run_id':run.name,'status':'Failed','provider_failures':6},result
+    assert frappe.db.get_value('DS Model Run',run.name,'provider_failures')==6
     print('PROVIDER_FAILURE_COUNT_OK')
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
