@@ -3179,3 +3179,29 @@ E AssertionError: old request input context allowed
 第 7 项（`monitor_ops` 只覆盖 `sites[0]`）维持 Deferred：多站运维快照属计划 3 的部署规格，R7 在本计划标"部分处理"。
 
 第 1–6 项由架构方接手关闭，逐项先红后绿。处置记录见下节。
+
+### 终审阻断项的关闭（2026-09-05，架构方执行）
+
+方法：先派 6 个只读代理各查一项，每项再由两名对抗复核者（正确性视角、并发与安全视角）独立回读源码；12 份结论全部判缺陷为真。另派一名完整性批评者对照计划的每条不变量重读六个源文件，找出终审漏掉的同类缺陷 7 条。合计 13 项，其中 12 项在本计划内关闭，1 项维持 Deferred。全程每项先红后绿，红灯原文记录在下表。
+
+| # | 缺陷 | 关闭方式 | 提交 |
+| --- | --- | --- | --- |
+| 1 | permission/transient 首次工具失败后 sources 为空，模型写好的解释被 finish_run 拒绝，运行悬到租约过期 | 完成判定仍只采信服务端记录的事实，但把"服务端拒绝了这次工具调用"也算作事实 | `36c0175` |
+| 2 | MCP `post()` 不捕获传输异常；5xx 的 `exception` 尾行（SQL 列名、内部路径）进入模型上下文 | 模型面 `run_tool` 收口为 transient 分类；5xx 与传输故障用固定文案；worker/runner 的 RPC 保留原始 httpx 类以免观测劣化 | `48bcd7d` |
+| 3 | 取消 RPC 继承 90s 模型超时，`grace` 只约束其后的 join | 整条停止路径由 `grace` 统一封顶，未确认也返回 Cancelled | `e063f18` |
+| 4 | NeedsInput 在 capability 未收回时即被移出在飞集合，第二个执行者可领走同一 native session | 按 capability 判定在飞；执行者中途死亡时只收回凭据、保留问题 | `36c0175` |
+| 5 | 多站心跳与领取同线程、每站 25s，黑洞站把健康站每轮拖约 50s | 按站并行发出、各带短超时（5s/10s），连续三次失败跳过 60s | `53c8858` |
+| 6 | `docker rm -f` 返回码被吞；`finally` 超时会丢弃已成功的结果；清理晚于依赖检查 | 删除失败落日志并重试，五次后放弃；清理提到依赖检查之前 | `53c8858` |
+| 批评 1 | 熔断判据是"是否 5xx"，AUTH/RATE_LIMIT/QUOTA_EXCEEDED 不计；guard 抛出分支的 JS 错误名永不命中词表 | 判据改为"provider 是否不可用"；抛出分支归一到 TIMEOUT/TRANSPORT，真正的编程错误保持原名 | `11db2ae` |
+| 批评 2 | 探针成功直接 `reset()`，试探态与 `release_trial` 全是死代码，恢复按满槽领取 | 探针成功只进 `half_open`，一条试探运行定成败 | `11db2ae` |
+| 批评 3 | claim 超时后服务端仍提交 Running，幽灵运行占位 180s 并报无关原因 | 领取先给 90s 确认租约；从未接手的运行落"助手未能启动本次运行，请重试" | `d587329` |
+| 批评 4 | 两个过期清扫是无上限全表循环且排在领取之前，积压时形成正反馈 | 各加 50 条上限 | `36c0175` |
+| 批评 5 | SIGTERM 就地抛 SystemExit，ExitStack 在在飞运行回写前关掉 client | 只置停止标志，循环退出后按 15s 上限排空 | `53c8858` |
+| 批评 6 | 观测与业务共用一个 try，心跳在 tick 内：`monitor_ops` 抛出会让所有站 60s 后返回 503 | 拆成两个 try | `53c8858` |
+| 批评 7 | `runtime_failed` 事件带 `failure_diagnostic` 的文件名与行号，经 `list_run_events` 直达业务用户 | 事件只留 `error_class` 与 reason 码，栈帧只走宿主 stderr；前端把 reason 渲染为业务文本 | `e063f18` |
+
+维持 Deferred 的一项：`monitor_ops` 只覆盖 `sites[0]`。多站运维快照属计划 3 的部署规格，R7 在本计划标"部分处理"。
+
+三处被更新的既有断言，都是原先锁定了缺陷本身，逐条说明：`tests/test_context_mcp.py` 的 5xx 文案（`业务请求失败` → 固定 transient 文案）、`tests/integration/test_run_events.py` 的 `provider_failures` 计数（3 → 6）、`tests/test_context_runner.py` 的 `runtime_failed` payload 形状（`type/frames` → `reason`）。另有两处因行为改变而放宽：`test_post_preserves_raw_transport_errors` 改测 worker RPC（模型面已按设计收口）、`test_coordinator_never_claims_beyond_free_slots` 的站点顺序改为集合断言（并行领取不承诺顺序）。SIGTERM 用例从"抛 SystemExit"改为"置停止标志并在循环退出时释放 pid"。
+
+一处自查发现的不稳定：并行领取让 `claim_calls` 顺序非确定，文件级测试三次里红两次。已定位为断言过度指定而非实现缺陷，改为集合断言后连跑六次全绿。
