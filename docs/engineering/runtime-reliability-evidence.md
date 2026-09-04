@@ -2278,3 +2278,236 @@ FAILED tests/test_context_worker.py::test_half_open_empty_poll_releases_trial_fo
 ```
 
 同一失败路径在第二次修复后转绿，未触发“两次修复仍红”的停止条件。
+
+## Task 7.3 前置契约补全：服务端模型策略与完整调用预算
+
+文档收口前复核发现：模型调用次数、输入/输出 token 上限仍散落在服务端代码，`dsherp_model_policy` 虽由 claim 返回，却未驱动业务 Harness 或 `reserve_model_call`。若直接写“配置已生效”会形成不实状态声明。因此先按计划“不改预算数值、只搬进服务端配置”的全局约束补齐这条链路。没有新增哈希或 DocType；业务 worker 的既有 revision 固定输入从 runtime 文件 + API key + `DSH_MODEL` + base URL 改为 runtime 文件 + API key + base URL，既有 conversation revision 的规范 JSON 输入加入可读 provider/model。
+
+首轮 RED 摘要原始输出：
+
+```text
+tests/integration/test_run_budget.py
+E         KeyError: 'model_max_calls'
+1 failed in 25.72s
+
+tests/integration/test_context_execution.py
+E         KeyError: 'model_max_calls'
+1 failed in 25.96s
+
+tests/test_session_runtime.py tests/test_runtime_revision.py
+52 failed, 14 passed in 3.48s
+
+tests/test_model_guard.py
+5 failed in 2.65s
+
+tests/test_context_compaction.py
+2 failed, 2 passed in 7.92s
+```
+
+独立测试审查后，收窄 `open_runtime` 只验证它实际消费的 provider/model/timeout/单次输出上限；服务端用例则分开证明单次输入、累计输入、单次输出、累计输出和调用次数。configuration 领域的 claim 值也进入真实 native compaction。两个补充 RED 的原始尾部：
+
+```text
+FFFFFFFFFFFFFFFFFFF                                                      [100%]
+19 failed, 17 deselected in 0.47s
+```
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_native_auto_compaction_cannot_bypass_authorization[configuration-False-True] _
+>           assert all(item['max_output_tokens']==budget['model_max_output_tokens_per_call'] for item in summaries)
+E           assert False
+tests/test_context_compaction.py:59: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_context_compaction.py::test_native_auto_compaction_cannot_bypass_authorization[configuration-False-True]
+1 failed, 4 deselected in 2.48s
+```
+
+分组 GREEN 原始输出：
+
+```text
+.                                                                        [100%]
+1 passed in 25.05s
+```
+
+```text
+..........................................                               [100%]
+42 passed in 3.18s
+```
+
+```text
+.....                                                                    [100%]
+5 passed in 8.33s
+```
+
+```text
+.....                                                                    [100%]
+5 passed in 11.38s
+```
+
+```text
+.                                                                        [100%]
+1 passed in 32.46s
+```
+
+相关 Python 回归与 runtime Node 门：
+
+```text
+........................................................................ [ 67%]
+..................................                                       [100%]
+106 passed in 37.05s
+```
+
+```text
+✔ dispose waits for native creation and releases exactly the completed handle (1.695333ms)
+✔ failed creation remains a request error but cannot break cleanup (1.612125ms)
+✔ business catalog rejects unlisted skill directories (24.562125ms)
+✔ ordinary and direct compaction requests both require authorization (0.706375ms)
+✔ a swallowed compaction denial still poisons all subsequent model calls (0.188042ms)
+✔ runtime drift rejects subsequent streams even if the file is restored (9.563917ms)
+✔ drift during a response cannot produce a successful terminal chunk (0.884541ms)
+✔ finish and errors are reported without affecting the stream (0.399625ms)
+✔ an in-stream provider error finish is reported as model_error (0.19925ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 92.267709
+```
+
+真实 HTTP worker 链第一次在 backend 未重载时正确 fastfail `Missing run budget`；重启后 alpha/daily readiness 均为 200。随后暴露 `CONTAINER_TEST` 仍使用 S4 前的旧工具清单，补入既有 `erp_request_input` 后同一真实容器/Frappe 链最终原始输出：
+
+```text
+.                                                                        [100%]
+1 passed in 95.75s (0:01:35)
+```
+
+常驻 worker 在上述所有进程内/worker 集成测试前均为停止状态，测试首语句 fastfail 未触发。全部模型请求使用本地 SSE 替身；未调用真实 provider。本项未修改 DocType、Report 或 hooks，故无需 migrate。
+
+独立代码审查继续发现：领取后若只修改数值预算而不修改 provider/model，旧实现会按新的较宽配置继续放行，违反“领取预算与执行预算一致”。先让 model guard 证明授权请求必须携带完整领取预算，并让服务端真实事务证明热改数值配置必须 fastfail。修复前 RED 原始输出：
+
+```text
+FFFFF                                                                    [100%]
+E               KeyError: 'claimed_budget'
+5 failed in 8.26s
+```
+
+```text
+F                                                                        [100%]
+E           TypeError: reserve_model_call() got an unexpected keyword argument 'claimed_budget'
+1 failed in 26.86s
+```
+
+最小实现只让 business model guard 发送 claim 返回的完整 budget，并在服务端完成 actor/权限复查后、任何调用计数写入前，将它与当前站点的严格解析结果结构化比较；不新增哈希、持久化或兜底。控制器独立重跑的 GREEN 原始输出：
+
+```text
+.....                                                                    [100%]
+5 passed in 10.53s
+```
+
+```text
+.                                                                        [100%]
+1 passed in 33.01s
+```
+
+独立复审随后指出 Python 普通字典相等会把 `True == 1`、`90.0 == 90`，不能证明领取预算是严格类型等值。补充 bool/float 伪造预算且断言失败请求不消耗计数后，控制器 RED 原始输出：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_capability_reads_as_owner_and_cannot_finish_without_actual_read _____
+E       AssertionError: Traceback (most recent call last):
+E           File "<stdin>", line 131, in <module>
+E         AssertionError: boolean site_concurrency allowed
+E       assert 1 == 0
+tests/integration/test_context_execution.py:230: AssertionError
+=========================== short test summary info ============================
+FAILED tests/integration/test_context_execution.py::test_capability_reads_as_owner_and_cannot_finish_without_actual_read
+1 failed in 30.07s
+```
+
+最小修复改为完整键集合加逐键严格类型和值比较。控制器目标 GREEN 及受影响回归原始输出：
+
+```text
+.                                                                        [100%]
+1 passed in 33.73s
+```
+
+```text
+.....                                                                    [100%]
+5 passed in 9.44s
+```
+
+```text
+...................                                                      [100%]
+19 passed in 83.15s (0:01:23)
+```
+
+独立复审最终 `APPROVED`：bool/int、float/int、缺键、额外键和字段展开均无绕过；权限错误仍先于领取预算错误，漂移请求不写计数。
+
+为让 HTTP backend 载入最终服务端比较逻辑，`docker restart dsherp-validation-backend-1` 退出码 0，stdout：
+
+```text
+dsherp-validation-backend-1
+```
+
+重载后两站 readiness 原始输出：
+
+```text
+dsherp-validation.localhost readiness=200 attempt=1
+dsherp-daily.localhost readiness=200 attempt=1
+```
+
+常驻 worker 停止且测试首语句 fastfail 未触发，最终真实 HTTP / Frappe / 容器 / 本地 SSE worker 链原始输出：
+
+```text
+.                                                                        [100%]
+1 passed in 93.59s (0:01:33)
+```
+
+测试清理后的实际状态原始输出：
+
+```text
+pidfile_exists=false
+worker_process_count=0
+metrics_listener_count=0
+context_container_count=0
+model_container_count=0
+{"active_runs": 0, "site": "dsherp-validation.localhost"}
+{"active_runs": 0, "site": "dsherp-daily.localhost"}
+```
+
+Task 7.3 前置模型策略/预算修复的提交前非集成门原始输出：
+
+```text
+........................................................................ [ 28%]
+........................................................................ [ 56%]
+........................................................................ [ 84%]
+.......................................                                  [100%]
+255 passed in 66.77s (0:01:06)
+```
+
+runtime Node 门原始输出（当前套件实际为 9 项，计划模板中的 8/8 已过时）：
+
+```text
+✔ dispose waits for native creation and releases exactly the completed handle (4.939458ms)
+✔ failed creation remains a request error but cannot break cleanup (2.398458ms)
+✔ business catalog rejects unlisted skill directories (8.523709ms)
+✔ ordinary and direct compaction requests both require authorization (0.780667ms)
+✔ a swallowed compaction denial still poisons all subsequent model calls (0.222875ms)
+✔ runtime drift rejects subsequent streams even if the file is restored (1.53025ms)
+✔ drift during a response cannot produce a successful terminal chunk (1.341791ms)
+✔ finish and errors are reported without affecting the stream (0.349ms)
+✔ an in-stream provider error finish is reported as model_error (0.156917ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 94.092292
+```

@@ -50,7 +50,8 @@ try:
     proposed=execution.run_tool(**cap,tool='erp_propose_configuration',arguments={'package':package})
     assert not proposed['execution_ready'] and not frappe.db.exists('DocType','DS Configuration Domain Test')
     assert frappe.session.user=='Guest'
-    assert execution.reserve_model_call(**cap,input_bytes=100,max_output_tokens=3072,provider='deepseek-official',model='deepseek-v4-flash',purpose='compaction',runtime_revision='a'*64,domain='configuration')['allowed']
+    from dsherp_bridge.run_budget import budget
+    assert execution.reserve_model_call(**cap,input_bytes=100,max_output_tokens=3072,provider='deepseek-official',model='deepseek-v4-flash',purpose='compaction',runtime_revision='a'*64,domain='configuration',claimed_budget=budget('configuration'))['allowed']
     execution.finish_run(**cap,status='Succeeded',answer='配置待确认')
     frappe.set_user(actor);assert get_bundle(proposed['id'])['execution_ready']
     sources=json.loads(frappe.get_doc('DS Model Run',run.name).sources)

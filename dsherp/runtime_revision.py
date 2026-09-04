@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
 FILES=tuple(json.loads((ROOT/'config/runtime-files.json').read_text()))
-KEYS=('DEEPSEEK_API_KEY','DSH_MODEL','DEEPSEEK_BASE_URL')
+KEYS=('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL')
 
 
 def verify_business_skills(root=ROOT):

@@ -18,8 +18,6 @@ from dsherp_bridge import context_permissions
 TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
        'erp_read_record':(erp.read_record,{'doctype','name'}),
        'erp_search_records':(erp.search_records,{'doctype','query','filters','fields'})}
-MAX_OPERATION_MODEL_CALLS=10
-MAX_OPERATION_OUTPUT_TOKENS_RESERVED=30720
 PROVIDER_FAILURE_ERROR_CLASSES=('TRANSPORT','TIMEOUT','SERVER')
 
 
@@ -118,10 +116,11 @@ def claim_run(runtime_revision):
     active=frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']]},fields=['owner'],limit_page_length=0)
     busy_owners={row.owner for row in active}
     candidates=frappe.get_all('DS Model Run',filters={'status':'Queued'},fields=['name','owner','domain'],order_by='creation asc, name asc',limit_page_length=0)
-    names=[row.name for row in candidates if row.owner not in busy_owners]
-    if not names:return None
-    if len(active)>=run_budget(candidates[0].domain)['site_concurrency']:return None
-    run=frappe.get_doc('DS Model Run',names[0],for_update=True)
+    candidates=[row for row in candidates if row.owner not in busy_owners]
+    if not candidates:return None
+    plan=run_budget(candidates[0].domain)
+    if len(active)>=plan['site_concurrency']:return None
+    run=frappe.get_doc('DS Model Run',candidates[0].name,for_update=True)
     if run.status!='Queued':return None
     try:
         with _actor(run) as identity:
@@ -135,17 +134,17 @@ def claim_run(runtime_revision):
         return None
     capability=secrets.token_urlsafe(32)
     domain=run.domain
-    plan=run_budget(domain)
-    combined_revision=hashlib.sha256((permission_revision+runtime_revision+domain).encode()).hexdigest()
-    if identity:
-        combined_revision=hashlib.sha256((combined_revision+conversations._json(identity)).encode()).hexdigest()
+    revision_material=[permission_revision,runtime_revision,domain,plan['provider'],plan['model']]
+    if identity:revision_material.append(identity)
+    combined_revision=hashlib.sha256(conversations._json(revision_material).encode()).hexdigest()
     if conversation.runtime_revision!=combined_revision:
         conversation.runtime_session=uuid.uuid4().hex
         frappe.db.set_value('DS Conversation',conversation.name,{'runtime_session':conversation.runtime_session,'runtime_revision':combined_revision})
     frappe.db.set_value('DS Model Run',run.name,{'status':'Running','capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
         'expires_at':add_to_date(now,seconds=plan['lease_seconds']),'permission_revision':permission_revision,'runtime_revision':runtime_revision})
     events.record_safely(run.name,'claimed',{'domain':domain,'permission_revision':permission_revision,
-        'runtime_revision':runtime_revision,'native_session_id':conversation.runtime_session})
+        'runtime_revision':runtime_revision,'native_session_id':conversation.runtime_session,
+        'provider':plan['provider'],'model':plan['model']})
     return {'run_id':run.name,'session_id':run.conversation,'native_session_id':conversation.runtime_session,
             'permission_revision':permission_revision,
             'runtime_revision':runtime_revision,'domain':domain,
@@ -176,31 +175,35 @@ def run_status(run_id,capability):
 
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
-def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,model,purpose,runtime_revision,domain='query'):
+def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,model,purpose,runtime_revision,domain='query',claimed_budget=None):
     run=_run(run_id,capability)
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')
     if runtime_revision!=run.runtime_revision:raise frappe.PermissionError('模型配置与领取的运行不一致')
     if domain!=run.domain:raise frappe.PermissionError('模型领域与领取的运行不一致')
-    if (provider!='deepseek-official' or model!='deepseek-v4-flash'
+    from dsherp_bridge.run_budget import budget as run_budget
+    plan=run_budget(run.domain)
+    if (provider!=plan['provider'] or model!=plan['model']
         or purpose not in ('conversation','compaction','session-title')
-        or type(input_bytes) is not int or not 0<input_bytes<=131072
-        or type(max_output_tokens) is not int or not 0<max_output_tokens<=(3072 if run.domain in ('operation','configuration') else 2048)):
+        or type(input_bytes) is not int or not 0<input_bytes<=plan['model_max_input_bytes_per_call']
+        or type(max_output_tokens) is not int or not 0<max_output_tokens<=plan['model_max_output_tokens_per_call']):
         frappe.throw('模型请求配置或输入预算不符')
     with _actor(run):
         context_permissions.require_revision(run)
         conversations._public(conversations._conversation(run.conversation))
+    if (not isinstance(claimed_budget,dict) or set(claimed_budget)!=set(plan)
+        or any(type(claimed_budget[key]) is not type(plan[key]) or claimed_budget[key]!=plan[key] for key in plan)):
+        frappe.throw('领取预算与当前站点配置不一致')
     calls=run.model_calls or 0
     total_input=(run.model_input_bytes or 0)+input_bytes
     total_output=(run.model_output_tokens_reserved or 0)+max_output_tokens
-    max_calls=MAX_OPERATION_MODEL_CALLS if run.domain=='operation' else 8
-    max_output=MAX_OPERATION_OUTPUT_TOKENS_RESERVED if run.domain=='operation' else 16384
-    if calls>=max_calls or total_input>524288 or total_output>max_output:
+    if (calls>=plan['model_max_calls'] or total_input>plan['model_max_input_bytes_total']
+        or total_output>plan['model_max_output_tokens_total']):
         frappe.throw('本轮模型调用预算已用尽')
     # Reserve before provider dispatch; uncertain/failed calls are not refunded.
     frappe.db.set_value('DS Model Run',run.name,{'model_calls':calls+1,
         'model_input_bytes':total_input,'model_output_tokens_reserved':total_output})
     events.record_safely(run.name,'model_call_reserved',{'call_index':calls+1,'input_bytes':input_bytes,
-        'max_output_tokens':max_output_tokens,'purpose':purpose,'model':model})
+        'max_output_tokens':max_output_tokens,'purpose':purpose,'provider':provider,'model':model})
     return {'allowed':True}
 
 

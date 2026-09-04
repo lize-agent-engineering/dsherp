@@ -136,7 +136,7 @@ try:
     assert claim and claim['run_id']==run_id,claim
     cap={'run_id':run_id,'capability':claim['capability']}
     frappe.set_user('Guest')
-    reserve_model_call(**cap,input_bytes=100,max_output_tokens=512,provider='deepseek-official',model='deepseek-v4-flash',purpose='conversation',runtime_revision='a'*64,domain='query')
+    reserve_model_call(**cap,input_bytes=100,max_output_tokens=512,provider='deepseek-official',model='deepseek-v4-flash',purpose='conversation',runtime_revision='a'*64,domain='query',claimed_budget=claim['budget'])
     run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'})
     finish_run(**cap,status='Succeeded',answer='完成')
     frappe.db.commit()

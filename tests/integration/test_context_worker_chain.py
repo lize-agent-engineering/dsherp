@@ -34,7 +34,7 @@ def test_service_worker_runs_two_messages_in_same_native_session(clients,created
         return args
     monkeypatch.setattr(worker,'docker_command',command)
     p=json.loads(Path('.runtime/context-worker.json').read_text())
-    settings={'DEEPSEEK_API_KEY':'synthetic-not-a-credential','DSH_MODEL':'deepseek-v4-flash','DEEPSEEK_BASE_URL':'http://127.0.0.1:38127/v1'}
+    settings={'DEEPSEEK_API_KEY':'synthetic-not-a-credential','DEEPSEEK_BASE_URL':'http://127.0.0.1:38127/v1'}
     reader,_=clients
     event_sequences=[]
     with httpx.Client(base_url=p['base_url'],headers={'X-Frappe-Site-Name':p['site'],'Authorization':'token '+p['api_key']+':'+p['api_secret']},trust_env=False,timeout=25) as service:

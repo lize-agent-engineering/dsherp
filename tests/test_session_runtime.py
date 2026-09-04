@@ -14,6 +14,25 @@ def _settings():
     return {'DEEPSEEK_API_KEY':'k','DSH_MODEL':'m','DEEPSEEK_BASE_URL':'http://provider.invalid'}
 
 
+def _business_settings():
+    return {'DEEPSEEK_API_KEY':'k','DEEPSEEK_BASE_URL':'http://provider.invalid'}
+
+
+_CLAIMED_BUDGET_FIELDS=('provider','model','model_request_timeout_seconds',
+    'model_max_output_tokens_per_call')
+_CLAIMED_BUDGET_INT_FIELDS=_CLAIMED_BUDGET_FIELDS[2:]
+
+
+def _claimed_budget(domain):
+    tokens={'query':1024,'configuration':1536,'operation':2560}[domain]
+    return {'provider':'deepseek-official','model':'synthetic-site-model',
+        'model_request_timeout_seconds':90,
+        'model_max_calls':10 if domain=='operation' else 8,
+        'model_max_input_bytes_per_call':131072,'model_max_input_bytes_total':524288,
+        'model_max_output_tokens_per_call':tokens,
+        'model_max_output_tokens_total':30720 if domain=='operation' else 16384}
+
+
 def _capture_harness(monkeypatch):
     captured={}
     class Fake:
@@ -34,14 +53,23 @@ def test_run_config_without_budget_fails_before_harness(tmp_path,monkeypatch):
     assert captured=={}
 
 
-def test_claimed_budget_timeout_reaches_harness(tmp_path,monkeypatch):
+@pytest.mark.parametrize('domain,tokens',[('query',1024),('configuration',1536),('operation',2560)])
+@pytest.mark.parametrize('settings',[
+    _business_settings(),
+    {**_business_settings(),'DSH_MODEL':'env-override-model'},
+])
+def test_claimed_budget_reaches_harness(tmp_path,monkeypatch,domain,tokens,settings):
     captured=_capture_harness(monkeypatch)
+    budget=_claimed_budget(domain)
     path=tmp_path/'run.json'
-    path.write_text(json.dumps({'domain':'operation','budget':{'model_request_timeout_seconds':90}}))
+    path.write_text(json.dumps({'domain':domain,'budget':budget}))
     with pytest.raises(RuntimeError,match='harness-captured'):
-        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False,run_config=path):
+        with session_runtime.open_runtime(settings,tmp_path,'s',resume=False,run_config=path):
             pass
-    assert captured['request_timeout_seconds']==90
+    assert captured['provider']==budget['provider']=='deepseek-official'
+    assert captured['model']==budget['model']=='synthetic-site-model'
+    assert captured['max_tokens']==budget['model_max_output_tokens_per_call']==tokens
+    assert captured['request_timeout_seconds']==budget['model_request_timeout_seconds']==90
 
 
 def test_context_runtime_without_run_config_keeps_90s(tmp_path,monkeypatch):
@@ -52,12 +80,44 @@ def test_context_runtime_without_run_config_keeps_90s(tmp_path,monkeypatch):
     assert captured['request_timeout_seconds']==90
 
 
-@pytest.mark.parametrize('timeout',[True,False,'90',90.0,0,-1])
-def test_invalid_budget_timeout_is_missing_run_budget(tmp_path,monkeypatch,timeout):
+@pytest.mark.parametrize('field',_CLAIMED_BUDGET_FIELDS)
+def test_claimed_budget_missing_field_fails_before_harness(tmp_path,monkeypatch,field):
     captured=_capture_harness(monkeypatch)
+    budget=_claimed_budget('query')
+    del budget[field]
     path=tmp_path/'run.json'
-    path.write_text(json.dumps({'domain':'query','budget':{'model_request_timeout_seconds':timeout}}))
+    path.write_text(json.dumps({'domain':'query','budget':budget}))
     with pytest.raises(ValueError,match='Missing run budget'):
+        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False,run_config=path):
+            pass
+    assert captured=={}
+
+
+@pytest.mark.parametrize('field',_CLAIMED_BUDGET_INT_FIELDS)
+@pytest.mark.parametrize('value',[True,False,'90',90.0,0,-1])
+def test_invalid_budget_field_fails_before_harness(tmp_path,monkeypatch,field,value):
+    captured=_capture_harness(monkeypatch)
+    budget=_claimed_budget('query')
+    budget[field]=value
+    path=tmp_path/'run.json'
+    path.write_text(json.dumps({'domain':'query','budget':budget}))
+    with pytest.raises(ValueError,match='Invalid run budget'):
+        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False,run_config=path):
+            pass
+    assert captured=={}
+
+
+@pytest.mark.parametrize('field,value',[
+    ('provider',''),('provider',' '),('provider','other'),('provider',True),
+    ('model',''),('model',' '),('model',True),
+])
+def test_invalid_budget_policy_fails_before_harness(tmp_path,monkeypatch,field,value):
+    captured=_capture_harness(monkeypatch)
+    budget=_claimed_budget('query')
+    budget[field]=value
+    path=tmp_path/'run.json'
+    path.write_text(json.dumps({'domain':'query','budget':budget}))
+    with pytest.raises(ValueError,match='Invalid run budget'):
         with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False,run_config=path):
             pass
     assert captured=={}

@@ -9,7 +9,7 @@ import pytest
 from dsherp.context_mcp import BusinessRuntimeError,ToolFailure
 import dsherp.context_worker as worker
 from dsherp.context_worker import profile_business,run_once
-SETTINGS={'DEEPSEEK_API_KEY':'synthetic','DSH_MODEL':'deepseek-v4-flash','DEEPSEEK_BASE_URL':'http://synthetic'}
+SETTINGS={'DEEPSEEK_API_KEY':'synthetic','DEEPSEEK_BASE_URL':'http://synthetic'}
 NEEDS_INPUT={'status':'NeedsInput','answer':'请指定仓库'}
 
 

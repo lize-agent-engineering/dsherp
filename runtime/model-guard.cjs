@@ -71,7 +71,7 @@ exports.apply=function(ctx){
   const config=JSON.parse(readFileSync(process.env.DSHERP_RUN_CONFIG,'utf8'));
   if(!['query','operation','configuration'].includes(config.domain)||config.domain!==process.env.DSHERP_DOMAIN)throw new Error('Business domain mismatch');
   const material=[files.map(file=>[file,createHash('sha256').update(readFileSync(path.join(root,file))).digest('hex')]),
-    ['DEEPSEEK_API_KEY','DSH_MODEL','DEEPSEEK_BASE_URL'].map(key=>config[key])];
+    ['DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL'].map(key=>config[key])];
   const revision=createHash('sha256').update(JSON.stringify(material)).digest('hex');
   if(revision!==config.runtime_revision)throw new Error('Runtime revision mismatch');
   const endpoint=new URL('/api/method/dsherp_bridge.context_execution.reserve_model_call',config.business_url);
@@ -85,7 +85,7 @@ exports.apply=function(ctx){
     check();
     const response=await fetch(endpoint,{method:'POST',redirect:'error',signal:AbortSignal.timeout(20000),
       headers:{'Content-Type':'application/json','X-Frappe-Site-Name':config.site},
-      body:JSON.stringify({run_id:config.run_id,capability:config.capability,runtime_revision:revision,domain:config.domain,...metadata})});
+      body:JSON.stringify({run_id:config.run_id,capability:config.capability,runtime_revision:revision,domain:config.domain,claimed_budget:config.budget,...metadata})});
     if(!response.ok)throw new Error(`Model authorization rejected (HTTP ${response.status})`);
     const body=await response.json();
     if(body.message?.allowed!==true)throw new Error('Invalid model authorization response');

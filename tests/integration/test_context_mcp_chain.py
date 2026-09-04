@@ -26,7 +26,7 @@ try:
     assert len(requests)==2
     if config['resume'] is True:
         assert any(m['role']=='assistant' and m.get('content')=='DSHERP_OK' for m in requests[0]['messages'])
-    assert {tool['function']['name'] for tool in requests[0]['tools']}=={'skill','mcp__erp__erp_read_schema','mcp__erp__erp_read_record','mcp__erp__erp_search_records'}
+    assert {tool['function']['name'] for tool in requests[0]['tools']}=={'skill','mcp__erp__erp_read_schema','mcp__erp__erp_read_record','mcp__erp__erp_search_records','mcp__erp__erp_request_input'}
     assert 'DSHERP-TEST-ITEM' in str([m for m in requests[1]['messages'] if m['role']=='tool'])
     print(json.dumps(result))
 finally:
