@@ -1370,3 +1370,181 @@ dsherp_provider_circuit_open 0
 ```
 
 最终 worker PID `37215` 唯一、pidfile 0600、仅回环监听、加载双站 profile。没有调用真实 provider。
+
+## S5
+
+### Task 5.1 RED→GREEN
+
+Cursor Grok 4.6 Extra High Fast 先写拒绝/过期的真实站点集成测试。生产接口不存在时原始尾部：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_reject_and_expire_are_terminal_without_execution _____________
+E       AssertionError: Traceback (most recent call last):
+E           File "<stdin>", line 8, in <module>
+E         ImportError: cannot import name 'expire_proposals' from 'dsherp_bridge.operations' (/opt/dsherp-frappe/dsherp_bridge/operations.py)
+=========================== short test summary info ============================
+FAILED tests/integration/test_proposal_exits.py::test_reject_and_expire_are_terminal_without_execution
+1 failed in 24.88s
+```
+
+实现完成但站点尚未 migrate 时，同一测试继续以站点元数据红灯：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_reject_and_expire_are_terminal_without_execution _____________
+E       AssertionError: Traceback (most recent call last):
+E           File "<stdin>", line 31, in <module>
+E         frappe.exceptions.ValidationError:  status cannot be "Rejected". It should be one of "Pending", "Authorized", "Succeeded", "Failed", "Unknown"
+=========================== short test summary info ============================
+FAILED tests/integration/test_proposal_exits.py::test_reject_and_expire_are_terminal_without_execution
+1 failed in 23.24s
+```
+
+DocType/hook 变更后三站迁移逐站退出码：
+
+```text
+ALPHA_MIGRATE_EXIT=0
+DAILY_MIGRATE_EXIT=0
+BETA_MIGRATE_EXIT=0
+```
+
+迁移后实际元数据：
+
+```text
+{"label":"alpha","site":"dsherp-validation.localhost","status_options":["Pending","Authorized","Succeeded","Failed","Unknown","Rejected","Expired"],"fields":["rejected_by","rejected_request_id"]}
+{"label":"daily","site":"dsherp-daily.localhost","status_options":["Pending","Authorized","Succeeded","Failed","Unknown","Rejected","Expired"],"fields":["rejected_by","rejected_request_id"]}
+{"label":"beta","site":"dsherp-beta.localhost","status_options":["Pending","Authorized","Succeeded","Failed","Unknown","Rejected","Expired"],"fields":["rejected_by","rejected_request_id"]}
+```
+
+三站 migrate 各产生一条 `build_index_for_all_routes`。未放宽队列卫生规则：逐站直接执行搜索索引函数均退出 0；确认共享队列恰好只有这三条可重建副本后，各精确清除 1 条，最终按现有“空串代表空队列”的解析语义得到 `{}`。第一次诊断误把原始空串断言为必须字面输出 `{}`，该脚本断言失败；纠正诊断后未改代码。
+
+```text
+ALPHA_SEARCH_INDEX_EXIT=0
+DAILY_SEARCH_INDEX_EXIT=0
+BETA_SEARCH_INDEX_EXIT=0
+Purged 1 jobs
+ALPHA_SEARCH_JOB_PURGE_EXIT=0
+Purged 1 jobs
+DAILY_SEARCH_JOB_PURGE_EXIT=0
+Purged 1 jobs
+BETA_SEARCH_JOB_PURGE_EXIT=0
+POST_PURGE_RAW=''
+POST_PURGE_JOBS={}
+```
+
+目标测试与既有提案回归：
+
+```text
+........                                                                 [100%]
+8 passed in 56.00s
+```
+
+退出码：0。实现包含 owner/digest/request-id 绑定的拒绝、同 request_id 重放幂等、逐行锁定的 Pending 过期、精确 confirm 出口、两类事件与十分钟 cron。测试暂存后恢复 C0 基线，没有业务写入残留。没有 provider 请求。提交：`4569baa`。
+
+### Task 5.2 RED→GREEN
+
+真实读取一次 ERP 记录后，以完成自述结束；实现前状态仍为 Succeeded，但标记未写入：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_finish_run_flags_unverified_completion_without_changing_status ______
+E       AssertionError: Traceback (most recent call last):
+E           File "<stdin>", line 35, in <module>
+E         AssertionError: {'status': 'Succeeded', 'answer_flagged': 0}
+=========================== short test summary info ============================
+FAILED tests/integration/test_completion_crosscheck.py::test_finish_run_flags_unverified_completion_without_changing_status
+1 failed in 27.75s
+```
+
+计划文件表漏列 `context_events.py`，但 `record` 会拒绝未知的计划事件 `unverified_completion_claim`；只在该文件增加这一事件常量，共 1 个计划外文件，未达到用户规定的“超过 3 个才停”阈值。控制器独立运行目标与 run-events：
+
+```text
+........                                                                 [100%]
+8 passed in 47.20s
+```
+
+退出码：0。所有 finished 事件包含本 run 的 proposals、Succeeded executions、sources 计数；只有 Succeeded 完成自述且没有成功执行记录时写 `answer_flagged=1` 与后续警示事件，不改变成功状态；公开消息带布尔标记。没有 provider 请求。提交：`2fe5d34`。
+
+### Task 5.3 RED→GREEN
+
+运行 ops 集成前正常停止常驻 worker，且测试函数首语句 fastfail 保留。停止输出：
+
+```text
+pre_stop_pid=37215
+bootout_exit=0
+stopped_attempt=2
+pidfile_present=false
+old_pid_alive=false
+metrics_listener_present=false
+```
+
+快照与告警断言实现前原始尾部：
+
+```text
+FF.......                                                                [100%]
+=================================== FAILURES ===================================
+_________________ test_collect_snapshot_and_authorized_status __________________
+E         AssertionError: {'queued': 1, 'queued_oldest_seconds': 0, 'running': 1, 'running_stuck': 1, 'pending_proposals_expired': 4, 'last_claim_age_seconds': 70345, 'runs_24h': {'Failed': 5, 'NeedsInput': 1, 'Queued': 1, 'Running': 1}, 'backup_age_hours': 33.93, 'site': 'dsherp-validation.localhost', 'collected_at': '2026-09-04 12:12:27.711743'}
+___________________ test_rules_fire_only_on_their_condition ____________________
+E       AssertionError: assert [] == ['queue_expiring']
+=========================== short test summary info ============================
+FAILED tests/integration/test_ops_snapshot.py::test_collect_snapshot_and_authorized_status
+FAILED tests/test_alerts.py::test_rules_fire_only_on_their_condition
+2 failed, 7 passed in 27.98s
+```
+
+实现后控制器独立运行：
+
+```text
+.........                                                                [100%]
+9 passed in 27.06s
+```
+
+退出码：0。快照计数当前 NeedsInput、24 小时内精确 `reason=queue_expired` 的事件（不含 lease_expired）、24 小时内修改且当前 Expired 的提案；`queue_expired_24h>10` 发 warning。没有 DocType/Report/hooks 变更，无需 migrate。没有 provider 请求。提交：`20d5cdf`。
+
+## S5 自检门
+
+常驻 worker 保持停止，四个计划集成测试开头的 fastfail 均通过。原始输出：
+
+```text
+....                                                                     [100%]
+4 passed in 35.77s
+```
+
+退出码：0。三站 migrate 退出码与实际元数据见 Task 5.1。启动 scheduled profile：
+
+```text
+Container dsherp-validation-scheduler-1 Started
+Container dsherp-validation-scheduler-worker-1 Started
+SCHEDULED_UP_EXIT=0
+```
+
+启动前 alpha 的 C0 基线为 4 条过期 Pending，`expire_proposals` 已是 `frequency=Cron`、`cron_format=*/10 * * * *`、`last_execution=null`。有界轮询原始状态：
+
+```text
+2026-09-04T12:16:09 attempt=1 {"statuses":{"5he61l424p":"Pending","d3u0kkn4kt":"Pending","ffvbmiq9s5":"Pending","fi3af9hog4":"Pending"},"jobs":[{"method":"dsherp_bridge.operations.expire_proposals","frequency":"Cron","cron_format":"*/10 * * * *","last_execution":null}],"failed_logs":0}
+2026-09-04T12:16:25 attempt=2 {"statuses":{"5he61l424p":"Pending","d3u0kkn4kt":"Pending","ffvbmiq9s5":"Pending","fi3af9hog4":"Pending"},"jobs":[{"method":"dsherp_bridge.operations.expire_proposals","frequency":"Cron","cron_format":"*/10 * * * *","last_execution":null}],"failed_logs":0}
+2026-09-04T12:16:42 attempt=3 {"statuses":{"5he61l424p":"Pending","d3u0kkn4kt":"Pending","ffvbmiq9s5":"Pending","fi3af9hog4":"Pending"},"jobs":[{"method":"dsherp_bridge.operations.expire_proposals","frequency":"Cron","cron_format":"*/10 * * * *","last_execution":null}],"failed_logs":0}
+2026-09-04T12:16:58 attempt=4 {"statuses":{"5he61l424p":"Pending","d3u0kkn4kt":"Pending","ffvbmiq9s5":"Pending","fi3af9hog4":"Pending"},"jobs":[{"method":"dsherp_bridge.operations.expire_proposals","frequency":"Cron","cron_format":"*/10 * * * *","last_execution":null}],"failed_logs":0}
+2026-09-04T12:17:15 attempt=5 {"statuses":{"5he61l424p":"Pending","d3u0kkn4kt":"Pending","ffvbmiq9s5":"Pending","fi3af9hog4":"Pending"},"jobs":[{"method":"dsherp_bridge.operations.expire_proposals","frequency":"Cron","cron_format":"*/10 * * * *","last_execution":null}],"failed_logs":0}
+2026-09-04T12:17:31 attempt=6 {"statuses":{"5he61l424p":"Expired","d3u0kkn4kt":"Expired","ffvbmiq9s5":"Expired","fi3af9hog4":"Expired"},"jobs":[{"method":"dsherp_bridge.operations.expire_proposals","frequency":"Cron","cron_format":"*/10 * * * *","last_execution":"2026-09-04 12:17:21.527808"}],"failed_logs":0}
+S5_SCHEDULED_ACCEPTED attempt=6
+```
+
+约 82 秒内 4/4 C0 基线成为 Expired，失败日志为 0。停止前发现 alpha/daily 已入队正常 `run_scheduled_job`；未删除任务或放宽夹具。保持 scheduler 停止、只让 scheduler-worker 自然消费，原始尾部：
+
+```text
+DRAIN attempt=10 queued=9 sites=['dsherp-daily.localhost', 'dsherp-validation.localhost']
+DRAIN attempt=11 queued=6 sites=['dsherp-daily.localhost', 'dsherp-validation.localhost']
+DRAIN attempt=12 queued=3 sites=['dsherp-daily.localhost']
+DRAIN attempt=13 queued=3 sites=['dsherp-daily.localhost']
+DRAIN attempt=14 queued=0 sites=[]
+SCHEDULER_WORKER_DRAIN_STOP_EXIT=0
+S5_FINAL_QUEUE={}
+```
+
+最终 scheduler 与 scheduler-worker 均停止，调度记录、Job Type 与 C0 的 Expired 状态保留。常驻 agent worker 仍停止，为后续集成隔离。没有调用真实 provider。
