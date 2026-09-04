@@ -134,7 +134,7 @@ def _public(doc):
         messages.append({'id':run.name,'question':run.question,
                          'answer':run.answer or (run.needs_input if run.status=='NeedsInput' else '') or '',
                          'error':run.error or '', 'status':run.status,'context':context,'domain':run.domain,
-                         'sources':sources})
+                         'sources':sources,'answer_flagged':bool(run.answer_flagged)})
         if run.status in ('Queued','Running','Cancelling'):active=run.name
     from dsherp_bridge.operations import get_proposal
     proposals=[get_proposal(name) for name in frappe.get_all('DS Operation Proposal',

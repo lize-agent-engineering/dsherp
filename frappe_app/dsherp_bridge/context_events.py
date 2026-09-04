@@ -16,6 +16,7 @@ SERVER_KINDS = (
     "needs_input",
     "proposal_rejected",
     "proposal_expired",
+    "unverified_completion_claim",
     "model_call_reserved",
     "tool_call",
     "finished",

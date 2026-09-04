@@ -375,10 +375,20 @@ def finish_run(run_id,capability,status,answer='',error=''):
     if status=='Cancelled' and run.status!='Cancelling':frappe.throw('运行未请求取消')
     if status=='NeedsInput' and run.status!='NeedsInput':frappe.throw('运行未请求补充信息')
     provider_failures=frappe.db.count('DS Run Event',{'run':run.name,'kind':'model_error'})
+    sources=json.loads(run.sources or '[]')
+    proposals=frappe.db.count('DS Operation Proposal',{'model_run':run.name})
+    proposal_names=frappe.get_all('DS Operation Proposal',filters={'model_run':run.name},pluck='name')
+    executions=frappe.db.count('DS Execution Record',{'proposal':['in',proposal_names],'status':'Succeeded'}) if proposal_names else 0
     events.record_safely(run.name,'finished',{'status':status,'answer_chars':len(answer) if isinstance(answer,str) else 0,
-        'error':(error or '')[:500],'model_calls':run.model_calls or 0,'provider_failures':provider_failures})
+        'error':(error or '')[:500],'model_calls':run.model_calls or 0,'provider_failures':provider_failures,
+        'proposals':proposals,'executions':executions,'sources':len(sources)})
     values={'status':status,'answer':answer if status=='Succeeded' else '',
         'error':error if status=='Failed' else '','capability_hash':'','provider_failures':provider_failures}
     if status=='NeedsInput':values['needs_input']=answer
+    if status=='Succeeded':
+        flagged=executions==0 and bool(re.search(r'(已|成功)(创建|提交|保存|完成|生成|录入|执行)',answer))
+        values['answer_flagged']=1 if flagged else 0
+        if flagged:
+            events.record_safely(run.name,'unverified_completion_claim',{'proposals':proposals,'executions':executions})
     frappe.db.set_value('DS Model Run',run.name,values)
     return {'run_id':run.name,'status':status,'provider_failures':provider_failures}
