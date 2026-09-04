@@ -10,6 +10,10 @@ class ConversationConflict(frappe.ValidationError):
     http_status_code = 409
 
 
+class WorkerUnavailableError(frappe.ValidationError):
+    http_status_code = 503
+
+
 def _user():
     user = frappe.session.user
     if user in ('Guest', 'Administrator') or not frappe.db.get_value('User', user, 'enabled'):
@@ -316,6 +320,18 @@ def send_message(question, context, request_id, session_id=None, domain='query')
         if run.request_digest!=digest:frappe.throw('请求标识已用于其他内容')
         return _public(_conversation(run.conversation))
     snapshot=_context(raw_context)
+    from dsherp_bridge.run_budget import budget
+    from frappe.utils import add_to_date,get_datetime,now_datetime
+    limits=budget(domain)
+    now=now_datetime()
+    heartbeat=frappe.cache().get_value('dsherp_worker_heartbeat')
+    age=None
+    if heartbeat:
+        beat=get_datetime(heartbeat)
+        if beat:age=(now-beat).total_seconds()
+    if age is None or age>limits['heartbeat_stale_seconds']:
+        frappe.local.response['http_status_code']=503
+        frappe.throw('助手服务暂不可用，请稍后再试',exc=WorkerUnavailableError)
     if session_id:
         doc=_conversation(session_id)
         current=_public(doc)
@@ -327,7 +343,8 @@ def send_message(question, context, request_id, session_id=None, domain='query')
     frappe.get_doc({'doctype':'DS Model Run','name':run_id,'conversation':doc.name,
         'platform_grant':grant,'domain':domain,
         'request_id':request_id,'request_digest':digest,'question':question.strip(),
-        'page_context':_json(snapshot),'status':'Queued','sources':'[]'}).insert(ignore_permissions=True,set_name=run_id)
+        'page_context':_json(snapshot),'status':'Queued','sources':'[]',
+        'queue_expires_at':add_to_date(now,seconds=limits['queue_expires_seconds'])}).insert(ignore_permissions=True,set_name=run_id)
     from dsherp_bridge import context_events as events
     events.record_safely(run_id,'queued',{'domain':domain,'question_chars':len(question.strip()),'page_type':snapshot.get('page_type')})
     return _public(doc)
