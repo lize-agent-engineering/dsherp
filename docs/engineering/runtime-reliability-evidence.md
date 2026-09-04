@@ -3244,3 +3244,11 @@ worker 按新代码重启后立刻对两站报 `RemoteProtocolError`，5 分钟 
 根因是连接复用：worker 每 3 秒 tick 一次，长于后端 keep-alive，池化的 socket 到下一轮总是已被服务端关闭，复用它就得到"服务端未响应即断开"。代价不是一条日志——丢的是一次心跳或一次领取；心跳丢成串会让所有站在 60 秒后对真实用户返回 503。
 
 修法沿用仓库既有的 `context_runner.business_client`（`max_keepalive_connections=0`，注释写明"不跨调用复用空闲后端 socket"）：把站点客户端抽成 `site_client()` 并采用同一限制，另加一条用真实 HTTP 服务器断言两次请求来自不同源端口的回归。
+
+#### 停止点运行态（2026-09-05）
+
+连接复用修掉后重启，观察 13 分钟：`dsherp_worker_errors_total` **没有任何样本**（当前进程零错误），此前 8 次 `RemoteProtocolError` 属被换掉的旧进程。恢复 `scheduled` profile 后 `collect_snapshot` 正常产出新快照，我在 S5 新加的 `ops_snapshot_stale` 告警在调度停摆时正确报出、恢复后自行消除——这条是本轮新增告警的第一次真实命中。
+
+最终状态：worker PID `31565`、单进程、仅监听 `127.0.0.1:9109`、20 项指标；`slots_busy` / `provider_circuit_open` / `orphan_containers` / `queue_depth` / `running_stuck` 均为 0；scheduler 与 scheduler-worker 各 1 个在跑；alpha 与 daily 活动运行均为 0。
+
+`dsherp_backup_age_hours` 为 `49.41`，因此有一条 `backup_stale` critical 告警。这是告警系统对真实状况的正确报告（本机开发环境已 49 小时没有取过备份），不是缺陷；是否补取备份属运维动作，不在本计划范围。
