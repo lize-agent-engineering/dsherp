@@ -848,3 +848,27 @@ def test_crash_leftovers_are_reclaimed_before_dependency_checks(monkeypatch):
     with pytest.raises(subprocess.CalledProcessError):
         context_worker.prepare_host(runner=runner,cleanup=lambda runner:order.append('cleanup'))
     assert order[0]=='cleanup' and 'image' in order
+
+
+def test_site_client_never_reuses_an_idle_backend_socket():
+    """tick 间隔长于后端 keep-alive：池化连接到下一轮总是陈旧，复用它会丢掉心跳或领取。"""
+    from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+    import threading as _threading
+    from dsherp.context_worker import site_client
+    seen=[]
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version='HTTP/1.1'
+        def do_POST(self):
+            seen.append(self.client_address)
+            self.send_response(200);self.send_header('Content-Length','2');self.end_headers();self.wfile.write(b'{}')
+        def log_message(self,*args):pass
+    server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+    thread=_threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        item={'site':'s','base_url':f'http://127.0.0.1:{server.server_port}','api_key':'k','api_secret':'v'}
+        with site_client(item) as client:
+            assert client.post('/a',json={}).status_code==200
+            assert client.post('/b',json={}).status_code==200
+        assert len(seen)==2 and seen[0]!=seen[1],seen
+    finally:
+        server.shutdown();server.server_close();thread.join()

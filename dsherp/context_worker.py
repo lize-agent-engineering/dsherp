@@ -519,6 +519,18 @@ def worker_pid(path):
             pass
 
 
+def site_client(item):
+    """One connection per request. The tick interval is longer than the backend's
+    keep-alive, so a pooled socket is always stale by the next tick: reusing it
+    surfaces as RemoteProtocolError and costs a heartbeat or a claim. A lost
+    heartbeat streak makes every Site answer 503 to real users."""
+    return httpx.Client(base_url=item['base_url'],
+        headers={'X-Frappe-Site-Name':item['site'],
+                 'Authorization':'token '+item['api_key']+':'+item['api_secret']},
+        limits=httpx.Limits(max_keepalive_connections=0),
+        timeout=25,trust_env=False,follow_redirects=False)
+
+
 def exit_on_signal(_signum, _frame):
     # Ask the loop to stop. Raising here would unwind the ExitStack under the
     # in-flight runs and close the very clients they need to write their result.
@@ -561,10 +573,7 @@ def main():
             with ExitStack() as stack:
                 sites=[]
                 for item in profile['sites']:
-                    client=stack.enter_context(httpx.Client(base_url=item['base_url'],
-                        headers={'X-Frappe-Site-Name':item['site'],
-                                 'Authorization':'token '+item['api_key']+':'+item['api_secret']},
-                        timeout=25,trust_env=False,follow_redirects=False))
+                    client=stack.enter_context(site_client(item))
                     sites.append({'site':item['site'],'client':client,'business':profile_business(item)})
                 start_metrics(profile,once=args.once)
                 notifier=None
