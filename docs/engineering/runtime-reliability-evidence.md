@@ -3151,3 +3151,31 @@ E AssertionError: old request input context allowed
 本轮精确删除了仅属于 runtime-reliability 的 24 个已忽略临时 brief/report/review diff 与一个 `work/__pycache__/smoke_context_model.cpython-312.pyc`；保留唯一指定台账 `runtime-reliability/progress.md`，未动其他项目台账。临时文件未备份、不可恢复。
 
 停止点运行态恢复：确认 alpha/daily/beta 活动运行均为 0 后，重载共享 backend 与 beta backend，退出码 0；三站 readiness 首次检查均为 200。重新合并 profile、渲染 plist 并 bootstrap，三步退出码均为 0。最终 PID `86281`、pidfile 0600、worker 进程 1、仅监听 `127.0.0.1:9109`；alpha/daily claims 均 0、slots busy 0、provider failures 0、circuit open 0、orphan containers 0。没有 Queued 运行或熔断探针条件，恢复过程没有 provider 调用。
+
+## 2026-09-05 架构方接手：范围偏离追认与阻断项处置
+
+执行方在终审停止点提出的两个问题，由架构方（Claude）逐条回读 diff 后裁决。
+
+### 追认 `c2b2f4b` 的 7 文件范围偏离
+
+架构方独立复核了 `git show c2b2f4b` 的全部非测试改动，结论：**追认**，且该提交是正确的。
+
+判据不是文件数，而是因果关系。这次提交只做一件事——把模型策略（provider/model）与全部调用预算从客户端常量搬到服务端下发。要做成这件事，下列改动是必要后果而非漂移：
+
+| 文件 | 为什么必然要改 |
+| --- | --- |
+| `dsherp/runtime_host.py` | `DSH_MODEL` 不再来自 `.env`，KEYS 必须去掉它 |
+| `dsherp/runtime_revision.py` | 指纹材料同步去掉 `DSH_MODEL`，否则 revision 与实际装配不符 |
+| `runtime/model-guard.cjs` | 新增 `claimed_budget` 上送，供服务端校验领取时的预算与当前站点配置一致 |
+| `config/dsh-business.yml` | `maxTokens` 改为读 `DSHERP_MODEL_MAX_OUTPUT_TOKENS`，该变量由 `session_runtime` 按下发预算注入 |
+| 四个集成测试 | 行为改变，断言随之更新 |
+
+该提交同时是安全面的改进：`reserve_model_call` 现在要求 `claimed_budget` 与站点当前配置逐键相等，运行期无法拿陈旧或被篡改的预算继续调用模型；`session_runtime._business_budget` 仍硬校验 `provider=='deepseek-official'`。
+
+执行方触发停止规则本身是正确的——规则的作用就是把这类扩张交给架构方判断，而不是让执行方自行放行。规则已按此修订（见计划"自检门规则"节）：必要后果需逐条披露但不停止，无因果关系的漂移无论几个文件都停。本次的实际缺陷是**披露不全**（只报了 3 个"核心"路径），不是改动本身越界。
+
+### 开放 Important 的处置
+
+第 7 项（`monitor_ops` 只覆盖 `sites[0]`）维持 Deferred：多站运维快照属计划 3 的部署规格，R7 在本计划标"部分处理"。
+
+第 1–6 项由架构方接手关闭，逐项先红后绿。处置记录见下节。
