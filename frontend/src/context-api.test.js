@@ -167,3 +167,27 @@ it('describeError 只把 transient 与 unavailable 标为可重试',()=>{
  expect(api.describeError(Object.assign(new Error('助手服务暂不可用'),{kind:'unavailable',httpStatus:503}))).toMatchObject({message:'助手服务暂不可用',retryable:true});
  expect(api.describeError(new Error('未知'))).toMatchObject({message:'未知',retryable:false});
 });
+it('fetch 网络中断只抛安全可重试错误，不泄漏原异常且不重试',async()=>{
+ const fetch=vi.fn(async()=>{throw new TypeError('PRIVATE Failed to fetch');});
+ vi.stubGlobal('fetch',fetch);
+ const failed=await api.contextApi('list_sessions').then(()=>{throw new Error('expected reject');},caught=>caught);
+ expect(failed).toMatchObject({message:'网络连接中断，请检查连接后重试',kind:'transient',httpStatus:null});
+ expect(failed).toBeInstanceOf(Error);
+ expect(failed.name).toBe('Error');
+ expect(failed.message).not.toMatch(/PRIVATE|Failed to fetch|TypeError/);
+ expect(String(failed)).not.toMatch(/PRIVATE|Failed to fetch/);
+ expect(api.describeError(failed)).toMatchObject({message:'网络连接中断，请检查连接后重试',retryable:true});
+ expect(fetch).toHaveBeenCalledTimes(1);
+});
+it('主动取消不伪装成网络故障',async()=>{
+ const aborted=Object.assign(new Error('aborted'),{name:'AbortError'});
+ const fetch=vi.fn(async()=>{throw aborted;});
+ vi.stubGlobal('fetch',fetch);
+ await expect(api.contextApi('list_sessions')).rejects.toBe(aborted);
+ expect(fetch).toHaveBeenCalledTimes(1);
+ const controller=new AbortController();
+ controller.abort();
+ const transport=new TypeError('PRIVATE Failed to fetch');
+ vi.stubGlobal('fetch',vi.fn(async()=>{throw transport;}));
+ await expect(api.contextApi('list_sessions',{},controller.signal)).rejects.toBe(transport);
+});

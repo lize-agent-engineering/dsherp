@@ -90,7 +90,13 @@ export async function contextApi(method,params={},signal){
     if(!csrf)throw new Error('当前会话尚未就绪，请刷新记录后再提交');
     Object.assign(options,{method:'POST',headers:{'Content-Type':'application/json','X-Frappe-CSRF-Token':csrf},body:JSON.stringify(params)});
   }
-  const response=await fetch(url,options);
+  let response;
+  try{
+    response=await fetch(url,options);
+  }catch(error){
+    if(signal?.aborted||error?.name==='AbortError')throw error;
+    throw requestError(null,'网络连接中断，请检查连接后重试','transient');
+  }
   if(!response.ok){
     const body=await readJson(response);
     if([401,403].includes(response.status)){
