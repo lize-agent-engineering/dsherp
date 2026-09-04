@@ -11,6 +11,12 @@ import httpx
 from dsherp.read_tools import create_read_server
 
 API='/api/method/dsherp_bridge.context_execution.'
+# Transport failures and server faults are the model's business only as a retryable
+# condition; their text is internal (SQL, paths, provider detail) and never crosses.
+TRANSIENT_MESSAGE='业务服务暂时不可用，请稍后重试'
+# Only this tool path reaches the model. Worker and runner RPCs keep raw httpx
+# exception classes so metrics and logs can still tell a broken network from a rejection.
+MODEL_FACING_METHODS=('run_tool',)
 
 
 class BusinessRuntimeError(RuntimeError):
@@ -55,8 +61,8 @@ def _server_message(body):
 def classify_failure(status_code,body,transport_error):
     exc_type=body.get('exc_type') if isinstance(body,dict) else None
     if transport_error is not None or (isinstance(status_code,int) and status_code>=500):
-        error_class,retryable='transient',True
-    elif status_code in (401,403) or exc_type=='PermissionError':
+        return {'error_class':'transient','message':TRANSIENT_MESSAGE,'retryable':True,'http_status':status_code}
+    if status_code in (401,403) or exc_type=='PermissionError':
         error_class,retryable='permission',False
     else:
         error_class,retryable='validation',False
@@ -66,7 +72,11 @@ def classify_failure(status_code,body,transport_error):
 def post(client,method,*,timeout=None,**data):
     request={'json':data}
     if timeout is not None:request['timeout']=timeout
-    response=client.post(API+method,**request)
+    try:
+        response=client.post(API+method,**request)
+    except httpx.TransportError as error:
+        if method not in MODEL_FACING_METHODS:raise
+        raise ToolFailure(classify_failure(None,None,error)) from error
     if response.status_code!=200:
         try:payload=response.json()
         except ValueError:payload=None

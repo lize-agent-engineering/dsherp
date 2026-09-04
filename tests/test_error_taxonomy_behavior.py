@@ -9,6 +9,7 @@ import pytest
 from deepseek_harness import DeepSeekHarness
 
 from dsherp.context_mcp import create_server
+from dsherp.context_mcp import TRANSIENT_MESSAGE
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -86,7 +87,8 @@ def _run_classified_tool_failure(model_server, tmp_path, status, body):
     (417,{'exc_type':'ValidationError','_server_messages':json.dumps([json.dumps({'message':'仓库不存在'})])},
      'validation','仓库不存在'),
     (403,{'exception':'frappe.exceptions.PermissionError: 无权读取'},'permission','无权读取'),
-    (503,{'_server_messages':json.dumps([json.dumps({'message':'上游超时'})])},'transient','上游超时'),
+    # 5xx 的服务端文本是内部细节，模型只应看到固定的可重试文案。
+    (503,{'_server_messages':json.dumps([json.dumps({'message':'上游超时'})])},'transient',TRANSIENT_MESSAGE),
 ])
 def test_classified_tool_failure_reaches_next_model_request(model_server,tmp_path,status,body,error_class,message):
     text=_run_classified_tool_failure(model_server,tmp_path,status,body)

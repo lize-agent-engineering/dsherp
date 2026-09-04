@@ -474,7 +474,7 @@ def test_needs_input_status_stops_gracefully(model_server,tmp_path):
 - Test: `tests/test_context_mcp.py`
 
 **Interfaces:**
-- `classify_failure(status_code: int, body: dict|None, transport_error: Exception|None) -> dict`：返回 `{'error_class': 'validation'|'permission'|'transient', 'message': str, 'retryable': bool, 'http_status': int|None}`。规则：transport 异常/超时/5xx/502-504 → transient（retryable True）；401/403 或 `exc_type=='PermissionError'` → permission（False）；417/400 及其他 4xx → validation（False）。`message` 取 Frappe 响应的 `_server_messages` 首条 `message` 字段，其次 `exception` 冒号后的文本，截断 500 字，不含栈。
+- `classify_failure(status_code: int, body: dict|None, transport_error: Exception|None) -> dict`：返回 `{'error_class': 'validation'|'permission'|'transient', 'message': str, 'retryable': bool, 'http_status': int|None}`。规则：transport 异常/超时/5xx/502-504 → transient（retryable True）；401/403 或 `exc_type=='PermissionError'` → permission（False）；417/400 及其他 4xx → validation（False）。`message` 的取法按类分开（2026-09-05 修订）：`validation`/`permission` 取 Frappe 响应的 `_server_messages` 首条 `message` 字段，其次 `exception` 冒号后的文本，截断 500 字、不含栈——这是面向用户的业务原因，透传是设计意图；`transient`（5xx 与传输故障）**不取任何服务端文本**，固定为 `TRANSIENT_MESSAGE`，因为 Frappe 500 的 `exception` 尾行含 SQL 列名、内部路径与异常类型，会经工具结果进入模型上下文并发往 provider。传输异常的收口只作用于模型面的 `run_tool`；worker 与 runner 的 RPC 保留原始 httpx 异常类，否则指标与日志的 `error_class` 会把断网和业务拒绝混为一谈。
 - `post(...)` 在非 200 时抛 `ToolFailure(classification)`，其 `str()` 为一行 JSON：`{"error_class":..,"message":..,"retryable":..}`——FastMCP 会把异常文本作为 `isError=true` 的工具结果返回给模型；worker/runner 侧对 `claim_run`/`finish_run` 的既有 `BusinessRuntimeError` 语义保留（`ToolFailure` 继承 `BusinessRuntimeError` 并保留 `status_code`）。
 
 - [x] **Step 1: 写失败测试**
