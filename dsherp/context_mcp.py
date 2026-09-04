@@ -19,11 +19,58 @@ class BusinessRuntimeError(RuntimeError):
         super().__init__(f'业务运行请求未完成（HTTP {status_code}）')
 
 
+class ToolFailure(BusinessRuntimeError):
+    def __init__(self,classification):
+        self.classification=classification
+        super().__init__(classification.get('http_status'))
+    def __str__(self):
+        return json.dumps({key:self.classification[key] for key in ('error_class','message','retryable')},ensure_ascii=False)
+
+
+def _failure_message(body):
+    if not isinstance(body,dict):return '业务请求失败'
+    message=_server_message(body)
+    if message is None:
+        exception=body.get('exception')
+        if isinstance(exception,str) and ':' in exception:message=exception.split(':',1)[1]
+        else:message='业务请求失败'
+    line=str(message).splitlines()[0].strip()
+    if 'Traceback' in line:line=line.split('Traceback',1)[0].strip() or '业务请求失败'
+    return line[:500]
+
+
+def _server_message(body):
+    raw=body.get('_server_messages')
+    if not raw:return None
+    try:
+        items=json.loads(raw) if isinstance(raw,str) else raw
+        first=items[0]
+        payload=json.loads(first) if isinstance(first,str) else first
+        message=payload.get('message')
+    except (TypeError,ValueError,KeyError,IndexError,AttributeError):
+        return None
+    return message if isinstance(message,str) and message.strip() else None
+
+
+def classify_failure(status_code,body,transport_error):
+    exc_type=body.get('exc_type') if isinstance(body,dict) else None
+    if transport_error is not None or (isinstance(status_code,int) and status_code>=500):
+        error_class,retryable='transient',True
+    elif status_code in (401,403) or exc_type=='PermissionError':
+        error_class,retryable='permission',False
+    else:
+        error_class,retryable='validation',False
+    return {'error_class':error_class,'message':_failure_message(body),'retryable':retryable,'http_status':status_code}
+
+
 def post(client,method,*,timeout=None,**data):
     request={'json':data}
     if timeout is not None:request['timeout']=timeout
     response=client.post(API+method,**request)
-    if response.status_code!=200:raise BusinessRuntimeError(response.status_code)
+    if response.status_code!=200:
+        try:payload=response.json()
+        except ValueError:payload=None
+        raise ToolFailure(classify_failure(response.status_code,payload if isinstance(payload,dict) else None,None))
     body=response.json()
     if method=='claim_run' and 'message' not in body:return None
     return body['message']

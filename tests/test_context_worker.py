@@ -6,7 +6,7 @@ import threading
 import time
 import httpx
 import pytest
-from dsherp.context_mcp import BusinessRuntimeError
+from dsherp.context_mcp import BusinessRuntimeError,ToolFailure
 import dsherp.context_worker as worker
 from dsherp.context_worker import profile_business,run_once
 SETTINGS={'DEEPSEEK_API_KEY':'synthetic','DSH_MODEL':'deepseek-v4-flash','DEEPSEEK_BASE_URL':'http://synthetic'}
@@ -89,6 +89,7 @@ def test_business_profile_requires_explicit_urls_and_site():
 
 
 def test_worker_poll_survives_transient_business_transport_and_server_failures(tmp_path, capsys):
+    assert issubclass(ToolFailure,BusinessRuntimeError)
     attempts=[]
     def handler(request):
         attempts.append(request.url.path)
@@ -102,7 +103,7 @@ def test_worker_poll_survives_transient_business_transport_and_server_failures(t
     assert len(attempts)==3
     diagnostic=capsys.readouterr().err
     assert 'ReadError' in diagnostic
-    assert 'BusinessRuntimeError' in diagnostic and '500' in diagnostic
+    assert 'ToolFailure' in diagnostic and '500' in diagnostic
     assert 'synthetic connection reset' not in diagnostic
 
 
