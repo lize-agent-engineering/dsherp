@@ -8,7 +8,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 import pytest
 
-from infra.v16_integration_queue import purge_validation_jobs
+from infra.v16_integration_queue import purge_validation_jobs, purge_validation_jobs_if_backlogged
 
 _SEED_WORKER_HEARTBEAT = """
 import os,frappe
@@ -43,6 +43,13 @@ def seed_validation_worker_heartbeat(*, run=subprocess.run):
     if not result.stdout.strip():
         raise RuntimeError("Failed to seed validation worker heartbeat")
     return result.stdout.strip()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def validation_queue_backlog():
+    """Keep the shared queue below Frappe's insert cap for the length of the suite."""
+    purge_validation_jobs_if_backlogged()
+    yield
 
 
 @pytest.fixture(scope="session", autouse=True)
