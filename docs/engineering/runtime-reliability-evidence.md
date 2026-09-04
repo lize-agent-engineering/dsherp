@@ -3103,3 +3103,51 @@ beta_scheduler
 ```
 
 最终仓库/运行产物核验：分支 `codex/runtime-reliability`，普通 checkout（`git_dir=.git`、`git_common_dir=.git`），`.runtime` 与 `work` 下 tracked 文件数 0，`work/context-run-*` / `run.json` stdout 为空，严格命名 context 容器 0、G5 model 容器 0。计划 2 全分支 diff 的凭据值扫描仅命中测试夹具 `DEEPSEEK_API_KEY=synthetic` 与 `https://provider.invalid`，没有真实 key 或 secret。
+
+## 2026-09-05 最终独立审查：阻断与第一批修复
+
+先前“95 项全部勾选”是 `f9224d2` 的候选状态。独立审查在随后回读源码时证明该结论不成立；Task 7.3 最后三项已重新打开，当前为 92/95，计划 2 未验收。
+
+第一批两个行为红测在常驻 worker 停止后运行。migrate 产生的 6 个搜索索引任务先使 queue hygiene fastfail；逐站同步执行 `frappe.search.website_search.build_index_for_all_routes` 后，仅精确清除各站两个已核验同类队列项，alpha/daily/beta 的 index 与 purge 退出码均为 0，最终队列查询 stdout 为空。目标 RED：
+
+```text
+FAILED tests/integration/test_context_execution.py::test_cancelling_run_finish_succeeded_persists_cancelled_answer
+E frappe.exceptions.PermissionError: 取消中的运行不能成功完成
+FAILED tests/integration/test_context_permission_revision.py::test_native_permission_change_invalidates_and_rotates_runtime
+E AssertionError: old request input context allowed
+2 failed in 35.13s
+```
+
+最小实现只改计划内 `context_execution.py`：Cancelling 收到经过来源、权限修订与公开会话复核的 Succeeded 回写时，最终落 Cancelled、保留答案并清 capability；`erp_request_input` 改状态前进入 owner actor 并复核权限 revision。第一次复跑中权限路径已绿；取消测试因在同一事务调用会先 rollback 的 `cancel_run` 而误删未提交 source，修正夹具为生产等价的两个已提交请求边界后：
+
+```text
+..                                                                       [100%]
+2 passed in 35.00s
+```
+
+相关两文件完整集成：
+
+```text
+.....                                                                    [100%]
+5 passed in 48.59s
+```
+
+提交：`c6b3e8e fix: 保留取消竞态答案并复核补充信息权限`。没有 DocType、Report 或 hooks 变更，无需 migrate；没有 provider 调用。
+
+审查仍有以下开放 Important，控制器已逐处回读源码确认，未在本停止点继续修改：
+
+1. permission/transient 工具首次失败且 sources 为空时，skill 要求模型说明后结束，但 runner 以 Succeeded 回写会被“必须有 sources”拒绝，答案丢失、运行等租约过期。
+2. MCP `post()` 不捕获 `httpx.TransportError`，实际断网没有结构化 transient；500 响应的任意 `exception` 冒号后文本会进入模型上下文，存在内部信息外泄。
+3. 取消先同步调用 native cancel RPC；client timeout 90s，`grace=5s` 只约束随后的 join。
+4. NeedsInput 在 capability 尚未清除、旧执行者尚未退出时就从 active/并发集合移除，可放入同一 native session 的下一 run。
+5. 多站 heartbeat 与 claim 使用同线程、每 client 25s timeout；一个黑洞站可把健康站每轮拖约 50s。
+6. `run_container` finally 的 `docker rm -f` 不检查 return code；启动清理又晚于 image/volume inspect，依赖检查失败时残留容器可能继续挂载 provider key。
+7. `monitor_ops` 只覆盖 `sites[0]`（alpha）；daily/其余站 Deferred。Docker 依赖启动失败的 LaunchAgent 重启行为属计划 3，R7 只能标部分处理。
+
+流程停止条件也已触发：回查 `c2b2f4b` 发现同一模型策略/预算修复实际改动 7 个计划全文未列路径：`config/dsh-business.yml`、`dsherp/runtime_host.py`、`dsherp/runtime_revision.py`、`runtime/model-guard.cjs`、`tests/integration/test_configuration_domain.py`、`tests/integration/test_context_execution.py`、`tests/integration/test_context_mcp_chain.py`。先前证据只披露了 3 个“核心”路径，未满足用户要求的 `>3` 先停规则；继续前需用户追认该历史范围偏离。
+
+另有文档偏离：2026-09-03 spec 写 operation 临时模型超时 120s 且计划 2 不改数值，计划 2 的全局约束与实际预算已统一为 90s；已在 spec 原裁决行中明确记录冲突，正式值仍由计划 6 评估裁定。
+
+本轮精确删除了仅属于 runtime-reliability 的 24 个已忽略临时 brief/report/review diff 与一个 `work/__pycache__/smoke_context_model.cpython-312.pyc`；保留唯一指定台账 `runtime-reliability/progress.md`，未动其他项目台账。临时文件未备份、不可恢复。
+
+停止点运行态恢复：确认 alpha/daily/beta 活动运行均为 0 后，重载共享 backend 与 beta backend，退出码 0；三站 readiness 首次检查均为 200。重新合并 profile、渲染 plist 并 bootstrap，三步退出码均为 0。最终 PID `86281`、pidfile 0600、worker 进程 1、仅监听 `127.0.0.1:9109`；alpha/daily claims 均 0、slots busy 0、provider failures 0、circuit open 0、orphan containers 0。没有 Queued 运行或熔断探针条件，恢复过程没有 provider 调用。

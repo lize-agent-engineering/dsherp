@@ -6,17 +6,19 @@
 
 对照当前实现与[运行底座可靠性证据](runtime-reliability-evidence.md)。下表只标计划 2 覆盖的 R1–R9、A1；**不解除计划 3/4/5/6、真实租户接入与生产部署边界**。下方 2026-09-03 原文缺口表保留为历史记录，行号与当时源码快照一并保留，不在本轮改写。固定 DSH `0.1.1rc1` 仍是预发布 Deferred。
 
+**2026-09-05 最终独立审查结论：未通过。** 下表是 `f9224d2` 时的候选处理映射，不是最终放行结论。已在 `c6b3e8e` 修复取消竞态丢答案和 `erp_request_input` 权限修订绕过，但尚未重跑全量门；其余开放 Important 包括：无 sources 的 permission/transient “做不了”回答无法终结、MCP transport 未分类且 500 exception 文本可能外泄、取消 RPC 不受 5 秒 grace 约束、NeedsInput 过早放开同一 native session、多站心跳/领取被黑洞站串行拖住、容器 finally 删除不检查结果且启动清理晚于 image/volume inspect。`monitor_ops` 仍只覆盖 alpha；Docker 启动依赖失败仍由 LaunchAgent 反复重启。故 R3、R6、R7、R9 及错误三分类闭环仍未解除。
+
 | ID | 复核 | 当前实现与证据（行为概述） |
 |---|---|---|
 | R1 | 计划 2 已处理 | `run_status` 改为按字段 `get_value` 的只读心跳：校验 capability 与未过期租约，剩余秒数低于 `lease_renew_below_seconds` 时续期；不再 `require_revision`、不再对会话来源逐条 `check_permission`，也不持 run 行 FOR UPDATE。G5 终验在 profile `slots=3`、20 个样本下，100 轮历史 P95 `0.383781s`，0 轮对照 P95 `0.303190s`，比值 `1.265809`。20 并发容量基线只记录、不作为本计划门。 |
-| R2 | 计划 2 已处理 | 常驻路径改为 `Coordinator.run_claimed`：容器结果或 `finish_run` 失败（含取消瞬间 403）记 `worker_error` / `runtime_failed`，异常不逃出 tick，主循环继续。`test_run_claimed_never_escapes_and_records_provider_failure` 覆盖 finish 403。混沌 1：SIGKILL 后运行保持 Running，租约到期由下一 worker 清扫为 Failed，不假完成、不自动重试。 |
-| R3 | 计划 2 已处理 | `claim_run` 按 `dsherp_site_concurrency`（站点默认 1）限制 Running/Cancelling，并跳过已有在飞运行的 owner。本机 worker profile `sites` 含 alpha/daily，`slots=3`。G5：daily 的 claimed 早于 alpha 第二条，alpha 三条按提交顺序领取，四条无 Failed。临时把站点并发改为 2 的集成测试可同时两条 Running。 |
+| R2 | 修复后待全量回归 | 常驻路径改为 `Coordinator.run_claimed`；`c6b3e8e` 又把 Cancelling 与 Succeeded 竞态落为 Cancelled 并保留答案，目标及相关集成 5 passed。完整集成门尚未在该提交上重跑。 |
+| R3 | 终审未通过 | `claim_run` 已有每站/每用户闸门，但 NeedsInput 在旧执行者清 capability 前就不再算 active，可让同一 native session 出现两个执行者；多站 heartbeat/claim 仍被单一黑洞站按 25s timeout 串行拖住。G5 的健康站两站并行不能覆盖这两条失败路径。 |
 | R4 | 计划 2 已处理 | 超时链改读领取预算：各领域 `model_request_timeout_seconds=90`；`run_total_seconds` query/configuration 300、operation 600；容器 subprocess 超时为 `run_total_seconds+30`。runner 到总时长 deadline 后 5s grace 取消并 Failed（`reason=run_total_exceeded`）。不再使用固定 140s 容器超时或 operation 120s 模型超时。 |
 | R5 | 计划 2 已处理 | 领取时 `expires_at` 取 `lease_seconds`（默认 180）；`run_status` 在剩余小于 `lease_renew_below_seconds`（默认 90）时续期。过期租约由 `claim_run` 清扫为 Failed 并写 `expired {reason:lease_expired}`。混沌 1 实测：180s 租约到期后约 2s 内清扫，同一会话可继续新消息。`finish_run` 仍拒绝已过期凭据，答案不再依赖“固定 180s 内必须结束”。 |
-| R6 | 计划 2 已处理 | `monitored_run` 用 daemon 线程跑模型调用；看到 Cancelling 后 `dsherp/session/cancel`，最多等 `grace=5s` 即返回 `Cancelled`，不再 `future.result(timeout=5)` 后 `shutdown(wait=True)` 等到模型自然结束。行为测试覆盖模型挂起时仍在 grace 内回到 Cancelled。 |
-| R7 | 计划 2 已处理 | `send_message` 写入 `queue_expires_at`（默认 600s）；`claim_run` 清扫过期 Queued 为 Failed（`reason=queue_expired`）。心跳陈旧超过 `heartbeat_stale_seconds`（默认 60）时入队返回 503。会话仍有一条在飞运行时拒绝新消息。docker 镜像/卷在 worker 启动时 `inspect`，不可用则该次启动失败；主循环不再因单次运行退出。 |
+| R6 | 终审未通过 | daemon 模型线程与 join grace 已实现，但 `dsherp/session/cancel` 是同步调用且 client timeout 为 90s；5 秒只约束 RPC 返回后的 join，取消总时长仍可远超 5 秒。 |
+| R7 | 部分处理，终审未通过 | 队列过期与 60s 心跳背压已实现。Docker image/volume inspect 失败仍发生在主循环外，LaunchAgent `KeepAlive` 每 10s 重启；黑洞站还可阻塞健康站 heartbeat。部署级启动/容量行为 Deferred 到计划 3，但本轮不能标为全部处理。 |
 | R8 | 计划 2 已处理 | 2s 轮询的 `run_status` 不再锁 run 行，也不读权限修订或会话全历史。`reserve_model_call` / 工具 / `finish_run` 仍对 run 行 FOR UPDATE 并在写路径复核修订，避免与心跳抢同一把长锁。G5 的历史无关 P95 比值用于核对这条退化是否复现。 |
-| R9 | 计划 2 已处理 | `run.json` 写在 `work/` 下的 `TemporaryDirectory`，正常返回路径会删除；容器名严格为 `dsherp-context-<32位小写十六进制>` 且 `finally` 里 `docker rm -f`。worker 取得单实例锁后的启动清理会先删除仍匹配该命名的残留容器，再删除 `work/context-run-*` 临时目录；枚举或删除失败则启动 fastfail。worker `post()` 对非 200 走 `ToolFailure`；`claim_run` 响应缺 `message` 时返回 None。`run_claimed` / 主循环捕获异常，单次解析或回写失败不再退出进程。配置确认路径仍只显式捕获 `QueryDeadlockError`；`.runtime/business-sessions/` 的保留、加密与备份属计划 4，本表不将两者标为已解除。 |
+| R9 | 终审未通过 | 启动清理会验证严格命名残留的删除结果，但单次容器 `finally` 里的 `docker rm -f` 仍未检查 return code；且启动清理排在 image/volume inspect 之后，依赖检查失败时不会先移除可能挂载 provider key 的孤儿容器。配置确认死锁和 `.runtime/business-sessions/` 仍按计划 4 Deferred。 |
 | A1 | 计划 2 已处理 | 宿主 `CircuitBreaker`：连续 3 次 `provider_failure` 打开 60s；打开期每 60s 探针 `GET /models`，失败则保持打开、成功则复位。指标 `dsherp_provider_circuit_open`、`dsherp_provider_call_failures_total`；打开时发 critical `provider_circuit_open`。混沌 2：三条本地替身失败运行后 gauge=1、恰好一条告警，授权窗口内一次真实 `/models` 探针后关闭，随后恢复运行 Succeeded。`dsherp_model_policy` 仍只允许单一 `deepseek-official` 模型；不重试已领取运行，也不做多 provider 路由。 |
 
 ## 已核验为生产级、设计中保持不动的底座

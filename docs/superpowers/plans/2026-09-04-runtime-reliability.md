@@ -640,9 +640,9 @@ def test_tool_failures_are_classified_and_serialized():
 ### Task 7.3：文档收口与终验
 
 - [x] `docs/engineering/runtime-baseline.md`：预算表与配置键（`dsherp_run_budget`、`dsherp_site_concurrency`、`dsherp_model_policy`、worker profile `sites/slots`）。
-- [x] README 当前状态与测试数字；spec 实施顺序表计划 2 行标注"实施完成，待审计"；生产就绪审计文档把 R1–R9、A1 标为"计划 2 已处理"。
-- [x] 全量门：非集成、前端、Node、`tests/integration -q` 全量（常驻 worker 停止状态下），三站 migrate 退出码，恢复 worker 并记录 pid。
-- [x] 本计划复选框逐项核验后勾选；提交 `docs: 收口运行底座可靠性计划`。
+- [ ] README 当前状态与测试数字；spec 实施顺序表计划 2 行标注"实施完成，待审计"；生产就绪审计文档把 R1–R9、A1 标为"计划 2 已处理"。（2026-09-05 最终独立审查未通过，状态已恢复为补修中。）
+- [ ] 全量门：非集成、前端、Node、`tests/integration -q` 全量（常驻 worker 停止状态下），三站 migrate 退出码，恢复 worker 并记录 pid。（`c6b3e8e` 后需重跑。）
+- [ ] 本计划复选框逐项核验后勾选；提交 `docs: 收口运行底座可靠性计划`。（终审阻断项关闭后再勾选。）
 
 **S7 自检门 / 终验报告模板**（停下并原样提交给审计方）：
 
