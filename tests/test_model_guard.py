@@ -41,13 +41,16 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
             reports=[item for item in observed if item[0].endswith('.record_run_event')]
             assert len(requests)==len(authorizations)==len(reports)==(3 if mode in ('skill','operation') else 2)
             assert all(item[1]['events'][0]['kind']=='model_response' for item in reports)
-            expected={'skill','mcp__erp__erp_read_schema','mcp__erp__erp_read_record','mcp__erp__erp_search_records'}
+            expected={'skill','mcp__erp__erp_read_schema','mcp__erp__erp_read_record','mcp__erp__erp_search_records','mcp__erp__erp_request_input'}
             if mode=='operation':expected.update({'mcp__erp__erp_propose_update','mcp__erp__erp_propose_create','mcp__erp__erp_propose_action','mcp__erp__erp_propose_fill','mcp__erp__erp_propose_make'})
             assert {tool['function']['name'] for tool in requests[0]['tools']}==expected
             assert 'PERSONAL_SKILL_FORBIDDEN' not in json.dumps(requests)
-            if mode=='skill':assert '业务只读查询' in str(requests[1]['messages'])
+            if mode=='skill':
+                assert '业务只读查询' in str(requests[1]['messages'])
+                assert '工具错误与做不了的出口' in str(requests[1]['messages'])
             if mode=='operation':
                 assert '业务操作提案' in str(requests[1]['messages'])
+                assert '工具错误与做不了的出口' in str(requests[1]['messages'])
                 assert 'erp-query' not in str(requests[0]['messages'])
         else:
             assert result.finish_reason!='completed'
