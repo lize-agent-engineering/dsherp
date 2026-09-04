@@ -108,3 +108,50 @@ it('权限拒绝和响应不明明确报错，不重试写请求',async()=>{
  await expect(api.contextApi('get_session',{session_id:'S-1'})).rejects.toThrow(/权限/);
  expect(fetch).toHaveBeenCalledTimes(1);
 });
+function jsonError(status,body){
+ return {ok:false,status,headers:new Headers({'Content-Type':'application/json'}),json:async()=>body};
+}
+it('417 业务校验透传首条服务端原因，并标记 validation',async()=>{
+ const fetch=vi.fn(async()=>jsonError(417,{exc_type:'ValidationError',exc:'PRIVATE TRACE',_server_messages:JSON.stringify([JSON.stringify({message:'库存不足'}),JSON.stringify({message:'第二条不应展示'})])}));
+ vi.stubGlobal('fetch',fetch);
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'库存不足',kind:'validation',httpStatus:417});
+ expect(fetch).toHaveBeenCalledTimes(1);
+});
+it('503 保留助手不可用原因并标记 unavailable',async()=>{
+ vi.stubGlobal('fetch',async()=>jsonError(503,{_server_messages:JSON.stringify([JSON.stringify({message:'助手服务暂不可用'})])}));
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'助手服务暂不可用',kind:'unavailable',httpStatus:503});
+});
+it('无 JSON 或 JSON 解析失败的 502 保留安全文案并标记 transient',async()=>{
+ const fetch=vi.fn(async()=>({ok:false,status:502}));vi.stubGlobal('fetch',fetch);
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'请求未完成（HTTP 502），请刷新记录核实，不要重复发送',kind:'transient',httpStatus:502});
+ expect(fetch).toHaveBeenCalledTimes(1);
+ vi.stubGlobal('fetch',async()=>({ok:false,status:502,headers:new Headers({'Content-Type':'application/json'}),json:async()=>{throw new SyntaxError('bad json');}}));
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'请求未完成（HTTP 502），请刷新记录核实，不要重复发送',kind:'transient',httpStatus:502});
+});
+it('401 与 403 保持既有文案并附 permission 与 httpStatus',async()=>{
+ vi.stubGlobal('fetch',async()=>jsonError(403,{exception:'frappe.exceptions.PermissionError: 企业成员绑定已变化，请重新登录',exc:'PRIVATE TRACE'}));
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'企业成员绑定已变化，请重新登录',kind:'permission',httpStatus:403});
+ vi.stubGlobal('fetch',async()=>({ok:false,status:401}));
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'当前身份或业务权限已失效，请重新登录或联系管理员',kind:'permission',httpStatus:401});
+});
+it('错误解析只取安全业务原因，失败则回退 HTTP 文案',async()=>{
+ vi.stubGlobal('fetch',async()=>jsonError(417,{exception:'frappe.exceptions.ValidationError: 仓库不存在',exc:'PRIVATE TRACE'}));
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'仓库不存在',kind:'validation',httpStatus:417});
+ vi.stubGlobal('fetch',async()=>jsonError(417,{_server_messages:'not-json',exception:'private-detail',exc:'Traceback (most recent call last):\nSECRET'}));
+ const failed=await api.contextApi('list_sessions').then(()=>{throw new Error('expected reject');},caught=>caught);
+ expect(failed).toMatchObject({message:'请求未完成（HTTP 417），请刷新记录核实，不要重复发送',kind:'validation',httpStatus:417});
+ expect(failed.message).not.toMatch(/private-detail|SECRET|Traceback|PRIVATE/);
+});
+it('417 的 RuntimeError exception 无有效 _server_messages 时回退安全 HTTP 文案',async()=>{
+ vi.stubGlobal('fetch',async()=>jsonError(417,{exception:'RuntimeError: PRIVATE SECRET'}));
+ const failed=await api.contextApi('list_sessions').then(()=>{throw new Error('expected reject');},caught=>caught);
+ expect(failed).toMatchObject({message:'请求未完成（HTTP 417），请刷新记录核实，不要重复发送',kind:'validation',httpStatus:417});
+ expect(failed.message).not.toMatch(/PRIVATE|SECRET/);
+});
+it('describeError 只把 transient 与 unavailable 标为可重试',()=>{
+ expect(api.describeError(Object.assign(new Error('库存不足'),{kind:'validation',httpStatus:417}))).toMatchObject({message:'库存不足',retryable:false});
+ expect(api.describeError(Object.assign(new Error('权限'),{kind:'permission',httpStatus:403}))).toMatchObject({message:'权限',retryable:false});
+ expect(api.describeError(Object.assign(new Error('请求未完成（HTTP 502），请刷新记录核实，不要重复发送'),{kind:'transient',httpStatus:502}))).toMatchObject({message:'请求未完成（HTTP 502），请刷新记录核实，不要重复发送',retryable:true});
+ expect(api.describeError(Object.assign(new Error('助手服务暂不可用'),{kind:'unavailable',httpStatus:503}))).toMatchObject({message:'助手服务暂不可用',retryable:true});
+ expect(api.describeError(new Error('未知'))).toMatchObject({message:'未知',retryable:false});
+});
