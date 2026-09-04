@@ -3205,3 +3205,13 @@ E AssertionError: old request input context allowed
 三处被更新的既有断言，都是原先锁定了缺陷本身，逐条说明：`tests/test_context_mcp.py` 的 5xx 文案（`业务请求失败` → 固定 transient 文案）、`tests/integration/test_run_events.py` 的 `provider_failures` 计数（3 → 6）、`tests/test_context_runner.py` 的 `runtime_failed` payload 形状（`type/frames` → `reason`）。另有两处因行为改变而放宽：`test_post_preserves_raw_transport_errors` 改测 worker RPC（模型面已按设计收口）、`test_coordinator_never_claims_beyond_free_slots` 的站点顺序改为集合断言（并行领取不承诺顺序）。SIGTERM 用例从"抛 SystemExit"改为"置停止标志并在循环退出时释放 pid"。
 
 一处自查发现的不稳定：并行领取让 `claim_calls` 顺序非确定，文件级测试三次里红两次。已定位为断言过度指定而非实现缺陷，改为集合断言后连跑六次全绿。
+
+### 全量集成门与陈旧服务端代码
+
+首轮全量集成在 backend 未重载时执行，`5 failed, 186 passed in 938.87s`。Frappe app 以只读 bind mount 进容器，gunicorn 已导入的是旧模块；用 `docker exec python -` 的用例读的是磁盘上的新代码，而走 HTTP 的用例读的是进程里的旧代码，两者在同一轮里不一致。重载 alpha 与 beta backend（退出码均为 0，alpha readiness 首次即 200）后复跑，`test_context_mcp_chain.py` 两项与 `test_work_order_operations.py` 一项转绿，确属陈旧代码所致。
+
+剩余两项 `test_translation_pack.py` 是数据残留而非代码缺陷：alpha 上留着一条 `Trial Balance → 企业科目余额表` 的企业级 Translation（`mpi1adgf33`，owner Administrator），正是该测试自己在第 67 行创建、第 73–74 行清理的夹具，清理被外层超时打断。核对三元组 `(source_text, translated_text, language)` 与夹具逐字一致后按名精确删除，未触碰任何其他 Translation 记录；复跑 3 项全绿。
+
+该残留同时复证了生产就绪审计 Q3：集成清理写在容器脚本的 finally 里，外层 `subprocess.run` 超时会直接杀掉脚本。修复属计划 5 的质量门禁，本计划只记录。
+
+**今后的规则**：改动 `frappe_app/` 下的代码后，走 HTTP 的集成门必须先重载 backend 再跑，否则测的是旧模块。

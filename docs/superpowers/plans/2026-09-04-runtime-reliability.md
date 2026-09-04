@@ -14,6 +14,7 @@
 
 - 全部按 AGENTS.md：中文；TDD（先写失败测试）；fastfail；不 fork Frappe/ERPNext/DSH；按功能分类提交；不推送远端；不提交密钥、租户数据、运行日志。
 - 生产化总体设计"前置约束"第 2、3、4、6 条是本计划的验收口径：工具错误三分类、写操作幂等与租约、完成只由外部事实判定、每个状态机都有"做不了"终态。
+- 改动 `frappe_app/` 下的任何代码后，走 HTTP 的集成测试必须先 `docker restart` 对应 backend 再跑：app 以只读 bind mount 进容器，gunicorn 已导入的是旧模块，`docker exec python -` 与 HTTP 两条路径会在同一轮里读到不同版本。
 - 承接计划 1 已固定的规则：每个阶段的自检门都必须附 `.venv/bin/python -m pytest tests --ignore=tests/integration -q` 与 `node --test runtime/*.test.cjs` 完整尾部；DocType/Report/hooks 变更后三站（alpha `dsherp-validation.localhost`、daily `dsherp-daily.localhost`、beta `dsherp-beta.localhost`）都 `bench migrate` 并逐站记录退出码；进程内调用 `worker.run_once`/`poll_once` 的集成测试只能在常驻 worker 停止时运行，且测试开头 fastfail。
 - 修改 `config/runtime-files.json` 所列文件会作废在飞运行；新增被容器加载的模块必须加入清单；`tests/test_runtime_revision.py` 必须继续通过。修改 `business-skills/*/SKILL.md` 必须同步更新 `config/business-skills.json` 的 version 与 sha256，`tests/test_business_skills.py` 必须继续通过。
 - **不重试模型运行**；熔断只影响是否领取，不影响已领取运行；告警只通知不修复。
