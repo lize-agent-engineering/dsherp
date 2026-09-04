@@ -3236,3 +3236,11 @@ frappe.exceptions.QueueOverloaded: Too many queued background jobs (600).
 集成运行期间 `scheduled` profile 未启动，没有任何 worker 消费队列，而每个被测试删除的合成文档都会留下一条 `delete_dynamic_links`。跑到一半跨过 Frappe 的 600 上限后，`frappe.enqueue` 直接抛异常——而 `delete_doc` 内部就要入队，于是**测试自己的清理先失败**：工单链的插入被拒，翻译包的夹具删不掉、残留再让下一轮的前置断言必红。实测中途深度为 127→151，与该机制一致；长跑结束后队列被 session finalizer 清空，所以事后查总是 0，这也是它此前一直被误当作偶发的原因。
 
 修复：`tests/integration/conftest.py` 增加按模块的积压检查，深度超过 200 时调用既有的 `purge_validation_jobs`；该助手仍然先核对全部作业都属 `frappe.ping`/`create_contact`/`delete_dynamic_links` 白名单，不在白名单内一律拒绝清扫。翻译包夹具的自愈与 90 秒超时保留为纵深防御。
+
+#### 恢复常驻 worker 时发现并修掉的连接复用缺陷
+
+worker 按新代码重启后立刻对两站报 `RemoteProtocolError`，5 分钟 10 次、领取 0 次。逐步取证：单独串行与并行调用 `worker_heartbeat`、`claim_run` 都是 200，说明服务端与并发本身没问题；查历史日志发现该错误类在本轮改动前就出现过（09-04 的 02 点 2 次、03 点 1 次），并行发出后频率明显上升。
+
+根因是连接复用：worker 每 3 秒 tick 一次，长于后端 keep-alive，池化的 socket 到下一轮总是已被服务端关闭，复用它就得到"服务端未响应即断开"。代价不是一条日志——丢的是一次心跳或一次领取；心跳丢成串会让所有站在 60 秒后对真实用户返回 503。
+
+修法沿用仓库既有的 `context_runner.business_client`（`max_keepalive_connections=0`，注释写明"不跨调用复用空闲后端 socket"）：把站点客户端抽成 `site_client()` 并采用同一限制，另加一条用真实 HTTP 服务器断言两次请求来自不同源端口的回归。
