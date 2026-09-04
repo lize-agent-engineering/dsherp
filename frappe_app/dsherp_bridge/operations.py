@@ -118,6 +118,55 @@ def _authorization_revision(user, grant=None):
 
 
 @frappe.whitelist(methods=['POST'])
+def reject(proposal_id, digest, request_id):
+    user = _user()
+    if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+        frappe.throw('请求标识无效')
+    frappe.db.rollback()
+    proposal = frappe.get_doc('DS Operation Proposal', proposal_id, for_update=True)
+    public = get_proposal(proposal_id)
+    if not isinstance(digest, str) or digest != proposal.digest:
+        frappe.throw('确认内容不匹配，请重新核对提案')
+    if proposal.status == 'Rejected' and proposal.rejected_request_id == request_id:
+        return public
+    if proposal.status != 'Pending':
+        frappe.throw('仅待确认提案可拒绝')
+    proposal.status = 'Rejected'
+    proposal.rejected_by = user
+    proposal.rejected_request_id = request_id
+    proposal.save(ignore_permissions=True)
+    if proposal.model_run:
+        from dsherp_bridge import context_events as events
+        events.record(proposal.model_run, 'proposal_rejected', {'proposal': proposal.name})
+    frappe.db.commit()
+    return get_proposal(proposal_id)
+
+
+def expire_proposals():
+    now = now_datetime()
+    names = frappe.get_all(
+        'DS Operation Proposal',
+        filters={'status': 'Pending', 'expires_at': ['<=', now]},
+        pluck='name',
+        order_by='creation asc, name asc',
+        limit_page_length=0,
+    )
+    from dsherp_bridge import context_events as events
+    count = 0
+    for name in names:
+        proposal = frappe.get_doc('DS Operation Proposal', name, for_update=True)
+        if proposal.status != 'Pending' or proposal.expires_at > now_datetime():
+            continue
+        proposal.status = 'Expired'
+        proposal.save(ignore_permissions=True)
+        if proposal.model_run:
+            events.record(proposal.model_run, 'proposal_expired', {'proposal': proposal.name})
+        count += 1
+    frappe.db.commit()
+    return count
+
+
+@frappe.whitelist(methods=['POST'])
 def confirm(proposal_id, digest, request_id):
     user = _user()
     grant = frappe.session.data.get('dsherp_platform_grant')
@@ -148,6 +197,10 @@ def confirm(proposal_id, digest, request_id):
         return public['execution']
     if existing:
         return public['execution']
+    if proposal.status == 'Rejected':
+        frappe.throw('提案已被拒绝，请重新提出操作')
+    if proposal.status == 'Expired':
+        frappe.throw('提案已过期，请重新提出操作')
     if proposal.model_run and frappe.db.get_value('DS Model Run',proposal.model_run,'status',for_update=True)!='Succeeded':
         frappe.throw('提案生成运行尚未成功结束，请核实运行记录')
     if proposal.status != 'Pending':
