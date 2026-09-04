@@ -27,6 +27,11 @@ def test_rules_fire_only_on_their_condition():
     assert keys(metrics={**METRICS, "consecutive_run_failures": 3}) == ["provider_or_runtime_failing"]
     assert keys({**BASE, "snapshot": {**SNAPSHOT, "queued": 6}}) == ["queue_backlog"]
     assert keys({**BASE, "snapshot": {**SNAPSHOT, "queued": 1, "queued_oldest_seconds": 601}}) == ["queue_backlog"]
+    assert keys({**BASE, "snapshot": {**SNAPSHOT, "queue_expired_24h": 11}}) == ["queue_expiring"]
+    assert alerts.evaluate({**BASE, "snapshot": {**SNAPSHOT, "queue_expired_24h": 11}}, METRICS, 1000.0) == [
+        alerts.Alert("queue_expiring", "warning", "排队过期较多")
+    ]
+    assert keys({**BASE, "snapshot": {**SNAPSHOT, "queued": 6, "queue_expired_24h": 11}}) == ["queue_backlog", "queue_expiring"]
     assert keys({**BASE, "snapshot": {**SNAPSHOT, "running_stuck": 1}}) == ["run_stuck"]
     assert keys({**BASE, "snapshot": {**SNAPSHOT, "backup_age_hours": None}}) == ["backup_stale"]
     assert keys({**BASE, "snapshot": {**SNAPSHOT, "backup_age_hours": 27}}) == ["backup_stale"]
@@ -44,6 +49,7 @@ def test_evaluate_is_pure_and_thresholds_are_boundaries():
     snapshot = {**BASE, "snapshot": dict(SNAPSHOT)}
     metrics = dict(METRICS)
     assert keys({**BASE, "snapshot": {**SNAPSHOT, "queued": 5}}) == []
+    assert keys({**BASE, "snapshot": {**SNAPSHOT, "queue_expired_24h": 10}}) == []
     assert keys({**BASE, "snapshot": {**SNAPSHOT, "queued": 1, "queued_oldest_seconds": 600}}) == []
     assert keys({**BASE, "snapshot": {**SNAPSHOT, "backup_age_hours": 26}}) == []
     assert keys({**BASE, "snapshot": {**SNAPSHOT, "queued": 1, "last_claim_age_seconds": 120}}) == []

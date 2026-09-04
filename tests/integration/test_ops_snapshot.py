@@ -29,7 +29,8 @@ from frappe.utils import add_to_date,now_datetime
 os.chdir('/home/frappe/frappe-bench/sites')
 frappe.init(site='dsherp-validation.localhost');frappe.connect()
 from dsherp_bridge import ops
-conversation=None;actor=None;runs=[];snapshots=[]
+from dsherp_bridge import context_events as events
+conversation=None;actor=None;runs=[];snapshots=[];proposals=[]
 try:
     frappe.set_user('Administrator')
     actor='ops-'+uuid.uuid4().hex+'@example.invalid'
@@ -47,10 +48,31 @@ try:
     recent=frappe.get_doc({'doctype':'DS Ops Snapshot','collected_at':add_to_date(now_datetime(),days=-1),'payload':'{}'}).insert(ignore_permissions=True)
     snapshots.extend([old.name,recent.name])
     frappe.db.commit()
+    since=add_to_date(now_datetime(),hours=-24)
+    baseline_needs=frappe.db.count('DS Model Run',{'status':'NeedsInput'})
+    baseline_queue=sum(1 for row in frappe.get_all('DS Run Event',filters={'kind':'expired','recorded_at':['>=',since]},fields=['payload']) if json.loads(row.payload or '{}').get('reason')=='queue_expired')
+    baseline_proposals=frappe.db.count('DS Operation Proposal',{'status':'Expired','modified':['>=',since]})
+    need=frappe.get_doc({'doctype':'DS Model Run','conversation':conversation.name,'domain':'query',
+        'status':'NeedsInput','question':'need input','page_context':'{}','sources':'[]','needs_input':'请指定仓库'}).insert(ignore_permissions=True)
+    runs.append(need.name)
+    expired_run=frappe.get_doc({'doctype':'DS Model Run','conversation':conversation.name,'domain':'query',
+        'status':'Failed','question':'expired','page_context':'{}','sources':'[]'}).insert(ignore_permissions=True)
+    runs.append(expired_run.name)
+    events.record(expired_run.name,'expired',{'reason':'queue_expired'})
+    events.record(expired_run.name,'expired',{'reason':'lease_expired'})
+    proposal=frappe.get_doc({'doctype':'DS Operation Proposal','conversation':conversation.name,
+        'payload':'{}','digest':'ops-'+uuid.uuid4().hex,'expires_at':add_to_date(now_datetime(),minutes=-1),
+        'status':'Expired'}).insert(ignore_permissions=True)
+    proposals.append(proposal.name)
+    frappe.db.commit()
     snapshot=ops.collect_snapshot()
     snapshots.extend(frappe.get_all('DS Ops Snapshot',filters={'collected_at':snapshot['collected_at']},pluck='name'))
     assert set(snapshot)=={'queued','queued_oldest_seconds','running','running_stuck',
-        'pending_proposals_expired','last_claim_age_seconds','runs_24h','backup_age_hours','site','collected_at'},snapshot
+        'pending_proposals_expired','last_claim_age_seconds','runs_24h','backup_age_hours','site','collected_at',
+        'needs_input','queue_expired_24h','proposals_expired_24h'},snapshot
+    assert snapshot['needs_input']==baseline_needs+1,snapshot
+    assert snapshot['queue_expired_24h']==baseline_queue+1,snapshot
+    assert snapshot['proposals_expired_24h']==baseline_proposals+1,snapshot
     assert snapshot['running_stuck']==1,snapshot
     assert snapshot['queued']>=1 and snapshot['queued_oldest_seconds']>=0,snapshot
     assert snapshot['runs_24h'].get('Running',0)>=1,snapshot
@@ -83,6 +105,8 @@ try:
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     for name in snapshots:frappe.db.delete('DS Ops Snapshot',{'name':name})
+    for name in proposals:
+        if frappe.db.exists('DS Operation Proposal',name):frappe.delete_doc('DS Operation Proposal',name,ignore_permissions=True)
     for name in runs:
         frappe.db.delete('DS Run Event',{'run':name})
         if frappe.db.exists('DS Model Run',name):frappe.delete_doc('DS Model Run',name,ignore_permissions=True)

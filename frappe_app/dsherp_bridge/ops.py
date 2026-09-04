@@ -54,6 +54,16 @@ def collect_snapshot():
         order_by="recorded_at desc",
         limit_page_length=1,
     )
+    since = add_to_date(now, hours=-24)
+    queue_expired_24h = sum(
+        1
+        for row in frappe.get_all(
+            "DS Run Event",
+            filters={"kind": "expired", "recorded_at": [">=", since]},
+            fields=["payload"],
+        )
+        if json.loads(row.payload or "{}").get("reason") == "queue_expired"
+    )
     snapshot = {
         "queued": len(queued),
         "queued_oldest_seconds": _age_seconds(queued[0].creation) if queued else None,
@@ -66,6 +76,12 @@ def collect_snapshot():
         "pending_proposals_expired": frappe.db.count(
             "DS Operation Proposal",
             {"status": "Pending", "expires_at": ["<=", now]},
+        ),
+        "needs_input": frappe.db.count("DS Model Run", {"status": "NeedsInput"}),
+        "queue_expired_24h": queue_expired_24h,
+        "proposals_expired_24h": frappe.db.count(
+            "DS Operation Proposal",
+            {"status": "Expired", "modified": [">=", since]},
         ),
         "last_claim_age_seconds": _age_seconds(claimed[0].recorded_at) if claimed else None,
         "runs_24h": counts,
