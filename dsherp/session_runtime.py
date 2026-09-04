@@ -14,8 +14,12 @@ from pydantic import BaseModel
 ROOT=Path(__file__).resolve().parents[1]
 
 
-def _request_timeout_seconds(domain):
-    return 120 if domain=='operation' else 90
+def _budget(run_config):
+    if run_config is None:return 90
+    raw=json.loads(run_config.read_text()).get('budget')
+    timeout=raw.get('model_request_timeout_seconds') if isinstance(raw,dict) else None
+    if type(timeout) is not int or timeout<1:raise ValueError('Missing run budget')
+    return timeout
 
 
 class OpenedSession(BaseModel):
@@ -64,7 +68,7 @@ def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bo
             api_key=settings['DEEPSEEK_API_KEY'],base_url=settings['DEEPSEEK_BASE_URL'],
             cordis=str(ROOT/'config'/('dsh-business.yml' if run_config else 'dsh-context.yml')),cwd=str(directory),runtime_cwd=str(directory),
             session_root=str(directory/'sessions'),max_tokens=3072 if domain in ('operation','configuration') else 2048,
-            request_timeout_seconds=_request_timeout_seconds(domain),shutdown_timeout_seconds=5,
+            request_timeout_seconds=_budget(run_config),shutdown_timeout_seconds=5,
             env={} if run_config is None else {'DSHERP_RUN_CONFIG':str(run_config.absolute()),
                 'DSHERP_PYTHON':sys.executable,'DSHERP_PROJECT':str(ROOT),'DSHERP_DOMAIN':domain})
         try:

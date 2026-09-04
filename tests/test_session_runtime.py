@@ -1,4 +1,5 @@
 """OS writer ownership and actual native process recovery, not a retained Session wrapper."""
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -9,11 +10,57 @@ from deepseek_harness.errors import JsonRpcError
 from dsherp import session_runtime
 
 
-def test_operation_request_timeout_is_longer_without_expanding_other_domains():
-    assert session_runtime._request_timeout_seconds('operation')==120
-    assert session_runtime._request_timeout_seconds('query')==90
-    assert session_runtime._request_timeout_seconds('configuration')==90
-    assert session_runtime._request_timeout_seconds(None)==90
+def _settings():
+    return {'DEEPSEEK_API_KEY':'k','DSH_MODEL':'m','DEEPSEEK_BASE_URL':'http://provider.invalid'}
+
+
+def _capture_harness(monkeypatch):
+    captured={}
+    class Fake:
+        def __init__(self,**kwargs):
+            captured.update(kwargs)
+            raise RuntimeError('harness-captured')
+    monkeypatch.setattr(session_runtime,'DeepSeekHarness',Fake)
+    return captured
+
+
+def test_run_config_without_budget_fails_before_harness(tmp_path,monkeypatch):
+    captured=_capture_harness(monkeypatch)
+    path=tmp_path/'run.json'
+    path.write_text('{"domain":"query"}')
+    with pytest.raises(ValueError,match='Missing run budget'):
+        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False,run_config=path):
+            pass
+    assert captured=={}
+
+
+def test_claimed_budget_timeout_reaches_harness(tmp_path,monkeypatch):
+    captured=_capture_harness(monkeypatch)
+    path=tmp_path/'run.json'
+    path.write_text(json.dumps({'domain':'operation','budget':{'model_request_timeout_seconds':90}}))
+    with pytest.raises(RuntimeError,match='harness-captured'):
+        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False,run_config=path):
+            pass
+    assert captured['request_timeout_seconds']==90
+
+
+def test_context_runtime_without_run_config_keeps_90s(tmp_path,monkeypatch):
+    captured=_capture_harness(monkeypatch)
+    with pytest.raises(RuntimeError,match='harness-captured'):
+        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False):
+            pass
+    assert captured['request_timeout_seconds']==90
+
+
+@pytest.mark.parametrize('timeout',[True,False,'90',90.0,0,-1])
+def test_invalid_budget_timeout_is_missing_run_budget(tmp_path,monkeypatch,timeout):
+    captured=_capture_harness(monkeypatch)
+    path=tmp_path/'run.json'
+    path.write_text(json.dumps({'domain':'query','budget':{'model_request_timeout_seconds':timeout}}))
+    with pytest.raises(ValueError,match='Missing run budget'):
+        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False,run_config=path):
+            pass
+    assert captured=={}
 
 
 def test_other_process_cannot_write_and_process_death_releases_lock(tmp_path):
