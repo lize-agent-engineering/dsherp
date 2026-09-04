@@ -28,7 +28,8 @@ def test_native_auto_compaction_cannot_bypass_authorization(model_server,tmp_pat
     multiplier=4 if pressure else 1
     state.update(content='Business context. '*(350*multiplier),summary_content='Item I-44; source version v2; continue read-only inquiry.')
     config=tmp_path/'run.json';config.write_text(json.dumps({**settings,
-        'domain':domain,'runtime_revision':configuration_revision(settings),'run_id':'test','capability':'test','site':'synthetic',
+        'domain':domain,'budget':{'model_request_timeout_seconds':90,'run_total_seconds':300},
+        'runtime_revision':configuration_revision(settings),'run_id':'test','capability':'test','site':'synthetic',
         'business_url':f'http://127.0.0.1:{server.server_port}'}));config.chmod(0o600)
     try:
         with open_runtime(settings,tmp_path/'native','compression',resume=False,run_config=config) as runtime:

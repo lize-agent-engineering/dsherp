@@ -27,7 +27,9 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
     personal=tmp_path/'native/.agents/skills/personal';personal.mkdir(parents=True)
     (personal/'SKILL.md').write_text('---\nname: personal\ndescription: PERSONAL_SKILL_FORBIDDEN\n---\nNot authorized')
     config=tmp_path/'run.json'
-    config.write_text(json.dumps({**settings,'domain':'operation' if mode=='operation' else 'query','runtime_revision':configuration_revision(settings),'run_id':'synthetic','capability':'synthetic','site':'synthetic',
+    config.write_text(json.dumps({**settings,'domain':'operation' if mode=='operation' else 'query',
+        'budget':{'model_request_timeout_seconds':90,'run_total_seconds':300},
+        'runtime_revision':configuration_revision(settings),'run_id':'synthetic','capability':'synthetic','site':'synthetic',
         'business_url':f'http://127.0.0.1:{server.server_port}'}));config.chmod(0o600)
     try:
         with open_runtime(settings,tmp_path/'native','denied',resume=False,run_config=config) as runtime:
