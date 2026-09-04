@@ -3222,3 +3222,17 @@ E AssertionError: old request input context allowed
 - `test_translation_pack.py` 两项的根因是 `run_alpha(script, timeout=30)`：该脚本本身就要约 29.5 秒，站点稍有负载即触发外层 `subprocess.run` 超时，容器内进程被杀，`finally` 里的 `frappe.delete_doc` 来不及执行，留下 `Trial Balance → 企业科目余额表` 的夹具；下一轮的前置断言因此必红，形成每轮重现。已把超时提到 90 秒，并让前置检查只回收与夹具逐字相同的残留（`language/source_text/translated_text/context` 四项全等），任何其它企业级 Trial Balance 翻译仍然让测试失败。复跑 3 项全绿。
 
 这条与生产就绪审计 Q3 是同一个洞：集成清理写在容器脚本的 `finally` 里，外层超时会连清理一起杀掉。系统性修复（先登记后创建、session 级 finalizer 按登记表清理）属计划 5 的质量门禁；本计划只修掉这一处使全量门可信，并把根因记录在案。
+
+#### 三项全量失败的单一根因：共享队列越过插入上限
+
+前两次重载后的全量都是 `3 failed, 188 passed`，三项在单独跑时全绿。抓到的真实错误把它们并成了一条：
+
+```text
+File "frappe/model/delete_doc.py", line 193, in delete_doc
+  frappe.enqueue("frappe.model.delete_doc.delete_dynamic_links", ...)
+frappe.exceptions.QueueOverloaded: Too many queued background jobs (600).
+```
+
+集成运行期间 `scheduled` profile 未启动，没有任何 worker 消费队列，而每个被测试删除的合成文档都会留下一条 `delete_dynamic_links`。跑到一半跨过 Frappe 的 600 上限后，`frappe.enqueue` 直接抛异常——而 `delete_doc` 内部就要入队，于是**测试自己的清理先失败**：工单链的插入被拒，翻译包的夹具删不掉、残留再让下一轮的前置断言必红。实测中途深度为 127→151，与该机制一致；长跑结束后队列被 session finalizer 清空，所以事后查总是 0，这也是它此前一直被误当作偶发的原因。
+
+修复：`tests/integration/conftest.py` 增加按模块的积压检查，深度超过 200 时调用既有的 `purge_validation_jobs`；该助手仍然先核对全部作业都属 `frappe.ping`/`create_contact`/`delete_dynamic_links` 白名单，不在白名单内一律拒绝清扫。翻译包夹具的自愈与 90 秒超时保留为纵深防御。
