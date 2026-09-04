@@ -68,7 +68,7 @@ def authorize_sources(sources):
 
 def _run(run_id,capability):
     run=frappe.get_doc('DS Model Run',run_id,for_update=True)
-    if (run.status not in ('Running','Cancelling') or not run.capability_hash
+    if (run.status not in ('Running','Cancelling','NeedsInput') or not run.capability_hash
         or not isinstance(capability,str) or get_datetime(run.expires_at)<=now_datetime()
         or not hmac.compare_digest(run.capability_hash,hashlib.sha256(capability.encode()).hexdigest())):
         raise frappe.PermissionError('运行凭据失效')
@@ -353,7 +353,7 @@ def record_run_event(run_id,capability,events):
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def finish_run(run_id,capability,status,answer='',error=''):
     run=_run(run_id,capability)
-    if status not in ('Succeeded','Failed','Cancelled'):frappe.throw('无效运行结束状态')
+    if status not in ('Succeeded','Failed','Cancelled','NeedsInput'):frappe.throw('无效运行结束状态')
     if status=='Succeeded':
         if run.status!='Running':raise frappe.PermissionError('取消中的运行不能成功完成')
         if not isinstance(answer,str) or not answer.strip() or not json.loads(run.sources or '[]'):
@@ -362,9 +362,12 @@ def finish_run(run_id,capability,status,answer='',error=''):
             context_permissions.require_revision(run)
             conversations._public(conversations._conversation(run.conversation))
     if status=='Cancelled' and run.status!='Cancelling':frappe.throw('运行未请求取消')
+    if status=='NeedsInput' and run.status!='NeedsInput':frappe.throw('运行未请求补充信息')
     provider_failures=frappe.db.count('DS Run Event',{'run':run.name,'kind':'model_error'})
     events.record_safely(run.name,'finished',{'status':status,'answer_chars':len(answer) if isinstance(answer,str) else 0,
         'error':(error or '')[:500],'model_calls':run.model_calls or 0,'provider_failures':provider_failures})
-    frappe.db.set_value('DS Model Run',run.name,{'status':status,'answer':answer if status=='Succeeded' else '',
-        'error':error if status=='Failed' else '', 'capability_hash':'','provider_failures':provider_failures})
+    values={'status':status,'answer':answer if status=='Succeeded' else '',
+        'error':error if status=='Failed' else '','capability_hash':'','provider_failures':provider_failures}
+    if status=='NeedsInput':values['needs_input']=answer
+    frappe.db.set_value('DS Model Run',run.name,values)
     return {'run_id':run.name,'status':status,'provider_failures':provider_failures}

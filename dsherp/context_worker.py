@@ -92,7 +92,7 @@ def _note_run(status,duration_ms):
     RUNS_TOTAL.inc(status=status)
     RUN_DURATION.observe(duration_ms/1000)
     if status=='Failed':set_consecutive_failures(_consecutive+1)
-    elif status in ('Succeeded','Cancelled'):set_consecutive_failures(0)
+    elif status in ('Succeeded','Cancelled','NeedsInput'):set_consecutive_failures(0)
 
 
 def profile_business(profile):
@@ -156,7 +156,7 @@ def run_container(task,settings,directory,timeout=170):
                         worker_log.log('runtime_diagnostic',**diagnostic)
                 raise RuntimeError('Isolated business runtime failed')
             output=json.loads(result.stdout)
-            if set(output)!={'status','answer'} or output['status'] not in ('Succeeded','Cancelled'):
+            if set(output)!={'status','answer'} or output['status'] not in ('Succeeded','Cancelled','NeedsInput'):
                 raise RuntimeError('Invalid business runtime result')
             if not isinstance(output['answer'],str) or (output['status']=='Succeeded' and not output['answer'].strip()):
                 raise RuntimeError('Missing business answer')

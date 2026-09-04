@@ -1,6 +1,7 @@
 import json
 import os
 import signal
+import subprocess
 import threading
 import time
 import httpx
@@ -9,6 +10,15 @@ from dsherp.context_mcp import BusinessRuntimeError
 import dsherp.context_worker as worker
 from dsherp.context_worker import profile_business,run_once
 SETTINGS={'DEEPSEEK_API_KEY':'synthetic','DSH_MODEL':'deepseek-v4-flash','DEEPSEEK_BASE_URL':'http://synthetic'}
+NEEDS_INPUT={'status':'NeedsInput','answer':'请指定仓库'}
+
+
+def _fake_container(payload):
+    def fake_run(args,**kwargs):
+        if list(args)[:3]==['docker','rm','-f']:
+            return subprocess.CompletedProcess(args,0,'','')
+        return subprocess.CompletedProcess(args,0,json.dumps(payload),'')
+    return fake_run
 
 
 def test_worker_claims_one_scoped_run_and_finishes_without_replay(tmp_path):
@@ -590,6 +600,40 @@ def test_tick_refreshes_site_heartbeats_while_slots_are_full(tmp_path):
             assert calls.count('worker_heartbeat')==2
         finally:
             release.set();coordinator.wait_idle()
+
+
+def test_run_container_accepts_needs_input_result(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'ROOT',tmp_path)
+    (tmp_path/'work').mkdir()
+    monkeypatch.setattr(worker.subprocess,'run',_fake_container(NEEDS_INPUT))
+    assert worker.run_container({'run_id':'r'},SETTINGS,tmp_path/'session')==NEEDS_INPUT
+
+
+def test_run_container_rejects_invalid_status_and_shape(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'ROOT',tmp_path)
+    (tmp_path/'work').mkdir()
+    for payload in ({'status':'Failed','answer':''},{'status':'Running','answer':'x'},
+                    {'status':'NeedsInput','answer':'请指定仓库','extra':1},{'status':'NeedsInput'}):
+        monkeypatch.setattr(worker.subprocess,'run',_fake_container(payload))
+        with pytest.raises(RuntimeError,match='Invalid business runtime result'):
+            worker.run_container({'run_id':'r'},SETTINGS,tmp_path/'session')
+
+
+def test_run_once_finishes_needs_input_and_clears_consecutive_failures(tmp_path,monkeypatch):
+    failures=[]
+    monkeypatch.setattr(worker,'set_consecutive_failures',lambda value:failures.append(value))
+    calls=[]
+    claim={'run_id':'r','scope_id':'a'*64,'capability':'cap','domain':'query',
+           'budget':{'run_total_seconds':300}}
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];calls.append((method,json.loads(request.content)))
+        return httpx.Response(200,json={'message':claim if method=='claim_run' else {
+            'status':'NeedsInput','provider_failures':0}})
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=lambda *args:NEEDS_INPUT)
+    assert [m for m,_ in calls]==['claim_run','record_run_event','finish_run']
+    assert calls[-1][1]['status']=='NeedsInput' and calls[-1][1]['answer']=='请指定仓库'
+    assert failures==[0]
 
 
 def test_run_claimed_contains_malformed_claim_errors(tmp_path,monkeypatch):
