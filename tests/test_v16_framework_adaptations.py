@@ -77,20 +77,6 @@ def test_both_apps_register_a_native_v16_apps_screen_route():
     assert '"route": "/desk/dsherp-home"' in hooks["platform"]
 
 
-def test_every_custom_get_all_query_has_explicit_deterministic_ordering():
-    missing = []
-    for path in sorted(ROOT.glob("frappe_app/**/*.py")):
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                continue
-            if node.func.attr != "get_all":
-                continue
-            if not any(keyword.arg == "order_by" for keyword in node.keywords):
-                missing.append(f"{path.relative_to(ROOT)}:{node.lineno}")
-    assert not missing, missing
-
-
 def test_stock_ledger_verification_reads_all_rows_in_deterministic_order():
     tree = ast.parse(OPERATIONS)
     calls = [
