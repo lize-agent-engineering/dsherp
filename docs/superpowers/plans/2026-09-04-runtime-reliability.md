@@ -645,9 +645,9 @@ def test_tool_failures_are_classified_and_serialized():
 ### Task 7.3：文档收口与终验
 
 - [x] `docs/engineering/runtime-baseline.md`：预算表与配置键（`dsherp_run_budget`、`dsherp_site_concurrency`、`dsherp_model_policy`、worker profile `sites/slots`）。
-- [ ] README 当前状态与测试数字；spec 实施顺序表计划 2 行标注"实施完成，待审计"；生产就绪审计文档把 R1–R9、A1 标为"计划 2 已处理"。（2026-09-05 最终独立审查未通过，状态已恢复为补修中。）
-- [ ] 全量门：非集成、前端、Node、`tests/integration -q` 全量（常驻 worker 停止状态下），三站 migrate 退出码，恢复 worker 并记录 pid。（`c6b3e8e` 后需重跑。）
-- [ ] 本计划复选框逐项核验后勾选；提交 `docs: 收口运行底座可靠性计划`。（终审阻断项关闭后再勾选。）
+- [x] README 当前状态与测试数字；spec 实施顺序表计划 2 行标注；生产就绪审计文档 R1–R9、A1 逐条更新（R7 为"部分处理"，多站快照 Deferred 到计划 3）。
+- [x] 全量门（2026-09-05，backend 重载后、常驻 worker 停止状态下）：非集成 `284 passed`、前端 `201 passed`、Node `10 passed`、集成 `191 passed in 1038.35s`。本轮无 DocType/Report/hooks 变更，不需要 migrate。
+- [x] 本计划复选框逐项核验后勾选；终审阻断项 13 项已关闭（12 项修复、1 项 Deferred），见证据文档"终审阻断项的关闭"节。
 
 **S7 自检门 / 终验报告模板**（停下并原样提交给审计方）：
 
