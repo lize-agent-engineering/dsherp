@@ -157,3 +157,13 @@ it('新增运行事件按精确标签翻译，未核实完成自述用 danger', 
  ]);
  expect(rows.map(row=>row.tone)).toEqual(['default','default','default','default','danger']);
 });
+
+it('运行失败事件只显示错误类别与可读原因，不渲染原始 payload', () => {
+ const rows = runEventRows([
+  {seq:1,kind:'runtime_failed',source:'runner',error_class:'RuntimeError',payload:{reason:'runtime_error'},recorded_at:'2026-09-05 10:00:00'},
+  {seq:2,kind:'runtime_failed',source:'runner',error_class:'RuntimeError',payload:{reason:'run_total_exceeded'},recorded_at:'2026-09-05 10:00:01'},
+ ]);
+ expect(rows[0].detail).toBe('RuntimeError 运行时错误');
+ expect(rows[1].detail).toBe('RuntimeError 超过运行时长预算');
+ expect(rows.map(r=>r.detail).join(' ')).not.toContain('{');
+});

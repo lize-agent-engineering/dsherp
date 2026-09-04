@@ -81,6 +81,19 @@ export const pendingCount = (session) =>
 
 const eventTones = new Set(['model_error', 'tool_error', 'runtime_failed', 'worker_error', 'unverified_completion_claim']);
 
+// Server-side reason codes are rendered as business text; the raw payload is never
+// dumped at a business user, who reads this stream through list_run_events.
+const reasonLabels = {
+  runtime_error: '运行时错误',
+  run_total_exceeded: '超过运行时长预算',
+  cancelled: '用户取消',
+  lease_expired: '运行租约过期',
+  queue_expired: '排队超时',
+  claim_unacked: '领取未确认，已退回排队',
+};
+
+const reasonText = (reason) => reasonLabels[reason] ?? reason;
+
 function eventDetail(event, payload) {
   const bits = [];
   if (event.error_class) bits.push(event.error_class);
@@ -91,6 +104,7 @@ function eventDetail(event, payload) {
   }
   if (typeof payload.text === 'string' && payload.text) bits.push(payload.text);
   else if (typeof payload.error === 'string' && payload.error) bits.push(payload.error);
+  else if (typeof payload.reason === 'string' && payload.reason) bits.push(reasonText(payload.reason));
   else if (Object.keys(payload).length) bits.push(JSON.stringify(payload));
   return bits.join(' ');
 }

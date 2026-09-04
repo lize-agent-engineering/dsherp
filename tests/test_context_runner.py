@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 
@@ -64,7 +65,8 @@ def test_monitored_run_records_runtime_failed_when_model_never_completes(model_s
             monitored_run(runtime,'hello','failed-run',lambda:{'status':'Running'},record=recorded.append)
     items=[item for batch in recorded for item in batch]
     assert items[-1]['kind']=='runtime_failed' and items[-1]['error_class']=='RuntimeError'
-    assert set(items[-1]['payload'])=={'type','frames'}
+    # 栈帧只走宿主 stderr；事件流对业务用户可见，payload 不带 type/frames。
+    assert set(items[-1]['payload'])=={'reason'} and items[-1]['payload']['reason']=='runtime_error'
 
 
 def test_event_writeback_timeout_does_not_change_successful_run(model_server,tmp_path):
@@ -182,3 +184,55 @@ def test_needs_input_status_stops_gracefully(model_server,tmp_path):
             result=monitored_run(runtime,'wait','needs-input',status,poll_interval=.05,grace=1)
         assert result=={'status':'NeedsInput','answer':'请告诉我仓库'}
     finally:state['release'].set()
+
+
+def test_cancel_rpc_is_bounded_by_the_grace_budget(model_server,tmp_path):
+    """原生取消 RPC 必须自带短超时；否则它继承 90s 模型超时，grace 只约束其后的 join。"""
+    settings,requests,state=model_server
+    state.update(received=threading.Event(),release=threading.Event())
+    seen=[]
+    def status():return {'status':'Cancelling' if state['received'].is_set() else 'Running'}
+    try:
+        with open_runtime(settings,tmp_path,'bounded-cancel',resume=False) as runtime:
+            original=runtime.client.request
+            def spy(method,params,**kwargs):
+                if method=='dsherp/session/cancel':seen.append(kwargs.get('timeout_seconds'))
+                return original(method,params,**kwargs)
+            runtime.client.request=spy
+            assert monitored_run(runtime,'wait','bounded-cancel',status,poll_interval=.05,grace=2)=={'status':'Cancelled','answer':''}
+    finally:state['release'].set()
+    assert seen and all(isinstance(value,(int,float)) and 0<value<=2 for value in seen),seen
+
+
+def test_unsettled_cancel_still_returns_within_grace(model_server,tmp_path):
+    """原生取消不确认时仍必须在 grace 内返回 Cancelled：容器由宿主 subprocess 超时与 docker rm -f 收尾。"""
+    settings,requests,state=model_server
+    state.update(received=threading.Event(),release=threading.Event())
+    def status():return {'status':'Cancelling' if state['received'].is_set() else 'Running'}
+    started=None
+    try:
+        with open_runtime(settings,tmp_path,'unsettled-cancel',resume=False) as runtime:
+            original=runtime.client.request
+            def stubborn(method,params,**kwargs):
+                if method!='dsherp/session/cancel':return original(method,params,**kwargs)
+                time.sleep(min(kwargs.get('timeout_seconds') or 30,30))
+                raise TimeoutError('native cancel did not answer')
+            runtime.client.request=stubborn
+            started=time.monotonic()
+            assert monitored_run(runtime,'wait','unsettled-cancel',status,poll_interval=.05,grace=2)=={'status':'Cancelled','answer':''}
+            assert time.monotonic()-started<6
+    finally:state['release'].set()
+
+
+def test_runtime_failed_event_carries_no_stack_frames_to_the_user(model_server,tmp_path):
+    """运行事件流对业务用户开放，栈帧只允许留在宿主 stderr 诊断通道。"""
+    settings,requests,state=model_server
+    state['finish_reason']='length';state['content']=''
+    recorded=[]
+    with open_runtime(settings,tmp_path,'no-frames',resume=False) as runtime:
+        with pytest.raises(RuntimeError):
+            monitored_run(runtime,'hello','no-frames',lambda:{'status':'Running'},poll_interval=.05,record=recorded.append,grace=1)
+    failures=[item for batch in recorded for item in batch if item['kind']=='runtime_failed']
+    assert failures and failures[-1]['error_class']=='RuntimeError'
+    serialized=json.dumps(failures,ensure_ascii=False)
+    assert 'frames' not in serialized and 'context_runner.py' not in serialized and 'monitored_run' not in serialized

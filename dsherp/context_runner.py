@@ -67,16 +67,26 @@ def monitored_run(runtime,question,session_id,status,*,poll_interval=2,record=No
             raise RuntimeError('Unexpected business run status')
         return value
 
-    def cancel():
+    def cancel(budget=None):
         nonlocal cancel_called
         cancel_called=True
-        result=runtime.client.request('dsherp/session/cancel',{'sessionId':session_id},response_model=Cancelled)
+        # Without an explicit bound this RPC inherits the model request timeout
+        # (90s from the run budget), which would make the cancellation budget a lie.
+        limit=grace if budget is None else budget
+        result=runtime.client.request('dsherp/session/cancel',{'sessionId':session_id},
+                                      response_model=Cancelled,timeout_seconds=max(0.1,limit))
         if result.sessionId!=session_id or result.status!='idle':
             raise RuntimeError('Native cancellation did not settle')
 
     def settle(result):
-        cancel()
-        model_thread.join(grace)
+        # The whole stop path is bounded by grace. An unconfirmed native cancel must
+        # not hold the user: the container is reaped by the host subprocess timeout
+        # and the unconditional docker rm -f that follows it.
+        limit=time.monotonic()+grace
+        try:cancel(limit-time.monotonic())
+        except Exception as error:
+            print('DSHERP_DIAGNOSTIC '+json.dumps({'type':'CancelUnsettled','error':type(error).__name__}),file=sys.stderr)
+        model_thread.join(max(0,limit-time.monotonic()))
         return result
 
     initial=check()
@@ -124,11 +134,17 @@ def monitored_run(runtime,question,session_id,status,*,poll_interval=2,record=No
         return {'status':'Succeeded','answer':result.final_response.strip()}
     except BaseException as error:
         if not failure_recorded:
-            emit([{'kind':'runtime_failed','source':'runner','error_class':type(error).__name__,'payload':failure_diagnostic(error)}])
+            # Stack frames stay on the host stderr channel; the run event stream is
+            # visible to the business user through list_run_events.
+            diagnostic=failure_diagnostic(error)
+            print('DSHERP_DIAGNOSTIC '+json.dumps(diagnostic),file=sys.stderr)
+            emit([{'kind':'runtime_failed','source':'runner','error_class':diagnostic['type'],
+                   'payload':{'reason':'runtime_error'}}])
+        limit=time.monotonic()+grace
         if not cancel_called:
-            try:cancel()
+            try:cancel(limit-time.monotonic())
             except Exception:pass
-        model_thread.join(grace)
+        model_thread.join(max(0,limit-time.monotonic()))
         raise
 
 
