@@ -237,7 +237,10 @@ class Coordinator:
                 if self._last_probe is None:self._last_probe=now
                 elif now-self._last_probe>=60:
                     self._last_probe=now;should_probe=True
-        if should_probe and self.probe():
+        if should_probe:
+            if not self.probe():
+                with self._circuit_lock:PROVIDER_CIRCUIT_OPEN.set(1)
+                return False,False
             with self._circuit_lock:self.breaker.reset()
         with self._circuit_lock:
             allowed=self.breaker.allow(now)

@@ -472,6 +472,35 @@ def test_coordinator_probe_resets_open_circuit_after_sixty_seconds(tmp_path):
         assert executions==['first','second']
 
 
+def test_coordinator_failed_probe_keeps_open_circuit_from_claiming(tmp_path):
+    from dsherp.context_worker import Coordinator
+    from dsherp.provider_circuit import CircuitBreaker
+
+    clock=[0];claims=['first','second'];probes=[];executions=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='claim_run':
+            run_id=claims.pop(0) if claims else None
+            return httpx.Response(200,json={'message':None if run_id is None else {
+                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'budget':{'run_total_seconds':300}}})
+        if method=='finish_run':
+            return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    def execute(task,settings,directory,timeout):
+        executions.append(task['run_id']);raise RuntimeError('synthetic provider failure')
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        breaker=CircuitBreaker(threshold=1,open_seconds=60)
+        coordinator=Coordinator([{'site':'a','client':client,'business':{}}],lambda:SETTINGS,1,
+            execute,breaker,lambda:probes.append(False) or False,tmp_path,clock=lambda:clock[0])
+        assert coordinator.tick(now=0)==1;coordinator.wait_idle()
+        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN._value==1
+        clock[0]=60
+        assert coordinator.tick(now=60)==0 and probes==[False]
+        assert executions==['first'] and claims==['second']
+        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN._value==1
+
+
 def test_circuit_open_period_starts_when_slow_run_finishes(tmp_path):
     from dsherp.context_worker import Coordinator
     from dsherp.provider_circuit import CircuitBreaker

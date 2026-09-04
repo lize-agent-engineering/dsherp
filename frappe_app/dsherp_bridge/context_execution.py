@@ -20,6 +20,7 @@ TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
        'erp_search_records':(erp.search_records,{'doctype','query','filters','fields'})}
 MAX_OPERATION_MODEL_CALLS=10
 MAX_OPERATION_OUTPUT_TOKENS_RESERVED=30720
+PROVIDER_FAILURE_ERROR_CLASSES=('TRANSPORT','TIMEOUT','SERVER')
 
 
 @contextmanager
@@ -374,7 +375,11 @@ def finish_run(run_id,capability,status,answer='',error=''):
             conversations._public(conversations._conversation(run.conversation))
     if status=='Cancelled' and run.status!='Cancelling':frappe.throw('运行未请求取消')
     if status=='NeedsInput' and run.status!='NeedsInput':frappe.throw('运行未请求补充信息')
-    provider_failures=frappe.db.count('DS Run Event',{'run':run.name,'kind':'model_error'})
+    provider_failures=frappe.db.count('DS Run Event',{
+        'run':run.name,
+        'kind':'model_error',
+        'error_class':['in',PROVIDER_FAILURE_ERROR_CLASSES],
+    })
     sources=json.loads(run.sources or '[]')
     proposals=frappe.db.count('DS Operation Proposal',{'model_run':run.name})
     proposal_names=frappe.get_all('DS Operation Proposal',filters={'model_run':run.name},pluck='name')

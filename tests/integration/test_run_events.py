@@ -388,12 +388,15 @@ try:
         'question':'provider failures','page_context':json.dumps({'schema_version':1,'page_type':'unknown','route':[]}),
         'capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
         'expires_at':add_to_date(now_datetime(),minutes=3)}).insert(ignore_permissions=True)
-    events.record(run.name,'model_error',{'attempt':1},source='runner',error_class='ProviderError')
-    events.record(run.name,'model_error',{'attempt':2},source='runner',error_class='ProviderError')
+    for attempt,error_class in enumerate((
+        'TRANSPORT','TIMEOUT','SERVER','ProviderError',
+        'CONTEXT_WINDOW_EXCEEDED','EMPTY_RESPONSE','INVALID_REQUEST','AUTH','RATE_LIMIT','QUOTA_EXCEEDED','PI_AI_ERROR',
+    ),start=1):
+        events.record(run.name,'model_error',{'attempt':attempt},source='runner',error_class=error_class)
     frappe.set_user('Guest')
     result=finish_run(run.name,capability,'Failed',error='provider unavailable')
-    assert result=={'run_id':run.name,'status':'Failed','provider_failures':2},result
-    assert frappe.db.get_value('DS Model Run',run.name,'provider_failures')==2
+    assert result=={'run_id':run.name,'status':'Failed','provider_failures':3},result
+    assert frappe.db.get_value('DS Model Run',run.name,'provider_failures')==3
     print('PROVIDER_FAILURE_COUNT_OK')
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')

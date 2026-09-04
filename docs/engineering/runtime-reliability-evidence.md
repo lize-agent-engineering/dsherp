@@ -1975,7 +1975,7 @@ RuntimeError: failed provider run lacks model_error: {"site":"dsherp-validation.
 
 两次诊断运行均按确切记录、会话、worker 与容器清理，且从未到达真实 provider 探针。
 
-固定 DSH 0.1.1rc1 源码确认 provider 失败可带内到达为 `finish.reason.kind=error`：https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/llm/llm-pi-ai/src/stream.ts#L183-L196
+固定 DSH 0.1.1rc1 源码确认 provider 失败可带内到达为 `finish.reason.kind=error`；错误码映射见 https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/llm/llm-pi-ai/src/stream.ts#L76-L114 ，in-stream error 到 finish 的转换见 https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/llm/llm-pi-ai/src/stream.ts#L199-L204 。
 
 In-stream provider 分类 TDD RED 原始输出：
 
@@ -2111,3 +2111,115 @@ active_query_exit=0
 ```
 
 Task 7.2 的修改不包含 DocType、Report 或 hooks，阶段末无需 migrate。获授权的真实 provider 行为仍只有熔断打开期的一次 `GET /models`；提交前复核没有调用 provider。
+
+### Task 7.2 独立审查修复
+
+独立审查发现，固定 DSH 的 error finish 还包含上下文溢出、空响应、无效请求等非 provider 可用性故障；若把全部 `model_error` 计入 `provider_failures`，三次用户输入错误会误开全 worker 熔断。最小集成行为测试先同时记录 4 个候选 provider 错误类（其中包含旧的通用 `ProviderError`）与 7 个明确非可用性错误类；修复前 RED 原始输出：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_finish_run_reports_and_persists_provider_failure_count __________
+
+>       assert result.returncode == 0, result.stdout + result.stderr
+E       AssertionError: Traceback (most recent call last):
+E           File "<stdin>", line 23, in <module>
+E         AssertionError: {'run_id': '4m2eb226vi', 'status': 'Failed', 'provider_failures': 11}
+E
+E       assert 1 == 0
+
+tests/integration/test_run_events.py:415: AssertionError
+=========================== short test summary info ============================
+FAILED tests/integration/test_run_events.py::test_finish_run_reports_and_persists_provider_failure_count
+1 failed in 23.76s
+```
+
+第一轮先把 `ProviderError`、`TRANSPORT`、`TIMEOUT`、`SERVER` 从所有 error finish 中分离；其他 error finish 仍保留为 `model_error`，但不阻断其他用户。目标 GREEN 原始输出：
+
+```text
+.                                                                        [100%]
+1 passed in 26.54s
+```
+
+随后按“只有明确可归因于 provider 可用性”收紧：通用 `ProviderError` 没有稳定原因，不能凭名称推定为 5xx/超时/传输故障。把期望收紧为只统计 `TRANSPORT`、`TIMEOUT`、`SERVER` 后再次先 RED：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_finish_run_reports_and_persists_provider_failure_count __________
+>       assert result.returncode == 0, result.stdout + result.stderr
+E       AssertionError: Traceback (most recent call last):
+E           File "<stdin>", line 23, in <module>
+E         AssertionError: {'run_id': '8rtivlea3l', 'status': 'Failed', 'provider_failures': 4}
+E
+E       assert 1 == 0
+tests/integration/test_run_events.py:415: AssertionError
+=========================== short test summary info ============================
+FAILED tests/integration/test_run_events.py::test_finish_run_reports_and_persists_provider_failure_count
+1 failed in 25.70s
+```
+
+严格分类 GREEN 原始输出：
+
+```text
+.                                                                        [100%]
+1 passed in 24.25s
+```
+
+此前只读审查还指出：到 60 秒的 `/models` 探针若返回 False，旧实现随后调用 `allow()` 会误转 half-open 并领取一条业务运行。最小失败路径测试先把第二条运行留在 claim 队列；修复前 RED 原始输出：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_coordinator_failed_probe_keeps_open_circuit_from_claiming ________
+
+>           assert coordinator.tick(now=60)==0 and probes==[False]
+E           assert (1 == 0)
+E            +  where 1 = tick(now=60)
+E            +    where tick = <dsherp.context_worker.Coordinator object at 0x10bdabd40>.tick
+
+tests/test_context_worker.py:499: AssertionError
+----------------------------- Captured stderr call -----------------------------
+{"ts": "2026-09-04T06:45:27.017+00:00", "event": "claimed", "site": "a", "run_id": "first"}
+{"ts": "2026-09-04T06:45:27.017+00:00", "event": "runtime_failed", "run_id": "first", "error_class": "RuntimeError", "duration_ms": 0}
+{"ts": "2026-09-04T06:45:27.019+00:00", "event": "claimed", "site": "a", "run_id": "second"}
+=========================== short test summary info ============================
+FAILED tests/test_context_worker.py::test_coordinator_failed_probe_keeps_open_circuit_from_claiming
+1 failed in 0.38s
+```
+
+失败探针现保持 circuit open、gauge 1，并返回零 claim。目标 GREEN 与相关纯 Python 回归原始输出：
+
+```text
+.                                                                        [100%]
+1 passed in 0.23s
+```
+
+```text
+..........................................................               [100%]
+58 passed in 8.43s
+```
+
+服务端事件文件级回归原始输出：
+
+```text
+.......                                                                  [100%]
+7 passed in 44.09s
+```
+
+本轮修复仍未调用 provider，也未改 DocType、Report 或 hooks。
+
+复审提交前的仓库/站点清理状态原始输出：
+
+```text
+backend=running
+pidfile_exists=false
+worker_process_count=0
+context_container_count=0
+model_container_count=0
+active_query_exit=0
+{"active_runs": 0, "site": "dsherp-validation.localhost"}
+{"active_runs": 0, "site": "dsherp-daily.localhost"}
+```
+
+`git diff --check` 退出码 0、stdout 为空。
