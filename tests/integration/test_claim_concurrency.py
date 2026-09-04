@@ -20,6 +20,32 @@ def run_in_site(script, timeout=120):
     )
 
 
+def test_worker_heartbeat_requires_runtime_identity_and_refreshes_cache():
+    script = r'''
+import os,frappe
+from frappe.utils import get_datetime,now_datetime
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge.context_execution import worker_heartbeat
+try:
+    frappe.cache().delete_value('dsherp_worker_heartbeat')
+    frappe.set_user('dsherp-reader@example.invalid')
+    try:worker_heartbeat();raise AssertionError('ordinary user refreshed worker heartbeat')
+    except frappe.PermissionError:pass
+    frappe.set_user(frappe.conf.get('dsherp_runtime_user'))
+    response=worker_heartbeat()
+    stored=frappe.cache().get_value('dsherp_worker_heartbeat')
+    assert response['heartbeat']==stored,response
+    assert (now_datetime()-get_datetime(stored)).total_seconds()<5,stored
+    print('WORKER_HEARTBEAT_OK')
+finally:
+    frappe.destroy()
+'''
+    result = run_in_site(script)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "WORKER_HEARTBEAT_OK" in result.stdout, result.stdout
+
+
 def test_claim_respects_site_and_owner_limits_and_expires_queued_runs():
     script = r'''
 import os,uuid,frappe

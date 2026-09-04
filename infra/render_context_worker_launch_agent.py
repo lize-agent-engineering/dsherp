@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the macOS LaunchAgent for the v16 context worker."""
+"""Render the macOS LaunchAgent for the multi-Site v16 context worker."""
 
 import argparse
 import os

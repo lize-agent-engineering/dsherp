@@ -75,6 +75,20 @@ def _run(run_id,capability):
     return run
 
 
+def _set_worker_heartbeat(now):
+    value=now.isoformat()
+    frappe.cache().set_value('dsherp_worker_heartbeat',value,expires_in_sec=3600)
+    return value
+
+
+@frappe.whitelist(methods=['POST'])
+def worker_heartbeat():
+    user=conversations._user()
+    if user!=frappe.conf.get('dsherp_runtime_user'):
+        raise frappe.PermissionError('需要站点指定的运行服务身份')
+    return {'heartbeat':_set_worker_heartbeat(now_datetime())}
+
+
 @frappe.whitelist(methods=['POST'])
 def claim_run(runtime_revision):
     user=conversations._user()
@@ -86,7 +100,7 @@ def claim_run(runtime_revision):
     frappe.db.rollback()
     frappe.db.sql('SELECT name FROM `tabUser` WHERE name=%s FOR UPDATE',(user,))
     now=now_datetime()
-    frappe.cache().set_value('dsherp_worker_heartbeat',now.isoformat(),expires_in_sec=3600)
+    _set_worker_heartbeat(now)
     queued_expiry_filters=[['status','=','Queued'],['queue_expires_at','is','set'],['queue_expires_at','<=',now]]
     expired_names=frappe.get_all('DS Model Run',filters=queued_expiry_filters,pluck='name',order_by='creation asc, name asc',limit_page_length=0)
     for name in expired_names:
@@ -348,8 +362,9 @@ def finish_run(run_id,capability,status,answer='',error=''):
             context_permissions.require_revision(run)
             conversations._public(conversations._conversation(run.conversation))
     if status=='Cancelled' and run.status!='Cancelling':frappe.throw('运行未请求取消')
+    provider_failures=frappe.db.count('DS Run Event',{'run':run.name,'kind':'model_error'})
     events.record_safely(run.name,'finished',{'status':status,'answer_chars':len(answer) if isinstance(answer,str) else 0,
-        'error':(error or '')[:500],'model_calls':run.model_calls or 0})
+        'error':(error or '')[:500],'model_calls':run.model_calls or 0,'provider_failures':provider_failures})
     frappe.db.set_value('DS Model Run',run.name,{'status':status,'answer':answer if status=='Succeeded' else '',
-        'error':error if status=='Failed' else '', 'capability_hash':''})
-    return {'run_id':run.name,'status':status}
+        'error':error if status=='Failed' else '', 'capability_hash':'','provider_failures':provider_failures})
+    return {'run_id':run.name,'status':status,'provider_failures':provider_failures}

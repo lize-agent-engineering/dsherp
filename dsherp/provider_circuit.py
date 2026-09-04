@@ -67,6 +67,9 @@ class CircuitBreaker:
         self._half_open_used=True
         return True
 
+    def release_trial(self):
+        if self._state=='half_open':self._half_open_used=False
+
 
 def probe_models(base_url,api_key,*,timeout=5,client=None):
     http=client
