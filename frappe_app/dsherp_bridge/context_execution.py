@@ -23,6 +23,8 @@ TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
 PROVIDER_FAILURE_ERROR_CLASSES=('TRANSPORT','TIMEOUT','SERVER','AUTH','RATE_LIMIT','QUOTA_EXCEEDED')
 # 积压最严重时清扫最长，而清扫排在领取之前：不封顶会让 claim 越慢越领不到，形成正反馈。
 SWEEP_LIMIT=50
+# 任何一条只有执行者才写得出的事件都算确认；只有 queued/claimed 说明没人接手。
+EXECUTOR_CONTACT_KINDS=('runtime_started','lease_renewed','model_call_reserved','tool_call','tool_error','model_error','needs_input')
 
 
 @contextmanager
@@ -115,8 +117,12 @@ def claim_run(runtime_revision):
         events.record_safely(name,'expired',{'reason':'queue_expired'})
         events.record_safely(name,'finished',{'status':'Failed','error':'queue_expired'})
     for name in frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']], 'expires_at':['<=',now]},pluck='name',order_by='creation asc, name asc',limit_page_length=SWEEP_LIMIT):
-        frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':'运行已过期，未自动重试','capability_hash':''})
-        events.record_safely(name,'expired',{'reason':'lease_expired'})
+        # 没有任何一条执行者写入的事件，说明这次领取的响应从未到达 worker：
+        # 这条运行从来没被执行过，说"已过期"会把用户引向完全无关的原因。
+        contacted=frappe.db.count('DS Run Event',{'run':name,'kind':['in',EXECUTOR_CONTACT_KINDS]})
+        error='运行已过期，未自动重试' if contacted else '助手未能启动本次运行，请重试'
+        frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':error,'capability_hash':''})
+        events.record_safely(name,'expired',{'reason':'lease_expired' if contacted else 'claim_unacked'})
     # 执行者在交还会话前死掉时，问题本身仍然有效：只收回凭据，不把用户的问题作废。
     for name in frappe.get_all('DS Model Run',filters={'status':'NeedsInput','capability_hash':['!=',''],'expires_at':['<=',now]},
                                pluck='name',order_by='creation asc, name asc',limit_page_length=SWEEP_LIMIT):
@@ -153,7 +159,7 @@ def claim_run(runtime_revision):
         conversation.runtime_session=uuid.uuid4().hex
         frappe.db.set_value('DS Conversation',conversation.name,{'runtime_session':conversation.runtime_session,'runtime_revision':combined_revision})
     frappe.db.set_value('DS Model Run',run.name,{'status':'Running','capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
-        'expires_at':add_to_date(now,seconds=plan['lease_seconds']),'permission_revision':permission_revision,'runtime_revision':runtime_revision})
+        'expires_at':add_to_date(now,seconds=plan['claim_ack_seconds']),'permission_revision':permission_revision,'runtime_revision':runtime_revision})
     events.record_safely(run.name,'claimed',{'domain':domain,'permission_revision':permission_revision,
         'runtime_revision':runtime_revision,'native_session_id':conversation.runtime_session,
         'provider':plan['provider'],'model':plan['model']})

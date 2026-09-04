@@ -3,6 +3,9 @@ import frappe
 
 DEFAULTS={
     'model_request_timeout_seconds':90,
+    # 领取先给一个短确认租约：claim 的 HTTP 超时后服务端仍会提交 Running，那条运行
+    # 没有执行者却占着并发位与用户在飞位。执行者第一次 run_status 就把它升到完整租约。
+    'claim_ack_seconds':90,
     'lease_seconds':180,
     'lease_renew_below_seconds':90,
     'queue_expires_seconds':600,
