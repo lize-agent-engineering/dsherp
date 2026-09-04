@@ -4,6 +4,8 @@ import plistlib
 import re
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).parents[1]
 COMPOSE_PATH = ROOT / "infra/compose.validation.yml"
@@ -114,7 +116,7 @@ def test_context_worker_launch_agent_is_reproducible_and_self_restarting(tmp_pat
         "-m",
         "dsherp.context_worker",
         "--profile",
-        str(ROOT / ".runtime/context-worker.json"),
+        str(ROOT / ".runtime/context-worker-sites.json"),
         "--provider-env",
         str(ROOT / ".env"),
     ]
@@ -125,3 +127,64 @@ def test_context_worker_launch_agent_is_reproducible_and_self_restarting(tmp_pat
         "/usr/local/bin","/opt/homebrew/bin","/usr/bin","/bin","/usr/sbin","/sbin",
     ]
     assert target.stat().st_mode & 0o777 == 0o600
+
+
+def test_merge_context_worker_profiles_writes_merged_sites_without_changing_inputs(tmp_path):
+    from infra.merge_context_worker_profiles import merge_context_worker_profiles
+
+    runtime = tmp_path / ".runtime"
+    runtime.mkdir()
+    alpha = {
+        "site": "dsherp-validation.localhost",
+        "base_url": "http://127.0.0.1:18081",
+        "business_url": "http://dsherp-validation-backend-1:8000",
+        "api_key": "alpha-key",
+        "api_secret": "alpha-secret",
+    }
+    daily = {
+        "site": "dsherp-daily.localhost",
+        "base_url": "http://127.0.0.1:18082",
+        "business_url": "http://dsherp-validation-backend-1:8000",
+        "api_key": "daily-key",
+        "api_secret": "daily-secret",
+    }
+    alpha_path = runtime / "context-worker.json"
+    daily_path = runtime / "context-worker-daily.json"
+    alpha_bytes = json.dumps(alpha, separators=(",", ":")).encode()
+    daily_bytes = json.dumps(daily, separators=(",", ":")).encode()
+    alpha_path.write_bytes(alpha_bytes)
+    daily_path.write_bytes(daily_bytes)
+
+    target = merge_context_worker_profiles(tmp_path)
+    assert target == runtime / "context-worker-sites.json"
+    assert target.stat().st_mode & 0o777 == 0o600
+    merged = json.loads(target.read_text())
+    assert merged["slots"] == 3
+    assert merged["sites"] == [alpha, daily]
+    assert alpha_path.read_bytes() == alpha_bytes
+    assert daily_path.read_bytes() == daily_bytes
+
+
+def test_merge_context_worker_profiles_fast_fails_on_missing_or_invalid_input(tmp_path):
+    from infra.merge_context_worker_profiles import merge_context_worker_profiles
+
+    runtime = tmp_path / ".runtime"
+    runtime.mkdir()
+    alpha = runtime / "context-worker.json"
+    daily = runtime / "context-worker-daily.json"
+
+    with pytest.raises(ValueError):
+        merge_context_worker_profiles(tmp_path)
+
+    alpha.write_text(json.dumps({"site": "alpha.localhost"}))
+    daily.write_text("[]")
+    with pytest.raises(ValueError):
+        merge_context_worker_profiles(tmp_path)
+
+    daily.write_text(json.dumps({"site": ""}))
+    with pytest.raises(ValueError):
+        merge_context_worker_profiles(tmp_path)
+
+    daily.write_text(json.dumps({"site": "alpha.localhost"}))
+    with pytest.raises(ValueError):
+        merge_context_worker_profiles(tmp_path)

@@ -24,7 +24,7 @@ ERPNext/Frappe 切换到 v16 没有改动本节的 DSH 链：SDK/Runtime 仍为 
 
 发布元数据：[SDK PyPI](https://pypi.org/pypi/deepseek-harness-sdk/0.1.1rc1/json)、[Runtime PyPI](https://pypi.org/pypi/deepseek-harness-runtime-bin/0.1.1rc1/json)。安装后的 `api.py`、`client.py`、`models.py` 与上述提交逐文件 SHA256 相同。Runtime 包内部 `deepseek-harness-runtime.json` 写的是 `0.0.0-dev`，不能用它证明发布版本或构建提交；以 wheel 版本和哈希固定制品，不声称已证明二进制全部源码来源。
 
-核验时 GitHub master/tag `dsh-v0.1.2-alpha.1` 指向 `cd5ef8148158c3a752a658978873241fdf8e2bbc`，它的 `profile`、`dsh_home` 接口不同。**不得混用 master 文档与当前 wheel**。选择已有匹配 wheel 的 rc1，尚非生产稳定性承诺。
+核验时 GitHub master/tag `dsh-v0.1.2-alpha.1` 指向 `cd5ef8148158c3a752a658978873241fdf8e2bbc`，它的 `profile`、`dsh_home` 接口不同。**不得混用 master 文档与当前 wheel**。固定 `0.1.1rc1` 是预发布制品，升级与生产稳定性评估为 Deferred；本文不声称该 SDK/Runtime 生产可用。
 
 ## 已核对的实际接口
 
@@ -96,6 +96,39 @@ ERPNext/Frappe 切换到 v16 没有改动本节的 DSH 链：SDK/Runtime 仍为 
 ### 运行时文件清单变更
 
 计划 1 新增 `dsherp/run_events.py`，供容器 runner 与宿主 worker 共用事件映射、脱敏和批量回写逻辑。该文件已紧跟 `dsherp/context_runner.py` 加入 `config/runtime-files.json`；因此其任何内容变化都会进入 `runtime_revision` 指纹并按既有契约作废不匹配的在飞运行。`alerts.py`、`metrics.py` 与 `worker_log.py` 只由宿主常驻 worker 加载，不进入隔离容器的运行时修订清单；这三类代码变化必须通过精确重启唯一 LaunchAgent 生效。
+
+### 计划 2 单一预算与配置键（2026-09-04）
+
+运行与模型预算的单一读取入口是 `frappe_app/dsherp_bridge/run_budget.py` 的 `budget(domain)`。`claim_run` 把该字典原样放入领取结果；容器 runner 与宿主 worker 只消费领取到的预算，不再各自散落超时或调用上限。`site_config` 未写入下列键、或 `dsherp_run_budget` / `dsherp_model_policy` 为 `None` 时，使用下表默认值；非法类型或未知键 fastfail，不静默忽略。
+
+四类配置键职责不同，不能互相替代：
+
+| 配置键 | 位置 | 作用 |
+| --- | --- | --- |
+| `dsherp_run_budget` | 站点 `site_config` | 可选对象；只允许覆盖下表已有的正整数键。覆盖后仍须满足单次输入/输出不超过累计、续租阈值小于租约。 |
+| `dsherp_site_concurrency` | 站点 `site_config` | 该站 Running/Cancelling 上限。缺省为每站 1；不是 worker 全局槽位。 |
+| `dsherp_model_policy` | 站点 `site_config` | 只允许 `provider`、`model`。缺省 `deepseek-official` / `deepseek-v4-flash`；`provider` 必须是 `deepseek-official`。 |
+| worker profile `sites` / `slots` | 宿主 profile JSON | `sites` 为多站列表（每项 `site`、`base_url`、`business_url`、`api_key`、`api_secret`）。`slots` 是该 worker 进程的全局容器并发；本机合并 profile 与 `normalize_profile` 缺省均为 3。 |
+
+站点默认每站并发 1，与本机 worker `slots=3` 是两层上限：一站在默认配置下同时最多 1 条 Running/Cancelling，同一 worker 可同时跑最多 3 个容器（例如两站并行时，一站 1 条、另一站最多再占剩余槽位）。每用户在飞上限为 1，写在 `claim_run`，不进配置。容器 subprocess 超时为领取到的 `run_total_seconds + 30`（query/configuration 默认 330s，operation 默认 630s）。
+
+各领域当前默认数值：
+
+| 项 | query | configuration | operation |
+| --- | ---: | ---: | ---: |
+| `run_total_seconds` | 300 | 300 | 600 |
+| `model_max_calls` | 8 | 8 | 10 |
+| `model_max_output_tokens_per_call` | 2048 | 3072 | 3072 |
+| `model_max_output_tokens_total` | 16384 | 16384 | 30720 |
+| `model_request_timeout_seconds` | 90 | 90 | 90 |
+| `lease_seconds` | 180 | 180 | 180 |
+| `lease_renew_below_seconds` | 90 | 90 | 90 |
+| `queue_expires_seconds` | 600 | 600 | 600 |
+| `heartbeat_stale_seconds` | 60 | 60 | 60 |
+| `model_max_input_bytes_per_call` | 131072 | 131072 | 131072 |
+| `model_max_input_bytes_total` | 524288 | 524288 | 524288 |
+
+这些是计划 2 把既有常量搬进服务端配置后的当前值，不是计划 6 用评估集裁定后的正式生产预算。固定 DSH `0.1.1rc1` 仍是预发布 Deferred，本节不声称生产可用。
 
 ## 本轮依赖与环境补充
 

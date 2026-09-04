@@ -7,6 +7,24 @@ from dsherp.context_mcp import post
 from dsherp.runtime_revision import configuration_revision
 
 
+def seed_beta_worker_heartbeat(*,run=subprocess.run):
+    script="""
+import os,frappe
+from frappe.utils import now_datetime
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-beta.localhost');frappe.connect()
+value=now_datetime().isoformat()
+frappe.cache().set_value('dsherp_worker_heartbeat',value,expires_in_sec=3600)
+written=frappe.cache().get_value('dsherp_worker_heartbeat')
+if written!=value:raise RuntimeError('dsherp_worker_heartbeat was not written')
+print(written)
+frappe.destroy()
+"""
+    result=run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,check=True,capture_output=True,text=True,timeout=60)
+    if not result.stdout.strip():raise RuntimeError('Failed to seed beta worker heartbeat')
+    return result.stdout.strip()
+
+
 def test_configuration_native_runtime_reads_then_proposes_without_ddl(model_server,tmp_path):
     settings,requests,state=model_server
     root="import os,frappe,json\nos.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-beta.localhost');frappe.connect()\n"
@@ -14,6 +32,7 @@ def test_configuration_native_runtime_reads_then_proposes_without_ddl(model_serv
         result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=root+script,text=True,capture_output=True,timeout=40)
         assert result.returncode==0,result.stderr
         return result.stdout
+    seed_beta_worker_heartbeat()
     claim=json.loads(execute("""
 import uuid
 from dsherp_bridge import context_api,context_execution
@@ -31,7 +50,7 @@ claim=context_execution.claim_run(REVISION);frappe.db.commit();print(json.dumps(
         result=run_business(secret,tmp_path/'native')
         assert result['status']=='Succeeded'
         assert len(requests)==3
-        assert {tool['function']['name'] for tool in requests[0]['tools']}=={'skill','mcp__erp__erp_read_configuration','mcp__erp__erp_propose_configuration'}
+        assert {tool['function']['name'] for tool in requests[0]['tools']}=={'skill','mcp__erp__erp_read_configuration','mcp__erp__erp_propose_configuration','mcp__erp__erp_request_input'}
         assert 'erp-configuration' in str(requests[0])
         assert 'execution_ready' in str(requests[2]['messages'])
         with httpx.Client(base_url='http://preview.localhost:18085',headers={'X-Frappe-Site-Name':'dsherp-beta.localhost'},trust_env=False,timeout=20) as client:

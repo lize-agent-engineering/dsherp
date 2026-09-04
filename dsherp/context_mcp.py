@@ -11,6 +11,12 @@ import httpx
 from dsherp.read_tools import create_read_server
 
 API='/api/method/dsherp_bridge.context_execution.'
+# Transport failures and server faults are the model's business only as a retryable
+# condition; their text is internal (SQL, paths, provider detail) and never crosses.
+TRANSIENT_MESSAGE='业务服务暂时不可用，请稍后重试'
+# Only this tool path reaches the model. Worker and runner RPCs keep raw httpx
+# exception classes so metrics and logs can still tell a broken network from a rejection.
+MODEL_FACING_METHODS=('run_tool',)
 
 
 class BusinessRuntimeError(RuntimeError):
@@ -19,11 +25,62 @@ class BusinessRuntimeError(RuntimeError):
         super().__init__(f'业务运行请求未完成（HTTP {status_code}）')
 
 
+class ToolFailure(BusinessRuntimeError):
+    def __init__(self,classification):
+        self.classification=classification
+        super().__init__(classification.get('http_status'))
+    def __str__(self):
+        return json.dumps({key:self.classification[key] for key in ('error_class','message','retryable')},ensure_ascii=False)
+
+
+def _failure_message(body):
+    if not isinstance(body,dict):return '业务请求失败'
+    message=_server_message(body)
+    if message is None:
+        exception=body.get('exception')
+        if isinstance(exception,str) and ':' in exception:message=exception.split(':',1)[1]
+        else:message='业务请求失败'
+    line=str(message).splitlines()[0].strip()
+    if 'Traceback' in line:line=line.split('Traceback',1)[0].strip() or '业务请求失败'
+    return line[:500]
+
+
+def _server_message(body):
+    raw=body.get('_server_messages')
+    if not raw:return None
+    try:
+        items=json.loads(raw) if isinstance(raw,str) else raw
+        first=items[0]
+        payload=json.loads(first) if isinstance(first,str) else first
+        message=payload.get('message')
+    except (TypeError,ValueError,KeyError,IndexError,AttributeError):
+        return None
+    return message if isinstance(message,str) and message.strip() else None
+
+
+def classify_failure(status_code,body,transport_error):
+    exc_type=body.get('exc_type') if isinstance(body,dict) else None
+    if transport_error is not None or (isinstance(status_code,int) and status_code>=500):
+        return {'error_class':'transient','message':TRANSIENT_MESSAGE,'retryable':True,'http_status':status_code}
+    if status_code in (401,403) or exc_type=='PermissionError':
+        error_class,retryable='permission',False
+    else:
+        error_class,retryable='validation',False
+    return {'error_class':error_class,'message':_failure_message(body),'retryable':retryable,'http_status':status_code}
+
+
 def post(client,method,*,timeout=None,**data):
     request={'json':data}
     if timeout is not None:request['timeout']=timeout
-    response=client.post(API+method,**request)
-    if response.status_code!=200:raise BusinessRuntimeError(response.status_code)
+    try:
+        response=client.post(API+method,**request)
+    except httpx.TransportError as error:
+        if method not in MODEL_FACING_METHODS:raise
+        raise ToolFailure(classify_failure(None,None,error)) from error
+    if response.status_code!=200:
+        try:payload=response.json()
+        except ValueError:payload=None
+        raise ToolFailure(classify_failure(response.status_code,payload if isinstance(payload,dict) else None,None))
     body=response.json()
     if method=='claim_run' and 'message' not in body:return None
     return body['message']
@@ -36,6 +93,14 @@ def _forbid_extra_tool_arguments(server,name):
     model.model_config['extra']='forbid'
     model.model_rebuild(force=True)
     tool.parameters=model.model_json_schema(by_alias=True)
+
+
+def _add_request_input(server,invoke):
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=False,idempotentHint=True))
+    def erp_request_input(question: str) -> dict:
+        """Stop this run and ask the user one explicit business question when required information is missing."""
+        return invoke('erp_request_input',question=question)
+    _forbid_extra_tool_arguments(server,'erp_request_input')
 
 
 def create_server(client,run_id,capability,domain='query'):
@@ -52,6 +117,7 @@ def create_server(client,run_id,capability,domain='query'):
         def erp_propose_configuration(package: dict) -> dict:
             """Store an immutable data-only native configuration proposal after reading its targets. Does not apply, publish, or create business records. Human preview and target confirmations are separate."""
             return invoke('erp_propose_configuration',package=package)
+        _add_request_input(server,invoke)
         return server
     server=create_read_server(invoke,'dsherp-context-'+domain)
     _forbid_extra_tool_arguments(server,'erp_search_records')
@@ -78,6 +144,7 @@ def create_server(client,run_id,capability,domain='query'):
             return invoke('erp_propose_make',source_doctype=source_doctype,source_name=source_name,
                           source_version=source_version,route=route)
         _forbid_extra_tool_arguments(server,'erp_propose_make')
+    _add_request_input(server,invoke)
     return server
 
 

@@ -1,7 +1,7 @@
 ---
 name: erp-query
 description: 在当前业务用户权限与服务端策略允许的业务对象中执行只读查询，并给出有来源的业务回答。
-version: 1.3.0
+version: 1.4.0
 ---
 
 # 业务只读查询
@@ -43,3 +43,10 @@ erp_search_records(
 ## 预算
 
 每轮运行的固定上限为 8 次模型调用。先规划，复用本轮已经取得且仍获授权的来源，避免重复读取 schema、同一记录或逐个 Bin。资料不足或预算不足时明确说明未完成及缺少的依据，不降低来源、身份或权限要求。
+
+## 工具错误与做不了的出口
+
+- `error_class=validation`：修正参数最多重试一次；仍失败则用 `erp_request_input` 向用户说明。
+- `error_class=permission`：不得重试，直接告知用户无权并结束。
+- `error_class=transient`：原样重试一次；再失败则结束并说明。
+- 不能自行猜测缺失信息，用 `erp_request_input` 索取。

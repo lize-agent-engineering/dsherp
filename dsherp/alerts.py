@@ -30,6 +30,8 @@ def evaluate(snapshot,metrics,now):
             oldest=current.get('queued_oldest_seconds')
             if queued>QUEUE_DEPTH or (oldest is not None and oldest>QUEUED_OLDEST_SECONDS):
                 found.append(Alert('queue_backlog','warning','队列积压'))
+            if (current.get('queue_expired_24h') or 0)>10:
+                found.append(Alert('queue_expiring','warning','排队过期较多'))
             if (current.get('running_stuck') or 0)>0:
                 found.append(Alert('run_stuck','critical','运行卡住'))
             backup=current.get('backup_age_hours')

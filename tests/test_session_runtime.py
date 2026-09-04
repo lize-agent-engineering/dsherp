@@ -1,4 +1,5 @@
 """OS writer ownership and actual native process recovery, not a retained Session wrapper."""
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -9,11 +10,117 @@ from deepseek_harness.errors import JsonRpcError
 from dsherp import session_runtime
 
 
-def test_operation_request_timeout_is_longer_without_expanding_other_domains():
-    assert session_runtime._request_timeout_seconds('operation')==120
-    assert session_runtime._request_timeout_seconds('query')==90
-    assert session_runtime._request_timeout_seconds('configuration')==90
-    assert session_runtime._request_timeout_seconds(None)==90
+def _settings():
+    return {'DEEPSEEK_API_KEY':'k','DSH_MODEL':'m','DEEPSEEK_BASE_URL':'http://provider.invalid'}
+
+
+def _business_settings():
+    return {'DEEPSEEK_API_KEY':'k','DEEPSEEK_BASE_URL':'http://provider.invalid'}
+
+
+_CLAIMED_BUDGET_FIELDS=('provider','model','model_request_timeout_seconds',
+    'model_max_output_tokens_per_call')
+_CLAIMED_BUDGET_INT_FIELDS=_CLAIMED_BUDGET_FIELDS[2:]
+
+
+def _claimed_budget(domain):
+    tokens={'query':1024,'configuration':1536,'operation':2560}[domain]
+    return {'provider':'deepseek-official','model':'synthetic-site-model',
+        'model_request_timeout_seconds':90,
+        'model_max_calls':10 if domain=='operation' else 8,
+        'model_max_input_bytes_per_call':131072,'model_max_input_bytes_total':524288,
+        'model_max_output_tokens_per_call':tokens,
+        'model_max_output_tokens_total':30720 if domain=='operation' else 16384}
+
+
+def _capture_harness(monkeypatch):
+    captured={}
+    class Fake:
+        def __init__(self,**kwargs):
+            captured.update(kwargs)
+            raise RuntimeError('harness-captured')
+    monkeypatch.setattr(session_runtime,'DeepSeekHarness',Fake)
+    return captured
+
+
+def test_run_config_without_budget_fails_before_harness(tmp_path,monkeypatch):
+    captured=_capture_harness(monkeypatch)
+    path=tmp_path/'run.json'
+    path.write_text('{"domain":"query"}')
+    with pytest.raises(ValueError,match='Missing run budget'):
+        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False,run_config=path):
+            pass
+    assert captured=={}
+
+
+@pytest.mark.parametrize('domain,tokens',[('query',1024),('configuration',1536),('operation',2560)])
+@pytest.mark.parametrize('settings',[
+    _business_settings(),
+    {**_business_settings(),'DSH_MODEL':'env-override-model'},
+])
+def test_claimed_budget_reaches_harness(tmp_path,monkeypatch,domain,tokens,settings):
+    captured=_capture_harness(monkeypatch)
+    budget=_claimed_budget(domain)
+    path=tmp_path/'run.json'
+    path.write_text(json.dumps({'domain':domain,'budget':budget}))
+    with pytest.raises(RuntimeError,match='harness-captured'):
+        with session_runtime.open_runtime(settings,tmp_path,'s',resume=False,run_config=path):
+            pass
+    assert captured['provider']==budget['provider']=='deepseek-official'
+    assert captured['model']==budget['model']=='synthetic-site-model'
+    assert captured['max_tokens']==budget['model_max_output_tokens_per_call']==tokens
+    assert captured['request_timeout_seconds']==budget['model_request_timeout_seconds']==90
+
+
+def test_context_runtime_without_run_config_keeps_90s(tmp_path,monkeypatch):
+    captured=_capture_harness(monkeypatch)
+    with pytest.raises(RuntimeError,match='harness-captured'):
+        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False):
+            pass
+    assert captured['request_timeout_seconds']==90
+
+
+@pytest.mark.parametrize('field',_CLAIMED_BUDGET_FIELDS)
+def test_claimed_budget_missing_field_fails_before_harness(tmp_path,monkeypatch,field):
+    captured=_capture_harness(monkeypatch)
+    budget=_claimed_budget('query')
+    del budget[field]
+    path=tmp_path/'run.json'
+    path.write_text(json.dumps({'domain':'query','budget':budget}))
+    with pytest.raises(ValueError,match='Missing run budget'):
+        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False,run_config=path):
+            pass
+    assert captured=={}
+
+
+@pytest.mark.parametrize('field',_CLAIMED_BUDGET_INT_FIELDS)
+@pytest.mark.parametrize('value',[True,False,'90',90.0,0,-1])
+def test_invalid_budget_field_fails_before_harness(tmp_path,monkeypatch,field,value):
+    captured=_capture_harness(monkeypatch)
+    budget=_claimed_budget('query')
+    budget[field]=value
+    path=tmp_path/'run.json'
+    path.write_text(json.dumps({'domain':'query','budget':budget}))
+    with pytest.raises(ValueError,match='Invalid run budget'):
+        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False,run_config=path):
+            pass
+    assert captured=={}
+
+
+@pytest.mark.parametrize('field,value',[
+    ('provider',''),('provider',' '),('provider','other'),('provider',True),
+    ('model',''),('model',' '),('model',True),
+])
+def test_invalid_budget_policy_fails_before_harness(tmp_path,monkeypatch,field,value):
+    captured=_capture_harness(monkeypatch)
+    budget=_claimed_budget('query')
+    budget[field]=value
+    path=tmp_path/'run.json'
+    path.write_text(json.dumps({'domain':'query','budget':budget}))
+    with pytest.raises(ValueError,match='Invalid run budget'):
+        with session_runtime.open_runtime(_settings(),tmp_path,'s',resume=False,run_config=path):
+            pass
+    assert captured=={}
 
 
 def test_other_process_cannot_write_and_process_death_releases_lock(tmp_path):

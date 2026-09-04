@@ -23,6 +23,25 @@ _PURGEABLE_METHODS = {
 }
 
 
+def validation_queue_depth(*, run=subprocess.run):
+    """Queued job count across the validation Sites. Frappe refuses new inserts at 600."""
+    inspection=run(INSPECT_COMMAND,check=True,capture_output=True,text=True,timeout=60)
+    try:
+        jobs=json.loads(inspection.stdout) if inspection.stdout.strip() else {}
+    except (TypeError,json.JSONDecodeError) as error:
+        raise RuntimeError("Invalid validation queue inspection") from error
+    if not isinstance(jobs,dict):raise RuntimeError("Invalid validation queue inspection")
+    return sum(len(methods) for methods in jobs.values() if isinstance(methods,list))
+
+
+def purge_validation_jobs_if_backlogged(threshold=200, *, run=subprocess.run):
+    """Nothing consumes the queue during an integration run: every synthetic document
+    deleted by a test leaves a `delete_dynamic_links` job behind. Left alone they cross
+    Frappe's 600 cap mid-suite and the remaining tests fail on QueueOverloaded."""
+    if validation_queue_depth(run=run)<threshold:return None
+    return purge_validation_jobs(run=run)
+
+
 def purge_validation_jobs(*, run=subprocess.run):
     inspection=run(INSPECT_COMMAND,check=True,capture_output=True,text=True,timeout=60)
     try:

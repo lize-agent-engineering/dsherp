@@ -163,5 +163,5 @@ def test_flush_batches_and_never_raises():
             items,
             batch=100,
         )
-    assert out["sent"] == 200 and "BusinessRuntimeError" in out["error"]
+    assert out["sent"] == 200 and out["error"] == "ToolFailure"
     assert all(len(body["events"]) <= 100 and body["run_id"] == "r" for body in seen)

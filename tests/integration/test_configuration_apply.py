@@ -139,10 +139,12 @@ try:
     assert frappe.db.count('DS Configuration Execution',{'confirmation':proposal['id']})==1
     assert frappe.db.count('DocType',{'name':name})==1
 finally:
-    frappe.db.rollback();frappe.set_user('Administrator')
     proposal_id=proposal['id'] if proposal else None
     bundle_id=bundle['id'] if bundle else None
     conversation_id=conversation.name if conversation else None
+    frappe.db.rollback();frappe.destroy()
+    os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-beta.localhost');frappe.connect()
+    frappe.set_user('Administrator')
     if proposal_id:
         for row in frappe.get_all('DS Configuration Execution',filters={'confirmation':proposal_id},pluck='name'):
             frappe.delete_doc('DS Configuration Execution',row,force=True)

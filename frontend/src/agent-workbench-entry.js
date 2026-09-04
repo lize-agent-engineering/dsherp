@@ -1,6 +1,7 @@
 import React from 'react';
 import {createRoot} from 'react-dom/client';
 import AgentWorkbench from './AgentWorkbench.jsx';
+import ErrorBoundary from './ErrorBoundary.jsx';
 import {contextApi} from './context-api.js';
 
 export function readWorkbenchState(search=globalThis.location?.search||''){
@@ -22,7 +23,7 @@ export function readWorkbenchState(search=globalThis.location?.search||''){
 export function mount(element){
  const root=createRoot(element);
  const controls={};
- root.render(React.createElement(AgentWorkbench,{api:contextApi,controls,...readWorkbenchState()}));
+ root.render(React.createElement(ErrorBoundary,null,React.createElement(AgentWorkbench,{api:contextApi,controls,...readWorkbenchState()})));
  const dispose=()=>root.unmount();
  // Returns whether the workbench actually opened settings; before the React
  // tree registers its handler the caller must be told, not silently ignored.

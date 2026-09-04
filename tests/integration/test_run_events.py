@@ -136,7 +136,7 @@ try:
     assert claim and claim['run_id']==run_id,claim
     cap={'run_id':run_id,'capability':claim['capability']}
     frappe.set_user('Guest')
-    reserve_model_call(**cap,input_bytes=100,max_output_tokens=512,provider='deepseek-official',model='deepseek-v4-flash',purpose='conversation',runtime_revision='a'*64,domain='query')
+    reserve_model_call(**cap,input_bytes=100,max_output_tokens=512,provider='deepseek-official',model='deepseek-v4-flash',purpose='conversation',runtime_revision='a'*64,domain='query',claimed_budget=claim['budget'])
     run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'})
     finish_run(**cap,status='Succeeded',answer='完成')
     frappe.db.commit()
@@ -211,7 +211,8 @@ try:
     frappe.local.request=frappe._dict({'method':'POST','path':'/api/method/finish_run','referrer':''})
     assert frappe.local.form_dict['capability']==capability
     assert ev.record_safely(run_id,'finished',{'status':'Succeeded'}) is None
-    assert finish_run(run_id,capability,'Succeeded',answer='事件写入失败但业务完成')=={'run_id':run_id,'status':'Succeeded'}
+    assert finish_run(run_id,capability,'Succeeded',answer='事件写入失败但业务完成')=={
+        'run_id':run_id,'status':'Succeeded','provider_failures':0}
     frappe.db.commit()
     assert frappe.db.get_value('DS Model Run',run_id,'status')=='Succeeded'
     created_logs=[name for name in frappe.get_all('Error Log',filters={'method':title},pluck='name') if name not in existing]
@@ -369,3 +370,49 @@ finally:
         timeout=90,
     )
     assert result.returncode == 0 and "OK" in result.stdout, result.stdout + result.stderr
+
+
+def test_finish_run_reports_and_persists_provider_failure_count():
+    script = r'''
+import hashlib,json,os,uuid,frappe
+from frappe.utils import add_to_date,now_datetime
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import context_events as events
+from dsherp_bridge.context_execution import finish_run
+conversation=None;run=None;capability=uuid.uuid4().hex
+try:
+    actor='dsherp-reader@example.invalid';frappe.set_user(actor)
+    conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Provider failure count'}).insert(ignore_permissions=True)
+    run=frappe.get_doc({'doctype':'DS Model Run','conversation':conversation.name,'domain':'query','status':'Running',
+        'question':'provider failures','page_context':json.dumps({'schema_version':1,'page_type':'unknown','route':[]}),
+        'capability_hash':hashlib.sha256(capability.encode()).hexdigest(),
+        'expires_at':add_to_date(now_datetime(),minutes=3)}).insert(ignore_permissions=True)
+    for attempt,error_class in enumerate((
+        'TRANSPORT','TIMEOUT','SERVER','ProviderError',
+        'CONTEXT_WINDOW_EXCEEDED','EMPTY_RESPONSE','INVALID_REQUEST','AUTH','RATE_LIMIT','QUOTA_EXCEEDED','PI_AI_ERROR',
+    ),start=1):
+        events.record(run.name,'model_error',{'attempt':attempt},source='runner',error_class=error_class)
+    frappe.set_user('Guest')
+    result=finish_run(run.name,capability,'Failed',error='provider unavailable')
+    # provider 不可用的六类都要计数：换错 key(AUTH)、限流(RATE_LIMIT)、配额耗尽
+    # (QUOTA_EXCEEDED) 同样让每条运行必败。只有本轮输入造成的失败不计。
+    assert result=={'run_id':run.name,'status':'Failed','provider_failures':6},result
+    assert frappe.db.get_value('DS Model Run',run.name,'provider_failures')==6
+    print('PROVIDER_FAILURE_COUNT_OK')
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if run:
+        frappe.db.delete('DS Run Event',{'run':run.name})
+        if frappe.db.exists('DS Model Run',run.name):frappe.delete_doc('DS Model Run',run.name,ignore_permissions=True)
+    if conversation and frappe.db.exists('DS Conversation',conversation.name):
+        frappe.delete_doc('DS Conversation',conversation.name,ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result = subprocess.run(
+        ["docker","exec","-i","dsherp-validation-backend-1",
+         "/home/frappe/frappe-bench/env/bin/python","-"],
+        input=script,text=True,capture_output=True,timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PROVIDER_FAILURE_COUNT_OK" in result.stdout

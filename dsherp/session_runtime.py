@@ -14,8 +14,18 @@ from pydantic import BaseModel
 ROOT=Path(__file__).resolve().parents[1]
 
 
-def _request_timeout_seconds(domain):
-    return 120 if domain=='operation' else 90
+def _business_budget(config):
+    raw=config.get('budget') if isinstance(config,dict) else None
+    if not isinstance(raw,dict):raise ValueError('Missing run budget')
+    required=('provider','model','model_request_timeout_seconds','model_max_output_tokens_per_call')
+    if any(key not in raw for key in required):raise ValueError('Missing run budget')
+    provider=raw['provider'];model=raw['model']
+    if (provider!='deepseek-official' or not isinstance(model,str) or not model
+        or model.strip()!=model):
+        raise ValueError('Invalid run budget policy')
+    for key in ('model_request_timeout_seconds','model_max_output_tokens_per_call'):
+        if type(raw[key]) is not int or raw[key]<1:raise ValueError('Invalid run budget value')
+    return raw
 
 
 class OpenedSession(BaseModel):
@@ -51,22 +61,29 @@ def open_runtime(settings: dict, directory: Path, session_id: str, *, resume: bo
     if not isinstance(session_id,str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,128}',session_id):
         raise ValueError('Invalid native session identity')
     if type(resume) is not bool and resume!='inspect':raise ValueError('Explicit resume decision required')
-    for key in ('DEEPSEEK_API_KEY','DSH_MODEL','DEEPSEEK_BASE_URL'):
+    config=json.loads(run_config.read_text()) if run_config else None
+    budget=_business_budget(config) if config is not None else None
+    required=('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL') if budget else ('DEEPSEEK_API_KEY','DSH_MODEL','DEEPSEEK_BASE_URL')
+    for key in required:
         if not isinstance(settings.get(key),str) or not settings[key].strip():
             raise ValueError('Missing runtime setting: '+key)
     directory=directory.absolute()
     domain=None
-    if run_config:
-        domain=json.loads(run_config.read_text()).get('domain')
+    if config is not None:
+        domain=config.get('domain')
         if domain not in ('query','operation','configuration'):raise ValueError('Unknown business domain')
     with session_writer(directory):
-        runtime=DeepSeekHarness(provider='deepseek-official',model=settings['DSH_MODEL'],
+        runtime=DeepSeekHarness(provider=budget['provider'] if budget else 'deepseek-official',
+            model=budget['model'] if budget else settings['DSH_MODEL'],
             api_key=settings['DEEPSEEK_API_KEY'],base_url=settings['DEEPSEEK_BASE_URL'],
             cordis=str(ROOT/'config'/('dsh-business.yml' if run_config else 'dsh-context.yml')),cwd=str(directory),runtime_cwd=str(directory),
-            session_root=str(directory/'sessions'),max_tokens=3072 if domain in ('operation','configuration') else 2048,
-            request_timeout_seconds=_request_timeout_seconds(domain),shutdown_timeout_seconds=5,
+            session_root=str(directory/'sessions'),
+            max_tokens=budget['model_max_output_tokens_per_call'] if budget else 2048,
+            request_timeout_seconds=budget['model_request_timeout_seconds'] if budget else 90,
+            shutdown_timeout_seconds=5,
             env={} if run_config is None else {'DSHERP_RUN_CONFIG':str(run_config.absolute()),
-                'DSHERP_PYTHON':sys.executable,'DSHERP_PROJECT':str(ROOT),'DSHERP_DOMAIN':domain})
+                'DSHERP_PYTHON':sys.executable,'DSHERP_PROJECT':str(ROOT),'DSHERP_DOMAIN':domain,
+                'DSHERP_MODEL_MAX_OUTPUT_TOKENS':str(budget['model_max_output_tokens_per_call'])})
         try:
             runtime.start()
             if resume=='inspect':

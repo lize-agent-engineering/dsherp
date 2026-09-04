@@ -13,7 +13,9 @@
     "payload",
     "digest",
     "expires_at",
-    "status"
+    "status",
+    "rejected_by",
+    "rejected_request_id"
   ],
   "fields": [
     {"fieldname":"model_run","label":"Model run","fieldtype":"Link","options":"DS Model Run"},
@@ -46,8 +48,18 @@
       "fieldname": "status",
       "label": "status",
       "fieldtype": "Select",
-      "options": "Pending\nAuthorized\nSucceeded\nFailed\nUnknown",
+      "options": "Pending\nAuthorized\nSucceeded\nFailed\nUnknown\nRejected\nExpired",
       "reqd": 1
+    },
+    {
+      "fieldname": "rejected_by",
+      "label": "rejected_by",
+      "fieldtype": "Data"
+    },
+    {
+      "fieldname": "rejected_request_id",
+      "label": "rejected_request_id",
+      "fieldtype": "Data"
     }
   ],
   "permissions": []

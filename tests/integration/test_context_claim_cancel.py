@@ -14,7 +14,11 @@ run=doc['active_run'];frappe.db.commit()
 original=frappe.get_all
 def selected(*args,**kwargs):
     result=original(*args,**kwargs)
-    if args==('DS Model Run',) and kwargs.get('filters')=={'status':'Queued'} and run in result:
+    if args==('DS Model Run',) and kwargs.get('filters')=={'status':'Queued'}:
+        selected_names={row if isinstance(row,str) else row.name for row in result}
+    else:
+        selected_names=set()
+    if run in selected_names:
         # Reproduce a cancellation that commits before the claimant gets its row lock.
         frappe.db.set_value('DS Model Run',run,'status','Cancelled');frappe.db.commit()
     return result

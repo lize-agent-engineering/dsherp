@@ -25,7 +25,7 @@ def test_configuration_skill_is_pinned_and_in_runtime_identity():
     from dsherp.runtime_revision import FILES
     manifest=json.loads((ROOT/'config/business-skills.json').read_text())
     row=next(row for row in manifest['skills'] if row['name']=='erp-configuration')
-    assert row['version']=='1.0.0'
+    assert row['version']=='1.1.0'
     assert 'business-skills/erp-configuration/SKILL.md' in FILES
     verify_business_skills()
 
@@ -56,7 +56,7 @@ def test_query_skill_requires_fresh_source_on_every_model_run():
 def test_query_skill_plans_bom_then_batches_warehouse_scoped_bins():
     content=(ROOT/'business-skills/erp-query/SKILL.md').read_text()
     header=content.split('---',2)[1]
-    assert 'version: 1.3.0' in header
+    assert 'version: 1.4.0' in header
     description=next(
         line for line in header.splitlines() if line.startswith('description:')
     )
@@ -86,7 +86,7 @@ def test_query_skill_plans_bom_then_batches_warehouse_scoped_bins():
 def test_operation_skill_discovers_dynamic_capabilities_and_manufacturing_routes():
     content=(ROOT/'business-skills/erp-operation/SKILL.md').read_text()
     header=content.split('---',2)[1]
-    assert 'version: 2.1.0' in header
+    assert 'version: 2.2.0' in header
     description=next(
         line for line in header.splitlines() if line.startswith('description:')
     )
@@ -165,3 +165,40 @@ def test_operation_skill_supplies_exact_trusted_make_route_tokens():
     assert '服务端当前策略、用户权限和固定 adapter 仍是最终裁决' in content
     assert '服务端拒绝时立即停止，不能尝试或发明其他 token' in content
     assert 'route 内容变化会轮换权限版本，使在飞运行和提案失效' in content
+
+
+ERROR_EXIT_HEADING='## 工具错误与做不了的出口'
+ERROR_EXIT_SKILLS=(
+    ('erp-query','1.4.0'),
+    ('erp-operation','2.2.0'),
+    ('erp-configuration','1.1.0'),
+)
+
+
+def error_exit_section(content):
+    start=content.index(ERROR_EXIT_HEADING)
+    rest=content[start+len(ERROR_EXIT_HEADING):]
+    nxt=rest.find('\n## ')
+    return content[start:] if nxt<0 else content[start:start+len(ERROR_EXIT_HEADING)+nxt]
+
+
+def test_business_skills_share_tool_error_and_impossible_exit_rules():
+    sections=[]
+    for name,version in ERROR_EXIT_SKILLS:
+        content=(ROOT/f'business-skills/{name}/SKILL.md').read_text()
+        header=content.split('---',2)[1]
+        assert f'version: {version}' in header
+        section=error_exit_section(content)
+        assert 'error_class=validation' in section
+        assert '修正参数最多重试一次' in section
+        assert '仍失败则用 `erp_request_input` 向用户说明' in section
+        assert 'error_class=permission' in section
+        assert '不得重试' in section
+        assert '直接告知用户无权并结束' in section
+        assert 'error_class=transient' in section
+        assert '原样重试一次' in section
+        assert '再失败则结束并说明' in section
+        assert '不能自行猜测缺失信息' in section
+        assert '用 `erp_request_input` 索取' in section
+        sections.append(section)
+    assert sections[0]==sections[1]==sections[2]

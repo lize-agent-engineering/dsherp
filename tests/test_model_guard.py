@@ -7,6 +7,22 @@ from dsherp.session_runtime import open_runtime
 from dsherp.runtime_revision import configuration_revision
 
 
+def _provider_settings(settings):
+    return {key:settings[key] for key in ('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL')}
+
+
+def _complete_budget(domain,model):
+    operation=domain=='operation'
+    return {'model_request_timeout_seconds':90,'lease_seconds':180,'lease_renew_below_seconds':90,
+        'queue_expires_seconds':600,'heartbeat_stale_seconds':60,
+        'run_total_seconds':600 if operation else 300,'site_concurrency':1,
+        'provider':'deepseek-official','model':model,
+        'model_max_calls':10 if operation else 8,
+        'model_max_input_bytes_per_call':131072,'model_max_input_bytes_total':524288,
+        'model_max_output_tokens_per_call':3072 if operation else 2048,
+        'model_max_output_tokens_total':30720 if operation else 16384}
+
+
 @pytest.mark.parametrize('mode',['denied','drift','allow','skill','operation'])
 def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,mode):
     observed=[]
@@ -22,13 +38,19 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
     server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     settings,requests,state=model_server
+    model=settings['DSH_MODEL']
+    settings=_provider_settings(settings)
     if mode=='skill':state['tool_call']={'name':'skill','arguments':json.dumps({'name':'erp-query'})}
     if mode=='operation':state['tool_call']={'name':'skill','arguments':json.dumps({'name':'erp-operation'})}
     personal=tmp_path/'native/.agents/skills/personal';personal.mkdir(parents=True)
     (personal/'SKILL.md').write_text('---\nname: personal\ndescription: PERSONAL_SKILL_FORBIDDEN\n---\nNot authorized')
+    domain='operation' if mode=='operation' else 'query'
+    budget=_complete_budget(domain,model)
     config=tmp_path/'run.json'
-    config.write_text(json.dumps({**settings,'domain':'operation' if mode=='operation' else 'query','runtime_revision':configuration_revision(settings),'run_id':'synthetic','capability':'synthetic','site':'synthetic',
+    config.write_text(json.dumps({**settings,'domain':domain,'budget':budget,
+        'runtime_revision':configuration_revision(settings),'run_id':'synthetic','capability':'synthetic','site':'synthetic',
         'business_url':f'http://127.0.0.1:{server.server_port}'}));config.chmod(0o600)
+    assert 'DSH_MODEL' not in json.loads(config.read_text())
     try:
         with open_runtime(settings,tmp_path/'native','denied',resume=False,run_config=config) as runtime:
             result=runtime.run('Do not transmit this without permission',session_id='denied')
@@ -39,13 +61,16 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
             reports=[item for item in observed if item[0].endswith('.record_run_event')]
             assert len(requests)==len(authorizations)==len(reports)==(3 if mode in ('skill','operation') else 2)
             assert all(item[1]['events'][0]['kind']=='model_response' for item in reports)
-            expected={'skill','mcp__erp__erp_read_schema','mcp__erp__erp_read_record','mcp__erp__erp_search_records'}
+            expected={'skill','mcp__erp__erp_read_schema','mcp__erp__erp_read_record','mcp__erp__erp_search_records','mcp__erp__erp_request_input'}
             if mode=='operation':expected.update({'mcp__erp__erp_propose_update','mcp__erp__erp_propose_create','mcp__erp__erp_propose_action','mcp__erp__erp_propose_fill','mcp__erp__erp_propose_make'})
             assert {tool['function']['name'] for tool in requests[0]['tools']}==expected
             assert 'PERSONAL_SKILL_FORBIDDEN' not in json.dumps(requests)
-            if mode=='skill':assert '业务只读查询' in str(requests[1]['messages'])
+            if mode=='skill':
+                assert '业务只读查询' in str(requests[1]['messages'])
+                assert '工具错误与做不了的出口' in str(requests[1]['messages'])
             if mode=='operation':
                 assert '业务操作提案' in str(requests[1]['messages'])
+                assert '工具错误与做不了的出口' in str(requests[1]['messages'])
                 assert 'erp-query' not in str(requests[0]['messages'])
         else:
             assert result.finish_reason!='completed'
@@ -54,7 +79,11 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
             assert len(observed)==1
         assert observed[0][0].endswith('.reserve_model_call')
         metadata=observed[0][1]
-        assert metadata['purpose']=='conversation' and metadata['max_output_tokens']==(3072 if mode=='operation' else 2048)
+        assert metadata['purpose']=='conversation'
+        assert metadata['provider']==budget['provider']=='deepseek-official'
+        assert metadata['model']==budget['model']==model
+        assert metadata['max_output_tokens']==budget['model_max_output_tokens_per_call']
+        assert metadata['claimed_budget']==budget
         assert metadata['input_bytes']>0
         assert 'Do not transmit' not in json.dumps(metadata)
     finally:

@@ -26,6 +26,15 @@ it('状态色调区分成功、需要注意和失败', () => {
  expect(statusTone('Authorized')).toBe('accent');
 });
 
+it('NeedsInput、Rejected、Expired 使用准确文案与色调', () => {
+ expect(statusText('NeedsInput')).toBe('需要你补充信息');
+ expect(statusTone('NeedsInput')).toBe('warning');
+ expect(statusText('Rejected')).toBe('已拒绝');
+ expect(statusTone('Rejected')).toBe('default');
+ expect(statusText('Expired')).toBe('已过期');
+ expect(statusTone('Expired')).toBe('default');
+});
+
 it('区分业务与配置两类记录', () => {
  expect(recordKind('operation')).toBe('业务');
  expect(recordKind('configuration')).toBe('配置');

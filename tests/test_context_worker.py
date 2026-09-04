@@ -1,24 +1,37 @@
 import json
 import os
 import signal
+import subprocess
+import threading
 import time
 import httpx
 import pytest
-from dsherp.context_mcp import BusinessRuntimeError
+from dsherp.context_mcp import BusinessRuntimeError,ToolFailure
 import dsherp.context_worker as worker
 from dsherp.context_worker import profile_business,run_once
-SETTINGS={'DEEPSEEK_API_KEY':'synthetic','DSH_MODEL':'deepseek-v4-flash','DEEPSEEK_BASE_URL':'http://synthetic'}
+SETTINGS={'DEEPSEEK_API_KEY':'synthetic','DEEPSEEK_BASE_URL':'http://synthetic'}
+NEEDS_INPUT={'status':'NeedsInput','answer':'请指定仓库'}
+
+
+def _fake_container(payload):
+    def fake_run(args,**kwargs):
+        if list(args)[:3]==['docker','rm','-f']:
+            return subprocess.CompletedProcess(args,0,'','')
+        return subprocess.CompletedProcess(args,0,json.dumps(payload),'')
+    return fake_run
 
 
 def test_worker_claims_one_scoped_run_and_finishes_without_replay(tmp_path):
     calls=[];executed=[]
-    claim={'run_id':'r','scope_id':'a'*64,'capability':'cap','native_session_id':'n','question':'q','context':{}}
+    claim={'run_id':'r','scope_id':'a'*64,'capability':'cap','native_session_id':'n','question':'q','context':{},
+           'domain':'query','budget':{'run_total_seconds':300}}
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];calls.append((method,json.loads(request.content)))
         return httpx.Response(200,json={'message':claim if method=='claim_run' else {'status':'Succeeded'}})
-    def execute(task,settings,directory):
+    def execute(task,settings,directory,timeout):
         executed.append(directory)
         assert task['resume']=='inspect'
+        assert timeout==330
         return {'status':'Succeeded','answer':'answer'}
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         assert run_once(client,SETTINGS,tmp_path,execute=execute)
@@ -32,11 +45,11 @@ def test_unknown_finish_response_does_not_overwrite_or_execute_again(tmp_path):
     calls=[]
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];calls.append(method)
-        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','capability':'c','scope_id':'b'*64}})
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','capability':'c','scope_id':'b'*64,
+            'domain':'query','budget':{'run_total_seconds':300}}})
         raise httpx.ReadTimeout('lost response')
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(httpx.ReadTimeout):
-            run_once(client,SETTINGS,tmp_path,execute=lambda *args:{'status':'Succeeded','answer':'ok'})
+        assert run_once(client,SETTINGS,tmp_path,execute=lambda *args:{'status':'Succeeded','answer':'ok'})
     assert calls==['claim_run','record_run_event','finish_run']
 
 
@@ -44,7 +57,8 @@ def test_bad_scope_is_failed_without_opening_any_directory(tmp_path):
     calls=[]
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];calls.append((method,json.loads(request.content)))
-        return httpx.Response(200,json={'message':{'run_id':'r','capability':'c','scope_id':'../other'}})
+        return httpx.Response(200,json={'message':{'run_id':'r','capability':'c','scope_id':'../other',
+            'domain':'query','budget':{'run_total_seconds':300}}})
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         run_once(client,SETTINGS,tmp_path,execute=lambda *args:pytest.fail('invalid scope executed'))
     assert calls[-1][1]['status']=='Failed'
@@ -52,13 +66,15 @@ def test_bad_scope_is_failed_without_opening_any_directory(tmp_path):
 
 
 def test_worker_injects_the_selected_business_site_without_alpha_hardcoding(tmp_path):
-    claim={'run_id':'r','scope_id':'c'*64,'capability':'cap'}
+    claim={'run_id':'r','scope_id':'c'*64,'capability':'cap','domain':'query',
+           'budget':{'run_total_seconds':300}}
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1]
         return httpx.Response(200,json={'message':claim if method=='claim_run' else {'status':'Succeeded'}})
-    def execute(task,settings,directory):
+    def execute(task,settings,directory,timeout):
         assert task['business_url']=='http://backend:8000'
         assert task['site']=='dsherp-daily.localhost'
+        assert timeout==330
         return {'status':'Succeeded','answer':'daily answer'}
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         run_once(client,SETTINGS,tmp_path,business={'business_url':'http://backend:8000','site':'dsherp-daily.localhost'},execute=execute)
@@ -73,6 +89,7 @@ def test_business_profile_requires_explicit_urls_and_site():
 
 
 def test_worker_poll_survives_transient_business_transport_and_server_failures(tmp_path, capsys):
+    assert issubclass(ToolFailure,BusinessRuntimeError)
     attempts=[]
     def handler(request):
         attempts.append(request.url.path)
@@ -86,7 +103,7 @@ def test_worker_poll_survives_transient_business_transport_and_server_failures(t
     assert len(attempts)==3
     diagnostic=capsys.readouterr().err
     assert 'ReadError' in diagnostic
-    assert 'BusinessRuntimeError' in diagnostic and '500' in diagnostic
+    assert 'ToolFailure' in diagnostic and '500' in diagnostic
     assert 'synthetic connection reset' not in diagnostic
 
 
@@ -108,23 +125,29 @@ def test_worker_pid_file_replaces_stale_value_and_is_removed_on_exit(tmp_path):
     assert not target.exists()
 
 
-def test_sigterm_exits_through_worker_pid_cleanup(tmp_path):
+def test_sigterm_drains_then_releases_the_worker_pid(tmp_path):
+    """SIGTERM 请求排空而不是就地抛 SystemExit；pid 仍在循环正常退出时释放。"""
     target=tmp_path/'worker.pid'
-    with pytest.raises(SystemExit) as caught:
+    worker.STOPPING.clear()
+    try:
         with worker.worker_pid(target):
             assert target.exists()
             worker.exit_on_signal(signal.SIGTERM,None)
-    assert caught.value.code==0
-    assert not target.exists()
+            assert worker.STOPPING.is_set()
+            assert worker.STOPPING.wait(0) is True
+        assert not target.exists()
+    finally:
+        worker.STOPPING.clear()
 
 
 def test_worker_records_container_outcome_before_finishing(tmp_path):
     calls=[]
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];calls.append((method,json.loads(request.content)))
-        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'d'*64,'capability':'cap'}})
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'d'*64,'capability':'cap',
+            'domain':'query','budget':{'run_total_seconds':300}}})
         return httpx.Response(200,json={'message':{'recorded':1,'last_seq':9} if method=='record_run_event' else {'status':'Failed'}})
-    def execute(task,settings,directory):raise RuntimeError('boom')
+    def execute(task,settings,directory,timeout):raise RuntimeError('boom')
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         assert run_once(client,SETTINGS,tmp_path,execute=execute)
     assert [m for m,_ in calls]==['claim_run','record_run_event','finish_run']
@@ -139,7 +162,8 @@ def test_event_writeback_failure_does_not_change_the_run_result(tmp_path,capsys)
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];calls.append(method)
         if method=='record_run_event':return httpx.Response(503)
-        return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'e'*64,'capability':'cap'} if method=='claim_run' else {'status':'Succeeded'}})
+        return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'e'*64,'capability':'cap',
+            'domain':'query','budget':{'run_total_seconds':300}} if method=='claim_run' else {'status':'Succeeded'}})
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'ok'})
     assert calls==['claim_run','record_run_event','finish_run']
@@ -153,7 +177,8 @@ def test_event_writeback_timeout_does_not_change_the_run_result(tmp_path,capsys)
         if method=='record_run_event':
             timeouts.append(request.extensions['timeout'])
             raise httpx.TimeoutException('synthetic slow event sink',request=request)
-        return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'f'*64,'capability':'cap'} if method=='claim_run' else {'status':'Succeeded'}})
+        return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'f'*64,'capability':'cap',
+            'domain':'query','budget':{'run_total_seconds':300}} if method=='claim_run' else {'status':'Succeeded'}})
     started=time.monotonic()
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler),timeout=30) as client:
         assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'ok'})
@@ -197,13 +222,14 @@ def test_run_once_updates_claim_result_and_duration_metrics(tmp_path,monkeypatch
     monkeypatch.setattr(worker,'RUNS_TOTAL',runs)
     monkeypatch.setattr(worker,'RUN_DURATION',duration)
     monkeypatch.setattr(worker,'set_consecutive_failures',lambda value:failures.append(value))
-    claim={'run_id':'r','scope_id':'a'*64,'capability':'cap'}
+    claim={'run_id':'r','scope_id':'a'*64,'capability':'cap','domain':'query',
+           'budget':{'run_total_seconds':300}}
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1]
         return httpx.Response(200,json={'message':claim if method=='claim_run' else {'status':'Succeeded'}})
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         assert run_once(client,SETTINGS,tmp_path,execute=lambda *args:{'status':'Succeeded','answer':'answer'})
-    assert claims.calls==[(1,{})]
+    assert claims.calls==[(0,{'site':'legacy'}),(1,{'site':'legacy'})]
     assert runs.calls==[(1,{'status':'Succeeded'})]
     assert len(duration.values)==1 and duration.values[0]>=0
     assert failures==[0]
@@ -307,3 +333,542 @@ def test_ops_monitor_skips_orphan_metric_when_probe_fails(monkeypatch):
             assert [item.key for item in items]==[]
     worker.monitor_ops(object(),Notifier(),{},now=1000)
     assert writes==[]
+
+
+def test_coordinator_round_robins_sites_and_respects_slots(tmp_path):
+    from dsherp.context_worker import Coordinator
+
+    claims={'a':['r1','r2'],'b':['r3']};finished=[];clients=[]
+    def make_client(site):
+        def handler(request):
+            method=request.url.path.rsplit('.',1)[-1];body=json.loads(request.content)
+            if method=='claim_run':
+                queue=claims[site]
+                return httpx.Response(200,json={'message':{'run_id':queue.pop(0),'scope_id':site*64,
+                    'capability':'c','domain':'query','budget':{'run_total_seconds':300}} if queue else {}})
+            if method=='finish_run':
+                finished.append((site,body['run_id']))
+                return httpx.Response(200,json={'message':{'status':'Succeeded','provider_failures':0}})
+            return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+        client=httpx.Client(base_url='http://'+site,transport=httpx.MockTransport(handler))
+        clients.append(client);return client
+    sites=[{'site':site,'client':make_client(site),'business':{'business_url':'http://x','site':site}}
+           for site in ('a','b')]
+    executed=[]
+    def execute(task,settings,directory,timeout):
+        executed.append((task['site'],task['run_id'],timeout));return {'status':'Succeeded','answer':'ok'}
+    try:
+        coordinator=Coordinator(sites,lambda:SETTINGS,slots=2,execute=execute,breaker=None,
+                                probe=lambda:True,state_root=tmp_path)
+        assert coordinator.tick(now=0)==2
+        coordinator.wait_idle()
+        assert coordinator.tick(now=1)==1 and coordinator.wait_idle() is None
+        assert sorted(item[1] for item in executed)==['r1','r2','r3']
+        assert all(item[2]==330 for item in executed)
+        assert sorted(finished)==[('a','r1'),('a','r2'),('b','r3')]
+    finally:
+        for client in clients:client.close()
+
+
+def test_run_claimed_never_escapes_and_records_provider_failure(tmp_path):
+    from dsherp.context_worker import Coordinator
+    from dsherp.provider_circuit import CircuitBreaker
+
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='claim_run':
+            return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'a'*64,'capability':'c',
+                'domain':'query','budget':{'run_total_seconds':300}}})
+        if method=='finish_run':return httpx.Response(403,json={'exc_type':'PermissionError'})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        breaker=CircuitBreaker()
+        coordinator=Coordinator([{'site':'a','client':client,
+            'business':{'business_url':'http://x','site':'a'}}],lambda:SETTINGS,slots=1,
+            execute=lambda *args,**kwargs:{'status':'Succeeded','answer':'ok'},breaker=breaker,
+            probe=lambda:False,state_root=tmp_path)
+        assert coordinator.tick(now=0)==1;coordinator.wait_idle()
+        assert breaker.state=='closed' and breaker.consecutive_failures==0
+        def failing(*args,**kwargs):raise RuntimeError('boom')
+        coordinator.execute=failing
+        for current in range(10,13):
+            coordinator.tick(now=current);coordinator.wait_idle()
+        assert breaker.state=='open' and coordinator.tick(now=20)==0
+
+
+def test_profile_normalization_supports_legacy_and_multisite_shapes():
+    from dsherp.context_worker import normalize_profile
+
+    legacy={'site':'alpha.localhost','base_url':'http://alpha','business_url':'http://backend:8000',
+            'api_key':'key','api_secret':'secret'}
+    normalized=normalize_profile(legacy)
+    assert normalized['slots']==3 and normalized['metrics_port']==9109
+    assert normalized['sites']==[legacy]
+    multisite=normalize_profile({'slots':2,'metrics_port':9200,'alert_webhook':None,
+        'sites':[legacy,{**legacy,'site':'daily.localhost'}]})
+    assert multisite['slots']==2 and [item['site'] for item in multisite['sites']]==[
+        'alpha.localhost','daily.localhost']
+    for invalid in ({'sites':[]},{'slots':0,'sites':[legacy]},
+                    {'sites':[legacy,dict(legacy)]},{'sites':[{}]}):
+        with pytest.raises(ValueError):normalize_profile(invalid)
+
+
+def test_coordinator_never_claims_beyond_free_slots(tmp_path):
+    from dsherp.context_worker import Coordinator
+
+    release=threading.Event();started=[];claim_calls=[];clients=[]
+    def make_client(site):
+        available=[site+'-run']
+        def handler(request):
+            method=request.url.path.rsplit('.',1)[-1]
+            if method=='claim_run':
+                claim_calls.append(site)
+                run_id=available.pop(0) if available else None
+                return httpx.Response(200,json={'message':None if run_id is None else {
+                    'run_id':run_id,'scope_id':site*64,'capability':'c','domain':'query',
+                    'budget':{'run_total_seconds':300}}})
+            return httpx.Response(200,json={'message':{'status':'Succeeded','provider_failures':0}})
+        client=httpx.Client(base_url='http://'+site,transport=httpx.MockTransport(handler))
+        clients.append(client);return client
+    def execute(task,settings,directory,timeout):
+        started.append(task['run_id']);release.wait(5)
+        return {'status':'Succeeded','answer':'ok'}
+    sites=[{'site':site,'client':make_client(site),'business':{'site':site,'business_url':'http://x'}}
+           for site in ('a','b','c')]
+    try:
+        coordinator=Coordinator(sites,lambda:SETTINGS,2,execute,None,lambda:True,tmp_path)
+        # 站点领取是并行的，顺序不做承诺；受约束的是"只联系轮转中前 capacity 个站"。
+        assert coordinator.tick(now=0)==2 and sorted(claim_calls)==['a','b']
+        assert coordinator.tick(now=1)==0 and len(started)==2
+        release.set();coordinator.wait_idle()
+        assert coordinator.tick(now=2)==1
+        coordinator.wait_idle()
+        assert sorted(started)==['a-run','b-run','c-run']
+    finally:
+        release.set()
+        for client in clients:client.close()
+
+
+def test_coordinator_probe_resets_open_circuit_after_sixty_seconds(tmp_path):
+    from dsherp.context_worker import Coordinator
+    from dsherp.provider_circuit import CircuitBreaker
+
+    clock=[0];claims=['first','second'];probes=[];executions=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='claim_run':
+            run_id=claims.pop(0) if claims else None
+            return httpx.Response(200,json={'message':None if run_id is None else {
+                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'budget':{'run_total_seconds':300}}})
+        if method=='finish_run':
+            return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    def execute(task,settings,directory,timeout):
+        executions.append(task['run_id']);raise RuntimeError('synthetic provider failure')
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        breaker=CircuitBreaker(threshold=1,open_seconds=60)
+        coordinator=Coordinator([{'site':'a','client':client,'business':{}}],lambda:SETTINGS,1,
+            execute,breaker,lambda:probes.append(True) or True,tmp_path,clock=lambda:clock[0])
+        assert coordinator.tick(now=0)==1;coordinator.wait_idle()
+        assert breaker.state=='open' and coordinator.tick(now=59)==0 and probes==[]
+        clock[0]=60
+        assert coordinator.tick(now=60)==1 and probes==[True]
+        coordinator.wait_idle()
+        assert executions==['first','second']
+
+
+def test_coordinator_failed_probe_keeps_open_circuit_from_claiming(tmp_path):
+    from dsherp.context_worker import Coordinator
+    from dsherp.provider_circuit import CircuitBreaker
+
+    clock=[0];claims=['first','second'];probes=[];executions=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='claim_run':
+            run_id=claims.pop(0) if claims else None
+            return httpx.Response(200,json={'message':None if run_id is None else {
+                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'budget':{'run_total_seconds':300}}})
+        if method=='finish_run':
+            return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    def execute(task,settings,directory,timeout):
+        executions.append(task['run_id']);raise RuntimeError('synthetic provider failure')
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        breaker=CircuitBreaker(threshold=1,open_seconds=60)
+        coordinator=Coordinator([{'site':'a','client':client,'business':{}}],lambda:SETTINGS,1,
+            execute,breaker,lambda:probes.append(False) or False,tmp_path,clock=lambda:clock[0])
+        assert coordinator.tick(now=0)==1;coordinator.wait_idle()
+        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN._value==1
+        clock[0]=60
+        assert coordinator.tick(now=60)==0 and probes==[False]
+        assert executions==['first'] and claims==['second']
+        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN._value==1
+        clock[0]=63
+        assert coordinator.tick(now=63)==0 and probes==[False]
+        assert executions==['first'] and claims==['second']
+        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN._value==1
+
+
+def test_circuit_open_period_starts_when_slow_run_finishes(tmp_path):
+    from dsherp.context_worker import Coordinator
+    from dsherp.provider_circuit import CircuitBreaker
+
+    clock=[0];claims=['first','second'];executed=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='claim_run':
+            run_id=claims.pop(0) if claims else None
+            return httpx.Response(200,json={'message':None if run_id is None else {
+                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'budget':{'run_total_seconds':300}}})
+        if method=='finish_run':return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    def execute(task,settings,directory,timeout):
+        executed.append(task['run_id']);clock[0]=120
+        raise RuntimeError('synthetic slow provider failure')
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        coordinator=Coordinator([{'site':'a','client':client,'business':{}}],lambda:SETTINGS,1,execute,
+            CircuitBreaker(threshold=1,open_seconds=60),lambda:False,tmp_path,clock=lambda:clock[0])
+        assert coordinator.tick(now=0)==1;coordinator.wait_idle()
+        clock[0]=121
+        assert coordinator.tick(now=121)==0 and executed==['first']
+        clock[0]=179
+        assert coordinator.tick(now=179)==0 and executed==['first']
+
+
+def test_coordinator_initializes_claim_metric_for_every_site(tmp_path,monkeypatch):
+    from dsherp.context_worker import Coordinator
+
+    class Counter:
+        def __init__(self):self.calls=[]
+        def inc(self,amount=1,**labels):self.calls.append((amount,labels))
+    claims=Counter();monkeypatch.setattr(worker,'CLAIMS_TOTAL',claims)
+    sites=[{'site':'alpha','client':object(),'business':{}},{'site':'daily','client':object(),'business':{}}]
+    Coordinator(sites,lambda:SETTINGS,1,lambda *args:None,None,lambda:False,tmp_path)
+    assert claims.calls==[(0,{'site':'alpha'}),(0,{'site':'daily'})]
+
+
+def test_tick_refreshes_site_heartbeats_while_circuit_open(tmp_path):
+    from dsherp.context_worker import Coordinator
+    from dsherp.provider_circuit import CircuitBreaker
+
+    calls=[]
+    def handler(request):
+        calls.append(request.url.path.rsplit('.',1)[-1])
+        return httpx.Response(200,json={'message':{'heartbeat':'synthetic'}})
+    breaker=CircuitBreaker(threshold=1,open_seconds=60);breaker.record('provider_failure',now=0)
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        coordinator=Coordinator([{'site':'a','client':client,'business':{}}],lambda:SETTINGS,1,
+            lambda *args:pytest.fail('open circuit executed'),breaker,lambda:False,tmp_path)
+        assert coordinator.tick(now=1)==0
+    assert calls==['worker_heartbeat']
+
+
+def test_tick_refreshes_site_heartbeats_while_slots_are_full(tmp_path):
+    from dsherp.context_worker import Coordinator
+
+    release=threading.Event();calls=[];queue=['running']
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];calls.append(method)
+        if method=='claim_run':
+            run_id=queue.pop(0) if queue else None
+            return httpx.Response(200,json={'message':None if run_id is None else {
+                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'budget':{'run_total_seconds':300}}})
+        return httpx.Response(200,json={'message':{'status':'Succeeded','provider_failures':0}})
+    def execute(*args):
+        release.wait(5);return {'status':'Succeeded','answer':'ok'}
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        coordinator=Coordinator([{'site':'a','client':client,'business':{}}],lambda:SETTINGS,1,
+            execute,None,lambda:False,tmp_path)
+        try:
+            assert coordinator.tick(now=0)==1
+            assert coordinator.tick(now=1)==0
+            assert calls.count('worker_heartbeat')==2
+        finally:
+            release.set();coordinator.wait_idle()
+
+
+def test_run_container_accepts_needs_input_result(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'ROOT',tmp_path)
+    (tmp_path/'work').mkdir()
+    monkeypatch.setattr(worker.subprocess,'run',_fake_container(NEEDS_INPUT))
+    assert worker.run_container({'run_id':'r'},SETTINGS,tmp_path/'session')==NEEDS_INPUT
+
+
+def test_run_container_rejects_invalid_status_and_shape(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'ROOT',tmp_path)
+    (tmp_path/'work').mkdir()
+    for payload in ({'status':'Failed','answer':''},{'status':'Running','answer':'x'},
+                    {'status':'NeedsInput','answer':'请指定仓库','extra':1},{'status':'NeedsInput'}):
+        monkeypatch.setattr(worker.subprocess,'run',_fake_container(payload))
+        with pytest.raises(RuntimeError,match='Invalid business runtime result'):
+            worker.run_container({'run_id':'r'},SETTINGS,tmp_path/'session')
+
+
+def test_run_once_finishes_needs_input_and_clears_consecutive_failures(tmp_path,monkeypatch):
+    failures=[]
+    monkeypatch.setattr(worker,'set_consecutive_failures',lambda value:failures.append(value))
+    calls=[]
+    claim={'run_id':'r','scope_id':'a'*64,'capability':'cap','domain':'query',
+           'budget':{'run_total_seconds':300}}
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];calls.append((method,json.loads(request.content)))
+        return httpx.Response(200,json={'message':claim if method=='claim_run' else {
+            'status':'NeedsInput','provider_failures':0}})
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=lambda *args:NEEDS_INPUT)
+    assert [m for m,_ in calls]==['claim_run','record_run_event','finish_run']
+    assert calls[-1][1]['status']=='NeedsInput' and calls[-1][1]['answer']=='请指定仓库'
+    assert failures==[0]
+
+
+def test_run_claimed_contains_malformed_claim_errors(tmp_path,monkeypatch):
+    from dsherp.context_worker import Coordinator
+
+    class Counter:
+        def __init__(self):self.calls=[]
+        def inc(self,amount=1,**labels):self.calls.append((amount,labels))
+    errors=Counter();monkeypatch.setattr(worker,'WORKER_ERRORS',errors)
+    coordinator=Coordinator([{'site':'a','client':object(),'business':{}}],lambda:SETTINGS,1,
+        lambda *args:pytest.fail('malformed claim executed'),None,lambda:False,tmp_path)
+    coordinator.run_claimed(coordinator.sites[0],{'run_id':'missing-capability'},SETTINGS)
+    assert errors.calls==[(1,{'error_class':'KeyError'})]
+
+
+def test_three_provider_failure_runs_emit_one_provider_circuit_open_alert(tmp_path,capsys):
+    from dsherp import alerts
+    from dsherp.context_worker import Coordinator
+    from dsherp.provider_circuit import CircuitBreaker
+
+    claims=['r1','r2','r3']
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='claim_run':
+            run_id=claims.pop(0) if claims else None
+            return httpx.Response(200,json={'message':None if run_id is None else {
+                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'budget':{'run_total_seconds':300}}})
+        if method=='finish_run':
+            return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        breaker=CircuitBreaker()
+        notifier=alerts.Notifier()
+        sites=[{'site':'a','client':client,'business':{}}]
+        execute=lambda *args:{'status':'Succeeded','answer':'ok'}
+        try:
+            coordinator=Coordinator(sites,lambda:SETTINGS,1,execute,breaker,lambda:False,tmp_path,
+                notifier=notifier)
+        except TypeError as error:
+            if 'notifier' not in str(error):
+                raise
+            coordinator=Coordinator(sites,lambda:SETTINGS,1,execute,breaker,lambda:False,tmp_path)
+        for current in range(3):
+            assert coordinator.tick(now=current)==1
+            coordinator.wait_idle()
+        assert breaker.state=='open' and coordinator.tick(now=3)==0
+    records=[json.loads(line) for line in capsys.readouterr().err.splitlines() if line.strip()]
+    opened=[line for line in records if line.get('event')=='alert'
+            and line.get('key')=='provider_circuit_open' and line.get('severity')=='critical']
+    assert len(opened)==1
+
+
+def test_cleanup_stale_runtime_artifacts_after_lock_removes_only_owned_leftovers(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'ROOT',tmp_path)
+    work=tmp_path/'work'
+    work.mkdir()
+    stale_a=work/'context-run-aaaa'
+    stale_b=work/'context-run-bbbb'
+    stale_a.mkdir();(stale_a/'run.json').write_text('{"marker":"stale-a"}')
+    stale_b.mkdir();(stale_b/'run.json').write_text('{"marker":"stale-b"}')
+    keeper=work/'keeper'
+    keeper.mkdir();(keeper/'keep.txt').write_text('keep')
+    similar=work/'context-run-notes.txt'
+    similar.write_text('not-a-temp-dir')
+    owned='dsherp-context-'+'ab'*16
+    neighbor='dsherp-context-orphan-test'
+    short='dsherp-context-abc'
+    uppercase='dsherp-context-'+'AB'*16
+    commands=[]
+    def fake_run(args,**kwargs):
+        commands.append(list(args))
+        if list(args)[:2]==['docker','ps']:
+            return subprocess.CompletedProcess(args,0,'\n'.join((owned,neighbor,short,uppercase))+'\n','')
+        if list(args)[:3]==['docker','rm','-f']:
+            return subprocess.CompletedProcess(args,0,'','')
+        raise AssertionError('unexpected '+str(args))
+    worker.cleanup_stale_runtime_artifacts(runner=fake_run)
+    listed=next(cmd for cmd in commands if cmd[:2]==['docker','ps'])
+    assert '-a' in listed or '--all' in listed
+    assert 'name=dsherp-context-' in listed
+    assert [cmd[3] for cmd in commands if cmd[:3]==['docker','rm','-f']]==[owned]
+    assert not stale_a.exists() and not stale_b.exists()
+    assert (keeper/'keep.txt').read_text()=='keep'
+    assert similar.read_text()=='not-a-temp-dir'
+    def fail_list(args,**kwargs):
+        return subprocess.CompletedProcess(args,1,'','synthetic enumerate failed')
+    with pytest.raises((subprocess.CalledProcessError,RuntimeError)):
+        worker.cleanup_stale_runtime_artifacts(runner=fail_list)
+    def fail_rm(args,**kwargs):
+        if list(args)[:2]==['docker','ps']:
+            return subprocess.CompletedProcess(args,0,owned+'\n','')
+        return subprocess.CompletedProcess(args,1,'','synthetic rm failed')
+    with pytest.raises((subprocess.CalledProcessError,RuntimeError)):
+        worker.cleanup_stale_runtime_artifacts(runner=fail_rm)
+
+
+def test_probe_recovery_risks_exactly_one_trial_run_not_a_full_slate(tmp_path):
+    """探针只证明 /models 活着；恢复应当只赌一条运行，而不是同一 tick 灌满槽位。"""
+    from dsherp.context_worker import Coordinator
+    from dsherp.provider_circuit import CircuitBreaker
+
+    clock=[0];claims=['a1','a2','a3','a4'];executions=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='claim_run':
+            run_id=claims.pop(0) if claims else None
+            return httpx.Response(200,json={'message':None if run_id is None else {
+                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'budget':{'run_total_seconds':300}}})
+        if method=='finish_run':
+            return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    def execute(task,settings,directory,timeout):
+        executions.append(task['run_id']);raise RuntimeError('synthetic provider failure')
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        breaker=CircuitBreaker(threshold=1,open_seconds=60)
+        coordinator=Coordinator([{'site':'a','client':client,'business':{}}],lambda:SETTINGS,3,
+            execute,breaker,lambda:True,tmp_path,clock=lambda:clock[0])
+        assert coordinator.tick(now=0)==1;coordinator.wait_idle()
+        assert breaker.state=='open'
+        clock[0]=60
+        assert coordinator.tick(now=60)==1,'probe recovery must risk a single trial run'
+        assert breaker.state=='half_open'
+        coordinator.wait_idle()
+        assert breaker.state=='open','a failed trial must reopen the circuit immediately'
+        assert executions==['a1','a2']
+
+
+def _site_client(name,handler):
+    return httpx.Client(base_url='http://'+name,transport=httpx.MockTransport(handler))
+
+
+def test_a_black_hole_site_is_skipped_and_never_starves_a_healthy_one(tmp_path):
+    """故障站不得按串行 25s 超时逐个拖住健康站，并且连续失败后应被跳过。"""
+    from dsherp.context_worker import Coordinator
+    contacted=[];executed=[]
+    def dead(request):
+        contacted.append('dead');raise httpx.ReadTimeout('black hole')
+    healthy=iter(['h1','h2','h3','h4','h5','h6'])
+    def alive(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        contacted.append('alive')
+        if method=='claim_run':
+            run_id=next(healthy,None)
+            return httpx.Response(200,json={'message':None if run_id is None else {
+                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'budget':{'run_total_seconds':300}}})
+        if method=='finish_run':return httpx.Response(200,json={'message':{'status':'Succeeded','provider_failures':0}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    with _site_client('dead',dead) as bad, _site_client('alive',alive) as good:
+        sites=[{'site':'dead','client':bad,'business':{}},{'site':'alive','client':good,'business':{}}]
+        coordinator=Coordinator(sites,lambda:SETTINGS,2,
+            lambda task,settings,directory,timeout:executed.append(task['run_id']) or {'status':'Succeeded','answer':'ok'},
+            None,lambda:True,tmp_path)
+        for round_index in range(4):
+            coordinator.tick(now=round_index);coordinator.wait_idle()
+    assert executed==['h1','h2','h3','h4'],executed
+    assert contacted.count('dead')<=3,'a repeatedly failing site must stop being contacted every tick'
+
+
+def test_failed_container_removal_is_reported_and_retried(tmp_path,capsys):
+    """docker rm 失败不得静默：容器仍挂着含 provider key 的 run.json。"""
+    from dsherp import context_worker
+    attempts=[]
+    def runner(command,**kwargs):
+        attempts.append(command)
+        code=1 if len([c for c in attempts if c[:3]==['docker','rm','-f']])==1 else 0
+        return subprocess.CompletedProcess(command,code,stdout='',stderr='no such container')
+    context_worker.PENDING_REMOVALS.clear()
+    assert context_worker.remove_container('dsherp-context-abc',runner=runner) is False
+    assert 'dsherp-context-abc' in context_worker.PENDING_REMOVALS
+    logged=capsys.readouterr().err
+    assert 'container_removal_failed' in logged
+    assert context_worker.retry_pending_removals(runner=runner)==1
+    assert not context_worker.PENDING_REMOVALS
+
+    # 永远删不掉的名字必须被放弃，否则重试集合与 docker 调用无界增长。
+    context_worker.REMOVAL_ATTEMPTS.clear()
+    always_fails=lambda command,**kwargs:subprocess.CompletedProcess(command,1,stdout='',stderr='no such container')
+    for _ in range(context_worker.MAX_REMOVAL_ATTEMPTS):
+        context_worker.remove_container('dsherp-context-ghost',runner=always_fails)
+    assert not context_worker.PENDING_REMOVALS and not context_worker.REMOVAL_ATTEMPTS
+    assert 'container_removal_abandoned' in capsys.readouterr().err
+
+
+def test_observability_failure_never_stops_claiming(tmp_path,monkeypatch):
+    """monitor_ops 抛出不得跳过 tick：心跳停 60s 会让所有站对真实用户返回 503。"""
+    from dsherp import context_worker
+    context_worker.STOPPING.clear()
+    beats=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='worker_heartbeat':beats.append(1)
+        return httpx.Response(200,json={'message':{}})
+    monkeypatch.setattr(context_worker,'monitor_ops',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('ops shape changed')))
+    with _site_client('alive',handler) as client:
+        coordinator=context_worker.Coordinator([{'site':'alive','client':client,'business':{}}],lambda:SETTINGS,1,
+            lambda *a,**k:{'status':'Succeeded','answer':'ok'},None,lambda:True,tmp_path)
+        assert context_worker.serve_once(coordinator,[{'site':'alive','client':client}],None,{},now=0) is True
+    assert beats,'heartbeat must survive an observability failure'
+
+
+def test_sigterm_requests_a_drain_instead_of_tearing_down_in_flight_runs():
+    """SIGTERM 直接抛 SystemExit 会在在飞运行回写前关掉 client，答案必然丢失。"""
+    from dsherp import context_worker
+    context_worker.STOPPING.clear()
+    try:
+        context_worker.exit_on_signal(15,None)
+        assert context_worker.STOPPING.is_set()
+    finally:
+        context_worker.STOPPING.clear()
+
+
+def test_crash_leftovers_are_reclaimed_before_dependency_checks(monkeypatch):
+    """依赖检查失败时若清理还没跑，残留容器会继续挂着含 provider key 的 run.json。"""
+    from dsherp import context_worker
+    order=[]
+    def runner(command,**kwargs):
+        order.append(command[1])
+        if command[1]=='image':raise subprocess.CalledProcessError(1,command)
+        return subprocess.CompletedProcess(command,0,stdout='',stderr='')
+    with pytest.raises(subprocess.CalledProcessError):
+        context_worker.prepare_host(runner=runner,cleanup=lambda runner:order.append('cleanup'))
+    assert order[0]=='cleanup' and 'image' in order
+
+
+def test_site_client_never_reuses_an_idle_backend_socket():
+    """tick 间隔长于后端 keep-alive：池化连接到下一轮总是陈旧，复用它会丢掉心跳或领取。"""
+    from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+    import threading as _threading
+    from dsherp.context_worker import site_client
+    seen=[]
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version='HTTP/1.1'
+        def do_POST(self):
+            seen.append(self.client_address)
+            self.send_response(200);self.send_header('Content-Length','2');self.end_headers();self.wfile.write(b'{}')
+        def log_message(self,*args):pass
+    server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+    thread=_threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        item={'site':'s','base_url':f'http://127.0.0.1:{server.server_port}','api_key':'k','api_secret':'v'}
+        with site_client(item) as client:
+            assert client.post('/a',json={}).status_code==200
+            assert client.post('/b',json={}).status_code==200
+        assert len(seen)==2 and seen[0]!=seen[1],seen
+    finally:
+        server.shutdown();server.server_close();thread.join()

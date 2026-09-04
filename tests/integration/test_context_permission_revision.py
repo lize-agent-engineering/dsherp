@@ -56,12 +56,16 @@ try:
     frappe.get_doc({'doctype':'Role','role_name':role}).insert()
     frappe.get_doc('User',actor).add_roles(role);frappe.db.commit()
     frappe.set_user('Guest')
-    try:execution.run_status(**cap);raise AssertionError('old authorization remained usable')
-    except frappe.PermissionError:pass
+    assert execution.run_status(**cap)['status']=='Running'
     try:execution.run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'});raise AssertionError('old tool context allowed')
     except frappe.PermissionError:pass
     try:execution.reserve_model_call(**cap,input_bytes=100,max_output_tokens=2048,provider='deepseek-official',model='deepseek-v4-flash',purpose='compaction',runtime_revision='a'*64);raise AssertionError('old summary context allowed')
     except frappe.PermissionError:pass
+    try:execution.run_tool(**cap,tool='erp_request_input',arguments={'question':'请指定仓库'});raise AssertionError('old request input context allowed')
+    except frappe.PermissionError:pass
+    stored=frappe.db.get_value('DS Model Run',before['run_id'],['status','needs_input'],as_dict=True)
+    assert stored.status=='Running' and not stored.needs_input,stored
+    assert not frappe.db.exists('DS Run Event',{'run':before['run_id'],'kind':'needs_input'})
     assert frappe.db.get_value('DS Model Run',before['run_id'],'model_calls')==0
     execution.finish_run(**cap,status='Failed',error='Permission changed');frappe.db.commit()
     frappe.set_user(actor)

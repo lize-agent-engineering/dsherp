@@ -92,3 +92,57 @@ it('过期提案不可确认，结果不明不自动重试',async()=>{
  view.rerender(<OperationProposal proposal={proposal} onConfirm={confirm}/>);fireEvent.click(screen.getByRole('button',{name:'确认执行'}));
  await screen.findByText('结果尚未核实');expect(confirm).toHaveBeenCalledTimes(1);expect(screen.getByRole('button',{name:'确认执行'}).disabled).toBe(true);
 });
+it('Pending 未过期提案显示拒绝，点击只提交绑定且不重复',async()=>{
+ const reject=vi.fn(async()=>({status:'Rejected'}));const confirm=vi.fn();
+ render(<OperationProposal proposal={proposal} onConfirm={confirm} onReject={reject}/>);
+ const rejectButton=screen.getByRole('button',{name:'拒绝'});
+ fireEvent.click(rejectButton);fireEvent.click(rejectButton);
+ expect(reject).toHaveBeenCalledTimes(1);expect(reject.mock.calls[0][0]).toEqual({proposal_id:'P1',digest:'d1',request_id:expect.any(String)});
+ expect(confirm).not.toHaveBeenCalled();expect(await screen.findByText('提案已拒绝')).toBeTruthy();
+ expect(screen.getByRole('button',{name:'确认执行'}).disabled).toBe(true);
+});
+it('非 Pending、过期、未就绪或已有执行状态时不显示拒绝',()=>{
+ const reject=vi.fn();const view=render(<OperationProposal proposal={{...proposal,status:'Succeeded',execution:{status:'Succeeded'}}} onConfirm={vi.fn()} onReject={reject}/>);
+ expect(screen.queryByRole('button',{name:'拒绝'})).toBeNull();
+ view.rerender(<OperationProposal proposal={{...proposal,expires_at:'2000-01-01T00:00:00Z'}} onConfirm={vi.fn()} onReject={reject}/>);
+ expect(screen.queryByRole('button',{name:'拒绝'})).toBeNull();
+ view.rerender(<OperationProposal proposal={{...proposal,execution_ready:false}} onConfirm={vi.fn()} onReject={reject}/>);
+ expect(screen.queryByRole('button',{name:'拒绝'})).toBeNull();
+ view.rerender(<OperationProposal proposal={{...proposal,execution:{status:'Running'}}} onConfirm={vi.fn()} onReject={reject}/>);
+ expect(screen.queryByRole('button',{name:'拒绝'})).toBeNull();
+});
+it('拒绝成功后不可再确认，确认与拒绝互斥',async()=>{
+ let finish;const reject=vi.fn(()=>new Promise(resolve=>finish=resolve));const confirm=vi.fn();
+ render(<OperationProposal proposal={proposal} onConfirm={confirm} onReject={reject}/>);
+ fireEvent.click(screen.getByRole('button',{name:'拒绝'}));fireEvent.click(screen.getByRole('button',{name:'确认执行'}));
+ expect(confirm).not.toHaveBeenCalled();
+ await act(async()=>finish({status:'Rejected'}));
+ expect(await screen.findByText('提案已拒绝')).toBeTruthy();
+ expect(screen.getByRole('button',{name:'确认执行'}).disabled).toBe(true);
+ fireEvent.click(screen.getByRole('button',{name:'确认执行'}));expect(confirm).not.toHaveBeenCalled();
+});
+it('拒绝失败不伪造已拒绝，展示错误并保持确认禁用且不重试写入',async()=>{
+ const reject=vi.fn(async()=>{throw new Error('仅待确认提案可拒绝');});const confirm=vi.fn();
+ render(<OperationProposal proposal={proposal} onConfirm={confirm} onReject={reject}/>);
+ const rejectButton=screen.getByRole('button',{name:'拒绝'});
+ fireEvent.click(rejectButton);fireEvent.click(rejectButton);
+ expect(await screen.findByText('仅待确认提案可拒绝')).toBeTruthy();
+ expect(screen.queryByText('提案已拒绝')).toBeNull();expect(reject).toHaveBeenCalledTimes(1);
+ expect(screen.getByRole('button',{name:'确认执行'}).disabled).toBe(true);
+ fireEvent.click(screen.getByRole('button',{name:'确认执行'}));expect(confirm).not.toHaveBeenCalled();
+});
+it('拒绝响应不完整或意外时不伪造已拒绝，要求刷新核实且不重试写入',async()=>{
+ async function assertUnverifiedReject(result){
+  const reject=vi.fn(async()=>result);const confirm=vi.fn();
+  const view=render(<OperationProposal proposal={proposal} onConfirm={confirm} onReject={reject}/>);
+  const rejectButton=screen.getByRole('button',{name:'拒绝'});
+  fireEvent.click(rejectButton);fireEvent.click(rejectButton);
+  expect(await screen.findByText('拒绝结果尚未核实，请刷新记录核实')).toBeTruthy();
+  expect(screen.queryByText('提案已拒绝')).toBeNull();expect(reject).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('button',{name:'确认执行'}).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button',{name:'确认执行'}));expect(confirm).not.toHaveBeenCalled();
+  view.unmount();
+ }
+ await assertUnverifiedReject({});
+ await assertUnverifiedReject({status:'Pending'});
+});

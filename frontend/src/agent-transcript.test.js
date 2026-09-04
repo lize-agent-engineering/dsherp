@@ -145,3 +145,25 @@ it('运行事件逐类翻译且错误类使用 danger 语气', () => {
  expect(rows.filter(row=>row.tone==='danger').map(row=>row.seq)).toEqual([6,10,13,18]);
  expect(rows[0]).toMatchObject({seq:1,time:'2026-09-03 10:00:00'});
 });
+
+it('新增运行事件按精确标签翻译，未核实完成自述用 danger', () => {
+ const events = [
+  ['lease_renewed',{}],['needs_input',{}],['proposal_rejected',{}],
+  ['proposal_expired',{}],['unverified_completion_claim',{}],
+ ].map(([kind,payload],index)=>({seq:index+1,kind,payload,recorded_at:'2026-09-04 12:00:00'}));
+ const rows=runEventRows(events);
+ expect(rows.map(row=>row.label)).toEqual([
+  '租约续期','请求用户补充','提案已拒绝','提案已过期','完成自述未经核实',
+ ]);
+ expect(rows.map(row=>row.tone)).toEqual(['default','default','default','default','danger']);
+});
+
+it('运行失败事件只显示错误类别与可读原因，不渲染原始 payload', () => {
+ const rows = runEventRows([
+  {seq:1,kind:'runtime_failed',source:'runner',error_class:'RuntimeError',payload:{reason:'runtime_error'},recorded_at:'2026-09-05 10:00:00'},
+  {seq:2,kind:'runtime_failed',source:'runner',error_class:'RuntimeError',payload:{reason:'run_total_exceeded'},recorded_at:'2026-09-05 10:00:01'},
+ ]);
+ expect(rows[0].detail).toBe('RuntimeError 运行时错误');
+ expect(rows[1].detail).toBe('RuntimeError 超过运行时长预算');
+ expect(rows.map(r=>r.detail).join(' ')).not.toContain('{');
+});

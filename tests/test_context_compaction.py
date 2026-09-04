@@ -7,8 +7,19 @@ from dsherp.session_runtime import open_runtime
 from dsherp.runtime_revision import configuration_revision
 
 
+def _claimed_budget(domain):
+    tokens={'query':1024,'configuration':1536,'operation':2560}[domain]
+    return {'provider':'deepseek-official','model':'synthetic-site-model',
+        'model_request_timeout_seconds':90,'run_total_seconds':600 if domain=='operation' else 300,
+        'model_max_calls':10 if domain=='operation' else 8,
+        'model_max_input_bytes_per_call':131072,'model_max_input_bytes_total':524288,
+        'model_max_output_tokens_per_call':tokens,
+        'model_max_output_tokens_total':30720 if domain=='operation' else 16384}
+
+
 @pytest.mark.parametrize('domain,deny_summary,pressure',[
     ('query',False,True),('query',True,True),('query',False,False),
+    ('configuration',False,True),
     ('operation',False,True),
 ])
 def test_native_auto_compaction_cannot_bypass_authorization(model_server,tmp_path,domain,deny_summary,pressure):
@@ -25,11 +36,15 @@ def test_native_auto_compaction_cannot_bypass_authorization(model_server,tmp_pat
     server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     settings,requests,state=model_server
+    settings={key:settings[key] for key in ('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL')}
     multiplier=4 if pressure else 1
     state.update(content='Business context. '*(350*multiplier),summary_content='Item I-44; source version v2; continue read-only inquiry.')
+    budget=_claimed_budget(domain)
     config=tmp_path/'run.json';config.write_text(json.dumps({**settings,
-        'domain':domain,'runtime_revision':configuration_revision(settings),'run_id':'test','capability':'test','site':'synthetic',
+        'domain':domain,'budget':budget,
+        'runtime_revision':configuration_revision(settings),'run_id':'test','capability':'test','site':'synthetic',
         'business_url':f'http://127.0.0.1:{server.server_port}'}));config.chmod(0o600)
+    assert 'DSH_MODEL' not in json.loads(config.read_text())
     try:
         with open_runtime(settings,tmp_path/'native','compression',resume=False,run_config=config) as runtime:
             for index in range(4):
@@ -41,8 +56,7 @@ def test_native_auto_compaction_cannot_bypass_authorization(model_server,tmp_pat
             assert result.finish_reason=='completed'
             return
         assert summaries,'Native pressure never invoked compaction'
-        expected_summary_tokens=3072 if domain=='operation' else 2048
-        assert all(item['max_output_tokens']==expected_summary_tokens for item in summaries)
+        assert all(item['max_output_tokens']==budget['model_max_output_tokens_per_call'] for item in summaries)
         if deny_summary:
             assert result.finish_reason!='completed'
             assert not any(state['compaction_calls'])

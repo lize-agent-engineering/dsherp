@@ -2,6 +2,25 @@
 
 范围：在 2026-09-02 "demo 与生产 Agent 系统七个差别"审计（评估集、错误分类、卡 Running、完成判定、流程骨架、提案出口、可观测性）之外，按安全、部署、可靠性、数据、质量、Agent 特有六路只读复审全仓。方法：六个只读 Explore 代理各出缺口表，Claude 对全部 P0 与关键 P1 逐条回读源码核验；未运行集成测试、未操作站点。定级：P0 = 首个真实租户前不修就会被生产校验直接否决或造成不可恢复后果；P1 = 首个真实租户前必须修；P2 = 可排期。编号在[生产化总体设计](../superpowers/specs/2026-09-03-production-hardening-design.md)中引用。
 
+## 2026-09-04 复核状态（计划 2，不改写下方 2026-09-03 历史缺口表）
+
+对照当前实现与[运行底座可靠性证据](runtime-reliability-evidence.md)。下表只标计划 2 覆盖的 R1–R9、A1；**不解除计划 3/4/5/6、真实租户接入与生产部署边界**。下方 2026-09-03 原文缺口表保留为历史记录，行号与当时源码快照一并保留，不在本轮改写。固定 DSH `0.1.1rc1` 仍是预发布 Deferred。
+
+**2026-09-05 最终独立审查结论：未通过。** 下表是 `f9224d2` 时的候选处理映射，不是最终放行结论。已在 `c6b3e8e` 修复取消竞态丢答案和 `erp_request_input` 权限修订绕过，但尚未重跑全量门；其余开放 Important 包括：无 sources 的 permission/transient “做不了”回答无法终结、MCP transport 未分类且 500 exception 文本可能外泄、取消 RPC 不受 5 秒 grace 约束、NeedsInput 过早放开同一 native session、多站心跳/领取被黑洞站串行拖住、容器 finally 删除不检查结果且启动清理晚于 image/volume inspect。`monitor_ops` 仍只覆盖 alpha；Docker 启动依赖失败仍由 LaunchAgent 反复重启。故 R3、R6、R7、R9 及错误三分类闭环仍未解除。
+
+| ID | 复核 | 当前实现与证据（行为概述） |
+|---|---|---|
+| R1 | 计划 2 已处理 | `run_status` 改为按字段 `get_value` 的只读心跳：校验 capability 与未过期租约，剩余秒数低于 `lease_renew_below_seconds` 时续期；不再 `require_revision`、不再对会话来源逐条 `check_permission`，也不持 run 行 FOR UPDATE。G5 终验在 profile `slots=3`、20 个样本下，100 轮历史 P95 `0.383781s`，0 轮对照 P95 `0.303190s`，比值 `1.265809`。20 并发容量基线只记录、不作为本计划门。 |
+| R2 | 计划 2 已处理 | 常驻路径改为 `Coordinator.run_claimed`，`run_claimed` 全程包在 try 内、`finish_run` 也在其中，任何结果都不会逃逸线程。`c6b3e8e` 把 Cancelling 与 Succeeded 竞态落为 Cancelled 并保留答案；`36c0175` 又补上被拒工具的出口，模型说明不再随租约过期丢失。`53c8858` 把 SIGTERM 从就地抛 SystemExit 改为置停止标志并排空。 |
+| R3 | 计划 2 已处理 | `claim_run` 的每站/每用户闸门之外，`36c0175` 把 capability 尚未收回的 NeedsInput 计入在飞集合，同一 native session 不会出现两个执行者；`53c8858` 把心跳与领取改为按站并行、各带短超时（5s/10s），连续三次失败的站跳过 60s，黑洞站不再拖住健康站。 |
+| R4 | 计划 2 已处理 | 超时链改读领取预算：各领域 `model_request_timeout_seconds=90`；`run_total_seconds` query/configuration 300、operation 600；容器 subprocess 超时为 `run_total_seconds+30`。runner 到总时长 deadline 后 5s grace 取消并 Failed（`reason=run_total_exceeded`）。不再使用固定 140s 容器超时或 operation 120s 模型超时。 |
+| R5 | 计划 2 已处理 | 领取时 `expires_at` 取 `lease_seconds`（默认 180）；`run_status` 在剩余小于 `lease_renew_below_seconds`（默认 90）时续期。过期租约由 `claim_run` 清扫为 Failed 并写 `expired {reason:lease_expired}`。混沌 1 实测：180s 租约到期后约 2s 内清扫，同一会话可继续新消息。`finish_run` 仍拒绝已过期凭据，答案不再依赖“固定 180s 内必须结束”。 |
+| R6 | 计划 2 已处理 | daemon 模型线程与 join grace 之外，`e063f18` 给 `dsherp/session/cancel` 传显式 `timeout_seconds`，整条停止路径由 `grace` 统一封顶；原生未确认时仍返回 Cancelled，容器由宿主 subprocess 超时与无条件 `docker rm -f` 收尾。 |
+| R7 | 部分处理（多站快照 Deferred 到计划 3） | 队列过期与 60s 心跳背压已实现；`53c8858` 另把观测与业务 tick 拆成两个 try（心跳在 tick 内，`monitor_ops` 抛出会让所有站 60s 后返回 503），并让黑洞站不再阻塞健康站心跳。仍 Deferred 到计划 3 的是：`monitor_ops` 只覆盖 `sites[0]`，以及 Docker 依赖启动失败时 LaunchAgent 每 10s 重启的部署级行为。 |
+| R8 | 计划 2 已处理 | 2s 轮询的 `run_status` 不再锁 run 行，也不读权限修订或会话全历史。`reserve_model_call` / 工具 / `finish_run` 仍对 run 行 FOR UPDATE 并在写路径复核修订，避免与心跳抢同一把长锁。G5 的历史无关 P95 比值用于核对这条退化是否复现。 |
+| R9 | 计划 2 已处理 | `53c8858` 让单次容器的 `docker rm -f` 检查返回码、失败落结构化日志并在下一轮重试（五次后放弃并交给孤儿容器告警），`finally` 的超时不再丢弃已解析成功的结果；启动清理提到 image/volume inspect 之前。配置确认死锁和 `.runtime/business-sessions/` 仍按计划 4 Deferred。 |
+| A1 | 计划 2 已处理 | 宿主 `CircuitBreaker`：连续 3 次 `provider_failure` 打开 60s；打开期每 60s 探针 `GET /models`，失败则保持打开、成功则复位。指标 `dsherp_provider_circuit_open`、`dsherp_provider_call_failures_total`；打开时发 critical `provider_circuit_open`。`11db2ae` 把判据从"是否 5xx"改为"provider 是否不可用"：AUTH/RATE_LIMIT/QUOTA_EXCEEDED 计入，本轮输入造成的失败不计；guard 抛出分支的 JS 错误名归一到 TIMEOUT/TRANSPORT，否则该分支的故障永不可观测。探针成功只进 `half_open`，恢复只赌一条试探运行。混沌 2：三条本地替身失败运行后 gauge=1、恰好一条告警，授权窗口内一次真实 `/models` 探针后关闭，随后恢复运行 Succeeded。`dsherp_model_policy` 仍只允许单一 `deepseek-official` 模型；不重试已领取运行，也不做多 provider 路由。 |
+
 ## 已核验为生产级、设计中保持不动的底座
 
 - 模型无法指定 site/actor；worker profile 覆盖任务字段（`dsherp/context_worker.py:71`），容器内 MCP 只读 `config['site']`（`dsherp/context_mcp.py:85`）。

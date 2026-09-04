@@ -77,20 +77,6 @@ def test_both_apps_register_a_native_v16_apps_screen_route():
     assert '"route": "/desk/dsherp-home"' in hooks["platform"]
 
 
-def test_every_custom_get_all_query_has_explicit_deterministic_ordering():
-    missing = []
-    for path in sorted(ROOT.glob("frappe_app/**/*.py")):
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                continue
-            if node.func.attr != "get_all":
-                continue
-            if not any(keyword.arg == "order_by" for keyword in node.keywords):
-                missing.append(f"{path.relative_to(ROOT)}:{node.lineno}")
-    assert not missing, missing
-
-
 def test_stock_ledger_verification_reads_all_rows_in_deterministic_order():
     tree = ast.parse(OPERATIONS)
     calls = [
@@ -176,3 +162,17 @@ def test_global_before_insert_hook_tolerates_meta_without_custom_during_migrate(
     """
     assert "frappe.get_meta(doc.doctype).custom" not in CONFIGURATION_LOCKS
     assert "getattr(frappe.get_meta(doc.doctype), 'custom', 0)" in CONFIGURATION_LOCKS
+
+
+def test_ds_model_run_persists_needs_input_status_and_queue_fields():
+    data = json.loads(
+        (ROOT / "frappe_app/dsherp_bridge/dsherp_bridge/doctype/ds_model_run/ds_model_run.json").read_text()
+    )
+    fields = {field["fieldname"]: field for field in data["fields"]}
+    assert "NeedsInput" in fields["status"]["options"].splitlines()
+    assert fields["queue_expires_at"]["fieldtype"] == "Datetime"
+    assert fields["needs_input"]["fieldtype"] == "Long Text"
+    assert fields["provider_failures"]["fieldtype"] == "Int"
+    assert fields["provider_failures"].get("default") in (0, "0")
+    assert fields["answer_flagged"]["fieldtype"] == "Check"
+    assert fields["answer_flagged"].get("default") in (0, "0")

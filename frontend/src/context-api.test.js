@@ -52,6 +52,18 @@ it('操作确认仅向同源原生执行端点发送提案绑定和 CSRF',async(
  expect(fetch.mock.calls[0][1]).toMatchObject({method:'POST',body:JSON.stringify(params),headers:{'X-Frappe-CSRF-Token':'test-csrf'}});
  await expect(api.contextApi('confirm_operation',{...params,values:{item_name:'forged'}})).rejects.toThrow(/参数/);
 });
+it('操作拒绝仅向同源拒绝端点 POST 提案绑定和 CSRF，不接受正文、身份或 URL',async()=>{
+ const fetch=vi.fn(async()=>({ok:true,json:async()=>({message:{status:'Rejected'}})}));vi.stubGlobal('fetch',fetch);
+ vi.stubGlobal('frappe',{csrf_token:'test-csrf'});
+ const params={proposal_id:'P1',digest:'d1',request_id:'r1'};
+ await api.contextApi('reject_operation',params);
+ expect(fetch.mock.calls[0][0]).toBe('/api/method/dsherp_bridge.operations.reject');
+ expect(fetch.mock.calls[0][1]).toMatchObject({method:'POST',credentials:'same-origin',body:JSON.stringify(params),headers:{'Content-Type':'application/json','X-Frappe-CSRF-Token':'test-csrf'}});
+ await expect(api.contextApi('reject_operation',{...params,values:{item_name:'forged'}})).rejects.toThrow(/参数/);
+ await expect(api.contextApi('reject_operation',{...params,user:'Administrator'})).rejects.toThrow(/参数/);
+ await expect(api.contextApi('reject_operation',{...params,url:'https://elsewhere'})).rejects.toThrow(/参数/);
+ expect(fetch).toHaveBeenCalledTimes(1);
+});
 it('只展示明确列举的登录失效原因，不泄漏服务器回溯',async()=>{
  vi.stubGlobal('fetch',async()=>({ok:false,status:403,headers:new Headers({'Content-Type':'application/json'}),json:async()=>({exception:'frappe.exceptions.PermissionError: 企业成员绑定已变化，请重新登录',exc:'PRIVATE TRACE'})}));
  await expect(api.contextApi('list_sessions')).rejects.toThrow('企业成员绑定已变化，请重新登录');
@@ -107,4 +119,75 @@ it('权限拒绝和响应不明明确报错，不重试写请求',async()=>{
  const fetch=vi.fn(async()=>({ok:false,status:403}));vi.stubGlobal('fetch',fetch);
  await expect(api.contextApi('get_session',{session_id:'S-1'})).rejects.toThrow(/权限/);
  expect(fetch).toHaveBeenCalledTimes(1);
+});
+function jsonError(status,body){
+ return {ok:false,status,headers:new Headers({'Content-Type':'application/json'}),json:async()=>body};
+}
+it('417 业务校验透传首条服务端原因，并标记 validation',async()=>{
+ const fetch=vi.fn(async()=>jsonError(417,{exc_type:'ValidationError',exc:'PRIVATE TRACE',_server_messages:JSON.stringify([JSON.stringify({message:'库存不足'}),JSON.stringify({message:'第二条不应展示'})])}));
+ vi.stubGlobal('fetch',fetch);
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'库存不足',kind:'validation',httpStatus:417});
+ expect(fetch).toHaveBeenCalledTimes(1);
+});
+it('503 保留助手不可用原因并标记 unavailable',async()=>{
+ vi.stubGlobal('fetch',async()=>jsonError(503,{_server_messages:JSON.stringify([JSON.stringify({message:'助手服务暂不可用'})])}));
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'助手服务暂不可用',kind:'unavailable',httpStatus:503});
+});
+it('无 JSON 或 JSON 解析失败的 502 保留安全文案并标记 transient',async()=>{
+ const fetch=vi.fn(async()=>({ok:false,status:502}));vi.stubGlobal('fetch',fetch);
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'请求未完成（HTTP 502），请刷新记录核实，不要重复发送',kind:'transient',httpStatus:502});
+ expect(fetch).toHaveBeenCalledTimes(1);
+ vi.stubGlobal('fetch',async()=>({ok:false,status:502,headers:new Headers({'Content-Type':'application/json'}),json:async()=>{throw new SyntaxError('bad json');}}));
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'请求未完成（HTTP 502），请刷新记录核实，不要重复发送',kind:'transient',httpStatus:502});
+});
+it('401 与 403 保持既有文案并附 permission 与 httpStatus',async()=>{
+ vi.stubGlobal('fetch',async()=>jsonError(403,{exception:'frappe.exceptions.PermissionError: 企业成员绑定已变化，请重新登录',exc:'PRIVATE TRACE'}));
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'企业成员绑定已变化，请重新登录',kind:'permission',httpStatus:403});
+ vi.stubGlobal('fetch',async()=>({ok:false,status:401}));
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'当前身份或业务权限已失效，请重新登录或联系管理员',kind:'permission',httpStatus:401});
+});
+it('错误解析只取安全业务原因，失败则回退 HTTP 文案',async()=>{
+ vi.stubGlobal('fetch',async()=>jsonError(417,{exception:'frappe.exceptions.ValidationError: 仓库不存在',exc:'PRIVATE TRACE'}));
+ await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'仓库不存在',kind:'validation',httpStatus:417});
+ vi.stubGlobal('fetch',async()=>jsonError(417,{_server_messages:'not-json',exception:'private-detail',exc:'Traceback (most recent call last):\nSECRET'}));
+ const failed=await api.contextApi('list_sessions').then(()=>{throw new Error('expected reject');},caught=>caught);
+ expect(failed).toMatchObject({message:'请求未完成（HTTP 417），请刷新记录核实，不要重复发送',kind:'validation',httpStatus:417});
+ expect(failed.message).not.toMatch(/private-detail|SECRET|Traceback|PRIVATE/);
+});
+it('417 的 RuntimeError exception 无有效 _server_messages 时回退安全 HTTP 文案',async()=>{
+ vi.stubGlobal('fetch',async()=>jsonError(417,{exception:'RuntimeError: PRIVATE SECRET'}));
+ const failed=await api.contextApi('list_sessions').then(()=>{throw new Error('expected reject');},caught=>caught);
+ expect(failed).toMatchObject({message:'请求未完成（HTTP 417），请刷新记录核实，不要重复发送',kind:'validation',httpStatus:417});
+ expect(failed.message).not.toMatch(/PRIVATE|SECRET/);
+});
+it('describeError 只把 transient 与 unavailable 标为可重试',()=>{
+ expect(api.describeError(Object.assign(new Error('库存不足'),{kind:'validation',httpStatus:417}))).toMatchObject({message:'库存不足',retryable:false});
+ expect(api.describeError(Object.assign(new Error('权限'),{kind:'permission',httpStatus:403}))).toMatchObject({message:'权限',retryable:false});
+ expect(api.describeError(Object.assign(new Error('请求未完成（HTTP 502），请刷新记录核实，不要重复发送'),{kind:'transient',httpStatus:502}))).toMatchObject({message:'请求未完成（HTTP 502），请刷新记录核实，不要重复发送',retryable:true});
+ expect(api.describeError(Object.assign(new Error('助手服务暂不可用'),{kind:'unavailable',httpStatus:503}))).toMatchObject({message:'助手服务暂不可用',retryable:true});
+ expect(api.describeError(new Error('未知'))).toMatchObject({message:'未知',retryable:false});
+});
+it('fetch 网络中断只抛安全可重试错误，不泄漏原异常且不重试',async()=>{
+ const fetch=vi.fn(async()=>{throw new TypeError('PRIVATE Failed to fetch');});
+ vi.stubGlobal('fetch',fetch);
+ const failed=await api.contextApi('list_sessions').then(()=>{throw new Error('expected reject');},caught=>caught);
+ expect(failed).toMatchObject({message:'网络连接中断，请检查连接后重试',kind:'transient',httpStatus:null});
+ expect(failed).toBeInstanceOf(Error);
+ expect(failed.name).toBe('Error');
+ expect(failed.message).not.toMatch(/PRIVATE|Failed to fetch|TypeError/);
+ expect(String(failed)).not.toMatch(/PRIVATE|Failed to fetch/);
+ expect(api.describeError(failed)).toMatchObject({message:'网络连接中断，请检查连接后重试',retryable:true});
+ expect(fetch).toHaveBeenCalledTimes(1);
+});
+it('主动取消不伪装成网络故障',async()=>{
+ const aborted=Object.assign(new Error('aborted'),{name:'AbortError'});
+ const fetch=vi.fn(async()=>{throw aborted;});
+ vi.stubGlobal('fetch',fetch);
+ await expect(api.contextApi('list_sessions')).rejects.toBe(aborted);
+ expect(fetch).toHaveBeenCalledTimes(1);
+ const controller=new AbortController();
+ controller.abort();
+ const transport=new TypeError('PRIVATE Failed to fetch');
+ vi.stubGlobal('fetch',vi.fn(async()=>{throw transport;}));
+ await expect(api.contextApi('list_sessions',{},controller.signal)).rejects.toBe(transport);
 });

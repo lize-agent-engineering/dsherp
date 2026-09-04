@@ -26,5 +26,6 @@ doc_events.update({doctype: {"before_validate": "dsherp_bridge.preview.prevent_e
 scheduler_events = {
     "cron": {
         "*/5 * * * *": ["dsherp_bridge.ops.collect_snapshot"],
+        "*/10 * * * *": ["dsherp_bridge.operations.expire_proposals"],
     }
 }

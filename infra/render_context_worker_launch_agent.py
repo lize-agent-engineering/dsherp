@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the macOS LaunchAgent for the v16 context worker."""
+"""Render the macOS LaunchAgent for the multi-Site v16 context worker."""
 
 import argparse
 import os
@@ -23,7 +23,7 @@ def render_launch_agent(root=ROOT, *, target=None):
             "-m",
             "dsherp.context_worker",
             "--profile",
-            str(root / ".runtime/context-worker.json"),
+            str(root / ".runtime/context-worker-sites.json"),
             "--provider-env",
             str(root / ".env"),
         ],

@@ -14,13 +14,14 @@ export default function OperationProposal(props) {
   return <Proposal key={`${props.proposal.id}:${props.proposal.digest}`} {...props}/>;
 }
 
-function Proposal({proposal, onConfirm,onApply=applyFormProposal,onVerify}) {
+function Proposal({proposal, onConfirm,onReject,onApply=applyFormProposal,onVerify}) {
   const claimed = useRef(false);
   const [localState, setState] = useState(null);
   const [verification,setVerification]=useState(null);
   const [verifying,setVerifying]=useState(false);
   const state = localState || proposal.execution;
   const expired = isExpired(proposal.expires_at);
+  const canReject=Boolean(onReject) && proposal.status==='Pending' && !expired && !state && proposal.execution_ready!==false;
   const stockEntries=(['submit','cancel'].includes(proposal.action)
     && proposal.impact?.kind==='stock'
     && Array.isArray(proposal.impact.entries)
@@ -56,6 +57,17 @@ function Proposal({proposal, onConfirm,onApply=applyFormProposal,onVerify}) {
       setState({status: 'Unknown', error: error.message});
     }
   }
+  async function reject() {
+    if (claimed.current || !onReject || proposal.execution_ready===false || isExpired(proposal.expires_at) || proposal.status !== 'Pending') return;
+    claimed.current = true;
+    setState({status: 'Rejecting'});
+    try {
+      const result = await onReject({proposal_id: proposal.id, digest: proposal.digest, request_id: crypto.randomUUID()});
+      setState(result?.status === 'Rejected' ? result : {status: 'Unknown', error: '拒绝结果尚未核实，请刷新记录核实'});
+    } catch (error) {
+      setState({status: 'Unknown', error: error.message});
+    }
+  }
   return <Space direction="vertical" style={{width: '100%'}}>
     <Typography.Text strong>{proposal.doctype} / {proposal.name || '新记录'}</Typography.Text>
     <Typography.Text type="secondary">操作：{actions[proposal.action]} · 基线版本：{proposal.version || '新建'}</Typography.Text>
@@ -70,6 +82,7 @@ function Proposal({proposal, onConfirm,onApply=applyFormProposal,onVerify}) {
       </Typography.Text>)}
     </Space>}
     {expired && proposal.status==='Pending' && !state && <Alert type="warning" message="确认已过期，请重新提出操作"/>}
+    {(state?.status === 'Rejected' || proposal.status === 'Rejected') && <Alert type="info" message="提案已拒绝"/>}
     {state?.status === 'Succeeded' && <Alert type="success" message="执行成功，已读取业务结果"/>}
     {state?.status==='Applied'&&<Alert type="success" message="已填入当前草稿，尚未保存或提交"/>}
     {state?.status==='Authorized'&&<Typography.Text>本次填入已获授权；请核实当前草稿，不会自动重新填入。</Typography.Text>}
@@ -83,6 +96,9 @@ function Proposal({proposal, onConfirm,onApply=applyFormProposal,onVerify}) {
         columns={[{title:'字段',dataIndex:'field'},{title:'当前已保存值',dataIndex:'value',render:display}]}/>
     </>}
     {proposal.execution_ready===false&&<Typography.Text type="secondary">提案生成运行尚未成功结束，请核实运行记录。</Typography.Text>}
-    <Button aria-label={proposal.action==='fill'?'确认填入':'确认执行'} type="primary" loading={state?.status === 'Running'} disabled={proposal.execution_ready===false || expired || proposal.status !== 'Pending' || Boolean(state)} onClick={confirm}>{proposal.action==='fill'?'确认填入':'确认执行'}</Button>
+    <Space>
+      <Button aria-label={proposal.action==='fill'?'确认填入':'确认执行'} type="primary" loading={state?.status === 'Running'} disabled={proposal.execution_ready===false || expired || proposal.status !== 'Pending' || Boolean(state)} onClick={confirm}>{proposal.action==='fill'?'确认填入':'确认执行'}</Button>
+      {canReject && <Button aria-label="拒绝" onClick={reject}>拒绝</Button>}
+    </Space>
   </Space>;
 }

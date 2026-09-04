@@ -7,7 +7,9 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ["docker", "compose", "-f", "infra/compose.validation.yml"]
 
 
-def run_alpha(script, timeout=30):
+# 脚本本身要跑约 30 秒；卡在超时上会在容器内 finally 清理前把它杀掉，
+# 留下的夹具再让下一轮的前置断言失败。给足余量。
+def run_alpha(script, timeout=90):
     result = subprocess.run(
         [*COMPOSE, "exec", "-T", "backend", "/home/frappe/frappe-bench/env/bin/python", "-"],
         cwd=ROOT,
@@ -53,6 +55,11 @@ frappe.init(site='dsherp-validation.localhost')
 frappe.connect()
 frappe.set_user('Administrator')
 filters={'language':'zh','source_text':'Trial Balance','context':['in',['',None]]}
+# 只回收与本夹具逐字相同的残留（上一轮被外层超时杀掉时留下的）；
+# 任何其它企业级 Trial Balance 翻译仍然必须让测试失败。
+for stale in frappe.get_all('Translation',filters={**filters,'translated_text':'企业科目余额表'},pluck='name'):
+    frappe.delete_doc('Translation',stale,ignore_permissions=True)
+frappe.db.commit()
 existing=frappe.get_all('Translation',filters=filters,pluck='name')
 assert not existing, 'alpha already has an enterprise Trial Balance translation'
 doc=None

@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
+import { Alert } from 'antd';
 import { LinkOutlined, SafetyCertificateOutlined, SettingOutlined, SwapOutlined, WarningFilled } from '@ant-design/icons';
 import { ConfirmCard, Prose, Spark, StatusChip, ToolChain } from './agent-ui.jsx';
 import OperationProposal from './OperationProposal.jsx';
@@ -27,6 +28,7 @@ export function TurnConfirmations({ group, api, filterBundles = (bundles) => bun
           <OperationProposal
             proposal={proposal}
             onConfirm={(binding) => api('confirm_operation', binding)}
+            onReject={(binding) => api('reject_operation', binding)}
             onVerify={(binding) => api('verify_operation', binding)}
           />
         </ConfirmCard>
@@ -64,8 +66,16 @@ export function TurnConfirmations({ group, api, filterBundles = (bundles) => bun
   );
 }
 
-export function TranscriptTurn({ turn, cx, labelContext, children = null, confirmations = null, api }) {
+export function TranscriptTurn({ turn, cx, labelContext, children = null, confirmations = null, api, onNeedsInput }) {
   const message = turn.message;
+  const needsInput = message.status === 'NeedsInput';
+  const showAnswer = !needsInput && Boolean(message.answer || !runPhase[message.status]);
+  const showReply = showAnswer || turn.tools.length > 0 || message.answer_flagged;
+  const onNeedsInputRef = useRef(onNeedsInput);
+  onNeedsInputRef.current = onNeedsInput;
+  useEffect(() => {
+    if (needsInput) onNeedsInputRef.current?.();
+  }, [needsInput, message.id]);
   return (
     <>
       <div className={cx.user}>{visibleQuestion(message.question)}</div>
@@ -74,17 +84,28 @@ export function TranscriptTurn({ turn, cx, labelContext, children = null, confir
         <code>{labelContext(message.context)}</code>
       </div>
       {children}
+      {needsInput && (
+        <Alert type="warning" showIcon message="需要你补充信息" description={message.answer} />
+      )}
       {/* The reply area appears as soon as there is something real to show —
           an answer, a finished run, or reads the server already authorized
           mid-run. Hiding recorded reads until the answer lands would forfeit
-          the transparency the sources record exists for. */}
-      {(message.answer || !runPhase[message.status] || turn.tools.length > 0) && (
+          the transparency the sources record exists for. NeedsInput is a
+          question to the user, not a completed reply, so it stays out. */}
+      {showReply && (
         <div className={cx.reply}>
           <span className={cx.replyMark}>
             <Spark size={12} />
           </span>
           <div className={cx.answer}>
-            {(message.answer || !runPhase[message.status]) && <Prose>{message.answer}</Prose>}
+            {showAnswer && <Prose>{message.answer}</Prose>}
+            {message.answer_flagged ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="回答声称已完成，但没有对应的执行记录；请以待确认/执行记录为准"
+              />
+            ) : null}
             <ToolChain events={turn.tools} />
           </div>
         </div>

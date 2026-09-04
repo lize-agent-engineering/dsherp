@@ -71,3 +71,29 @@ test('finish and errors are reported without affecting the stream',async()=>{
   assert.equal(reports.at(-1).kind,'model_error');assert.equal(reports.at(-1).error_class,'Error');
   assert.ok(!JSON.stringify(reports).includes('provider down'));
 });
+test('an in-stream provider error finish is reported as model_error',async()=>{
+  const reports=[];
+  const secret='private provider body ECONNREFUSED 127.0.0.1:9';
+  const finish={type:'finish',reason:{kind:'error',failure:{message:secret,code:'TRANSPORT'}}};
+  const guard=createGuard(async()=>{},()=>{},async record=>{reports.push(record);});
+  const delivered=[];for await(const item of guard(request,async function*(){yield finish;}))delivered.push(item);
+  assert.deepEqual(delivered,[finish]);
+  assert.equal(reports.length,1);
+  assert.equal(reports[0].kind,'model_error');
+  assert.equal(reports[0].error_class,'TRANSPORT');
+  assert.ok(!JSON.stringify(reports).includes(secret));
+});
+test('thrown provider failures are normalised into the observable failure vocabulary',async()=>{
+  // A guard poisons itself after any failure, so each case needs its own instance.
+  const classify=async error=>{
+    const seen=[];
+    const guard=createGuard(async()=>{},()=>{},async r=>{seen.push(r);});
+    await assert.rejects(consume(guard(request,async function*(){throw error;})));
+    assert.equal(seen.length,1);assert.equal(seen[0].kind,'model_error');
+    return seen[0].error_class;
+  };
+  assert.equal(await classify(Object.assign(new Error('timed out'),{name:'TimeoutError'})),'TIMEOUT');
+  assert.equal(await classify(Object.assign(new TypeError('fetch failed'),{cause:new Error('ECONNREFUSED')})),'TRANSPORT');
+  // A real programming bug must stay itself; only network-shaped failures open the circuit.
+  assert.equal(await classify(new TypeError('options.messages is not iterable')),'TypeError');
+});
