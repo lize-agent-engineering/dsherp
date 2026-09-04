@@ -1785,3 +1785,97 @@ dsherp-scheduler-worker=STOPPED
 ```
 
 最后两行依次为 alpha 上 `title LIKE "S6-%"` 的会话数量、临时用户 `s6-browser-8c51136e@example.invalid` 的数量；查询退出码 0。常驻 agent worker、scheduler、scheduler-worker 均保持停止；没有调用真实 provider。
+
+## S7 / Task 7.1：G5 负载
+
+最终用户/系统结果：一个可重复的 `infra/load_runs.py` 会在常驻 worker 已停、alpha/daily 无活动运行时 fastfail 预检；随后以专用临时 provider-env 启动一次性双站 worker，并把 provider 仅指向同一 Docker 网络里的本地 SSE 替身。脚本对 alpha 三名既有合成用户和 daily 合成用户各发一条只读问题，轮询终态、计算运行时间与事件序列，并发调用 `run_status` 20 次后计算 P95；最后精确删除本轮站点记录、四个业务 session 目录、临时 provider-env 和模型容器。
+
+当前实际凭据边界与计划文字有一处明确偏离：`.runtime/erp-users.json` 由既有 provisioner 生成 `reader/denied` 两个 token profile，第三名既有 alpha 用户 `writer` 在独立的 `.runtime/context-writer.json`；daily 身份由站点映射持有。脚本不旋转或复制凭据，而是显式读取这两个 alpha 文件、核验恰好三个唯一用户；reader/denied 走真实 HTTP，writer/daily 在各自隔离 Site 内以普通用户身份提交。`denied` 没有 Item read 权限，本地替身调用现有 `erp_request_input`，因此按真实状态机以 NeedsInput 结束而不是伪造只读成功。
+
+### RED→GREEN
+
+纯行为测试在实现文件不存在时的原始 RED：
+
+```text
+==================================== ERRORS ====================================
+___________________ ERROR collecting tests/test_load_runs.py ___________________
+ImportError while importing test module '/Users/lize/Documents/ChatGPT/dsherp/tests/test_load_runs.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../../.local/share/uv/python/cpython-3.12-macos-aarch64-none/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_load_runs.py:5: in <module>
+    from infra.load_runs import load_alpha_actors, summarize_run, validate_load
+E   ModuleNotFoundError: No module named 'infra.load_runs'
+=========================== short test summary info ============================
+ERROR tests/test_load_runs.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.07s
+```
+
+第一次直接执行真实脚本在导入路径处 fastfail，尚未启动 worker 或创建运行：
+
+```text
+Traceback (most recent call last):
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 22, in <module>
+    from dsherp.runtime_host import IMAGE, load_settings
+ModuleNotFoundError: No module named 'dsherp'
+```
+
+加入显式仓库根路径后，脚本到达业务链，但 Runtime 容器没有命中宿主 SSE。相同镜像/网络的最小网络探针原始结论：
+
+```text
+{"exit": 1, "last_stderr": "urllib.error.URLError: <urlopen error [Errno -2] Name or service not known>", "seen": []}
+{"rows": [{"host": "172.27.0.1", "exit": 1, "stdout": "", "error": "urllib.error.URLError: <urlopen error [Errno 111] Connection refused>"}, {"host": "host.lima.internal", "exit": 1, "stdout": "", "error": "urllib.error.URLError: <urlopen error [Errno -2] Name or service not known>"}, {"host": "host.containers.internal", "exit": 1, "stdout": "", "error": "urllib.error.URLError: <urlopen error [Errno -2] Name or service not known>"}], "seen": []}
+```
+
+因此本地替身改为一次性受限容器，并在与业务 Runtime 相同的 `dsherp-validation_api` 网络内提供 SSE；不修改生产容器命令、不加入主机别名。模型容器单独健康验证原始输出：
+
+```text
+G5_MODEL_CONTAINER_READY=dsherp-g5-model-d7265f2ec677
+G5_MODEL_INITIAL_REQUESTS=0
+G5_MODEL_CONTAINER_STOPPED
+G5_MODEL_CONTAINER_REMNANTS=0
+```
+
+真实负载随即全部到达本地替身。控制器曾额外要求前一条 `finished` 事件写回后才能领取下一条；实测 denied 在 NeedsInput 已成为终态后，下一条可在前一容器最后约 0.9 秒收尾时领取。该限制不是计划验收、也不保护真实故障，按仓库约定删除；仍严格验证 alpha 三条 claimed 顺序、无 Failed，以及 daily claimed 早于 alpha 第二条。
+
+纯行为测试最终 GREEN：
+
+```text
+...................                                                      [100%]
+19 passed in 0.04s
+```
+
+### G5 结果表
+
+| Site / owner | run_id | queued→claimed 秒 | 总时长秒 | 状态 | kind 序列 |
+| --- | --- | ---: | ---: | --- | --- |
+| alpha / reader | `12fb0fc7448aec8c745ba26b895e906b72d7d1f7d16c15ffd6dea69a8c94a42a` | 3.808631 | 24.924969 | Succeeded | queued, claimed, runtime_started, model_call_reserved, model_response, tool_call, model_call_reserved, model_response, runtime_tool_call, tool_result, turn_end, container_finished, finished |
+| alpha / denied | `23efc88752fb3f668da3f8738512d6524cafee36bf503607d005ce1147571ada` | 25.685703 | 48.879349 | NeedsInput | queued, claimed, runtime_started, model_call_reserved, model_response, needs_input, tool_call, runtime_tool_call, tool_result, turn_end, container_finished, finished |
+| alpha / writer | `58b7c220eb9e5cafdf83849817b54948f1fe43d397f5c17de13bb298d50d3413` | 46.862508 | 72.145355 | Succeeded | queued, claimed, runtime_started, model_call_reserved, model_response, tool_call, model_call_reserved, model_response, runtime_tool_call, tool_result, turn_end, container_finished, finished |
+| daily / daily-operator | `0cefad20ad01a5417dcda5edfb1113f7d801c11e97a6451e2fcbd521d2d3be3c` | 0.647646 | 22.268828 | Succeeded | queued, claimed, runtime_started, model_call_reserved, model_response, tool_call, model_call_reserved, model_response, runtime_tool_call, tool_result, turn_end, container_finished, finished |
+
+daily 的 claimed 时间为 `13:38:38.062012`，早于 alpha 第二条的 `13:39:00.476861`。alpha 的 claimed 顺序与提交顺序一致；四条无 Failed。20 次并发 `run_status` 的 P95 为 `0.145412s`，小于 1 秒。
+
+真实 GREEN 命令 `.venv/bin/python infra/load_runs.py` 的原始输出：
+
+```text
+G5_LOAD_RESULT={"runs":[{"run_id":"12fb0fc7448aec8c745ba26b895e906b72d7d1f7d16c15ffd6dea69a8c94a42a","site":"dsherp-validation.localhost","owner":"dsherp-reader@example.invalid","status":"Succeeded","queued_to_claimed_seconds":3.808631,"total_seconds":24.924969,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 13:38:34.759429","claimed_at":"2026-09-04 13:38:38.568060","finished_at":"2026-09-04 13:38:59.684398"},{"run_id":"23efc88752fb3f668da3f8738512d6524cafee36bf503607d005ce1147571ada","site":"dsherp-validation.localhost","owner":"dsherp-denied@example.invalid","status":"NeedsInput","queued_to_claimed_seconds":25.685703,"total_seconds":48.879349,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","needs_input","tool_call","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 13:38:34.791158","claimed_at":"2026-09-04 13:39:00.476861","finished_at":"2026-09-04 13:39:23.670507"},{"run_id":"58b7c220eb9e5cafdf83849817b54948f1fe43d397f5c17de13bb298d50d3413","site":"dsherp-validation.localhost","owner":"dsherp-writer@example.invalid","status":"Succeeded","queued_to_claimed_seconds":46.862508,"total_seconds":72.145355,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 13:38:35.920057","claimed_at":"2026-09-04 13:39:22.782565","finished_at":"2026-09-04 13:39:48.065412"},{"run_id":"0cefad20ad01a5417dcda5edfb1113f7d801c11e97a6451e2fcbd521d2d3be3c","site":"dsherp-daily.localhost","owner":"daily-operator@example.invalid","status":"Succeeded","queued_to_claimed_seconds":0.647646,"total_seconds":22.268828,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 13:38:37.414366","claimed_at":"2026-09-04 13:38:38.062012","finished_at":"2026-09-04 13:38:59.683194"}],"run_status_p95_seconds":0.145412,"run_status_samples":20,"provider_requests":7,"worker":{"pid":82939,"returncode":0,"events":[{"ts":"2026-09-04T05:38:34.677+00:00","event":"alert","key":"ops_snapshot_stale","severity":"warning","message":"运维快照陈旧"},{"ts":"2026-09-04T05:38:38.068+00:00","event":"claimed","site":"dsherp-daily.localhost","run_id":"0cefad20ad01a5417dcda5edfb1113f7d801c11e97a6451e2fcbd521d2d3be3c"},{"ts":"2026-09-04T05:38:38.574+00:00","event":"claimed","site":"dsherp-validation.localhost","run_id":"12fb0fc7448aec8c745ba26b895e906b72d7d1f7d16c15ffd6dea69a8c94a42a"},{"ts":"2026-09-04T05:38:58.888+00:00","event":"container_finished","run_id":"0cefad20ad01a5417dcda5edfb1113f7d801c11e97a6451e2fcbd521d2d3be3c","status":"Succeeded","duration_ms":20820},{"ts":"2026-09-04T05:38:58.918+00:00","event":"container_finished","run_id":"12fb0fc7448aec8c745ba26b895e906b72d7d1f7d16c15ffd6dea69a8c94a42a","status":"Succeeded","duration_ms":20343},{"ts":"2026-09-04T05:39:00.483+00:00","event":"claimed","site":"dsherp-validation.localhost","run_id":"23efc88752fb3f668da3f8738512d6524cafee36bf503607d005ce1147571ada"},{"ts":"2026-09-04T05:39:22.789+00:00","event":"claimed","site":"dsherp-validation.localhost","run_id":"58b7c220eb9e5cafdf83849817b54948f1fe43d397f5c17de13bb298d50d3413"},{"ts":"2026-09-04T05:39:23.597+00:00","event":"container_finished","run_id":"23efc88752fb3f668da3f8738512d6524cafee36bf503607d005ce1147571ada","status":"NeedsInput","duration_ms":23110},{"ts":"2026-09-04T05:39:47.605+00:00","event":"container_finished","run_id":"58b7c220eb9e5cafdf83849817b54948f1fe43d397f5c17de13bb298d50d3413","status":"Succeeded","duration_ms":24816}]},"cleanup":{"dsherp-validation.localhost":{"runs":0,"conversations":0},"dsherp-daily.localhost":{"runs":0,"conversations":0}},"business_session_paths_removed":4,"final_active":{"dsherp-validation.localhost":0,"dsherp-daily.localhost":0}}
+```
+
+发出 Task 7.1 状态前再次核验；原始输出：
+
+```text
+PIDFILE_ABSENT
+worker_process_count=0
+context_container_count=0
+model_container_count=0
+0
+0
+0
+0
+```
+
+后四个 0 依次是 alpha 本轮问题/探针残留、alpha 活动运行、daily 本轮问题残留、daily 活动运行。Task 7.1 没有 DocType/Report/hooks 变更，无需 migrate；整个负载只调用本地 SSE 替身，没有读取 `.env`、没有调用真实 provider。
