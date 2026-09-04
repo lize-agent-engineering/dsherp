@@ -41,6 +41,12 @@ def _fail(message):
     raise RuntimeError(message)
 
 
+def _require_positive_int(value, label):
+    if type(value) is not int or value < 1:
+        _fail(f"invalid {label}")
+    return value
+
+
 def _read_json(path):
     path = Path(path)
     try:
@@ -206,6 +212,22 @@ def validate_load(rows, alpha_order, daily_id, run_status_p95):
         _fail("run_status p95 must be under 1")
 
 
+def validate_status_probe(history_turns, sample_count, p95, concurrency, ratio):
+    if isinstance(history_turns, bool) or not isinstance(history_turns, int) or history_turns != 100:
+        _fail("status probe requires exactly 100 history turns")
+    if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count != 20:
+        _fail("status probe requires exactly twenty samples")
+    if isinstance(p95, bool) or not isinstance(p95, (int, float)) or p95 < 0:
+        _fail("invalid status probe p95")
+    if not p95 < 1:
+        _fail("run_status p95 must be under 1")
+    _require_positive_int(concurrency, "status probe concurrency")
+    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or ratio < 0:
+        _fail("invalid status probe ratio")
+    if ratio > 1.5:
+        _fail("run_status p95 ratio must be at most 1.5")
+
+
 def _site_json(site, body, payload=None, timeout=60):
     encoded = json.dumps(payload, ensure_ascii=False)
     script = (
@@ -249,6 +271,16 @@ def _service_client(profile):
     )
 
 
+def capability_client(profile):
+    return httpx.Client(
+        base_url=profile["base_url"],
+        headers={"X-Frappe-Site-Name": profile["site"]},
+        timeout=25,
+        trust_env=False,
+        follow_redirects=False,
+    )
+
+
 def _call(client, prefix, method, payload):
     response = client.post(prefix + method, json=payload)
     if response.status_code != 200:
@@ -257,6 +289,80 @@ def _call(client, prefix, method, payload):
     if "message" not in body:
         _fail(f"{method} returned no message")
     return body["message"]
+
+
+def measure_run_status(client, cap, concurrency, sample_count):
+    concurrency = _require_positive_int(concurrency, "run_status concurrency")
+    sample_count = _require_positive_int(sample_count, "run_status sample_count")
+    precheck = _call(client, EXECUTION_API, "run_status", cap)
+    if precheck.get("status") != "Running":
+        _fail("run_status precheck is not Running")
+
+    def timed_call(_index):
+        started = time.perf_counter()
+        value = _call(client, EXECUTION_API, "run_status", cap)
+        elapsed = time.perf_counter() - started
+        if value.get("status") != "Running":
+            _fail("run_status probe stopped being Running")
+        return elapsed
+
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="g5-status") as pool:
+        return list(pool.map(timed_call, range(sample_count)))
+
+
+def measure_http_ping(client, concurrency, sample_count):
+    concurrency = _require_positive_int(concurrency, "ping concurrency")
+    sample_count = _require_positive_int(sample_count, "ping sample_count")
+
+    def timed_ping(_index):
+        started = time.perf_counter()
+        response = client.get("/api/method/ping")
+        elapsed = time.perf_counter() - started
+        if response.status_code != 200:
+            raise RuntimeError(f"ping failed with HTTP {response.status_code}")
+        return elapsed
+
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="g5-ping") as pool:
+        return list(pool.map(timed_ping, range(sample_count)))
+
+
+def report_status_probe(
+    *,
+    history_samples,
+    zero_samples,
+    concurrency,
+    history_turns,
+    status_capacity_samples,
+    ping_capacity_samples,
+):
+    history_p95 = percentile95(history_samples)
+    zero_p95 = percentile95(zero_samples)
+    status_capacity_p95 = percentile95(status_capacity_samples)
+    ping_capacity_p95 = percentile95(ping_capacity_samples)
+    ratio = history_p95 / zero_p95 if zero_p95 > 0 else None
+    payload = {
+        "history_samples": history_samples,
+        "zero_samples": zero_samples,
+        "status_capacity_samples": status_capacity_samples,
+        "ping_capacity_samples": ping_capacity_samples,
+        "history_p95": history_p95,
+        "zero_p95": zero_p95,
+        "status_capacity_p95": status_capacity_p95,
+        "ping_capacity_p95": ping_capacity_p95,
+        "concurrency": concurrency,
+        "history_turns": history_turns,
+        "ratio": ratio,
+    }
+    print(
+        "G5_STATUS_PROBE="
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        file=sys.stderr,
+        flush=True,
+    )
+    if ratio is None:
+        _fail("zero-turn run_status p95 must be greater than 0")
+    validate_status_probe(history_turns, len(history_samples), history_p95, concurrency, ratio)
+    return payload
 
 
 def _active_counts():
@@ -287,19 +393,17 @@ def _preflight():
         _fail(f"active runs must be zero before G5 load: {active}")
 
 
-def _enqueue_http(profile, question, request_id):
+def _enqueue_http(profile, question, request_id, session_id=None):
+    payload = {
+        "question": question,
+        "context": {"schema_version": 1, "page_type": "unknown", "route": []},
+        "request_id": request_id,
+        "domain": "query",
+    }
+    if session_id is not None:
+        payload["session_id"] = _require_text(session_id, "session_id")
     with _service_client(profile) as client:
-        message = _call(
-            client,
-            CONTEXT_API,
-            "send_message",
-            {
-                "question": question,
-                "context": {"schema_version": 1, "page_type": "unknown", "route": []},
-                "request_id": request_id,
-                "domain": "query",
-            },
-        )
+        message = _call(client, CONTEXT_API, "send_message", payload)
     return {"run_id": message["active_run"], "conversation": message["id"]}
 
 
@@ -325,36 +429,169 @@ def _seed_heartbeat(clients):
             _fail("worker heartbeat was not recorded")
 
 
-def _status_probe(alpha_client, reader_profile, settings):
+def _plan_status_history(history_turns):
+    if type(history_turns) is not int or history_turns < 0:
+        _fail("invalid status history turns")
+    batch = uuid.uuid4().hex
+    conversation = "s7-hist-conv-" + batch
+    return {
+        "conversation": conversation,
+        "runtime_session": uuid.uuid4().hex,
+        "title": "S7 G5 run_status history",
+        "question": "G5 history",
+        "page_context": '{"schema_version":1,"page_type":"unknown","route":[]}',
+        "sources": "[]",
+        "answer": "ok",
+        "runs": [
+            {
+                "run_id": f"s7-hist-run-{batch}-{index:03d}",
+                "request_id": f"s7-hist-req-{batch}-{index:03d}",
+                "conversation": conversation,
+            }
+            for index in range(history_turns)
+        ],
+    }
+
+
+def _seed_status_history(reader_profile, plan):
+    body = """
+frappe.set_user(PAYLOAD['owner'])
+conversation=frappe.get_doc({'doctype':'DS Conversation','name':PAYLOAD['conversation'],
+    'title':PAYLOAD['title'],'runtime_session':PAYLOAD['runtime_session']
+    }).insert(ignore_permissions=True,set_name=PAYLOAD['conversation'])
+for item in PAYLOAD['runs']:
+    frappe.get_doc({'doctype':'DS Model Run','name':item['run_id'],'conversation':conversation.name,
+        'domain':'query','request_id':item['request_id'],'question':PAYLOAD['question'],
+        'page_context':PAYLOAD['page_context'],'sources':PAYLOAD['sources'],
+        'answer':PAYLOAD['answer'],'status':'Succeeded'
+        }).insert(ignore_permissions=True,set_name=item['run_id'])
+frappe.db.commit()
+names=[item['run_id'] for item in PAYLOAD['runs']]
+counted=frappe.db.count('DS Model Run',{
+    'name':['in',names],
+    'conversation':conversation.name,
+    'status':'Succeeded',
+    'owner':PAYLOAD['owner'],
+}) if names else 0
+print(json.dumps({'conversation':conversation.name,'history_turns':counted}))
+"""
+    expected = len(plan["runs"])
+    result = _site_json(
+        ALPHA_SITE,
+        body,
+        {
+            "owner": reader_profile["user"],
+            "conversation": plan["conversation"],
+            "runtime_session": plan["runtime_session"],
+            "title": plan["title"],
+            "question": plan["question"],
+            "page_context": plan["page_context"],
+            "sources": plan["sources"],
+            "answer": plan["answer"],
+            "runs": plan["runs"],
+        },
+        timeout=180,
+    )
+    if result.get("conversation") != plan["conversation"] or result.get("history_turns") != expected:
+        _fail(f"status history was not exactly {expected} succeeded runs: {result}")
+    return result["history_turns"]
+
+
+def _session_descriptors(plan):
+    items = [
+        {"run_id": item["run_id"], "conversation": item["conversation"]} for item in plan["runs"]
+    ]
+    if not items:
+        items.append(
+            {
+                "run_id": "s7-zero-guard-" + plan["runtime_session"],
+                "conversation": plan["conversation"],
+            }
+        )
+    return items
+
+
+def _open_status_probe(alpha_client, reader_profile, settings, plan, descriptors):
+    history_turns = _seed_status_history(reader_profile, plan)
     fixture = _enqueue_http(
         reader_profile,
         "S7 G5 run_status 并发探针",
         "s7-status-" + uuid.uuid4().hex,
+        session_id=plan["conversation"],
     )
+    if fixture["conversation"] != plan["conversation"]:
+        _fail("run_status probe did not reuse the planned session")
+    if fixture["run_id"] in {item["run_id"] for item in plan["runs"]}:
+        _fail("run_status probe reused a history run id")
+    descriptors.append(fixture)
+    claim = _call(
+        alpha_client,
+        EXECUTION_API,
+        "claim_run",
+        {"runtime_revision": configuration_revision(settings)},
+    )
+    if not claim or claim.get("run_id") != fixture["run_id"]:
+        _fail("run_status probe did not claim its exact run")
+    return history_turns, {"run_id": claim["run_id"], "capability": claim["capability"]}
+
+
+def _measure_status_session(
+    alpha_client, reader_profile, settings, plan, *, concurrency, collect_capacity
+):
+    descriptors = _session_descriptors(plan)
     try:
-        claim = _call(
-            alpha_client,
-            EXECUTION_API,
-            "claim_run",
-            {"runtime_revision": configuration_revision(settings)},
+        history_turns, cap = _open_status_probe(
+            alpha_client, reader_profile, settings, plan, descriptors
         )
-        if not claim or claim.get("run_id") != fixture["run_id"]:
-            _fail("run_status probe did not claim its exact run")
-        cap = {"run_id": claim["run_id"], "capability": claim["capability"]}
-
-        def timed_call(_index):
-            started = time.perf_counter()
-            value = _call(alpha_client, EXECUTION_API, "run_status", cap)
-            elapsed = time.perf_counter() - started
-            if value.get("status") != "Running":
-                _fail("run_status probe stopped being Running")
-            return elapsed
-
-        with ThreadPoolExecutor(max_workers=20, thread_name_prefix="g5-status") as pool:
-            samples = list(pool.map(timed_call, range(20)))
-        return percentile95(samples), samples
+        with capability_client(reader_profile) as status_client:
+            samples = measure_run_status(
+                status_client, cap, concurrency=concurrency, sample_count=20
+            )
+            status_capacity_samples = None
+            ping_capacity_samples = None
+            if collect_capacity:
+                status_capacity_samples = measure_run_status(
+                    status_client, cap, concurrency=20, sample_count=20
+                )
+                ping_capacity_samples = measure_http_ping(
+                    status_client, concurrency=20, sample_count=20
+                )
+        return {
+            "history_turns": history_turns,
+            "samples": samples,
+            "status_capacity_samples": status_capacity_samples,
+            "ping_capacity_samples": ping_capacity_samples,
+        }
     finally:
-        _cleanup_site(ALPHA_SITE, [fixture])
+        _cleanup_site(ALPHA_SITE, descriptors)
+
+
+def _status_probe(alpha_client, reader_profile, settings, slots):
+    slots = _require_positive_int(slots, "worker slots")
+    hundred = _measure_status_session(
+        alpha_client,
+        reader_profile,
+        settings,
+        _plan_status_history(100),
+        concurrency=slots,
+        collect_capacity=True,
+    )
+    zero = _measure_status_session(
+        alpha_client,
+        reader_profile,
+        settings,
+        _plan_status_history(0),
+        concurrency=slots,
+        collect_capacity=False,
+    )
+    return report_status_probe(
+        history_samples=hundred["samples"],
+        zero_samples=zero["samples"],
+        concurrency=slots,
+        history_turns=hundred["history_turns"],
+        status_capacity_samples=hundred["status_capacity_samples"],
+        ping_capacity_samples=hundred["ping_capacity_samples"],
+    )
 
 
 def _read_runs(site, descriptors):
@@ -394,21 +631,30 @@ def _cleanup_site(site, descriptors):
         return {"runs": 0, "conversations": 0}
     body = """
 frappe.set_user('Administrator')
-for item in PAYLOAD:
-    run=item['run_id'];conversation=item['conversation']
-    assert frappe.db.count('DS Operation Proposal',{'model_run':run})==0
-    frappe.db.delete('DS Run Event',{'run':run})
-    if frappe.db.exists('DS Model Run',run):frappe.delete_doc('DS Model Run',run,ignore_permissions=True)
-    if frappe.db.exists('DS Conversation',conversation):frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
+runs=[item['run_id'] for item in PAYLOAD]
+conversations=sorted({item['conversation'] for item in PAYLOAD if item.get('conversation')})
+assert frappe.db.count('DS Operation Proposal',{'model_run':['in',runs]})==0
+frappe.db.delete('DS Run Event',{'run':['in',runs]})
+frappe.db.delete('DS Model Run',{'name':['in',runs]})
+if conversations:
+    frappe.db.delete('DS Conversation',{'name':['in',conversations]})
 frappe.db.commit()
 remaining_runs=sum(frappe.db.exists('DS Model Run',item['run_id']) is not None for item in PAYLOAD)
 remaining_conversations=sum(frappe.db.exists('DS Conversation',item['conversation']) is not None for item in PAYLOAD)
-print(json.dumps({'runs':remaining_runs,'conversations':remaining_conversations}))
+remaining_events=sum(frappe.db.count('DS Run Event',{'run':item['run_id']}) for item in PAYLOAD)
+remaining_proposals=sum(frappe.db.count('DS Operation Proposal',{'model_run':item['run_id']}) for item in PAYLOAD)
+print(json.dumps({'runs':remaining_runs,'conversations':remaining_conversations,'events':remaining_events,'proposals':remaining_proposals}))
 """
     result = _site_json(site, body, descriptors)
-    if result != {"runs": 0, "conversations": 0}:
-        _fail(f"G5 cleanup incomplete for {site}: {result}")
-    return result
+    leftover = {
+        "runs": result.get("runs"),
+        "conversations": result.get("conversations"),
+        "events": result.get("events"),
+        "proposals": result.get("proposals"),
+    }
+    if leftover != {"runs": 0, "conversations": 0, "events": 0, "proposals": 0}:
+        _fail(f"G5 cleanup incomplete for {site}: {leftover}")
+    return {"runs": 0, "conversations": 0}
 
 
 def _session_directory(site, owner, conversation, native_session_id):
@@ -660,7 +906,6 @@ def _synthetic_model_container(directory):
 def _write_provider_env(path, base_url):
     settings = {
         "DEEPSEEK_API_KEY": "synthetic-not-a-credential",
-        "DSH_MODEL": "deepseek-v4-flash",
         "DEEPSEEK_BASE_URL": base_url,
     }
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -730,6 +975,7 @@ def execute_load():
     )
     daily_owner = "daily-operator@example.invalid"
     worker_profile = _read_json(ROOT / ".runtime" / "context-worker-sites.json")
+    slots = _require_positive_int(worker_profile.get("slots"), "worker profile slots")
     site_profiles = {item["site"]: item for item in worker_profile.get("sites", [])}
     if set(site_profiles) != {ALPHA_SITE, DAILY_SITE}:
         _fail("worker profile must contain exact alpha and daily sites")
@@ -749,7 +995,10 @@ def execute_load():
             clients = {site: _service_client(profile) for site, profile in site_profiles.items()}
             try:
                 _seed_heartbeat(clients)
-                p95, status_samples = _status_probe(clients[ALPHA_SITE], actors[0], settings)
+                probe = _status_probe(clients[ALPHA_SITE], actors[0], settings, slots)
+                p95 = probe["history_p95"]
+                status_samples = probe["history_samples"]
+                history_turns = probe["history_turns"]
                 if _active_counts() != {ALPHA_SITE: 0, DAILY_SITE: 0}:
                     _fail("run_status probe cleanup did not restore idle sites")
                 worker = _start_worker(env_path)
@@ -795,6 +1044,14 @@ def execute_load():
                             {
                                 "runs": rows,
                                 "run_status_p95_seconds": round(p95, 6),
+                                "run_status_zero_p95_seconds": round(probe["zero_p95"], 6),
+                                "run_status_p95_ratio": probe["ratio"],
+                                "run_status_concurrency": slots,
+                                "run_status_history_turns": history_turns,
+                                "run_status_capacity_p95_seconds": round(
+                                    probe["status_capacity_p95"], 6
+                                ),
+                                "ping_capacity_p95_seconds": round(probe["ping_capacity_p95"], 6),
                                 "provider_request_summaries": _model_summaries(model),
                             },
                             ensure_ascii=False,
@@ -808,7 +1065,13 @@ def execute_load():
                 result = {
                     "runs": rows,
                     "run_status_p95_seconds": round(p95, 6),
+                    "run_status_zero_p95_seconds": round(probe["zero_p95"], 6),
+                    "run_status_p95_ratio": probe["ratio"],
                     "run_status_samples": len(status_samples),
+                    "run_status_concurrency": slots,
+                    "run_status_history_turns": history_turns,
+                    "run_status_capacity_p95_seconds": round(probe["status_capacity_p95"], 6),
+                    "ping_capacity_p95_seconds": round(probe["ping_capacity_p95"], 6),
                     "provider_requests": len(summaries),
                 }
             finally:

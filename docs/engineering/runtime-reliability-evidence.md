@@ -2511,3 +2511,241 @@ runtime Node 门原始输出（当前套件实际为 9 项，计划模板中的 
 ℹ todo 0
 ℹ duration_ms 94.092292
 ```
+
+## Task 7.3 前置复核：G5 100 轮历史会话补证
+
+总体设计 G5 明确要求“100 轮历史会话下 `run_status` P95 < 1s”，而 Task 7.1 初版只在新会话上测了 20 次并发调用。文档收口前未把它误写为已覆盖，而是先补行为契约。纯测试 RED 原始输出：
+
+```text
+==================================== ERRORS ====================================
+___________________ ERROR collecting tests/test_load_runs.py ___________________
+E   ImportError: cannot import name 'validate_status_probe' from 'infra.load_runs' (/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py)
+=========================== short test summary info ============================
+ERROR tests/test_load_runs.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.08s
+```
+
+实现会在 alpha 新建专用会话，以精确 UUID 名称写入 100 条 Succeeded 历史运行，再在同一会话提交、领取一个 Running 探针，并发调用 `run_status` 20 次。清理只接受本轮精确 run_id，会在删除前断言不存在提案，删除后核验 run/conversation/event/proposal 全零；未按用户或标题宽删。纯行为 GREEN：
+
+```text
+.......................                                                  [100%]
+23 passed in 0.07s
+```
+
+常驻 worker 停止状态下，以本地 SSE 替身重跑完整 G5 的结构化结果摘要（该次完整进程输出还包含 worker 事件对象，本段未冒充完整原始 stdout）：
+
+```text
+G5_LOAD_RESULT={"runs":[{"run_id":"171e8eb4c8dc27ec778d3369e846ca8b12b5a1dbdadaa526d30d30cb79efaecc","site":"dsherp-validation.localhost","owner":"dsherp-reader@example.invalid","status":"Succeeded","queued_to_claimed_seconds":0.607547,"total_seconds":31.225243,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 16:00:11.783968","claimed_at":"2026-09-04 16:00:12.391515","finished_at":"2026-09-04 16:00:43.009211"},{"run_id":"d57767cc144caf7e831b2558e9df68f6b2496b653d9137145982224406857742","site":"dsherp-validation.localhost","owner":"dsherp-denied@example.invalid","status":"NeedsInput","queued_to_claimed_seconds":33.226548,"total_seconds":56.721433,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","needs_input","tool_call","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 16:00:12.068233","claimed_at":"2026-09-04 16:00:45.294781","finished_at":"2026-09-04 16:01:08.789666"},{"run_id":"77f02470aaad136e17730c30716217c3324d4a7ed45ba388eab90681678a91a0","site":"dsherp-validation.localhost","owner":"dsherp-writer@example.invalid","status":"Succeeded","queued_to_claimed_seconds":52.542902,"total_seconds":75.705684,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 16:00:13.696551","claimed_at":"2026-09-04 16:01:06.239453","finished_at":"2026-09-04 16:01:29.402235"},{"run_id":"0f3c168d8f277f2b2d8141987aca38ec5e00ae228fa4cbc7ed7bcb0a694c09b0","site":"dsherp-daily.localhost","owner":"daily-operator@example.invalid","status":"Succeeded","queued_to_claimed_seconds":3.832534,"total_seconds":34.341459,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 16:00:16.243852","claimed_at":"2026-09-04 16:00:20.076386","finished_at":"2026-09-04 16:00:50.585311"}],"run_status_p95_seconds":0.662683,"run_status_samples":20,"run_status_history_turns":100,"provider_requests":7,"cleanup":{"dsherp-validation.localhost":{"runs":0,"conversations":0},"dsherp-daily.localhost":{"runs":0,"conversations":0}},"business_session_paths_removed":4,"final_active":{"dsherp-validation.localhost":0,"dsherp-daily.localhost":0}}
+```
+
+本轮 alpha 三条仍按提交顺序领取，daily 的 `claimed` 早于 alpha 第二条；四条均无 Failed。`run_status_history_turns=100`、样本 20、P95 `0.662683s`。本地替身共 7 请求。测试后状态原始输出：
+
+```text
+pidfile_exists=false
+worker_process_count=0
+context_container_count=0
+model_container_count=0
+{"active_runs": 0, "history_conversation_remnants": 0, "history_run_remnants": 0, "site": "dsherp-validation.localhost"}
+{"active_runs": 0, "site": "dsherp-daily.localhost"}
+```
+
+未调用真实 provider，未改 `.env`，未修改 DocType、Report 或 hooks；本补证无需 migrate。
+
+## Task 7.3 停止点：G5 `run_status` P95 同一红灯两次修复后仍红
+
+在后续复跑中，100 条历史记录的逐条 `frappe.delete_doc` 首先暴露真实查询超时。行为测试先固定“只删除 100 个精确 run_id、对应事件与会话，未列出的 keeper 不受影响”，原始 RED：
+
+```text
+F                                                                        [100%]
+E           RuntimeError: site command failed for dsherp-validation.localhost: QueryTimeoutError
+1 failed in 0.07s
+```
+
+改为同一事务按精确 ID 批量删除后，控制器 GREEN：
+
+```text
+..........................                                               [100%]
+26 passed in 0.15s
+```
+
+真实站点清理返回：
+
+```text
+{'runs': 0, 'conversations': 0}
+```
+
+随后同一 G5 P95 红灯的修复 #1：状态探针改为真实 runner 相同的 guest capability 客户端，不携带服务令牌。完整 G5 原始 stderr：
+
+```text
+Traceback (most recent call last):
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 955, in <module>
+    main()
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 947, in main
+    result = execute_load()
+             ^^^^^^^^^^^^^^
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 858, in execute_load
+    p95, status_samples, history_turns = _status_probe(
+                                         ^^^^^^^^^^^^^^
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 452, in _status_probe
+    validate_status_probe(history_turns, len(samples), p95)
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 217, in validate_status_probe
+    _fail("run_status p95 must be under 1")
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 41, in _fail
+    raise RuntimeError(message)
+RuntimeError: run_status p95 must be under 1
+```
+
+修复 #2 先用失败测试证明探针应复现生产 runner 的一次不计时状态预检，然后才并发 20 次并只返回 20 个计时样本。RED 与控制器 GREEN：
+
+```text
+.........................FF.                                             [100%]
+E       ImportError: cannot import name 'measure_run_status' from 'infra.load_runs'
+2 failed, 26 passed in 0.19s
+```
+
+```text
+............................                                             [100%]
+28 passed in 0.24s
+```
+
+第二次修复后的完整 G5 原始 stderr：
+
+```text
+Traceback (most recent call last):
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 963, in <module>
+    main()
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 955, in main
+    result = execute_load()
+             ^^^^^^^^^^^^^^
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 866, in execute_load
+    p95, status_samples, history_turns = _status_probe(
+                                         ^^^^^^^^^^^^^^
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 460, in _status_probe
+    validate_status_probe(history_turns, len(samples), p95)
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 217, in validate_status_probe
+    _fail("run_status p95 must be under 1")
+  File "/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py", line 41, in _fail
+    raise RuntimeError(message)
+RuntimeError: run_status p95 must be under 1
+```
+
+因此触发计划的硬停止条件“同一红灯修两次仍红”。没有第三次修改、没有提交这组未完成改动、没有进入 Task 7.3 全量终验。停止时只读核验的原始输出：
+
+```text
+pidfile_absent_exit=0
+worker_process_count=0
+metrics_listener_count=0
+runtime_container_count=0
+```
+
+alpha 的 `s7-hist-run-%`、历史会话、Queued/Running/Cancelling 查询均 exit 0 且 stdout 为空；daily 的 Queued/Running/Cancelling 查询 exit 0 且 stdout 为空；队列查询 exit 0 且 stdout 为空。`dsherp-validation-backend-1` 状态为 `running`。本停止点未调用真实 provider，未修改 DocType、Report 或 hooks，故没有新的 migrate。
+
+## Task 7.1 修订口径后的第三次修复与 G5 终验
+
+用户提交 Fable 5.1 的只读实测结论后，计划由提交 `a3a60c3 docs: 修订 G5 run_status 探针口径为槽位并发与历史无关比` 明确修订：原先 20 并发门混入了验证 backend `cpus=0.5`、`GUNICORN_THREADS=2` 的网页层容量，无法区分 R1 历史相关退化；G5 改为 worker profile 槽位数并发、恰好 20 个样本、100 轮 P95 < 1 秒，并新增 100/0 轮 P95 比不超过 1.5。20 并发 `run_status` 与 ping 仍保留为不门控的容量基线。用户明确授权按此唯一第三次修复继续。
+
+控制器先核验 HEAD 为 `a3a60c3`，再独立运行修订后的行为测试；实现前 RED 原始输出：
+
+```text
+FFFFFFFFFFFFFFF                                                          [100%]
+=================================== FAILURES ===================================
+_ test_validate_status_probe_accepts_hundred_history_turns_twenty_samples_and_p95_under_one _
+E   TypeError: validate_status_probe() takes 3 positional arguments but 5 were given
+_ test_validate_status_probe_fastfails_when_history_turns_are_below_one_hundred _
+E   TypeError: validate_status_probe() takes 3 positional arguments but 5 were given
+____ test_validate_status_probe_fastfails_when_sample_count_is_below_twenty ____
+E   TypeError: validate_status_probe() takes 3 positional arguments but 5 were given
+________ test_validate_status_probe_fastfails_when_p95_is_not_under_one ________
+E   TypeError: validate_status_probe() takes 3 positional arguments but 5 were given
+____ test_validate_status_probe_fastfails_when_ratio_exceeds_one_point_five ____
+E   TypeError: validate_status_probe() takes 3 positional arguments but 5 were given
+___ test_measure_run_status_prechecks_once_then_returns_twenty_timed_samples ___
+E   TypeError: measure_run_status() got an unexpected keyword argument 'concurrency'
+________ test_measure_run_status_fastfails_when_precheck_is_not_running ________
+E   TypeError: measure_run_status() got an unexpected keyword argument 'concurrency'
+_ test_measure_run_status_can_collect_capacity_baseline_at_concurrency_twenty __
+E   TypeError: measure_run_status() got an unexpected keyword argument 'concurrency'
+___ test_measure_http_ping_collects_capacity_baseline_and_requires_http_200 ____
+E   ImportError: cannot import name 'measure_http_ping' from 'infra.load_runs' (/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py)
+________ test_measure_http_ping_fastfails_when_a_sample_is_not_http_200 ________
+E   ImportError: cannot import name 'measure_http_ping' from 'infra.load_runs' (/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py)
+_____ test_report_status_probe_prints_diagnostics_then_fastfails_on_ratio ______
+E   ImportError: cannot import name 'report_status_probe' from 'infra.load_runs' (/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py)
+______ test_report_status_probe_ratio_uses_history_p95_over_zero_turn_p95 ______
+E   ImportError: cannot import name 'report_status_probe' from 'infra.load_runs' (/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py)
+____________ test_report_status_probe_rejects_zero_turn_p95_of_zero ____________
+E   ImportError: cannot import name 'report_status_probe' from 'infra.load_runs' (/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py)
+_______ test_report_status_probe_does_not_gate_on_capacity_baseline_p95 ________
+E   ImportError: cannot import name 'report_status_probe' from 'infra.load_runs' (/Users/lize/Documents/ChatGPT/dsherp/infra/load_runs.py)
+__ test_plan_status_history_builds_independent_zero_and_hundred_turn_sessions __
+E   TypeError: _plan_status_history() takes 0 positional arguments but 1 was given
+=========================== short test summary info ============================
+FAILED tests/test_load_runs.py::test_validate_status_probe_accepts_hundred_history_turns_twenty_samples_and_p95_under_one
+FAILED tests/test_load_runs.py::test_validate_status_probe_fastfails_when_history_turns_are_below_one_hundred
+FAILED tests/test_load_runs.py::test_validate_status_probe_fastfails_when_sample_count_is_below_twenty
+FAILED tests/test_load_runs.py::test_validate_status_probe_fastfails_when_p95_is_not_under_one
+FAILED tests/test_load_runs.py::test_validate_status_probe_fastfails_when_ratio_exceeds_one_point_five
+FAILED tests/test_load_runs.py::test_measure_run_status_prechecks_once_then_returns_twenty_timed_samples
+FAILED tests/test_load_runs.py::test_measure_run_status_fastfails_when_precheck_is_not_running
+FAILED tests/test_load_runs.py::test_measure_run_status_can_collect_capacity_baseline_at_concurrency_twenty
+FAILED tests/test_load_runs.py::test_measure_http_ping_collects_capacity_baseline_and_requires_http_200
+FAILED tests/test_load_runs.py::test_measure_http_ping_fastfails_when_a_sample_is_not_http_200
+FAILED tests/test_load_runs.py::test_report_status_probe_prints_diagnostics_then_fastfails_on_ratio
+FAILED tests/test_load_runs.py::test_report_status_probe_ratio_uses_history_p95_over_zero_turn_p95
+FAILED tests/test_load_runs.py::test_report_status_probe_rejects_zero_turn_p95_of_zero
+FAILED tests/test_load_runs.py::test_report_status_probe_does_not_gate_on_capacity_baseline_p95
+FAILED tests/test_load_runs.py::test_plan_status_history_builds_independent_zero_and_hundred_turn_sessions
+15 failed, 22 deselected in 0.15s
+```
+
+Cursor Grok 4.6 Extra High Fast 只改 `infra/load_runs.py`。控制器审查时发现 0 轮 P95 为 0 会在诊断输出前抛错，先把既有行为测试收紧；修复前原始 RED：
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_report_status_probe_rejects_zero_turn_p95_of_zero_after_printing_diagnostics _
+tests/test_load_runs.py:666: in test_report_status_probe_rejects_zero_turn_p95_of_zero_after_printing_diagnostics
+    payload = _stderr_json(capsys)
+              ^^^^^^^^^^^^^^^^^^^^
+tests/test_load_runs.py:382: in _stderr_json
+    assert len(lines) == 1, lines
+E   AssertionError: []
+E   assert 0 == 1
+E    +  where 0 = len([])
+=========================== short test summary info ============================
+FAILED tests/test_load_runs.py::test_report_status_probe_rejects_zero_turn_p95_of_zero_after_printing_diagnostics
+1 failed, 36 deselected in 0.15s
+```
+
+最小修复让所有失败路径先输出样本与统计；控制器目标与文件全量 GREEN：
+
+```text
+...............                                                          [100%]
+15 passed, 22 deselected in 0.40s
+```
+
+```text
+.....................................                                    [100%]
+37 passed in 1.51s
+```
+
+真实 G5 前置状态：LaunchAgent 查询退出 113（服务未加载），pidfile 不存在，worker 进程、9109 listener、context/G5/model 临时容器均为 0；backend 为 `Up 6 hours`；alpha/daily 活动运行 0/0，alpha 历史会话与历史运行残留 0/0。完整 G5 原始输出：
+
+```text
+G5_STATUS_PROBE={"history_samples":[0.03866891699726693,0.03918216699094046,0.19050079199951142,0.1915996249881573,0.15112379100173712,0.21332020898989867,0.03796358399267774,0.38378070799808484,0.18051320800441317,0.21588316700945143,0.39280045799387153,0.19720508399768732,0.3055945829983102,0.19361320800089743,0.30463312499341555,0.2671288330020616,0.30856620900158305,0.19002441699558403,0.21377366699744016,0.10163379200093914],"zero_samples":[0.09066437500587199,0.036293832992669195,0.12684679200174287,0.1507002919970546,0.12978579199989326,0.09400570800062269,0.13358220800000709,0.2746678340045037,0.09859541700279806,0.1823664999974426,0.3031900830101222,0.1941457079956308,0.2947418330004439,0.17146258299180772,0.23386195801140275,0.3082786250015488,0.19992366700898856,0.18420516701007728,0.22434887501003686,0.19975820901163388],"status_capacity_samples":[0.0998553749959683,0.19508362498891074,0.30243850000260863,0.09881262500130106,0.30205700000806246,0.1934869999968214,0.4050401250133291,0.40455533300701063,0.5084873330051778,0.5071302079886664,0.6001440420077415,0.5986407910095295,0.6923702920030337,0.6917152499954682,0.7897657910070848,0.7887456250027753,0.8208134160086047,0.8211072080011945,0.9137762500031386,0.9129727090039523],"ping_capacity_samples":[0.08039516600547358,0.08019733300898224,0.38251254199713003,0.16663008301111404,0.26838745799614117,0.09706983399519231,0.3979193330014823,0.09661895800672937,0.29006583300360944,0.16573004200472496,0.3047177499975078,0.18365804199129343,0.28888237501087133,0.18357550000655465,0.3959817910072161,0.19894783399649896,0.3049183749972144,0.19886533298995346,0.3792775000038091,0.26609604198893066],"history_p95":0.38378070799808484,"zero_p95":0.3031900830101222,"status_capacity_p95":0.9129727090039523,"ping_capacity_p95":0.3959817910072161,"concurrency":3,"history_turns":100,"ratio":1.2658089083516366}
+G5_LOAD_RESULT={"runs":[{"run_id":"fed7c6ebb2538c46ef24cf547fba753fbcb389af2b7655e5a9918390e2ea8d28","site":"dsherp-validation.localhost","owner":"dsherp-reader@example.invalid","status":"Succeeded","queued_to_claimed_seconds":3.312851,"total_seconds":43.207997,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 22:12:46.801555","claimed_at":"2026-09-04 22:12:50.114406","finished_at":"2026-09-04 22:13:30.009552"},{"run_id":"a909c15f95dca6ac8a93e46020028e41e128804b2941f517e3fe68053bbcf484","site":"dsherp-validation.localhost","owner":"dsherp-denied@example.invalid","status":"NeedsInput","queued_to_claimed_seconds":46.940925,"total_seconds":74.785504,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","needs_input","tool_call","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 22:12:48.713083","claimed_at":"2026-09-04 22:13:35.654008","finished_at":"2026-09-04 22:14:03.498587"},{"run_id":"45f2972890bb4117371404e099c0e101daf68b77f78c785b4aeb0936771f1a60","site":"dsherp-validation.localhost","owner":"dsherp-writer@example.invalid","status":"Succeeded","queued_to_claimed_seconds":73.137804,"total_seconds":111.489618,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 22:12:51.604745","claimed_at":"2026-09-04 22:14:04.742549","finished_at":"2026-09-04 22:14:43.094363"},{"run_id":"f24e0fc64eba7b67275c4bc66185138fb03ec222732e7ab0c269ef89abf0791f","site":"dsherp-daily.localhost","owner":"daily-operator@example.invalid","status":"Succeeded","queued_to_claimed_seconds":2.711994,"total_seconds":45.840343,"kinds":["queued","claimed","runtime_started","model_call_reserved","model_response","tool_call","model_call_reserved","model_response","runtime_tool_call","tool_result","turn_end","container_finished","finished"],"queued_at":"2026-09-04 22:12:53.608965","claimed_at":"2026-09-04 22:12:56.320959","finished_at":"2026-09-04 22:13:39.449308"}],"run_status_p95_seconds":0.383781,"run_status_zero_p95_seconds":0.30319,"run_status_p95_ratio":1.2658089083516366,"run_status_samples":20,"run_status_concurrency":3,"run_status_history_turns":100,"run_status_capacity_p95_seconds":0.912973,"ping_capacity_p95_seconds":0.395982,"provider_requests":7,"worker":{"pid":67579,"returncode":0,"events":[{"ts":"2026-09-04T14:12:46.512+00:00","event":"alert","key":"ops_snapshot_stale","severity":"warning","message":"运维快照陈旧"},{"ts":"2026-09-04T14:12:50.205+00:00","event":"claimed","site":"dsherp-validation.localhost","run_id":"fed7c6ebb2538c46ef24cf547fba753fbcb389af2b7655e5a9918390e2ea8d28"},{"ts":"2026-09-04T14:12:57.193+00:00","event":"claimed","site":"dsherp-daily.localhost","run_id":"f24e0fc64eba7b67275c4bc66185138fb03ec222732e7ab0c269ef89abf0791f"},{"ts":"2026-09-04T14:13:19.791+00:00","event":"container_finished","run_id":"fed7c6ebb2538c46ef24cf547fba753fbcb389af2b7655e5a9918390e2ea8d28","status":"Succeeded","duration_ms":29587},{"ts":"2026-09-04T14:13:35.736+00:00","event":"claimed","site":"dsherp-validation.localhost","run_id":"a909c15f95dca6ac8a93e46020028e41e128804b2941f517e3fe68053bbcf484"},{"ts":"2026-09-04T14:13:36.343+00:00","event":"container_finished","run_id":"f24e0fc64eba7b67275c4bc66185138fb03ec222732e7ab0c269ef89abf0791f","status":"Succeeded","duration_ms":39152},{"ts":"2026-09-04T14:14:02.035+00:00","event":"container_finished","run_id":"a909c15f95dca6ac8a93e46020028e41e128804b2941f517e3fe68053bbcf484","status":"NeedsInput","duration_ms":26297},{"ts":"2026-09-04T14:14:04.822+00:00","event":"claimed","site":"dsherp-validation.localhost","run_id":"45f2972890bb4117371404e099c0e101daf68b77f78c785b4aeb0936771f1a60"},{"ts":"2026-09-04T14:14:39.417+00:00","event":"container_finished","run_id":"45f2972890bb4117371404e099c0e101daf68b77f78c785b4aeb0936771f1a60","status":"Succeeded","duration_ms":34596}]},"cleanup":{"dsherp-validation.localhost":{"runs":0,"conversations":0},"dsherp-daily.localhost":{"runs":0,"conversations":0}},"business_session_paths_removed":4,"final_active":{"dsherp-validation.localhost":0,"dsherp-daily.localhost":0}}
+```
+
+本次 100 轮门的并发为 profile `slots=3`，20 个样本 nearest-rank P95 为 `0.383781s`；0 轮独立会话 P95 为 `0.303190s`，比值 `1.265809`，均通过。20 并发容量基线只记录：`run_status` P95 `0.912973s`、ping P95 `0.395982s`。alpha 三条按提交顺序领取，daily 在 alpha 第二条前领取；三条 Succeeded、一条 NeedsInput、无 Failed；本地 SSE 共 7 个请求。
+
+脚本退出 0 后原始状态：
+
+```text
+pidfile_absent_exit=0
+{'active': {'dsherp-validation.localhost': 0, 'dsherp-daily.localhost': 0}}
+{'site': 'dsherp-validation.localhost', 'active_runs': 0, 'history_conversation_remnants': 0, 'history_run_remnants': 0}
+{'site': 'dsherp-daily.localhost', 'active_runs': 0}
+```
+
+worker 进程、9109 listener、context/G5/model 临时容器查询 stdout 均为空。没有调用真实 provider，没有改 `.env`，没有修改 DocType、Report 或 hooks，因此无需 migrate。
