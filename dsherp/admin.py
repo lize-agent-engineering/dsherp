@@ -142,11 +142,15 @@ class Bench:
             command += ['--env-file', str(env_file)]
         return command + ['-f', str(file), *arguments]
 
-    def run(self, *arguments, stdin=None, timeout=900):
+    def run(self, *arguments, stdin=None, timeout=900, secrets=()):
         command = self._compose('exec', '-T', self.service, *arguments)
         result = self.runner(command, input=stdin, text=True, capture_output=True, timeout=timeout)
         if result.returncode:
-            raise Fault(f'容器命令失败（{self.service}）：{" ".join(arguments[:3])}；先看容器状态再重试')
+            tail = '\n'.join((result.stderr or result.stdout or '').strip().splitlines()[-6:])
+            for value in secrets:
+                if value:
+                    tail = tail.replace(value, '[redacted]')
+            raise Fault(f'容器命令失败（{self.service}）：{" ".join(arguments[:3])}\n{tail}')
         return result.stdout
 
     def python(self, site, body, timeout=900):
@@ -160,9 +164,15 @@ class Bench:
                   "finally:\n    frappe.destroy()\n")
         return self.run(BENCH_PYTHON, '-', stdin=script, timeout=timeout)
 
+    def site_state(self, site):
+        """'present' (has site_config.json), 'partial' (directory only) or 'absent'."""
+        listed = self.run('sh', '-c',
+                          f'if [ -f {SITES}/{site}/site_config.json ]; then echo present; '
+                          f'elif [ -e {SITES}/{site} ]; then echo partial; else echo absent; fi', timeout=60)
+        return listed.strip().splitlines()[-1]
+
     def site_exists(self, site):
-        listed = self.run('sh', '-c', f'test -d {SITES}/{site} && echo yes || echo no', timeout=60)
-        return listed.strip().endswith('yes')
+        return self.site_state(site) == 'present'
 
 
 BENCH_APPS = 'frappe\nerpnext\ndsherp_bridge\ndsherp_platform\n'
@@ -180,12 +190,18 @@ def bench_config(resolved):
 
 
 def ensure_bench(bench, resolved):
-    """Bootstrap an empty sites volume. Existing files are reported, never rewritten:
-    rewriting a live bench's database address is how a running Site disappears."""
+    """Bootstrap a bench volume. The image ships placeholders (an apps.txt without our
+    Apps, an empty common_site_config.json), so presence means nothing: apps are added
+    when missing, the config is written only while it names no database. A config that
+    already points at a database is never rewritten: that is how a live Site disappears."""
     config = json.dumps(bench_config(resolved), indent=1, sort_keys=True)
+    apps = ' '.join(BENCH_APPS.split())
     script = (f"cd {SITES} && state=''\n"
-              f"if [ -f apps.txt ]; then state=\"$state apps.txt:kept\"; else printf '%s' {BENCH_APPS!r} > apps.txt; state=\"$state apps.txt:created\"; fi\n"
-              f"if [ -f common_site_config.json ]; then state=\"$state config:kept\"; else cat > common_site_config.json <<'JSON'\n{config}\nJSON\nstate=\"$state config:created\"; fi\n"
+              "touch apps.txt; added=0\n"
+              f"for app in {apps}; do grep -qx \"$app\" apps.txt || {{ echo \"$app\" >> apps.txt; added=$((added+1)); }}; done\n"
+              "if [ \"$added\" -eq 0 ]; then state=\"$state apps.txt:kept\"; else state=\"$state apps.txt:added=$added\"; fi\n"
+              "if [ -f common_site_config.json ] && grep -q '\"db_host\"' common_site_config.json; then state=\"$state config:kept\"; "
+              f"else cat > common_site_config.json <<'JSON'\n{config}\nJSON\nstate=\"$state config:created\"; fi\n"
               "if [ -e assets ]; then state=\"$state assets:kept\"; else ln -s ../assets assets; state=\"$state assets:created\"; fi\n"
               "echo \"$state\"")
     return bench.run('sh', '-c', script, timeout=60).split()
@@ -201,12 +217,17 @@ def ensure_role(bench, site, role):
 
 def ensure_site(bench, resolved, site, admin_password, db_root_password, apps=('erpnext',)):
     """Create the Site only when its directory is absent; never touch an existing one."""
-    if bench.site_exists(site):
+    state = bench.site_state(site)
+    if state == 'present':
         return 'kept'
+    if state == 'partial':
+        raise Fault(f'{SITES}/{site} 存在但没有 site_config.json：上一次建站半途失败。'
+                    '先检查库里是否留下同名数据库，再删除该目录重跑；不会自动清理')
     install = [argument for app in apps for argument in ('--install-app', app)]
     bench.run('bench', 'new-site', site, '--db-host', 'db', '--db-root-username', 'root',
               '--db-root-password', db_root_password, '--admin-password', admin_password,
-              '--mariadb-user-host-login-scope', '%', *install, timeout=1800)
+              '--mariadb-user-host-login-scope', '%', *install, timeout=1800,
+              secrets=(db_root_password, admin_password))
     return 'created'
 
 

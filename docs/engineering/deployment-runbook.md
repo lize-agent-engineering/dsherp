@@ -63,17 +63,19 @@ compose 在解析时就要求每个 `configs:`/`secrets:` 文件存在，所以�
 ```sh
 export DSHERP_ENV=prod DSHERP_RUNTIME_DIR=/opt/dsherp/.runtime DSHERP_SECRETS_DIR=/opt/dsherp/.runtime/control
 ./bin/dsherp-admin render-ingress
-export COMPOSE="docker compose --env-file infra/env/prod.env -f infra/compose.prod.yml"
-$COMPOSE up -d db redis-cache redis-queue
-$COMPOSE ps    # 三个服务 healthy 后再继续
+compose() { docker compose --env-file infra/env/prod.env -f infra/compose.prod.yml "$@"; }
+compose up -d db redis-cache redis-queue
+compose ps    # 三个服务 healthy 后再继续
 ```
+
+用函数而不是 `$COMPOSE` 变量：zsh 默认不对变量做分词，同一行在 bash 与 zsh 下行为不同。
 
 `DSHERP_RUNTIME_DIR` 与 `DSHERP_SECRETS_DIR` 决定 CLI 与 compose 在哪里找租户清单、Caddyfile 与密钥；两者必须在整个 runbook 中保持同一个值。
 
 ## 5. 开通平台站与第一个租户站
 
 ```sh
-$COMPOSE up -d platform-backend backend
+compose up -d platform-backend backend
 DSHERP_ENV=prod ./bin/dsherp-admin provision-platform
 DSHERP_ENV=prod ./bin/dsherp-admin provision-tenant "$SLUG"
 ```
@@ -86,11 +88,11 @@ DSHERP_ENV=prod ./bin/dsherp-admin provision-tenant "$SLUG"
 
 ```sh
 ./bin/dsherp-admin render-ingress          # 现在含租户站块
-$COMPOSE up -d frontend platform-frontend agent-egress caddy
-$COMPOSE ps    # 全部 healthy
+compose up -d frontend platform-frontend agent-egress caddy
+compose ps    # 全部 healthy
 ```
 
-Caddy 按当前租户清单逐站签发 HTTP-01 证书，因此 `$SLUG.$DSHERP_BASE_DOMAIN` 与 platform 域名必须已解析到本机 80/443。每次增删租户后重跑 `render-ingress` 并 `$COMPOSE up -d caddy`。
+Caddy 按当前租户清单逐站签发 HTTP-01 证书，因此 `$SLUG.$DSHERP_BASE_DOMAIN` 与 platform 域名必须已解析到本机 80/443。每次增删租户后重跑 `render-ingress` 并 `compose up -d caddy`。
 
 ## 7. 装宿主 worker
 
@@ -132,7 +134,7 @@ unit 为 `Type=notify` + `WatchdogSec=60s`：worker 每轮 tick 回喂看门狗�
 
 ```sh
 AGENT_CIDR=$(docker network inspect "${DSHERP_PROJECT}_agent" --format '{{(index .IPAM.Config 0).Subnet}}')
-$COMPOSE exec -T backend /home/frappe/frappe-bench/env/bin/python - <<PY
+compose exec -T backend /home/frappe/frappe-bench/env/bin/python - <<PY
 import os, frappe
 os.chdir('/home/frappe/frappe-bench/sites')
 frappe.init(site='$SLUG.$DSHERP_BASE_DOMAIN'); frappe.connect()
@@ -146,7 +148,7 @@ PY
 
 | 检查 | 命令 | 期望 |
 |---|---|---|
-| 全部 healthcheck 绿 | `$COMPOSE ps` | 每个长驻服务 `healthy` |
+| 全部 healthcheck 绿 | `compose ps` | 每个长驻服务 `healthy` |
 | 站点可达且走 TLS | `curl -sI https://$SLUG.$DSHERP_BASE_DOMAIN/login` | 200，含 `Content-Security-Policy`，`connect-src 'self'` |
 | 密码登录已关 | `curl -s -X POST https://$SLUG.$DSHERP_BASE_DOMAIN/api/method/login -d 'usr=x&pwd=y'` | 拒绝，登录页不显示密码表单 |
 | 容器不出网、非 root | `.venv/bin/python -m pytest tests/integration/test_agent_boundary.py -q` | 全绿 |
@@ -158,12 +160,12 @@ PY
 ```sh
 # 升级：先备份，逐站 migrate，再逐字段比对；有差异退出码为 1
 $EDITOR infra/env/prod.env          # DSHERP_IMAGE_TAG 改为新 tag
-$COMPOSE pull && $COMPOSE up -d
+compose pull && compose up -d
 DSHERP_ENV=prod ./bin/dsherp-admin release "$NEW_TAG"
 
 # 回滚：改回旧 tag，起旧镜像，从升级前备份恢复（备份文件必须显式指明）
 $EDITOR infra/env/prod.env
-$COMPOSE up -d
+compose up -d
 DSHERP_ENV=prod ./bin/dsherp-admin rollback "$OLD_TAG" \
   --backup "$SLUG.$DSHERP_BASE_DOMAIN=/home/frappe/frappe-bench/sites/$SLUG.$DSHERP_BASE_DOMAIN/private/backups/<升级前备份>.sql.gz"
 ```
@@ -174,7 +176,7 @@ DSHERP_ENV=prod ./bin/dsherp-admin rollback "$OLD_TAG" \
 
 ```sh
 DSHERP_ENV=prod ./bin/dsherp-admin retire-tenant "$SLUG"     # 先整站归档再删站
-DSHERP_ENV=prod ./bin/dsherp-admin render-ingress && $COMPOSE up -d caddy
+DSHERP_ENV=prod ./bin/dsherp-admin render-ingress && compose up -d caddy
 ```
 
 ## 本地 Docker 上的 G1 演练（非 Linux 主机时）

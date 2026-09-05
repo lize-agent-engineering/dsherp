@@ -34,17 +34,23 @@ class FakeBench:
         self.installed = set(installed)
         self.config = dict(config or {})
 
-    def site_exists(self, site):
+    def site_state(self, site):
         self.calls.append(("exists", site))
-        return site in self.existing
+        if site in self.existing:
+            return "present"
+        return "partial" if site in getattr(self, "partial", set()) else "absent"
 
-    def run(self, *arguments, stdin=None, timeout=900):
+    def site_exists(self, site):
+        return self.site_state(site) == "present"
+
+    def run(self, *arguments, stdin=None, timeout=900, secrets=()):
         self.calls.append(("run",) + arguments[:3])
         self.verbs.append(" ".join(arguments))
         if arguments[:2] == ("sh", "-c") and "apps.txt" in arguments[2]:
-            state = "kept" if self.config.get("bench") else "created"
+            if self.config.get("bench"):
+                return " apps.txt:kept config:kept assets:kept\n"
             self.config["bench"] = True
-            return f" apps.txt:{state} config:{state} assets:{state}\n"
+            return " apps.txt:added=2 config:created assets:created\n"
         if arguments[:2] == ("bench", "new-site"):
             self.existing.add(arguments[2])
         if arguments[:1] == ("bench",) and "install-app" in arguments:
@@ -211,8 +217,9 @@ def test_retiring_a_site_that_does_not_exist_is_refused_rather_than_treated_as_c
 
 def test_doctor_names_what_is_missing_instead_of_failing_at_compose_time(host):
     findings = admin.doctor(PROD)
-    assert any("compose" in row for row in findings)
-    assert any("db_root_password" in row for row in findings)
+    # Only what the deployment itself lacks; never a finding that depends on a gitignored file.
+    assert {row for row in findings if "控制面密钥" in row} == {
+        f"缺少控制面密钥：{name}" for name in admin.control_secrets(PROD)}
     complete = admin.doctor(deploy_env.settings({"DSHERP_ENV": "dev"}), admin.ROOT)
     assert not [row for row in complete if "部署指纹清单缺少文件" in row]
 
@@ -298,7 +305,7 @@ def test_the_platform_site_is_created_without_erpnext_and_with_its_own_app():
     result = admin.provision_platform(PROD, bench_factory=lambda kind: bench)
     assert result["site"] == "platform.tenant.example.com"
     steps = dict(result["steps"])
-    assert steps["bench"] == "apps.txt:created config:created assets:created"
+    assert steps["bench"] == "apps.txt:added=2 config:created assets:created"
     assert steps["member-role"] == "created"
     assert bench.verbs.index([v for v in bench.verbs if "apps.txt" in v][0]) < \
         bench.verbs.index([v for v in bench.verbs if "new-site" in v][0])
@@ -317,10 +324,12 @@ def test_the_platform_site_is_created_without_erpnext_and_with_its_own_app():
 def test_the_bench_bootstrap_never_rewrites_an_existing_database_address():
     bench = FakeBench()
     first = admin.ensure_bench(bench, PROD)
-    assert first == ["apps.txt:created", "config:created", "assets:created"]
+    assert first == ["apps.txt:added=2", "config:created", "assets:created"]
     assert admin.ensure_bench(bench, PROD) == ["apps.txt:kept", "config:kept", "assets:kept"]
     body = [verb for verb in bench.verbs if "apps.txt" in verb][0]
-    assert "if [ -f common_site_config.json ]" in body and "redis-queue" in body and "redis-cache" in body
+    # Presence is not configuration: only a config that names a database is left alone.
+    assert "grep -q '\"db_host\"' common_site_config.json" in body and "redis-queue" in body and "redis-cache" in body
+    assert "grep -qx" in body and "touch apps.txt" in body
     assert "dsherp_bridge" in body and "dsherp_platform" in body
 
 
@@ -338,3 +347,24 @@ def test_compose_calls_carry_the_environment_file_the_code_resolved_from(tmp_pat
     assert command[command.index("--env-file") + 1] == str(tmp_path / "infra" / "env" / "prod.env")
     assert command[command.index("-f") + 1].endswith("infra/compose.prod.yml")
     assert "exec" in command and "backend" in command
+
+
+def test_a_half_created_site_directory_stops_provisioning_instead_of_being_kept():
+    admin.ensure_secrets(PROD)
+    bench = FakeBench()
+    bench.partial = {"acme.tenant.example.com"}
+    with pytest.raises(admin.Fault) as failure:
+        admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    assert "site_config.json" in str(failure.value)
+    assert not [verb for verb in bench.verbs if "new-site" in verb]
+
+
+def test_a_failed_container_command_reports_its_stderr_without_the_secrets_it_was_given(tmp_path):
+    def runner(command, **kwargs):
+        return type("Result", (), {"returncode": 1, "stdout": "",
+                                   "stderr": "line one\nMySQL error with password hunter2\n"})()
+    bench = admin.Bench(PROD, "tenant", root=tmp_path, runner=runner)
+    with pytest.raises(admin.Fault) as failure:
+        bench.run("bench", "new-site", "x", "--db-root-password", "hunter2", secrets=("hunter2",))
+    message = str(failure.value)
+    assert "MySQL error with password [redacted]" in message and "hunter2" not in message
