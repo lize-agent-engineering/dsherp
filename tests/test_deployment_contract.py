@@ -96,7 +96,10 @@ def test_production_publishes_only_the_ingress_and_a_loopback_port_for_the_host_
             published[service] = re.findall(r'"([^"]+)"', _block(block, "ports", indent=4) or block.split("ports:", 1)[1].split("\n", 1)[0])
     assert set(published) == {"caddy", "backend"}, published
     assert all(entry.startswith("127.0.0.1:") for entry in published["backend"]), published["backend"]
-    assert {entry.split(":")[0] for entry in published["caddy"]} == {"80", "443"}
+    # Host side defaults to 80/443 and may be moved; the container side never moves.
+    # rsplit: the host side is a ${VAR:-default} expression and itself contains a colon.
+    assert {entry.rsplit(":", 1)[0] for entry in published["caddy"]} == {"${DSHERP_HTTP_PORT:-80}", "${DSHERP_HTTPS_PORT:-443}"}
+    assert {entry.rsplit(":", 1)[1] for entry in published["caddy"]} == {"80", "443", "443/udp"}
     # Docker publishes nothing for a container that is only on internal networks.
     networks = PROD_COMPOSE.split("\nnetworks:\n", 1)[1].split("\nvolumes:\n", 1)[0]
     assert "internal" not in _block(networks, "worker")
@@ -120,9 +123,10 @@ def test_production_keeps_every_long_lived_service_supervised_and_probed():
     assert {"db", "redis-cache", "redis-queue", "backend", "frontend",
             "platform-backend", "platform-frontend", "agent-egress", "caddy"} <= set(services)
     assert body.count("restart: unless-stopped") + body.count("<<: *frappe") >= len(services)
-    for service in ("db", "redis-cache", "redis-queue", "backend", "frontend",
-                    "platform-backend", "platform-frontend", "agent-egress", "caddy"):
+    # Every service, including the four bench supervisors the spec topology names explicitly.
+    for service in services:
         assert "healthcheck:" in _block(body, service), service
+    assert len(services) == 13
 
 
 def test_the_agent_network_has_no_route_out_in_either_environment():
@@ -160,6 +164,20 @@ def test_the_browser_gets_a_content_security_policy_from_a_versioned_file():
     assert "COPY infra/nginx/security-headers.conf /etc/nginx/snippets/security_headers.conf" in dockerfile
 
 
+def test_production_keeps_the_two_benches_apart_and_caddy_without_capabilities():
+    body = PROD_COMPOSE.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+    for service in ("scheduler", "queue"):
+        assert "tenant-backups:/home/frappe/backups" in _block(body, service), service
+    for service in ("platform-scheduler", "platform-queue"):
+        assert "platform-backups:/home/frappe/backups" in _block(body, service), service
+    assert "backups:/home/frappe/backups" not in PROD_COMPOSE.replace("tenant-backups:", "").replace("platform-backups:", "")
+    caddy = _block(body, "caddy")
+    assert "cap_drop: [ALL]" in caddy and "cap_add: [NET_BIND_SERVICE]" in caddy
+    networks = PROD_COMPOSE.split("\nnetworks:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+    assert "DSHERP_EDGE_SUBNET" in _block(networks, "edge")
+    assert "${DSHERP_EDGE_SUBNET:-10.90.0.0/24}" in _block(_block(body, "frontend"), "environment", indent=4)
+
+
 def test_the_public_edge_does_not_expose_the_run_capability_endpoints():
     # Development renders infra/frappe.conf.template; the release image ships its own
     # template over the base image's, so both must carry the same block.
@@ -169,6 +187,9 @@ def test_the_public_edge_does_not_expose_the_run_capability_endpoints():
         for endpoint in ("run_status", "reserve_model_call", "run_tool", "record_run_event", "finish_run"):
             assert endpoint in block, name
         assert "return 404;" in block, name
+        # Audit finding: Frappe also serves /api/v2/method/... and ?cmd=...; both must 404 too.
+        assert "^/api/(v[0-9]+/)?method/" in template, name
+        assert "$arg_cmd" in template and template.count("return 404;") >= 2, name
     dockerfile = (ROOT / "infra/docker/frappe/Dockerfile").read_text()
     assert "COPY infra/nginx/site.conf.template /templates/nginx/frappe.conf.template" in dockerfile
 
@@ -269,11 +290,15 @@ def test_the_production_worker_unit_restarts_itself_and_owns_only_two_directorie
     assert "Restart=always" in unit and "RestartSec=10" in unit
     assert re.search(r"^WatchdogSec=\d+s$", unit, re.MULTILINE)
     assert "ProtectSystem=strict" in unit and "NoNewPrivileges=true" in unit
-    assert f"ReadWritePaths={ROOT}/.runtime {ROOT}/work" in unit
+    # work/ only appears once a run starts; a systemd that honours ReadWritePaths must not
+    # fail namespace setup on its absence.
+    assert f"ReadWritePaths={ROOT}/.runtime -{ROOT}/work" in unit
     assert "SupplementaryGroups=docker" in unit
     assert f"ExecStart={ROOT}/.venv/bin/python -m dsherp.context_worker" in unit
     assert "TimeoutStopSec=120" in unit
     assert "User=dsherp" in unit
+    # Found on the x86_64 drill: an unset DSHERP_ENV made the worker check for the dev volume.
+    assert "Environment=DSHERP_ENV=prod" in unit
 
 
 def test_the_worker_unit_refuses_an_unusable_account_or_watchdog(tmp_path):

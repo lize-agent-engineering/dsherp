@@ -91,11 +91,17 @@ services:
 
   scheduler:
     <<: *frappe
+    # Liveness of the bench process itself; readiness has no port to probe.
+    healthcheck:
+      test: ["CMD", "sh", "-c", "kill -0 1 && grep -q bench /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     command: ["bench", "schedule"]
     volumes:
       - tenant-sites:/home/frappe/frappe-bench/sites
       - tenant-logs:/home/frappe/frappe-bench/logs
-      - backups:/home/frappe/backups
+      - tenant-backups:/home/frappe/backups
     depends_on:
       db: {condition: service_healthy}
       redis-queue: {condition: service_healthy}
@@ -104,11 +110,17 @@ services:
 
   queue:
     <<: *frappe
+    # Liveness of the bench process itself; readiness has no port to probe.
+    healthcheck:
+      test: ["CMD", "sh", "-c", "kill -0 1 && grep -q bench /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     command: ["bench", "worker", "--queue", "short,default,long"]
     volumes:
       - tenant-sites:/home/frappe/frappe-bench/sites
       - tenant-logs:/home/frappe/frappe-bench/logs
-      - backups:/home/frappe/backups
+      - tenant-backups:/home/frappe/backups
     depends_on:
       db: {condition: service_healthy}
       redis-queue: {condition: service_healthy}
@@ -126,7 +138,7 @@ services:
       SOCKETIO: backend:8000
       # Tenant Sites are addressed by host name; one entry point serves all of them.
       FRAPPE_SITE_NAME_HEADER: $$host
-      UPSTREAM_REAL_IP_ADDRESS: ${DSHERP_TRUSTED_PROXY_CIDR:-10.0.0.0/8}
+      UPSTREAM_REAL_IP_ADDRESS: ${DSHERP_EDGE_SUBNET:-10.90.0.0/24}
       UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
       UPSTREAM_REAL_IP_RECURSIVE: "on"
       PROXY_READ_TIMEOUT: "120"
@@ -175,11 +187,17 @@ services:
 
   platform-scheduler:
     <<: *frappe
+    # Liveness of the bench process itself; readiness has no port to probe.
+    healthcheck:
+      test: ["CMD", "sh", "-c", "kill -0 1 && grep -q bench /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     command: ["bench", "schedule"]
     volumes:
       - platform-sites:/home/frappe/frappe-bench/sites
       - platform-logs:/home/frappe/frappe-bench/logs
-      - backups:/home/frappe/backups
+      - platform-backups:/home/frappe/backups
     depends_on:
       db: {condition: service_healthy}
       redis-queue: {condition: service_healthy}
@@ -188,11 +206,17 @@ services:
 
   platform-queue:
     <<: *frappe
+    # Liveness of the bench process itself; readiness has no port to probe.
+    healthcheck:
+      test: ["CMD", "sh", "-c", "kill -0 1 && grep -q bench /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     command: ["bench", "worker", "--queue", "short,default,long"]
     volumes:
       - platform-sites:/home/frappe/frappe-bench/sites
       - platform-logs:/home/frappe/frappe-bench/logs
-      - backups:/home/frappe/backups
+      - platform-backups:/home/frappe/backups
     depends_on:
       db: {condition: service_healthy}
       redis-queue: {condition: service_healthy}
@@ -209,7 +233,7 @@ services:
       BACKEND: platform-backend:8000
       SOCKETIO: platform-backend:8000
       FRAPPE_SITE_NAME_HEADER: ${DSHERP_PLATFORM_SLUG}.${DSHERP_BASE_DOMAIN}
-      UPSTREAM_REAL_IP_ADDRESS: ${DSHERP_TRUSTED_PROXY_CIDR:-10.0.0.0/8}
+      UPSTREAM_REAL_IP_ADDRESS: ${DSHERP_EDGE_SUBNET:-10.90.0.0/24}
       UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
       UPSTREAM_REAL_IP_RECURSIVE: "on"
       PROXY_READ_TIMEOUT: "120"
@@ -250,7 +274,12 @@ services:
     image: caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
     pull_policy: if_not_present
     restart: unless-stopped
-    ports: ["80:80", "443:443", "443:443/udp"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    # Defaults are the real thing; a host that already serves 80/443 for someone else
+    # (a shared drill box) moves these, at the cost of ACME HTTP-01 which needs port 80.
+    ports: ["${DSHERP_HTTP_PORT:-80}:80", "${DSHERP_HTTPS_PORT:-443}:443", "${DSHERP_HTTPS_PORT:-443}:443/udp"]
     healthcheck:
       # Port 80 only redirects to HTTPS and 443 needs a matching SNI, so a plain
       # HTTP probe cannot pass; the listener being open is the liveness signal.
@@ -280,8 +309,8 @@ networks:
   platform-site: {internal: true}
   # Run containers reach exactly two things here: the tenant backend and the egress proxy.
   agent: {internal: true}
-  # Caddy to the two front ends.
-  edge: {internal: true}
+  # Caddy to the two front ends; pinned so the front ends can trust it for the real client IP.
+  edge: {internal: true, ipam: {config: [{subnet: "${DSHERP_EDGE_SUBNET:-10.90.0.0/24}"}]}}
   # The only networks with a default route: provider for Caddy/ACME and the egress proxy,
   # worker so the tenant backend can publish its loopback port to the host worker.
   provider: {}
@@ -295,7 +324,8 @@ volumes:
   tenant-logs:
   platform-sites:
   platform-logs:
-  backups:
+  tenant-backups:
+  platform-backups:
   caddy-data:
   caddy-config:
 

@@ -36,9 +36,11 @@ server {
 
 	# Run capabilities are used by run containers that talk to the backend directly.
 	# From the browser edge they have no legitimate caller, so they do not exist here.
-	location ~ ^/api/method/dsherp_bridge\.context_execution\.(run_status|reserve_model_call|run_tool|record_run_event|finish_run)$ {
+	location ~ ^/api/(v[0-9]+/)?method/dsherp_bridge\.context_execution\.(run_status|reserve_model_call|run_tool|record_run_event|finish_run)$ {
 		return 404;
 	}
+	# Frappe also dispatches ?cmd=<dotted.path>; the body form is caught by the site-side source allowlist.
+	if ($arg_cmd ~ "^dsherp_bridge\.context_execution\.(run_status|reserve_model_call|run_tool|record_run_event|finish_run)$") { return 404; }
 
 	location ~ ^/protected/(.*) {
 		internal;

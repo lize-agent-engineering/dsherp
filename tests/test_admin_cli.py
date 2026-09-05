@@ -62,7 +62,12 @@ class FakeBench:
     def python(self, site, body, timeout=900):
         self.calls.append(("python", site, body.splitlines()[0][:40]))
         if "dsherp_runtime_user" in body and "assert" in body:
-            return json.dumps({"site": site, "apps": ["dsherp_bridge", "erpnext", "frappe"]}) + "\n"
+            return json.dumps({"site": site, "apps": ["dsherp_bridge", "erpnext", "frappe"],
+                               "agent_sources": self.config.get("dsherp_agent_sources")}) + "\n"
+        if "is_scheduler_disabled" in body and "enable_scheduler" in body:
+            state = "kept" if self.config.get("scheduler") else "enabled"
+            self.config["scheduler"] = True
+            return json.dumps(state) + "\n"
         if "'Role'" in body:
             state = "kept" if self.config.get("role") else "created"
             self.config["role"] = True
@@ -138,10 +143,16 @@ def test_the_ingress_lists_every_live_host_explicitly(host):
     assert "{$DSHERP_ACME_EMAIL}" in text
 
 
+def fake_networks(command, **kwargs):
+    """docker network inspect answers for the agent and worker networks."""
+    subnet = {"dsherp_agent": "192.168.0.0/20", "dsherp_worker": "192.168.16.0/20"}.get(command[3], "")
+    return type("Result", (), {"returncode": 0 if subnet else 1, "stdout": subnet + "\n", "stderr": ""})()
+
+
 def test_provisioning_a_new_tenant_creates_the_site_once_and_records_it(host):
     admin.ensure_secrets(PROD)
     bench = FakeBench()
-    result = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    result = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
     assert result["site"] == "acme.tenant.example.com"
     assert ("run", "bench", "new-site", "acme.tenant.example.com") in bench.calls
     assert dict(result["steps"])["site"] == "created"
@@ -153,6 +164,10 @@ def test_provisioning_a_new_tenant_creates_the_site_once_and_records_it(host):
     assert dict(result["steps"])["healthcheck"] == "acme.tenant.example.com"
     assert dict(result["steps"])["runtime-identity"] == "issued"
     assert result["runtime_identity"]["api_secret"] == "s"
+    # The run capability may be used from run containers and from the host worker's loopback
+    # path, whose packets arrive from the worker bridge; never left fail-open.
+    assert bench.config["dsherp_agent_sources"] == ["192.168.0.0/20", "192.168.16.0/20"]
+    assert dict(result["steps"])["scheduler"] == "enabled"
     assert dict(result["steps"])["enterprise"] == "created"
     assert dict(result["steps"])["oauth-client"] == "created"
     assert dict(result["steps"])["social-login-key"] == "created"
@@ -173,12 +188,13 @@ def test_provisioning_a_new_tenant_creates_the_site_once_and_records_it(host):
 def test_provisioning_the_same_tenant_again_changes_nothing(host):
     admin.ensure_secrets(PROD)
     bench = FakeBench()
-    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
     bench.calls.clear()
-    again = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    again = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
     assert dict(again["steps"])["site"] == "kept"
     assert dict(again["steps"])["app"] == "kept"
     assert dict(again["steps"])["site-config"] == "kept"
+    assert dict(again["steps"])["scheduler"] == "kept"
     # A rerun never rotates the runtime key silently, and never shows the secret again.
     assert dict(again["steps"])["runtime-identity"] == "kept"
     assert "runtime_identity" not in again
@@ -194,7 +210,7 @@ def test_provisioning_the_same_tenant_again_changes_nothing(host):
 def test_provisioning_without_control_secrets_stops_before_touching_a_container(host):
     bench = FakeBench()
     with pytest.raises(admin.Fault):
-        admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+        admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
     assert not [call for call in bench.calls if call[0] == "run"]
 
 
@@ -210,8 +226,8 @@ def test_a_tenant_slug_that_is_not_a_slug_never_reaches_a_command(host):
 def test_retiring_a_tenant_archives_before_it_drops_and_leaves_the_ingress_correct(host):
     admin.ensure_secrets(PROD)
     bench = FakeBench()
-    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
-    admin.provision_tenant(PROD, "beta", bench_factory=lambda kind: bench)
+    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    admin.provision_tenant(PROD, "beta", bench_factory=lambda kind: bench, runner=fake_networks)
     bench.calls.clear()
     result = admin.retire_tenant(PROD, "acme", bench_factory=lambda kind: bench)
     verbs = [call for call in bench.calls if call[0] == "run"]
@@ -373,7 +389,7 @@ def test_a_half_created_site_directory_stops_provisioning_instead_of_being_kept(
     bench = FakeBench()
     bench.partial = {"acme.tenant.example.com"}
     with pytest.raises(admin.Fault) as failure:
-        admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+        admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
     assert "site_config.json" in str(failure.value)
     assert not [verb for verb in bench.verbs if "new-site" in verb]
 
@@ -403,8 +419,8 @@ def test_doctor_refuses_a_production_file_that_lets_compose_fall_back_to_develop
 def test_rotating_the_runtime_key_is_explicit_and_returns_the_new_secret_once():
     admin.ensure_secrets(PROD)
     bench = FakeBench()
-    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
-    rotated = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, rotate_runtime_key=True)
+    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    rotated = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, rotate_runtime_key=True, runner=fake_networks)
     assert dict(rotated["steps"])["runtime-identity"] == "rotated"
     assert rotated["runtime_identity"]["api_secret"] == "s"
 
@@ -412,6 +428,45 @@ def test_rotating_the_runtime_key_is_explicit_and_returns_the_new_secret_once():
 def test_a_tenant_that_chose_its_own_language_keeps_it_on_rerun():
     admin.ensure_secrets(PROD)
     bench = FakeBench(config={"language": "en", "time_zone": "Europe/Berlin"})
-    result = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    result = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
     assert dict(result["steps"])["system-settings"] == "kept"
     assert bench.config["language"] == "en"
+
+
+def test_a_container_command_without_input_never_inherits_the_operator_stdin(tmp_path):
+    import subprocess as _subprocess
+    seen = {}
+    def runner(command, **kwargs):
+        seen.update(kwargs)
+        return type("Result", (), {"returncode": 0, "stdout": "present\n", "stderr": ""})()
+    bench = admin.Bench(PROD, "tenant", root=tmp_path, runner=runner)
+    bench.site_state("acme.tenant.example.com")
+    assert seen.get("stdin") is _subprocess.DEVNULL and "input" not in seen
+    bench.python("acme.tenant.example.com", "print(1)")
+    assert "input" in seen and seen["input"].startswith("import json")
+
+
+def test_the_platform_bench_never_shares_the_tenant_queue_namespace():
+    tenant = admin.bench_config(PROD, "tenant")
+    platform = admin.bench_config(PROD, "platform")
+    assert tenant["redis_queue"] == "redis://redis-queue:6379/0"
+    assert platform["redis_queue"] == "redis://redis-queue:6379/1"
+    assert tenant["redis_cache"] == platform["redis_cache"]
+
+
+def test_provisioning_refuses_to_write_an_agent_allowlist_it_cannot_derive(host):
+    admin.ensure_secrets(PROD)
+    bench = FakeBench()
+    def no_networks(command, **kwargs):
+        return type("Result", (), {"returncode": 1, "stdout": "", "stderr": "not found"})()
+    with pytest.raises(admin.Fault):
+        admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=no_networks)
+
+
+def test_firewall_rules_target_only_the_agent_bridge():
+    def networks(command, **kwargs):
+        return type("Result", (), {"returncode": 0, "stdout": "db512087a978abcdef0123456789\n", "stderr": ""})()
+    rules = admin.agent_firewall_rules(PROD, runner=networks)
+    assert rules["bridge"] == "br-db512087a978"
+    assert all("br-db512087a978" in rule for rule in rules["iptables"] + rules["nft"] + rules["undo"])
+    assert rules["iptables"][-1].endswith("-j DROP")
