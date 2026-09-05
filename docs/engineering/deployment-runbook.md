@@ -11,9 +11,13 @@
 | 操作系统 | Linux x86_64 | 四个基础镜像 digest 均为多架构清单，含 `linux/amd64`（见[运行契约](runtime-baseline.md)） |
 | Docker | Engine 25+ 与 compose 插件 | `docker compose version` 必须可用 |
 | Python | 3.12（见仓库 `.python-version`） | 宿主 worker 用，不进容器 |
+| 宿主 glibc | **≥ 2.28**（RHEL/Rocky 8、Debian 10、Ubuntu 18.10 及以上） | `deepseek-harness-runtime-bin` 只发布 `manylinux_2_28` wheel，`uv pip sync requirements.lock` 在 glibc 2.17（CentOS 7）上无解。宿主 worker 本身不引入 SDK，但同一份锁装不上就起不了 CLI；容器内是 Debian bookworm，不受影响 |
 | Node | 见 `.nvmrc` | 仅构建前端产物时需要；发布镜像已内含 dist |
+| git | 构建机需要；目标主机可以没有——用 `git archive` 传源码树，并把提交号交给 `release_images.py --git-commit` | 没有 git 的主机上 manifest 仍记录真实提交 |
 | 镜像来源 | 私有 registry，或在本机 `docker load` 导入的镜像 tar | `compose.prod.yml` 用 `pull_policy: if_not_present` |
 | 账号 | 一个非 root 系统账号（本文用 `dsherp`），在 `docker` 组内 | worker 与容器都不以 root 运行 |
+| systemd | ≥ 242 才能启用 unit 里的全部沙箱指令（`ProtectSystem=strict` 232+、`ReadWritePaths` 232+、`RestrictSUIDSGID` 242+）；更老的版本会忽略这些行并在 journal 告警，进程照常受 `Restart`/`WatchdogSec` 管，但沙箱**静默退化**——219 上 `ProtectSystem=strict` 被解析成 `no` | CentOS 7 的 systemd 219 实测：保留 notify/看门狗/Restart/PrivateTmp/NoNewPrivileges/ProtectHome，丢掉其余五条 |
+| 安装根 | 本文用 `/opt/dsherp`，但只是参数：`render_worker_units.py --root` 与 `bin/dsherp-admin` 都跟随实际目录。**不要放在 `/home` 下**：unit 的 `ProtectHome=read-only` 会把它锁成只读，能解锁 `.runtime`/`work` 的 `ReadWritePaths` 要 systemd ≥ 232 | 某些主机的 `/opt` 带 immutable 属性，root 也写不进，这时用 `/srv/dsherp` |
 
 约定：下文所有命令在仓库根执行，`$TAG` 为发布 tag，`$SLUG` 为租户短名（小写字母开头，`[a-z0-9-]`）。
 
@@ -82,7 +86,7 @@ DSHERP_ENV=prod ./bin/dsherp-admin provision-tenant "$SLUG"
 
 两条命令都是幂等步骤链：每一步先查现状，中断后重跑不会重复建站或重复装 App。`provision-tenant` 会同时关闭该站的密码登录（Frappe 原生 `disable_user_pass_login`），此后进入业务站只能经平台 SSO。
 
-命令输出里的 `runtime_identity` 是该站运行服务身份的 api_key/api_secret，**只出现这一次**，写入下一步的 worker profile 后即从终端历史中清除。
+命令输出里的 `runtime_identity` 是该站运行服务身份的 api_key/api_secret，**只在签发那一次出现**：重跑 `provision-tenant` 不会再签发也不会再显示（步骤报 `kept`）；丢了或要换就 `provision-tenant <slug> --rotate-runtime-key`，旧密钥随即作废。写入下一步的 worker profile 后即从终端历史中清除——更稳妥的做法是像演练脚本那样，用一段 Python 把 JSON 输出直接落成 0600 文件，密钥从不经过终端。
 
 ## 6. 起入口与出口
 
@@ -102,8 +106,9 @@ Caddy 按当前租户清单逐站签发 HTTP-01 证书，因此 `$SLUG.$DSHERP_B
 worker 不进容器：它需要 docker 才能拉起一次性 Runtime 容器。
 
 ```sh
-sudo -u dsherp python3.12 -m venv /opt/dsherp/.venv
-sudo -u dsherp /opt/dsherp/.venv/bin/pip install --require-hashes -r requirements.lock
+# 与 README 一致用 uv；宿主没有 3.12 时 uv 会装一个独立解释器（glibc ≥ 2.28 见前置表）
+sudo -iu dsherp uv venv --python 3.12.11 /opt/dsherp/.venv
+sudo -iu dsherp uv pip sync --python /opt/dsherp/.venv/bin/python --require-hashes /opt/dsherp/requirements.lock
 sudo -u dsherp install -m 600 /dev/null /opt/dsherp/.runtime/context-worker-sites.json
 sudo -u dsherp $EDITOR /opt/dsherp/.runtime/context-worker-sites.json
 ```

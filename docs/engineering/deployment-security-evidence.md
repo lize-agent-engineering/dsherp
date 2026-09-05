@@ -2,7 +2,7 @@
 
 日期：2026-09-05。分支 `plan3/deployment-security`（基于 `main` `b8e7b13`）。执行方式：按用户 2026-09-05 指示，本计划不再写交给 Codex 的实施计划，由 Claude 直接实施并自行入档；因此本文同时承担计划说明与证据两个角色。覆盖范围按[生产化总体设计](../superpowers/specs/2026-09-03-production-hardening-design.md)实施顺序表第 3 行：工作流 A 全部 + 工作流 B 的出口控制（S1）、非 root 与最小挂载（S7）、SSO 强制（S3）、guest 端点加固（S5/A5）、CSP 与渲染限制（S6/A2 的渲染部分）。放行门 G1、G4。
 
-**总判定**：G4 的全部判据先在 dev 容器、后在**生产形态**（发布镜像 + `compose.prod.yml` + `dsherp-admin`）的容器上实测通过；G1 按用户指示用本机 Docker 代替 Linux 主机，以生产形态从 tag 走到 13 个服务全部 Up、9 个带探针的全部 healthy，途中暴露并修复了 15 个只有实跑才会出现的断点（见"本地 Docker 上的 G1 演练"）。与真正 Linux x86_64 主机的残余差别是架构、ACME 与 systemd 三项。本文不宣称生产可用；真实租户接入仍需终验。
+**总判定**：G4 的全部判据在 dev 容器、本机生产形态、以及 **x86_64 服务器上的 amd64 发布镜像**三处实测通过；G1 先在本机 Docker 以生产形态走通（15 个断点），再按用户指示在 x86_64 服务器（CentOS 7、共用主机、端口挪到 18080/18443）以生产形态整体执行：源码树 → 原生 amd64 镜像 → 13 服务全 Up、9 探针全 healthy → **systemd 守护下的宿主 worker 写入站侧心跳**，又暴露并修复 7 个（#16–#22）。G1 的三条残余差别只剩 **ACME**（两次演练都没有 80 端口 + 公网域名）。本文不宣称生产可用；真实租户接入仍需终验。
 
 ## 勘察
 
@@ -177,7 +177,41 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 | 宿主 worker | 停 dev worker 后以 `DSHERP_ENV=prod` 前台跑 40s：`prepare_host` 通过（发布镜像 + `dsherp_agent` 网络）、`/metrics` 9110 应答、**站侧 `dsherp_worker_heartbeat` 已写入**、零 `worker_error`、SIGTERM 干净退出；dev worker 随后恢复 |
 | 门禁（本轮修复后） | 离线 `363 passed`、Node `10 pass`（前端与 dist 自上次无变化） |
 
-与真正的 Linux x86_64 主机仍有的差别：架构（arm64）、`.localhost` 内置 CA 而非 ACME、systemd 守护未实际启用（unit 只做了渲染）、单机上 dev 与 prod 两套栈并存。演练结束后本地 prod 栈连卷拆除、两个发布镜像删除，`.runtime/prod-local/` 一并清理。
+本地演练与真正 Linux x86_64 主机的差别（架构、systemd）随后由 x86_64 服务器演练补上（下节）；ACME 两次都验不了（本地无公网域名，服务器 80 被占）。演练结束后本地 prod 栈连卷拆除、两个发布镜像删除，`.runtime/prod-local/` 一并清理。
+
+## x86_64 服务器上的 G1 演练（2026-09-05，用户指定 120.24.29.56）
+
+用户提供的是一台**共用**的阿里云 ECS（`yibao-ecs`：x86_64、CentOS 7、8 核 15 GB、Docker 26.1.4 + compose 2.27.1、systemd 219），上面跑着十几个其他项目的容器并占用 80/443。演练以生产形态在它上面走 runbook，端口挪到 18080/18443，所有其他服务不动。这条腿补的是本地演练缺的**架构**与 **systemd** 两项；ACME 仍不可验（HTTP-01 需要 80）。
+
+主机侧又暴露出四个只有换一台真实机器才会碰到的前置条件，全部写进 runbook 前置表：
+
+| # | 断点 | 现象 | 处置 |
+|---|---|---|---|
+| 16 | **宿主 glibc 2.17** | `deepseek-harness-runtime-bin==0.1.1rc1` 只发布 `manylinux_2_28` wheel，`uv pip sync requirements.lock` 无解 | runbook 硬前置：宿主 glibc ≥ 2.28（Rocky 8 / Debian 10 / Ubuntu 18.10+）。演练用去掉两个 `deepseek-harness*` 块、其余 547 行哈希原样的子集装宿主 venv——已核实宿主 worker 与 CLI 不引入 SDK（只有 `dsh_probe.py`、`session_runtime.py` 引入，都在容器侧）。用户知情同意后继续 |
+| 17 | `/opt` 带 immutable 属性 | root 也建不了 `/opt/dsherp` | 安装根本就是参数，改用 `/home/dsherp/dsherp`；runbook 注明 |
+| 18 | 主机没有 git | runbook 第 1 步 `git clone` 不可用 | `git archive` 传源码树，`release_images.py --git-commit` 显式记录提交；runbook 注明 |
+| 19 | systemd 219 | `systemd-analyze verify` 实测：`ProtectSystem=strict` "Failed to parse… ignoring"（生效值变成 `no`），`ProtectKernelTunables`/`ProtectControlGroups`/`RestrictSUIDSGID`/`ReadWritePaths` 为 Unknown lvalue；保留 `Type=notify`、`WatchdogUSec=1min`、`Restart=always`、`User/Group`、`PrivateTmp`、`ProtectHome=read-only`、`NoNewPrivileges` | runbook 前置：systemd ≥ 242 才有完整沙箱，且说明退化是静默的 |
+| 20 | 安装根在 `/home/dsherp/dsherp`（因 #17）+ systemd 219 | `ProtectHome=read-only` 生效而 `ReadWritePaths` 被忽略 → worker 写不了 `.runtime` 的锁与 pid，unit 起不来 | runbook：安装根不放 `/home`，`/opt` 不可用时用 `/srv/dsherp`；演练先按原样启动记录失败，再挪到 `/srv/dsherp` 证明正向路径 |
+| 22 | systemd unit 里没有 `DSHERP_ENV` | 挪到 `/srv` 后 worker 仍起不来：`prepare_host` 按 dev 解析、去查只有开发环境才有的 `dsherp-v16-agent-runtime` 卷。本地 prod worker 都是手动 export 跑的，从未暴露 | 渲染器固定写 `Environment=DSHERP_ENV=prod`，契约测试断言 |
+| 21 | `Bench.run` 无 `input` 时让容器命令继承父进程 stdin | 经 ssh 用 stdin 喂脚本驱动 CLI 时，`bench new-site` 把脚本剩余文本当输入吃掉，`provision-platform` 之后的步骤静默消失、退出码 0 | 无 input 的容器命令一律 `stdin=DEVNULL`（`1a3a35a`）；远端驱动改为 scp 脚本文件 + `ssh -n` |
+| — | GitHub Releases 从该 ECS 下载 ~30 KB/s；Docker Hub 直连不通 | uv 与 CPython 发布包在 Mac 下载、sha256 校验后 scp；uv 用 `file://` 镜像装 3.12.11（uv 自带哈希校验）；基底镜像经主机已配置的国内加速器按 digest 拉取，四个均为 amd64 | 环境问题，不是产品缺陷 |
+
+### 演练结果（x86_64；镜像 manifest 提交 `dde55f0`、`linux/amd64`、两镜像 `architecture: amd64`，原生构建 2060 秒，PyPI 限速所致）
+
+| G1 / G4 判据 | 实测（120.24.29.56，生产形态，端口 18080/18443） |
+|---|---|
+| 从源码树到全绿 | `secrets init` → `doctor` 空 → `render-ingress` → 数据面 3 healthy → `provision-platform`（25s，全 created）→ `provision-tenant g1`（**71s 一次通过**，15 步全 created/issued/disabled/bootstrapped——本地演练修掉的 10 个开站断点一个都没再出现）→ scheduler/queue/入口/出口/Caddy → **13 服务全 Up、9 探针全 healthy** |
+| 幂等 | 平台重跑 5 步全 kept；租户重跑 15 步除清单/渲染/healthcheck 外全 kept，输出不含密钥 |
+| TLS | Caddy 内置 CA（issuer `Caddy Local Authority - ECC Intermediate`），HSTS；`http://…:18080` → 308 |
+| CSP | `login` 200，`Content-Security-Policy` 与 HSTS 头在 |
+| SSO 强制 | `POST /api/method/login` → 401；登录页无密码输入框 |
+| 边缘屏蔽 | `run_status`、`finish_run` 经 Caddy → 404 |
+| 平台 / 回环 | 平台 ping 200；宿主 `127.0.0.1:8000`（Host g1）→ 200（worker 网络 + 回环发布在 x86 上同样成立） |
+| 容器边界（**amd64 发布镜像** `local/dsherp-worker:v0.3.0-rc2` 在 `dsherp_agent`） | `machine=x86_64`、uid 995；公网 DNS/IP 不可达；`agent-egress`、`backend` 可达；`platform-backend`、`db` 不可达；无控制面文件；代码不可写；provider 仅经代理（401） |
+| 完整锁在 amd64 容器内 | `deepseek-harness-runtime-bin 0.1.1rc1` 在 worker 镜像里可导入——`manylinux_2_28` wheel 在 bookworm（glibc 2.36）容器内正常，只有宿主 CentOS 7 装不了 |
+| 宿主 worker / systemd | 先按原样在 `/home` 根下 `systemctl start`：如 #20 所料 `OSError: [Errno 30] Read-only file system: …/.runtime/business-sessions`，`Restart=always` 反复拉起；挪到 `/srv/dsherp` 后又暴露 #22（无 `DSHERP_ENV`）；修后 `enable --now`：**`active (running)`、`Type=notify`（READY=1 被 systemd 接受）、`WatchdogUSec=1min`、跨过看门狗周期无重启**、`/metrics` 9109 应答、**站侧 `dsherp_worker_heartbeat` 经 `127.0.0.1:8000` 写入**、journal 仅有 219 对 `ProtectSystem=strict` 的解析告警与新站的 `ops_snapshot_stale`。宿主 venv 为不含 SDK 的子集（#16），provider 凭据为合成值，演练未调用 provider |
+
+服务器上的源码树是 `dde55f0`（`git archive`）加 `3ca26ca` 的渲染器修复；两个镜像由 `dde55f0` 构建，渲染器修复只影响宿主侧。演练结束后按收尾脚本把 unit、栈、卷、我拉的六个镜像、`/srv/dsherp`、`dsherp` 账号全部清除，其他人的服务与 80/443 不受影响。
 
 ## 偏离 spec 与理由
 
@@ -196,7 +230,7 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 
 | 项 | 状态 | 去向 |
 |---|---|---|
-| 干净 Linux x86_64 主机整体拉起 | 已在本机 Docker 以生产形态整体执行（用户指示）；x86_64 架构、ACME 签发、systemd 守护三项未在真机验证 | 有 Linux 主机时按 runbook 再跑一次即可，预期不再有断点 |
+| 干净 Linux x86_64 主机整体拉起 | 本机 Docker 与 x86_64 服务器各以生产形态整体执行一次；仅 ACME 签发未验（需要 80 端口 + 公网域名的专用主机） | 首台真实生产主机开通时顺带核 ACME；其余无遗留断点 |
 | DS Membership 人工创建 | 沿用平台 Desk 手工 | 已裁决 #4 的短期密钥签发属计划 4，绑定链路不在本计划改 |
 | 平台侧撤销推送端点 | 未做 | 计划 4 与凭证托管一起 |
 | `infra/provision_*.py` 等 17 个 dev 脚本 | 保留 | 四站由它们建成、集成夹具依赖其产物；prod 路径已不经过它们。退役随 dev 收敛另立项 |
@@ -206,4 +240,4 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 
 ## 提交
 
-`7882fb0` 环境分层 → `cf939d9` 自建镜像 → `3f79ac0` 出口控制/非 root/契约 → `1e47cf3` 开站 CLI → `64ed22e` SSO/guest/CSP/渲染 → `5f8e71b` 升级回滚/patches/供应链 → `001c503` OAuth 链与 runbook → `e7a4ca9` 集成门修复 → `8857788` 证据 → 本地 G1 演练：`49c1cb2`、`34f0d39`、`71b66f0`、`b9a6032`、`946a0b4`、`7482304` → 本文。
+`7882fb0` 环境分层 → `cf939d9` 自建镜像 → `3f79ac0` 出口控制/非 root/契约 → `1e47cf3` 开站 CLI → `64ed22e` SSO/guest/CSP/渲染 → `5f8e71b` 升级回滚/patches/供应链 → `001c503` OAuth 链与 runbook → `e7a4ca9` 集成门修复 → `8857788` 证据 → 本地 G1 演练：`49c1cb2`、`34f0d39`、`71b66f0`、`b9a6032`、`946a0b4`、`7482304`、`6401f3c`（PR #3 `750f043` 合入）→ x86_64 演练（分支 `plan3/g1-x86`）：`4178ee2` 端口参数化、`dde55f0`、`1a3a35a` stdin、`3ca26ca` unit 环境 → 本文。
