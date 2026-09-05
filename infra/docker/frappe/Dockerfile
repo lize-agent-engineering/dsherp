@@ -12,6 +12,8 @@ LABEL org.opencontainers.image.title="dsherp-frappe" \
 
 USER root
 COPY --chown=frappe:frappe frappe_app /opt/dsherp-frappe
+# The same headers (including CSP) that development overlays by bind mount.
+COPY infra/nginx/security-headers.conf /etc/nginx/snippets/security_headers.conf
 # Desk loads /assets/dsherp_bridge/dist/*; the built bundle ships in the image, not on a mount.
 RUN set -eu; \
     rm -rf /opt/dsherp-frappe/*/__pycache__ /opt/dsherp-frappe/*/*/__pycache__; \

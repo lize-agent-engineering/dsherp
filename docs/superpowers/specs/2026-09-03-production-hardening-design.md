@@ -186,7 +186,7 @@ Internet ──TLS──▶ 反向代理（Caddy，自动证书，*.tenant.examp
 |---|---|---|---|---|
 | 1 | 可观测与失败回放（2026-09-03 C4 通过） | 工作流 D 全部；F 的评估集导出（只导出，不做断言） | G6；历史失败运行全部导出为评估用例，新失败运行可从事件流回放到工具级（计划：[2026-09-03-observability-replay](../plans/2026-09-03-observability-replay.md)） | 无。先做的理由：后续所有计划的验证都依赖事件流与日志 |
 | 2 | 运行底座可靠性（2026-09-05 终审阻断项已逐项关闭，待审计放行） | 工作流 C 全部；H 的错误透传与 ErrorBoundary | G5；崩溃安全负例全绿（计划：[2026-09-04-runtime-reliability](../plans/2026-09-04-runtime-reliability.md)） | 1（用事件流验证） |
-| 3 | 部署制品与安全边界 | 工作流 A 全部；B 的出口控制、非 root、SSO 强制、guest 加固、CSP | G1、G4 | 2（worker 多站形态确定后再打包） |
+| 3 | 部署制品与安全边界（2026-09-05 由 Claude 直接实施；G4 本机实测通过，G1 待审计方在干净 Linux x86_64 主机按 runbook 执行） | 工作流 A 全部；B 的出口控制、非 root、SSO 强制、guest 加固、CSP | G1、G4（证据：[deployment-security-evidence](../../engineering/deployment-security-evidence.md)，runbook：[deployment-runbook](../../engineering/deployment-runbook.md)） | 2（worker 多站形态确定后再打包） |
 | 4 | 数据治理与容灾 | 工作流 E 全部；B 的凭证托管与轮换 | G2、G3、G7 | 3（对象存储与 CLI 属部署制品） |
 | 5 | 质量门禁 | 工作流 G 全部；H 剩余项 | G9 | 3（CI 需镜像与 compose.prod） |
 | 6 | Agent 质量与成本 | 工作流 F 全部；B 的注入信封 | G8 | 5（串行执行，见已裁决 #7） |

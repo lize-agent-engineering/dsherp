@@ -121,7 +121,9 @@ def _capability_guard(run_id,endpoint):
 
 
 def _capability_calls(run_id):
-    value=frappe.cache().get_value(f'dsherp_capability_calls:{run_id}')
+    # Written by a raw INCRBY, so it must be read raw: get_value would try to unpickle it.
+    cache=frappe.cache()
+    value=cache.get(cache.make_key(f'dsherp_capability_calls:{run_id}'))
     try:return int(value)
     except (TypeError,ValueError):return None
 

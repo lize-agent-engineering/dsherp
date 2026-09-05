@@ -91,8 +91,8 @@ def callback(code: str,state: str):
 # The business interface; neither Administrator nor the runtime identity may hold one.
 DESK_PREFIXES=('/app','/desk')
 EXEMPT_PATHS=('/api/method/dsherp_bridge.sso.start','/api/method/dsherp_bridge.sso.callback','/api/method/logout')
-# Long enough that a platform outage does not stop work, short enough that a
-# revoked membership stops working within a minute without a push channel.
+# How long the last successful platform answer may stand in for an unreachable
+# platform. Revocation itself never waits on this: a reachable platform is asked every time.
 GRANT_CACHE_SECONDS=60
 
 
@@ -120,14 +120,17 @@ def _grant_cache_key(user,identity):
 def validate_grant(grant,user):
     data=json.loads(decrypt(grant))
     key=_grant_cache_key(user,data['identity'])
-    # A cached decision keeps business running while the platform is unreachable;
-    # once it expires an unreachable platform is a refusal, never a silent pass.
-    if frappe.cache().get_value(key):return data['identity']
+    # The platform is asked on every request, so a revoked membership stops on the
+    # very next one. The cache is only a fallback for the moments the platform cannot
+    # answer: a decision younger than GRANT_CACHE_SECONDS still stands, an older one
+    # is a refusal, never a silent pass.
     try:
         info=identity_for_token(data['token'])
     except requests.RequestException:
+        if frappe.cache().get_value(key):return data['identity']
         raise frappe.PermissionError('企业平台暂时不可达，请稍后重试')
     if validate_identity(info)!=user or info!=data['identity']:
+        frappe.cache().delete_value(key)
         raise frappe.PermissionError('企业成员绑定已变化，请重新登录')
     frappe.cache().set_value(key,1,expires_in_sec=GRANT_CACHE_SECONDS)
     return info

@@ -129,6 +129,16 @@ def test_the_browser_gets_a_content_security_policy_from_a_versioned_file():
     assert "connect-src 'self'" in headers
     assert "object-src 'none'" in headers
     assert "/etc/nginx/snippets/security_headers.conf" in DEV_COMPOSE
+    dockerfile = (ROOT / "infra/docker/frappe/Dockerfile").read_text()
+    assert "COPY infra/nginx/security-headers.conf /etc/nginx/snippets/security_headers.conf" in dockerfile
+
+
+def test_the_public_edge_does_not_expose_the_run_capability_endpoints():
+    template = (ROOT / "infra/frappe.conf.template").read_text()
+    block = template.split("dsherp_bridge\\.context_execution", 1)[1].split("}", 1)[0]
+    for endpoint in ("run_status", "reserve_model_call", "run_tool", "record_run_event", "finish_run"):
+        assert endpoint in block
+    assert "return 404;" in block
 
 
 def test_compose_uses_only_fresh_v16_named_volumes():
