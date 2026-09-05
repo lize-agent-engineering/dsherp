@@ -1,6 +1,7 @@
 """Operating one deployment: every step asks what exists before it changes anything."""
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +28,7 @@ class FakeBench:
 
     def __init__(self, existing_sites=(), installed=(), config=None):
         self.calls = []
+        self.verbs = []
         self.existing = set(existing_sites)
         self.installed = set(installed)
         self.config = dict(config or {})
@@ -37,6 +39,7 @@ class FakeBench:
 
     def run(self, *arguments, stdin=None, timeout=900):
         self.calls.append(("run",) + arguments[:3])
+        self.verbs.append(" ".join(arguments))
         if arguments[:2] == ("bench", "new-site"):
             self.existing.add(arguments[2])
         if arguments[:1] == ("bench",) and "install-app" in arguments:
@@ -173,3 +176,78 @@ def test_doctor_names_what_is_missing_instead_of_failing_at_compose_time(host):
     assert any("db_root_password" in row for row in findings)
     complete = admin.doctor(deploy_env.settings({"DSHERP_ENV": "dev"}), admin.ROOT)
     assert not [row for row in complete if "部署指纹清单缺少文件" in row]
+
+
+class SnapshotBench(FakeBench):
+    """A bench whose Site content can be made to change between two snapshots."""
+
+    def __init__(self, snapshots):
+        super().__init__(existing_sites=("acme.tenant.example.com",), installed=("dsherp_bridge",))
+        self.snapshots = list(snapshots)
+
+    def python(self, site, body, timeout=900):
+        if "digests" in body:
+            self.calls.append(("snapshot", site))
+            self.verbs.append("snapshot " + site)
+            return json.dumps(self.snapshots.pop(0)) + "\n"
+        return super().python(site, body, timeout=timeout)
+
+
+def _tenant_row():
+    admin.save_tenants(PROD, [{"slug": "acme", "site": "acme.tenant.example.com",
+                               "origin": "https://acme.tenant.example.com"}])
+
+
+def test_a_release_backs_up_before_it_migrates_and_reports_the_data_unchanged():
+    admin.ensure_secrets(PROD)
+    _tenant_row()
+    same = {"Item": {"count": 3, "digest": "aa"}, "DS Model Run": {"count": 9, "digest": "bb"}}
+    bench = SnapshotBench([same, dict(same)])
+    report = admin.release(PROD, "v0.4.0", bench_factory=lambda kind: bench)
+    phases = [verb.split()[0] if verb.startswith("snapshot") else verb.split()[3] for verb in bench.verbs]
+    assert phases == ["backup", "snapshot", "migrate", "snapshot"]
+    assert report["clean"] is True
+    assert report["sites"]["acme.tenant.example.com"]["differences"] == []
+    assert json.loads(Path(report["path"]).read_text())["tag"] == "v0.4.0"
+
+
+def test_a_release_that_changes_stored_data_is_reported_as_not_clean():
+    admin.ensure_secrets(PROD)
+    _tenant_row()
+    before = {"Item": {"count": 3, "digest": "aa"}}
+    after = {"Item": {"count": 3, "digest": "cc"}}
+    bench = SnapshotBench([before, after])
+    report = admin.release(PROD, "v0.4.0", bench_factory=lambda kind: bench)
+    assert report["clean"] is False
+    assert report["sites"]["acme.tenant.example.com"]["differences"][0]["doctype"] == "Item"
+
+
+def test_a_release_without_a_tag_or_without_sites_is_refused():
+    admin.ensure_secrets(PROD)
+    bench = SnapshotBench([])
+    with pytest.raises(admin.Fault):
+        admin.release(PROD, "", bench_factory=lambda kind: bench)
+    with pytest.raises(admin.Fault):
+        admin.release(PROD, "v0.4.0", bench_factory=lambda kind: bench)
+
+
+def test_a_rollback_will_not_guess_which_backup_to_restore():
+    admin.ensure_secrets(PROD)
+    _tenant_row()
+    bench = SnapshotBench([{"Item": {"count": 3, "digest": "aa"}}])
+    with pytest.raises(admin.Fault):
+        admin.rollback(PROD, "v0.3.0", bench_factory=lambda kind: bench)
+    report = admin.rollback(PROD, "v0.3.0", bench_factory=lambda kind: bench,
+                            backups={"acme.tenant.example.com": "/backups/pre-upgrade.sql.gz"})
+    assert any("restore" in verb for verb in bench.verbs)
+    assert report["sites"]["acme.tenant.example.com"]["Item"]["count"] == 3
+
+
+def test_snapshot_comparison_names_added_removed_and_changed_doctypes():
+    before = {"Item": {"count": 1, "digest": "a"}, "Gone": {"count": 2, "digest": "b"}}
+    after = {"Item": {"count": 1, "digest": "z"}, "New": {"count": 4, "digest": "c"}}
+    differences = admin.compare_snapshots(before, after)
+    assert [row["doctype"] for row in differences] == ["Gone", "Item", "New"]
+    assert differences[0]["after"] == {"count": 0, "digest": None}
+    assert differences[2]["before"] == {"count": 0, "digest": None}
+    assert admin.compare_snapshots(before, dict(before)) == []

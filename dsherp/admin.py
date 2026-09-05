@@ -289,6 +289,96 @@ def doctor(resolved, root=ROOT, runner=subprocess.run):
     return findings
 
 
+# --- release and rollback -------------------------------------------------------
+# An upgrade is only reversible if the state before it was captured and backed up.
+# Both are hard preconditions here, and the field-level comparison is the evidence.
+SNAPSHOT = """
+digests={}
+for doctype in sorted(frappe.get_all('DocType',filters={'issingle':0,'istable':0},pluck='name')):
+    try:rows=frappe.get_all(doctype,fields=['*'],order_by='name asc',limit_page_length=0,ignore_permissions=True)
+    except Exception:continue
+    if not rows:continue
+    import hashlib
+    material=json.dumps(rows,ensure_ascii=False,sort_keys=True,default=str,separators=(',',':'))
+    digests[doctype]={'count':len(rows),'digest':hashlib.sha256(material.encode()).hexdigest()}
+print(json.dumps(digests))
+"""
+
+
+def snapshot(bench, site):
+    return json.loads(bench.python(site, SNAPSHOT.strip(), timeout=1800).strip().splitlines()[-1])
+
+
+def compare_snapshots(before, after):
+    """Field-level differences, named by DocType so a report points at the cause."""
+    differences = []
+    for doctype in sorted(set(before) | set(after)):
+        first, second = before.get(doctype), after.get(doctype)
+        if first == second:
+            continue
+        differences.append({'doctype': doctype,
+                            'before': first or {'count': 0, 'digest': None},
+                            'after': second or {'count': 0, 'digest': None}})
+    return differences
+
+
+def _release_report(resolved, name, payload, root=ROOT):
+    target = runtime_dir(resolved, root) / 'releases' / f'{name}.json'
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n')
+    return target
+
+
+def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, sites=None):
+    """Back up, migrate every Site to the new tag, then prove the data is unchanged."""
+    if not deploy_env.TAG.fullmatch(tag or ''):
+        raise Fault('发布必须给出明确的镜像 tag')
+    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
+    tenant = factory('tenant')
+    targets = sites or [row['site'] for row in load_tenants(resolved, root)]
+    if not targets:
+        raise Fault('没有可发布的站点；先运行 provision-tenant')
+    before, steps = {}, []
+    for site in targets:
+        tenant.run('bench', '--site', site, 'backup', '--with-files', timeout=3600)
+        before[site] = snapshot(tenant, site)
+        steps.append((site, 'backed-up'))
+    for site in targets:
+        tenant.run('bench', '--site', site, 'migrate', timeout=3600)
+        steps.append((site, 'migrated'))
+    report = {'tag': tag, 'sites': {}, 'steps': steps}
+    for site in targets:
+        differences = compare_snapshots(before[site], snapshot(tenant, site))
+        report['sites'][site] = {'differences': differences, 'doctypes': len(before[site])}
+    report['clean'] = not any(row['differences'] for row in report['sites'].values())
+    report['path'] = str(_release_report(resolved, f'release-{tag}', report, root))
+    return report
+
+
+def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, sites=None, backups=None):
+    """Restore the pre-upgrade backup on the previous tag; the caller names the files."""
+    if not deploy_env.TAG.fullmatch(tag or ''):
+        raise Fault('回滚必须给出要回到的镜像 tag')
+    if not backups:
+        raise Fault('回滚必须给出每站升级前的备份文件；不要让命令自己猜')
+    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
+    tenant = factory('tenant')
+    targets = sites or sorted(backups)
+    missing = [site for site in targets if site not in backups]
+    if missing:
+        raise Fault('这些站点没有指定备份文件：' + '、'.join(missing))
+    steps, report = [], {'tag': tag, 'sites': {}}
+    for site in targets:
+        tenant.run('bench', '--site', site, 'restore', backups[site],
+                   '--db-root-username', 'root',
+                   '--db-root-password', read_secret(resolved, 'db_root_password', root), timeout=3600)
+        steps.append((site, 'restored'))
+        report['sites'][site] = snapshot(tenant, site)
+    report['steps'] = steps
+    report['path'] = str(_release_report(resolved, f'rollback-{tag}', report, root))
+    return report
+
+
 def _print(payload):
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -306,6 +396,12 @@ def main(argv=None):
     retire.add_argument('--no-archive', action='store_true')
     sub.add_parser('list-tenants', help='列出当前租户')
     sub.add_parser('render-ingress', help='按当前租户清单重新渲染入口配置')
+    release_parser = sub.add_parser('release', help='升级到新 tag：先备份，逐站 migrate，再逐字段比对')
+    release_parser.add_argument('tag')
+    rollback_parser = sub.add_parser('rollback', help='回到旧 tag 并从升级前备份恢复')
+    rollback_parser.add_argument('tag')
+    rollback_parser.add_argument('--backup', action='append', default=[], metavar='SITE=FILE',
+                                 help='每站升级前的备份文件，可重复')
     arguments = parser.parse_args(argv)
     resolved = deploy_env.settings()
     try:
@@ -327,6 +423,19 @@ def main(argv=None):
             return 0
         if arguments.command == 'render-ingress':
             _print({'rendered': str(render_ingress(resolved, load_tenants(resolved)))})
+            return 0
+        if arguments.command == 'release':
+            report = release(resolved, arguments.tag)
+            _print(report)
+            return 0 if report['clean'] else 1
+        if arguments.command == 'rollback':
+            pairs = {}
+            for entry in arguments.backup:
+                site, separator, file = entry.partition('=')
+                if not separator:
+                    raise Fault('备份参数格式为 SITE=FILE')
+                pairs[site] = file
+            _print(rollback(resolved, arguments.tag, backups=pairs))
             return 0
     except Fault as fault:
         print(str(fault), file=sys.stderr)
