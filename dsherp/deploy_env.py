@@ -40,6 +40,9 @@ DEFAULTS = {
     # Host directories compose and the CLI must agree on; empty means <repo>/.runtime.
     'DSHERP_RUNTIME_DIR': '',
     'DSHERP_SECRETS_DIR': '',
+    # Bootstrap values for a fresh Site's System Settings; Frappe refuses to save without them.
+    'DSHERP_SITE_LANGUAGE': 'zh',
+    'DSHERP_SITE_TIME_ZONE': 'Asia/Shanghai',
 }
 
 
@@ -152,6 +155,8 @@ def settings(environ=None, root=ROOT):
             raise ValueError(f'{key} must be absolute in production: ' + str(path))
     resolved['runtime_dir'] = runtime_dir
     resolved['secrets_dir'] = secrets_dir
+    resolved['site_language'] = _match(re.compile('[a-z]{2}(-[a-z]{2})?'), _text(values, 'DSHERP_SITE_LANGUAGE'), 'Invalid site language')
+    resolved['site_time_zone'] = _match(re.compile('[A-Za-z_]+(/[A-Za-z_+-]+)*'), _text(values, 'DSHERP_SITE_TIME_ZONE'), 'Invalid site time zone')
     if not resolved['agent_provider_base_url'].startswith(('http://', 'https://')):
         raise ValueError('Invalid agent provider base URL')
     return resolved

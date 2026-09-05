@@ -84,11 +84,19 @@ class FakeBench:
             app = body.split("'")[1]
             return json.dumps(app in self.installed) + "\n"
         if "generate_keys" in body:
-            return json.dumps({"user": f"runtime@{site}", "api_key": "k", "api_secret": "s"}) + "\n"
+            rotate = "rotate=True" in body
+            if self.config.get("runtime_keys") and not rotate:
+                return json.dumps({"user": f"runtime@{site}", "state": "kept"}) + "\n"
+            self.config["runtime_keys"] = True
+            return json.dumps({"user": f"runtime@{site}", "state": "rotated" if rotate else "issued",
+                               "api_key": "k", "api_secret": "s"}) + "\n"
         if "System Settings" in body:
             values = json.loads(json.loads(body.splitlines()[0].split("=", 1)[1][len("json.loads("):-1]))
+            defaults = json.loads(json.loads(body.splitlines()[1].split("=", 1)[1][len("json.loads("):-1]))
             changed = [key for key, value in values.items() if self.config.get(key) != value]
+            changed += [key for key in defaults if not self.config.get(key)]
             self.config.update(values)
+            self.config.update({key: defaults[key] for key in defaults if not self.config.get(key)})
             return json.dumps(changed) + "\n"
         if "update_site_config" in body:
             values = json.loads(json.loads(body.splitlines()[0].split("=", 1)[1][len("json.loads("):-1]))
@@ -139,7 +147,12 @@ def test_provisioning_a_new_tenant_creates_the_site_once_and_records_it(host):
     assert dict(result["steps"])["site"] == "created"
     assert dict(result["steps"])["app"] == "created"
     assert dict(result["steps"])["password-login"] == "disabled"
+    # A fresh Site cannot save System Settings without these; a rerun leaves them alone.
+    assert dict(result["steps"])["system-settings"] == "bootstrapped:language,time_zone"
+    assert bench.config["language"] == "zh" and bench.config["time_zone"] == "Asia/Shanghai"
     assert dict(result["steps"])["healthcheck"] == "acme.tenant.example.com"
+    assert dict(result["steps"])["runtime-identity"] == "issued"
+    assert result["runtime_identity"]["api_secret"] == "s"
     assert dict(result["steps"])["enterprise"] == "created"
     assert dict(result["steps"])["oauth-client"] == "created"
     assert dict(result["steps"])["social-login-key"] == "created"
@@ -166,7 +179,11 @@ def test_provisioning_the_same_tenant_again_changes_nothing(host):
     assert dict(again["steps"])["site"] == "kept"
     assert dict(again["steps"])["app"] == "kept"
     assert dict(again["steps"])["site-config"] == "kept"
+    # A rerun never rotates the runtime key silently, and never shows the secret again.
+    assert dict(again["steps"])["runtime-identity"] == "kept"
+    assert "runtime_identity" not in again
     assert dict(again["steps"])["password-login"] == "kept"
+    assert dict(again["steps"])["system-settings"] == "kept"
     assert dict(again["steps"])["enterprise"] == "kept"
     assert dict(again["steps"])["oauth-client"] == "kept"
     assert dict(again["steps"])["social-login-key"] == "kept"
@@ -381,3 +398,20 @@ def test_doctor_refuses_a_production_file_that_lets_compose_fall_back_to_develop
     directory.joinpath("prod.env").write_text(
         "DSHERP_RUNTIME_DIR=/srv/dsherp/state\nDSHERP_SECRETS_DIR=/srv/dsherp/state/control\n")
     assert not [row for row in admin.doctor(PROD, tmp_path) if "DSHERP_SECRETS_DIR" in row]
+
+
+def test_rotating_the_runtime_key_is_explicit_and_returns_the_new_secret_once():
+    admin.ensure_secrets(PROD)
+    bench = FakeBench()
+    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    rotated = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, rotate_runtime_key=True)
+    assert dict(rotated["steps"])["runtime-identity"] == "rotated"
+    assert rotated["runtime_identity"]["api_secret"] == "s"
+
+
+def test_a_tenant_that_chose_its_own_language_keeps_it_on_rerun():
+    admin.ensure_secrets(PROD)
+    bench = FakeBench(config={"language": "en", "time_zone": "Europe/Berlin"})
+    result = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    assert dict(result["steps"])["system-settings"] == "kept"
+    assert bench.config["language"] == "en"

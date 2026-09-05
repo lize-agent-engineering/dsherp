@@ -254,26 +254,36 @@ def ensure_site_config(bench, site, values):
     return json.loads(bench.python(site, body).strip().splitlines()[-1])
 
 
-def ensure_system_settings(bench, site, values):
-    """Frappe's own switches; password login is one of them, so use it rather than a hook."""
+def ensure_system_settings(bench, site, values, defaults=None):
+    """Frappe's own switches; password login is one of them, so use it rather than a hook.
+
+    `values` are enforced. `defaults` are written only while empty: a fresh Site has no
+    language or time zone and Frappe refuses to save System Settings without them, but
+    a tenant that later chose its own must keep it."""
     body = (f"values=json.loads({json.dumps(json.dumps(values))})\n"
+            f"defaults=json.loads({json.dumps(json.dumps(defaults or {}))})\n"
             "settings=frappe.get_single('System Settings')\n"
             "changed=[key for key,value in values.items() if settings.get(key)!=value]\n"
-            "for key in changed:settings.set(key,values[key])\n"
+            "changed+=[key for key,value in defaults.items() if not settings.get(key)]\n"
+            "for key in changed:settings.set(key,values.get(key,defaults.get(key)))\n"
             "if changed:settings.save()\n"
             "frappe.db.commit();print(json.dumps(changed))")
     return json.loads(bench.python(site, body).strip().splitlines()[-1])
 
 
-def ensure_runtime_identity(bench, site, user):
-    """The Site's own execution identity; its keys are returned once and stored by the caller."""
-    body = (f"user={user!r}\n"
+def ensure_runtime_identity(bench, site, user, rotate=False):
+    """The Site's own execution identity. Keys are issued when the user has none, or on an
+    explicit rotation; a plain rerun never rotates them, so the secret really is shown once."""
+    body = (f"user={user!r};rotate={rotate!r}\n"
             "if not frappe.db.exists('User',user):\n"
             "    frappe.get_doc({'doctype':'User','email':user,'first_name':'DSHERP Runtime',\n"
-            "        'enabled':1,'user_type':'System User','send_welcome_email':0}).insert()\n"
-            "from frappe.core.doctype.user.user import generate_keys\n"
-            "keys=generate_keys(user)\n"
-            "frappe.db.commit();print(json.dumps({'user':user,**keys}))")
+            "        'enabled':1,'user_type':'System User','send_welcome_email':0}).insert();state='created'\n"
+            "else:state='kept'\n"
+            "result={'user':user,'state':state}\n"
+            "if rotate or not frappe.db.get_value('User',user,'api_key'):\n"
+            "    from frappe.core.doctype.user.user import generate_keys\n"
+            "    result.update(generate_keys(user));result['state']='rotated' if rotate else 'issued'\n"
+            "frappe.db.commit();print(json.dumps(result))")
     return json.loads(bench.python(site, body).strip().splitlines()[-1])
 
 
@@ -390,7 +400,8 @@ def ensure_healthy(bench, site):
     return json.loads(bench.python(site, body, timeout=120).strip().splitlines()[-1])
 
 
-def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_factory=None):
+def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_factory=None,
+                     rotate_runtime_key=False):
     """Bring one tenant from nothing to reachable; every step is resumable."""
     site = deploy_env.site_name(resolved, slug)
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
@@ -402,17 +413,22 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
     steps.append(('site', ensure_site(tenant, resolved, site, admin, db_root)))
     steps.append(('app', ensure_app(tenant, site, 'dsherp_bridge')))
     runtime_user = f'runtime@{site}'
-    identity = ensure_runtime_identity(tenant, site, runtime_user)
-    steps.append(('runtime-identity', 'created'))
+    identity = ensure_runtime_identity(tenant, site, runtime_user, rotate=rotate_runtime_key)
+    steps.append(('runtime-identity', identity['state']))
     changed = ensure_site_config(tenant, site, {
         'dsherp_runtime_user': runtime_user,
         'host_name': deploy_env.public_origin(resolved, slug),
     })
     steps.append(('site-config', 'changed:' + ','.join(changed) if changed else 'kept'))
+    bootstrap = {'language': resolved['site_language'], 'time_zone': resolved['site_time_zone']}
     if resolved['env'] == 'prod':
         # Production reaches a business Site through the platform only.
-        hardened = ensure_system_settings(tenant, site, {'disable_user_pass_login': 1})
-        steps.append(('password-login', 'disabled' if hardened else 'kept'))
+        hardened = ensure_system_settings(tenant, site, {'disable_user_pass_login': 1}, defaults=bootstrap)
+        steps.append(('password-login', 'disabled' if 'disable_user_pass_login' in hardened else 'kept'))
+    else:
+        hardened = ensure_system_settings(tenant, site, {}, defaults=bootstrap)
+    steps.append(('system-settings', 'bootstrapped:' + ','.join(sorted(set(hardened) - {'disable_user_pass_login'}))
+                  if set(hardened) - {'disable_user_pass_login'} else 'kept'))
     platform = factory('platform')
     steps.append(('enterprise', ensure_enterprise(platform, resolved, slug, site)))
     credentials = ensure_oauth_client(platform, resolved, slug)
@@ -430,7 +446,11 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
                   'changed' if ensure_platform_endpoints(platform, resolved, rows) else 'kept'))
     steps.append(('ingress', str(render_ingress(resolved, rows, root))))
     steps.append(('healthcheck', ensure_healthy(tenant, site)['site']))
-    return {'site': site, 'steps': steps, 'runtime_identity': identity}
+    result = {'site': site, 'steps': steps}
+    if 'api_secret' in identity:
+        # Only present when keys were issued or rotated; the caller stores them now or never.
+        result['runtime_identity'] = identity
+    return result
 
 
 def retire_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_factory=None, archive=True):
@@ -589,6 +609,8 @@ def main(argv=None):
     secrets_parser.add_argument('action', choices=['init'])
     provision = sub.add_parser('provision-tenant', help='幂等开通一个租户站')
     provision.add_argument('slug')
+    provision.add_argument('--rotate-runtime-key', action='store_true',
+                           help='重新签发该站运行服务身份的 API 密钥（会作废旧密钥）')
     retire = sub.add_parser('retire-tenant', help='归档后下线一个租户站')
     retire.add_argument('slug')
     retire.add_argument('--no-archive', action='store_true')
@@ -615,7 +637,7 @@ def main(argv=None):
             _print(provision_platform(resolved))
             return 0
         if arguments.command == 'provision-tenant':
-            _print(provision_tenant(resolved, arguments.slug))
+            _print(provision_tenant(resolved, arguments.slug, rotate_runtime_key=arguments.rotate_runtime_key))
             return 0
         if arguments.command == 'retire-tenant':
             _print(retire_tenant(resolved, arguments.slug, archive=not arguments.no_archive))
