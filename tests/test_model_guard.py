@@ -7,8 +7,13 @@ from dsherp.session_runtime import open_runtime
 from dsherp.runtime_revision import configuration_revision
 
 
+# The deployment identity is computed on the host and travels inside run.json.
+SYNTHETIC_DEPLOYMENT='a1'*32
+
+
 def _provider_settings(settings):
-    return {key:settings[key] for key in ('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL')}
+    return {**{key:settings[key] for key in ('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL')},
+            'deployment_digest':SYNTHETIC_DEPLOYMENT}
 
 
 def _complete_budget(domain,model):

@@ -36,7 +36,8 @@ def test_native_auto_compaction_cannot_bypass_authorization(model_server,tmp_pat
     server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     settings,requests,state=model_server
-    settings={key:settings[key] for key in ('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL')}
+    settings={**{key:settings[key] for key in ('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL')},
+              'deployment_digest':'a1'*32}
     multiplier=4 if pressure else 1
     state.update(content='Business context. '*(350*multiplier),summary_content='Item I-44; source version v2; continue read-only inquiry.')
     budget=_claimed_budget(domain)

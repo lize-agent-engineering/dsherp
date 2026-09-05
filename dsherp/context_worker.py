@@ -16,8 +16,8 @@ import time
 import uuid
 from urllib.parse import urlsplit
 import httpx
-from dsherp import alerts,metrics,worker_log
-from dsherp.runtime_host import ROOT,IMAGE,load_settings
+from dsherp import alerts,deploy_env,metrics,sd_notify,worker_log
+from dsherp.runtime_host import ROOT,IMAGE,agent_settings,load_settings
 from dsherp.context_container import docker_command
 from dsherp.context_mcp import BusinessRuntimeError,post
 from dsherp.provider_circuit import CircuitBreaker,probe_models
@@ -136,20 +136,33 @@ def normalize_profile(profile):
     return {'slots':slots,'metrics_port':metrics_port,'alert_webhook':webhook,'sites':sites}
 
 
-def prepare_host(runner=subprocess.run,cleanup=None):
+def prepare_host(runner=subprocess.run,cleanup=None,resolved=None):
     """Reclaim crash leftovers before checking dependencies.
 
     A leftover container still holds the run.json mount and therefore the provider
     key; if a dependency check fails first it keeps holding it while the worker
     refuses to start.
+
+    Development runs the pinned base image plus a prepared Runtime volume; production
+    runs one release image that already carries the Runtime, so it checks that instead.
     """
+    resolved=resolved or deploy_env.settings()
     (cleanup or cleanup_stale_runtime_artifacts)(runner=runner)
-    runner(['docker','image','inspect',IMAGE],check=True,stdout=subprocess.DEVNULL)
-    runner(['docker','volume','inspect','dsherp-v16-agent-runtime'],check=True,stdout=subprocess.DEVNULL)
+    if resolved['env']=='dev':
+        runner(['docker','image','inspect',resolved['base_image']],check=True,stdout=subprocess.DEVNULL)
+        runner(['docker','volume','inspect','dsherp-v16-agent-runtime'],check=True,stdout=subprocess.DEVNULL)
+    else:
+        runner(['docker','image','inspect',resolved['worker_image']],check=True,stdout=subprocess.DEVNULL)
+    # A run container reaches the provider only through the egress proxy, so its
+    # address must resolve inside the agent network before the first user request.
+    runner(['docker','network','inspect',resolved['agent_network']],check=True,stdout=subprocess.DEVNULL)
 
 
-def cleanup_stale_runtime_artifacts(runner=subprocess.run):
-    listed=runner(['docker','ps','-a','--filter','name=dsherp-context-','--format','{{.Names}}'],
+def cleanup_stale_runtime_artifacts(runner=subprocess.run,resolved=None):
+    # Scoped by label: a restarting worker must never reap another deployment's runs.
+    resolved=resolved or deploy_env.settings()
+    listed=runner(['docker','ps','-a','--filter','name=dsherp-context-',
+                   '--filter','label=dsherp.project='+resolved['project'],'--format','{{.Names}}'],
                   capture_output=True,text=True)
     listed.check_returncode()
     for raw in listed.stdout.splitlines():
@@ -561,7 +574,7 @@ def main():
     parser.add_argument('--once',action='store_true')
     args=parser.parse_args()
     signal.signal(signal.SIGTERM,exit_on_signal)
-    settings=load_settings(args.provider_env)
+    settings=agent_settings(args.provider_env)
     profile=normalize_profile(json.loads(args.profile.read_text()))
     worker_log.configure([settings['DEEPSEEK_API_KEY'],*[site['api_secret'] for site in profile['sites']]])
     state_root=ROOT/'.runtime'/'business-sessions';state_root.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -580,7 +593,7 @@ def main():
                 ops_state={}
                 if not args.once:
                     notifier=alerts.Notifier(webhook=profile.get('alert_webhook'),cooldown=600)
-                settings_loader=lambda:load_settings(args.provider_env)
+                settings_loader=lambda:agent_settings(args.provider_env)
                 def probe():
                     current=settings_loader()
                     return probe_models(current['DEEPSEEK_BASE_URL'],current['DEEPSEEK_API_KEY'])
@@ -589,7 +602,10 @@ def main():
                     run_once(sites[0]['client'],settings,state_root,business=sites[0]['business'])
                     return 0
                 STOPPING.clear()
+                sd_notify.ready()
                 while serve_once(coordinator,sites,notifier,ops_state):
+                    # A hung tick must become a restart, not a silently growing queue.
+                    sd_notify.watchdog()
                     if STOPPING.wait(3):break
                 coordinator.drain(SHUTDOWN_DRAIN_SECONDS)
                 return 0

@@ -3,6 +3,8 @@
 Nothing here reads the working copy: a run is identified by the release tag it was
 started from, so a production host can be rebuilt from the repository tag alone.
 """
+import hashlib
+import json
 import os
 import re
 from pathlib import Path
@@ -30,6 +32,8 @@ DEFAULTS = {
     'DSHERP_AGENT_UID': '',
     'DSHERP_AGENT_GID': '',
     'DSHERP_ORIGINS': '',
+    'DSHERP_AGENT_PROVIDER_BASE_URL': 'http://agent-egress:8890',
+    'DSHERP_PROVIDER_HOST': 'api.deepseek.com',
 }
 
 
@@ -48,14 +52,24 @@ def _match(pattern, value, message):
     return value
 
 
+# Used when the calling process is root (CI, an installer): the container still is not.
+UNPRIVILEGED = 1000
+
+
 def _identity(values):
-    raw_uid = _text(values, 'DSHERP_AGENT_UID') or str(os.getuid())
-    raw_gid = _text(values, 'DSHERP_AGENT_GID') or str(os.getgid())
-    if not re.fullmatch('[0-9]+', raw_uid) or not re.fullmatch('[0-9]+', raw_gid):
+    raw_uid = _text(values, 'DSHERP_AGENT_UID')
+    raw_gid = _text(values, 'DSHERP_AGENT_GID')
+    explicit = bool(raw_uid or raw_gid)
+    uid = raw_uid or str(os.getuid() or UNPRIVILEGED)
+    gid = raw_gid or str(os.getgid() or UNPRIVILEGED)
+    if not re.fullmatch('[0-9]+', uid) or not re.fullmatch('[0-9]+', gid):
         raise ValueError('Agent container identity must be numeric')
-    if int(raw_uid) == 0 or int(raw_gid) == 0:
+    if int(uid) == 0 or int(gid) == 0:
+        # Only reachable when someone asked for it; the fallback above never returns root.
         raise ValueError('Agent container must never run as root')
-    return int(raw_uid), int(raw_gid)
+    if explicit and (not raw_uid or not raw_gid):
+        raise ValueError('Agent container identity needs both a uid and a gid')
+    return int(uid), int(gid)
 
 
 def _origins(values):
@@ -116,7 +130,12 @@ def settings(environ=None, root=ROOT):
         'agent_user': f'{uid}:{gid}',
         'scheme': 'https' if name == 'prod' else 'http',
         'origins': _origins(values),
+        # The run container has no route to the Internet; this is the proxy in front of the provider.
+        'agent_provider_base_url': _text(values, 'DSHERP_AGENT_PROVIDER_BASE_URL'),
+        'provider_host': _match(DOMAIN, _text(values, 'DSHERP_PROVIDER_HOST'), 'Invalid provider host'),
     }
+    if not resolved['agent_provider_base_url'].startswith(('http://', 'https://')):
+        raise ValueError('Invalid agent provider base URL')
     return resolved
 
 
@@ -136,3 +155,29 @@ def callback_url(resolved, slug):
 
 def start_url(resolved, slug):
     return public_origin(resolved, slug) + START_PATH
+
+
+# Files that decide how a deployment is shaped. The digest travels inside run.json:
+# a run container never sees a compose definition or a provisioning script.
+DEPLOYMENT_FILES = (
+    'infra/compose.validation.yml',
+    'infra/compose.prod.yml',
+    'infra/prepare_agent_runtime.sh',
+    'infra/docker/frappe/Dockerfile',
+    'infra/docker/worker/Dockerfile',
+    'infra/nginx/security-headers.conf',
+    'infra/nginx/agent-egress.conf',
+    'infra/nginx/agent-egress-entrypoint.sh',
+    'infra/caddy/Caddyfile.template',
+)
+DEPLOYMENT_KEYS = ('env', 'project', 'base_domain', 'platform_site', 'image_tag',
+                   'frappe_image', 'worker_image', 'agent_network', 'agent_user',
+                   'agent_provider_base_url', 'provider_host')
+
+
+def deployment_digest(resolved, root=ROOT):
+    """Identity of the deployment definition one run was started from."""
+    root = Path(root)
+    files = [[name, hashlib.sha256((root / name).read_bytes()).hexdigest()] for name in DEPLOYMENT_FILES]
+    material = [files, [str(resolved[key]) for key in DEPLOYMENT_KEYS]]
+    return hashlib.sha256(json.dumps(material, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()

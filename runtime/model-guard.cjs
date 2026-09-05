@@ -84,8 +84,9 @@ exports.apply=function(ctx){
   const check=()=>{checkFiles();verifyBusinessSkills(root);};
   const config=JSON.parse(readFileSync(process.env.DSHERP_RUN_CONFIG,'utf8'));
   if(!['query','operation','configuration'].includes(config.domain)||config.domain!==process.env.DSHERP_DOMAIN)throw new Error('Business domain mismatch');
+  if(!/^[a-f0-9]{64}$/.test(config.deployment_digest??''))throw new Error('Missing deployment digest');
   const material=[files.map(file=>[file,createHash('sha256').update(readFileSync(path.join(root,file))).digest('hex')]),
-    ['DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL'].map(key=>config[key])];
+    ['DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL'].map(key=>config[key]),config.deployment_digest];
   const revision=createHash('sha256').update(JSON.stringify(material)).digest('hex');
   if(revision!==config.runtime_revision)throw new Error('Runtime revision mismatch');
   const endpoint=new URL('/api/method/dsherp_bridge.context_execution.reserve_model_call',config.business_url);

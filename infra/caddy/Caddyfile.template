@@ -1,0 +1,18 @@
+# Rendered by "dsherp-admin render-ingress"; one block per live Site.
+# Wildcard certificates would need a DNS-01 provider plugin, so each tenant host is
+# listed explicitly and answered over HTTP-01. Pilot scale is three tenants.
+{
+	email {$DSHERP_ACME_EMAIL}
+	admin off
+}
+
+(site) {
+	encode zstd gzip
+	header -Server
+	reverse_proxy {args[0]} {
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-For {remote_host}
+	}
+}
+
+__SITE_BLOCKS__

@@ -9,7 +9,7 @@ import pytest
 from dsherp.context_mcp import BusinessRuntimeError,ToolFailure
 import dsherp.context_worker as worker
 from dsherp.context_worker import profile_business,run_once
-SETTINGS={'DEEPSEEK_API_KEY':'synthetic','DEEPSEEK_BASE_URL':'http://synthetic'}
+SETTINGS={'DEEPSEEK_API_KEY':'synthetic','DEEPSEEK_BASE_URL':'http://synthetic','deployment_digest':'a1'*32}
 NEEDS_INPUT={'status':'NeedsInput','answer':'请指定仓库'}
 
 
@@ -872,3 +872,27 @@ def test_site_client_never_reuses_an_idle_backend_socket():
         assert len(seen)==2 and seen[0]!=seen[1],seen
     finally:
         server.shutdown();server.server_close();thread.join()
+
+
+def test_production_checks_the_release_image_and_the_agent_network_not_a_prepared_volume():
+    """生产没有 Runtime 卷：镜像自带运行时，出网只有代理，两者缺一就不该开工。"""
+    from dsherp import context_worker,deploy_env
+    production=deploy_env.settings({'DSHERP_ENV':'prod','DSHERP_PROJECT':'dsherp',
+        'DSHERP_BASE_DOMAIN':'tenant.example.com','DSHERP_PLATFORM_SLUG':'platform',
+        'DSHERP_IMAGE_TAG':'v0.3.0','DSHERP_IMAGE_REGISTRY':'registry.example.com/dsherp',
+        'DSHERP_AGENT_UID':'1000','DSHERP_AGENT_GID':'1000'})
+    checked=[]
+    def runner(command,**kwargs):
+        checked.append(tuple(command[1:3])+(command[3],))
+        return subprocess.CompletedProcess(command,0,stdout='',stderr='')
+    context_worker.prepare_host(runner=runner,cleanup=lambda runner:None,resolved=production)
+    assert ('image','inspect','registry.example.com/dsherp/dsherp-worker:v0.3.0') in checked
+    assert ('network','inspect','dsherp_agent') in checked
+    assert not [row for row in checked if row[0]=='volume']
+
+    development=deploy_env.settings({'DSHERP_ENV':'dev'})
+    checked.clear()
+    context_worker.prepare_host(runner=runner,cleanup=lambda runner:None,resolved=development)
+    assert ('volume','inspect','dsherp-v16-agent-runtime') in checked
+    assert ('image','inspect',deploy_env.BASE_IMAGE) in checked
+    assert ('network','inspect','dsherp-validation_agent') in checked

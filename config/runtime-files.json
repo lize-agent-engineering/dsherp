@@ -14,8 +14,6 @@
   "dsherp/read_tools.py",
   "dsherp/session_runtime.py",
   "dsherp/runtime_revision.py",
-  "infra/compose.validation.yml",
-  "infra/prepare_agent_runtime.sh",
   "dsherp/runtime_host.py",
   "dsherp/context_container.py",
   "dsherp/context_worker.py",
