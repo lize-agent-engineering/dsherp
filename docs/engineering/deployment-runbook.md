@@ -58,11 +58,17 @@ DSHERP_ENV=prod ./bin/dsherp-admin doctor      # 必须输出空 findings 才继
 
 ## 4. 起数据面
 
+compose 在解析时就要求每个 `configs:`/`secrets:` 文件存在，所以入口配置要先渲染一次（此时只有 platform 一个站块）：
+
 ```sh
+export DSHERP_ENV=prod DSHERP_RUNTIME_DIR=/opt/dsherp/.runtime DSHERP_SECRETS_DIR=/opt/dsherp/.runtime/control
+./bin/dsherp-admin render-ingress
 export COMPOSE="docker compose --env-file infra/env/prod.env -f infra/compose.prod.yml"
 $COMPOSE up -d db redis-cache redis-queue
 $COMPOSE ps    # 三个服务 healthy 后再继续
 ```
+
+`DSHERP_RUNTIME_DIR` 与 `DSHERP_SECRETS_DIR` 决定 CLI 与 compose 在哪里找租户清单、Caddyfile 与密钥；两者必须在整个 runbook 中保持同一个值。
 
 ## 5. 开通平台站与第一个租户站
 
@@ -79,7 +85,7 @@ DSHERP_ENV=prod ./bin/dsherp-admin provision-tenant "$SLUG"
 ## 6. 起入口与出口
 
 ```sh
-DSHERP_ENV=prod ./bin/dsherp-admin render-ingress
+./bin/dsherp-admin render-ingress          # 现在含租户站块
 $COMPOSE up -d frontend platform-frontend agent-egress caddy
 $COMPOSE ps    # 全部 healthy
 ```
@@ -170,6 +176,10 @@ DSHERP_ENV=prod ./bin/dsherp-admin rollback "$OLD_TAG" \
 DSHERP_ENV=prod ./bin/dsherp-admin retire-tenant "$SLUG"     # 先整站归档再删站
 DSHERP_ENV=prod ./bin/dsherp-admin render-ingress && $COMPOSE up -d caddy
 ```
+
+## 本地 Docker 上的 G1 演练（非 Linux 主机时）
+
+同一份 runbook 可以在一台已装 Docker Desktop 的开发机上以生产形态跑通，作为拿不到干净 Linux 主机时的替代演练。差别只有四点，全部由 `infra/env/prod.env` 表达：`DSHERP_BASE_DOMAIN=localhost`（`*.localhost` 解析到回环，Caddy 对这类主机名自动用内置 CA 签发，用 `curl -k` 或导入其根证书验证 TLS）；`DSHERP_IMAGE_REGISTRY=local` 且镜像用 `--platform linux/arm64` 在本机构建（不是 x86_64）；数据面用 `DSHERP_DB_BUFFER_POOL=256M`、两个 redis `64mb`、gunicorn 1×2 的笔记本规格；worker 没有 systemd，改为前台启动一次核对 `prepare_host`、心跳与 `/metrics`。dev 栈与它并存：项目名 `dsherp` 对 `dsherp-validation`，网络、卷、容器名全部不同，端口只共用宿主 80/443（dev 不占）。
 
 ## 已知边界
 

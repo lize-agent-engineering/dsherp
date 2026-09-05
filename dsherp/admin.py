@@ -135,7 +135,12 @@ class Bench:
 
     def _compose(self, *arguments):
         file = self.root / COMPOSE[self.resolved['env']]
-        return ['docker', 'compose', '-p', self.resolved['project'], '-f', str(file), *arguments]
+        command = ['docker', 'compose', '-p', self.resolved['project']]
+        # The same file deploy_env resolved from, so compose interpolates the same values.
+        env_file = deploy_env.env_file(self.resolved['env'], self.root)
+        if env_file.exists():
+            command += ['--env-file', str(env_file)]
+        return command + ['-f', str(file), *arguments]
 
     def run(self, *arguments, stdin=None, timeout=900):
         command = self._compose('exec', '-T', self.service, *arguments)
@@ -158,6 +163,40 @@ class Bench:
     def site_exists(self, site):
         listed = self.run('sh', '-c', f'test -d {SITES}/{site} && echo yes || echo no', timeout=60)
         return listed.strip().endswith('yes')
+
+
+BENCH_APPS = 'frappe\nerpnext\ndsherp_bridge\ndsherp_platform\n'
+
+
+def bench_config(resolved):
+    """Database and queue addresses as the compose services expose them."""
+    if resolved['env'] == 'prod':
+        return {'db_host': 'db', 'db_port': 3306,
+                'redis_cache': 'redis://redis-cache:6379', 'redis_queue': 'redis://redis-queue:6379',
+                'redis_socketio': 'redis://redis-queue:6379'}
+    return {'db_host': 'db', 'db_port': 3306,
+            'redis_cache': 'redis://redis:6379/0', 'redis_queue': 'redis://redis:6379/1',
+            'redis_socketio': 'redis://redis:6379/1'}
+
+
+def ensure_bench(bench, resolved):
+    """Bootstrap an empty sites volume. Existing files are reported, never rewritten:
+    rewriting a live bench's database address is how a running Site disappears."""
+    config = json.dumps(bench_config(resolved), indent=1, sort_keys=True)
+    script = (f"cd {SITES} && state=''\n"
+              f"if [ -f apps.txt ]; then state=\"$state apps.txt:kept\"; else printf '%s' {BENCH_APPS!r} > apps.txt; state=\"$state apps.txt:created\"; fi\n"
+              f"if [ -f common_site_config.json ]; then state=\"$state config:kept\"; else cat > common_site_config.json <<'JSON'\n{config}\nJSON\nstate=\"$state config:created\"; fi\n"
+              "if [ -e assets ]; then state=\"$state assets:kept\"; else ln -s ../assets assets; state=\"$state assets:created\"; fi\n"
+              "echo \"$state\"")
+    return bench.run('sh', '-c', script, timeout=60).split()
+
+
+def ensure_role(bench, site, role):
+    body = (f"role={role!r}\n"
+            "if frappe.db.exists('Role',role):state='kept'\n"
+            "else:frappe.get_doc({'doctype':'Role','role_name':role,'desk_access':1}).insert();state='created'\n"
+            "frappe.db.commit();print(json.dumps(state))")
+    return json.loads(bench.python(site, body).strip().splitlines()[-1])
 
 
 def ensure_site(bench, resolved, site, admin_password, db_root_password, apps=('erpnext',)):
@@ -305,8 +344,11 @@ def provision_platform(resolved, *, root=ROOT, runner=subprocess.run, bench_fact
     admin_password = read_secret(resolved, 'platform_admin_password' if resolved['env'] == 'prod'
                                 else 'admin_password', root)
     db_root = read_secret(resolved, 'db_root_password', root)
+    steps.append(('bench', ' '.join(ensure_bench(platform, resolved))))
     steps.append(('site', ensure_site(platform, resolved, site, admin_password, db_root, apps=())))
     steps.append(('app', ensure_app(platform, site, 'dsherp_platform')))
+    # OAuth Clients for tenants are restricted to this role; the platform must own it.
+    steps.append(('member-role', ensure_role(platform, site, 'DSHERP Member')))
     changed = ensure_site_config(platform, site, {'host_name': f"{resolved['scheme']}://{site}"})
     steps.append(('site-config', 'changed:' + ','.join(changed) if changed else 'kept'))
     return {'site': site, 'steps': steps}
@@ -330,6 +372,7 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
     steps = []
     admin = read_secret(resolved, 'tenant_admin_password' if resolved['env'] == 'prod' else 'admin_password', root)
     db_root = read_secret(resolved, 'db_root_password', root)
+    steps.append(('bench', ' '.join(ensure_bench(tenant, resolved))))
     steps.append(('site', ensure_site(tenant, resolved, site, admin, db_root)))
     steps.append(('app', ensure_app(tenant, site, 'dsherp_bridge')))
     runtime_user = f'runtime@{site}'

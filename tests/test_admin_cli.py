@@ -41,6 +41,10 @@ class FakeBench:
     def run(self, *arguments, stdin=None, timeout=900):
         self.calls.append(("run",) + arguments[:3])
         self.verbs.append(" ".join(arguments))
+        if arguments[:2] == ("sh", "-c") and "apps.txt" in arguments[2]:
+            state = "kept" if self.config.get("bench") else "created"
+            self.config["bench"] = True
+            return f" apps.txt:{state} config:{state} assets:{state}\n"
         if arguments[:2] == ("bench", "new-site"):
             self.existing.add(arguments[2])
         if arguments[:1] == ("bench",) and "install-app" in arguments:
@@ -53,6 +57,10 @@ class FakeBench:
         self.calls.append(("python", site, body.splitlines()[0][:40]))
         if "dsherp_runtime_user" in body and "assert" in body:
             return json.dumps({"site": site, "apps": ["dsherp_bridge", "erpnext", "frappe"]}) + "\n"
+        if "'Role'" in body:
+            state = "kept" if self.config.get("role") else "created"
+            self.config["role"] = True
+            return json.dumps(state) + "\n"
         if "DS Enterprise" in body:
             state = "kept" if self.config.get("enterprise") else "created"
             self.config["enterprise"] = True
@@ -289,6 +297,11 @@ def test_the_platform_site_is_created_without_erpnext_and_with_its_own_app():
     bench = FakeBench()
     result = admin.provision_platform(PROD, bench_factory=lambda kind: bench)
     assert result["site"] == "platform.tenant.example.com"
+    steps = dict(result["steps"])
+    assert steps["bench"] == "apps.txt:created config:created assets:created"
+    assert steps["member-role"] == "created"
+    assert bench.verbs.index([v for v in bench.verbs if "apps.txt" in v][0]) < \
+        bench.verbs.index([v for v in bench.verbs if "new-site" in v][0])
     created = [verb for verb in bench.verbs if "new-site" in verb][0]
     assert "--install-app erpnext" not in created
     assert any("install-app dsherp_platform" in verb for verb in bench.verbs)
@@ -296,4 +309,32 @@ def test_the_platform_site_is_created_without_erpnext_and_with_its_own_app():
     bench.verbs.clear()
     again = admin.provision_platform(PROD, bench_factory=lambda kind: bench)
     assert dict(again["steps"])["site"] == "kept" and dict(again["steps"])["app"] == "kept"
+    assert dict(again["steps"])["bench"] == "apps.txt:kept config:kept assets:kept"
+    assert dict(again["steps"])["member-role"] == "kept"
     assert not [verb for verb in bench.verbs if "new-site" in verb]
+
+
+def test_the_bench_bootstrap_never_rewrites_an_existing_database_address():
+    bench = FakeBench()
+    first = admin.ensure_bench(bench, PROD)
+    assert first == ["apps.txt:created", "config:created", "assets:created"]
+    assert admin.ensure_bench(bench, PROD) == ["apps.txt:kept", "config:kept", "assets:kept"]
+    body = [verb for verb in bench.verbs if "apps.txt" in verb][0]
+    assert "if [ -f common_site_config.json ]" in body and "redis-queue" in body and "redis-cache" in body
+    assert "dsherp_bridge" in body and "dsherp_platform" in body
+
+
+def test_compose_calls_carry_the_environment_file_the_code_resolved_from(tmp_path, monkeypatch):
+    recorded = []
+    def runner(command, **kwargs):
+        recorded.append(command)
+        return type("Result", (), {"returncode": 0, "stdout": "yes\n"})()
+    (tmp_path / "infra" / "env").mkdir(parents=True)
+    (tmp_path / "infra" / "env" / "prod.env").write_text("DSHERP_ENV=prod\n")
+    bench = admin.Bench(PROD, "tenant", root=tmp_path, runner=runner)
+    bench.site_exists("acme.tenant.example.com")
+    command = recorded[0]
+    assert command[:4] == ["docker", "compose", "-p", "dsherp"]
+    assert command[command.index("--env-file") + 1] == str(tmp_path / "infra" / "env" / "prod.env")
+    assert command[command.index("-f") + 1].endswith("infra/compose.prod.yml")
+    assert "exec" in command and "backend" in command
