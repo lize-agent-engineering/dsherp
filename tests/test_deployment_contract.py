@@ -96,7 +96,9 @@ def test_production_publishes_only_the_ingress_and_a_loopback_port_for_the_host_
             published[service] = re.findall(r'"([^"]+)"', _block(block, "ports", indent=4) or block.split("ports:", 1)[1].split("\n", 1)[0])
     assert set(published) == {"caddy", "backend"}, published
     assert all(entry.startswith("127.0.0.1:") for entry in published["backend"]), published["backend"]
-    assert {entry.split(":")[0] for entry in published["caddy"]} == {"80", "443"}
+    # Host side defaults to 80/443 and may be moved; the container side never moves.
+    assert {entry.split(":")[0] for entry in published["caddy"]} == {"${DSHERP_HTTP_PORT:-80}", "${DSHERP_HTTPS_PORT:-443}"}
+    assert {entry.split(":", 1)[1] for entry in published["caddy"]} == {"80", "443", "443/udp"}
     # Docker publishes nothing for a container that is only on internal networks.
     networks = PROD_COMPOSE.split("\nnetworks:\n", 1)[1].split("\nvolumes:\n", 1)[0]
     assert "internal" not in _block(networks, "worker")

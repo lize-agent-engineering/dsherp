@@ -182,6 +182,10 @@ DSHERP_ENV=prod ./bin/dsherp-admin retire-tenant "$SLUG"     # 先整站归档�
 DSHERP_ENV=prod ./bin/dsherp-admin render-ingress && compose up -d caddy
 ```
 
+## 与其他服务共用的主机
+
+`DSHERP_HTTP_PORT` / `DSHERP_HTTPS_PORT` 可以把 Caddy 挪开 80/443（例如 18080/18443），用于一台已经在跑别的服务的演练机；这样做 ACME HTTP-01 无法签发，Caddy 对 `.localhost` 主机名回落到内置 CA。生产主机不应这样用。
+
 ## 本地 Docker 上的 G1 演练（非 Linux 主机时）
 
 同一份 runbook 可以在一台已装 Docker Desktop 的开发机上以生产形态跑通，作为拿不到干净 Linux 主机时的替代演练。差别只有四点，全部由 `infra/env/prod.env` 表达：`DSHERP_BASE_DOMAIN=localhost`（`*.localhost` 解析到回环，Caddy 对这类主机名自动用内置 CA 签发，用 `curl -k` 或导入其根证书验证 TLS）；`DSHERP_IMAGE_REGISTRY=local` 且镜像用 `--platform linux/arm64` 在本机构建（不是 x86_64）；数据面用 `DSHERP_DB_BUFFER_POOL=256M`、两个 redis `64mb`、gunicorn 1×2 的笔记本规格；worker 没有 systemd，改为前台启动一次核对 `prepare_host`、心跳与 `/metrics`。dev 栈与它并存：项目名 `dsherp` 对 `dsherp-validation`，网络、卷、容器名全部不同，端口只共用宿主 80/443（dev 不占）。
