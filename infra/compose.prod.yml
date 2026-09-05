@@ -66,8 +66,10 @@ services:
       GUNICORN_WORKERS: "${DSHERP_GUNICORN_WORKERS:-2}"
       GUNICORN_THREADS: "${DSHERP_GUNICORN_THREADS:-4}"
     healthcheck:
+      # A tenant bench serves many Sites; an unknown Host is a 404 from a healthy
+      # process, so only a transport failure or a 5xx counts as unhealthy.
       test: ["CMD", "python3", "-c",
-             "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/method/ping',timeout=5).status==200 else 1)"]
+             "import urllib.error,urllib.request,sys\ntry:\n sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/method/ping',timeout=5).status<500 else 1)\nexcept urllib.error.HTTPError as error:\n sys.exit(0 if error.code<500 else 1)"]
       interval: 15s
       timeout: 10s
       retries: 8
@@ -138,11 +140,13 @@ services:
     <<: *frappe
     command: ["start.sh"]
     environment:
+      FRAPPE_SITE: ${DSHERP_PLATFORM_SLUG}.${DSHERP_BASE_DOMAIN}
       GUNICORN_WORKERS: "${DSHERP_PLATFORM_GUNICORN_WORKERS:-1}"
       GUNICORN_THREADS: "2"
     healthcheck:
+      # One Site only, so the check goes all the way through to that Site's ping.
       test: ["CMD", "python3", "-c",
-             "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/method/ping',timeout=5).status==200 else 1)"]
+             "import os,urllib.request,sys;request=urllib.request.Request('http://127.0.0.1:8000/api/method/ping',headers={'Host':os.environ['FRAPPE_SITE']});sys.exit(0 if urllib.request.urlopen(request,timeout=5).status==200 else 1)"]
       interval: 15s
       timeout: 10s
       retries: 8

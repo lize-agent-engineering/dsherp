@@ -188,6 +188,17 @@ def ensure_site_config(bench, site, values):
     return json.loads(bench.python(site, body).strip().splitlines()[-1])
 
 
+def ensure_system_settings(bench, site, values):
+    """Frappe's own switches; password login is one of them, so use it rather than a hook."""
+    body = (f"values=json.loads({json.dumps(json.dumps(values))})\n"
+            "settings=frappe.get_single('System Settings')\n"
+            "changed=[key for key,value in values.items() if settings.get(key)!=value]\n"
+            "for key in changed:settings.set(key,values[key])\n"
+            "if changed:settings.save()\n"
+            "frappe.db.commit();print(json.dumps(changed))")
+    return json.loads(bench.python(site, body).strip().splitlines()[-1])
+
+
 def ensure_runtime_identity(bench, site, user):
     """The Site's own execution identity; its keys are returned once and stored by the caller."""
     body = (f"user={user!r}\n"
@@ -218,6 +229,10 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
         'host_name': deploy_env.public_origin(resolved, slug),
     })
     steps.append(('site-config', 'changed:' + ','.join(changed) if changed else 'kept'))
+    if resolved['env'] == 'prod':
+        # Production reaches a business Site through the platform only.
+        hardened = ensure_system_settings(tenant, site, {'disable_user_pass_login': 1})
+        steps.append(('password-login', 'disabled' if hardened else 'kept'))
     rows = [row for row in load_tenants(resolved, root) if row['slug'] != slug]
     rows.append({'slug': slug, 'site': site, 'origin': deploy_env.public_origin(resolved, slug)})
     save_tenants(resolved, rows, root)

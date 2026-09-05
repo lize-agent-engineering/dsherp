@@ -51,6 +51,11 @@ class FakeBench:
             return json.dumps("dsherp_bridge" in self.installed) + "\n"
         if "generate_keys" in body:
             return json.dumps({"user": f"runtime@{site}", "api_key": "k", "api_secret": "s"}) + "\n"
+        if "System Settings" in body:
+            values = json.loads(json.loads(body.splitlines()[0].split("=", 1)[1][len("json.loads("):-1]))
+            changed = [key for key, value in values.items() if self.config.get(key) != value]
+            self.config.update(values)
+            return json.dumps(changed) + "\n"
         if "update_site_config" in body:
             values = json.loads(json.loads(body.splitlines()[0].split("=", 1)[1][len("json.loads("):-1]))
             changed = [key for key, value in values.items() if self.config.get(key) != value]
@@ -99,6 +104,7 @@ def test_provisioning_a_new_tenant_creates_the_site_once_and_records_it(host):
     assert ("run", "bench", "new-site", "acme.tenant.example.com") in bench.calls
     assert dict(result["steps"])["site"] == "created"
     assert dict(result["steps"])["app"] == "created"
+    assert dict(result["steps"])["password-login"] == "disabled"
     rows = admin.load_tenants(PROD)
     assert rows == [{"slug": "acme", "site": "acme.tenant.example.com",
                      "origin": "https://acme.tenant.example.com"}]
@@ -115,6 +121,7 @@ def test_provisioning_the_same_tenant_again_changes_nothing(host):
     assert dict(again["steps"])["site"] == "kept"
     assert dict(again["steps"])["app"] == "kept"
     assert dict(again["steps"])["site-config"] == "kept"
+    assert dict(again["steps"])["password-login"] == "kept"
     assert not [call for call in bench.calls if call[:3] == ("run", "bench", "new-site")]
     assert len(admin.load_tenants(PROD)) == 1
 
