@@ -8,7 +8,7 @@
 
 用户要求收敛旧服务后，旧独立聊天付费 worker 已于 2026-08-29 停止（无在途任务），其提交、领取、工具和完成端点及本地凭证随后退役；旧任务记录只读保留。下文“已启用”的历史描述不再代表当前运行状态。原生 ERP 与身份服务保留。新实现进度见 [上下文 Agent 证据](docs/engineering/context-agent-evidence.md)。
 
-当前隔离合成环境运行 ERPNext `16.33.0` / Frappe `16.31.0`，容器 Python `3.14.7`；固定 DSH SDK/Runtime 仍为 `0.1.1rc1`。计划 2 的终审阻断项已于 2026-09-05 逐项关闭，四套门在 backend 重载后的最终数字为非集成 `284 passed`、集成 `191 passed`（17 分 18 秒）、前端 22 个文件 `201 passed`、Node Runtime `10 passed`；本轮无 DocType/Report/hooks 变更，因此不需要 migrate。计划 2 待审计放行，尚未验收。自动化中的工具链使用本地模型替身；仅混沌演练在熔断打开且零活动运行期间按授权调用过一次真实 provider 的免费 `GET /models` 探针，没有调用真实 chat/completions。真实 ERP、浏览器与部署证据分别记录，不能相互替代。
+当前隔离合成环境运行 ERPNext `16.33.0` / Frappe `16.31.0`，容器 Python `3.14.7`；固定 DSH SDK/Runtime 仍为 `0.1.1rc1`。计划 2 的终审阻断项已于 2026-09-05 逐项关闭，四套门在 backend 重载后的最终数字为非集成 `284 passed`、集成 `191 passed`（17 分 18 秒）、前端 22 个文件 `201 passed`、Node Runtime `10 passed`；本轮无 DocType/Report/hooks 变更，因此不需要 migrate。计划 2 待审计放行，尚未验收。计划 3（部署制品与安全边界）于 2026-09-05 由 Claude 直接实施：自建两个镜像、生产 compose、`dsherp-admin` 开站/发布/回滚 CLI、systemd 守护、internal 的 agent 网络与唯一出口代理、非 root 容器、业务站 SSO 强制、运行凭据限源限频、CSP 与渲染限制；G4 六条判据在 dev 与生产形态的真实容器上实测通过，G1 按用户指示用本机 Docker 以生产形态整体执行（13 服务全 Up、9 探针全 healthy，修掉 15 个实跑断点；x86_64、ACME、systemd 三项待真机），见[计划 3 证据](docs/engineering/deployment-security-evidence.md)与[部署 runbook](docs/engineering/deployment-runbook.md)。自动化中的工具链使用本地模型替身；仅混沌演练在熔断打开且零活动运行期间按授权调用过一次真实 provider 的免费 `GET /models` 探针，没有调用真实 chat/completions。真实 ERP、浏览器与部署证据分别记录，不能相互替代。
 
 运行事件流、Prometheus 指标与规则化告警已在隔离合成站落地，计划 1 于 2026-09-03 通过 C4；计划 2 的运行底座、G5、混沌、前端截图与终审阻断项的逐项关闭见[运行底座可靠性证据](docs/engineering/runtime-reliability-evidence.md)。失败回放与告警时延见[可观测与失败回放证据](docs/engineering/observability-evidence.md)。这仍不代表生产租户部署或生产可用。
 
@@ -53,6 +53,8 @@
 - [生产就绪第二轮审计](docs/engineering/production-readiness-audit-2026-09-03.md)
 - [计划 1：可观测与失败回放](docs/superpowers/plans/2026-09-03-observability-replay.md)
 - [计划 2：运行底座可靠性](docs/superpowers/plans/2026-09-04-runtime-reliability.md)
+- [计划 3：部署制品与安全边界 证据](docs/engineering/deployment-security-evidence.md)
+- [部署 runbook（单 Linux 主机 + Compose + 自建镜像）](docs/engineering/deployment-runbook.md)
 
 ## 最小验证
 
@@ -74,6 +76,8 @@ uv pip sync --python .venv/bin/python --require-hashes requirements.lock
 docker compose -f infra/compose.validation.yml up -d
 .venv/bin/python -m pytest tests/integration -q
 ```
+
+生产形态不用这份 compose：镜像由 `infra/release_images.py` 从 tag 构建，栈由 `infra/compose.prod.yml` 加 `infra/env/prod.env` 拉起，开站与发布走 `bin/dsherp-admin`，逐步命令见[部署 runbook](docs/engineering/deployment-runbook.md)。
 
 集成测试需本地 `.runtime/` 普通测试用户配置；缺失会明确失败，不自动跳过。此命令不自动建站或生成资料，首次开通记录和资源边界见 ERP 证据。
 

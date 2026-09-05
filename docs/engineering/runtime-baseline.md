@@ -52,7 +52,18 @@ ERPNext/Frappe 切换到 v16 没有改动本节的 DSH 链：SDK/Runtime 仍为 
 | 容器 Python | `3.14.7` |
 | 镜像 | `frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd` |
 
-镜像版本由容器内 `bench version`、Python 解释器和 RepoDigest 分别核验；标签、最新主线文档或工作副本不能代替运行事实。当前四站为 fresh provision 的隔离合成站点，证据见 [v16 迁移证据](v16-migration-evidence.md)。C4 与 C5 已完成：冷静期、最终独立审计通过，`main` 已切换到 v16，v15 九卷已归档并逐名删除。本节仍不声明可上线或生产可用——四站为隔离合成环境，不含生产租户数据。
+镜像版本由容器内 `bench version`、Python 解释器和 RepoDigest 分别核验；标签、最新主线文档或工作副本不能代替运行事实。
+
+### 钉死镜像的架构清单（2026-09-05，`docker manifest inspect` 实测）
+
+| 镜像 | digest | 平台 |
+| --- | --- | --- |
+| `frappe/erpnext` | `sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd` | `linux/amd64`、`linux/arm64` |
+| `mariadb` | `sha256:2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3` | `linux/amd64`、`linux/arm64`、`linux/ppc64le`、`linux/s390x` |
+| `redis` | `sha256:d0c875bdacfb5c4d2c2d9124de3f53cee1dc9ceff8936bd459fabc135cb33015` | `linux/386`、`linux/amd64`、`linux/arm`、`linux/arm64`、`linux/ppc64le`、`linux/riscv64`、`linux/s390x` |
+| `caddy` | `sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d` | `linux/amd64`、`linux/arm`、`linux/arm64`、`linux/ppc64le`、`linux/riscv64`、`linux/s390x` |
+
+四个 digest 都是 OCI image index（多架构清单），本机 arm64 解析到的单架构 manifest 只是其中一项；生产目标 `linux/amd64` 由同一 digest 服务。自建的 `dsherp-frappe` 与 `dsherp-worker` 镜像以它们为基底，由 `infra/release_images.py --platform` 指定架构构建并把实际架构写入 `infra/releases/<tag>.json`。这关闭了生产就绪审计的 D7 与存疑项 6。当前四站为 fresh provision 的隔离合成站点，证据见 [v16 迁移证据](v16-migration-evidence.md)。C4 与 C5 已完成：冷静期、最终独立审计通过，`main` 已切换到 v16，v15 九卷已归档并逐名删除。本节仍不声明可上线或生产可用——四站为隔离合成环境，不含生产租户数据。
 
 ### v16.33.0 制造 mapper 固定契约
 

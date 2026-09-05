@@ -1,5 +1,6 @@
 """Business Desk OAuth adapter. Membership identity is supplied by the platform."""
 import frappe
+import hashlib
 import json
 import requests
 from frappe.utils.password import encrypt,decrypt
@@ -87,17 +88,71 @@ def callback(code: str,state: str):
     frappe.response.update(type='redirect',location='/desk/dsherp-agent')
 
 
+# The business interface; neither Administrator nor the runtime identity may hold one.
+DESK_PREFIXES=('/app','/desk')
+EXEMPT_PATHS=('/api/method/dsherp_bridge.sso.start','/api/method/dsherp_bridge.sso.callback','/api/method/logout')
+# How long the last successful platform answer may stand in for an unreachable
+# platform. Revocation itself never waits on this: a reachable platform is asked every time.
+GRANT_CACHE_SECONDS=60
+
+
+def _password_login_disabled():
+    # Frappe's own switch is the primary control: it refuses inside LoginManager, before
+    # a session exists, and it hides the password form. This hook only re-states it.
+    return bool(frappe.get_system_settings('disable_user_pass_login'))
+
+
+def _machine_authenticated():
+    # Server-issued API credentials; a browser session never carries these.
+    header=frappe.get_request_header('Authorization') or ''
+    return header.split(' ',1)[0].lower() in ('token','basic')
+
+
+def _service_identities():
+    return {'Administrator',frappe.conf.get('dsherp_runtime_user')}
+
+
+def _grant_cache_key(user,identity):
+    material=[user,identity['sub'],identity['binding_version'],identity['enterprise_version']]
+    return 'dsherp_grant:'+hashlib.sha256(json.dumps(material,separators=(',',':')).encode()).hexdigest()
+
+
 def validate_grant(grant,user):
     data=json.loads(decrypt(grant))
-    info=identity_for_token(data['token'])
+    key=_grant_cache_key(user,data['identity'])
+    # The platform is asked on every request, so a revoked membership stops on the
+    # very next one. The cache is only a fallback for the moments the platform cannot
+    # answer: a decision younger than GRANT_CACHE_SECONDS still stands, an older one
+    # is a refusal, never a silent pass.
+    try:
+        info=identity_for_token(data['token'])
+    except requests.RequestException:
+        if frappe.cache().get_value(key):return data['identity']
+        raise frappe.PermissionError('企业平台暂时不可达，请稍后重试')
     if validate_identity(info)!=user or info!=data['identity']:
+        frappe.cache().delete_value(key)
         raise frappe.PermissionError('企业成员绑定已变化，请重新登录')
+    frappe.cache().set_value(key,1,expires_in_sec=GRANT_CACHE_SECONDS)
     return info
 
 
 def validate_session():
-    grant=frappe.session.data.get('dsherp_platform_grant')
-    if not grant:return
-    if frappe.request.path in ('/api/method/dsherp_bridge.sso.start','/api/method/dsherp_bridge.sso.callback','/api/method/logout'):
+    if getattr(frappe.local,'request',None) is None:return
+    path=frappe.request.path
+    if path=='/api/method/login' and _password_login_disabled():
+        raise frappe.PermissionError('本站只接受企业平台登录')
+    if path in EXEMPT_PATHS:return
+    user=frappe.session.user
+    if user=='Guest':return
+    if user in _service_identities():
+        # They exist for provisioning and for the runtime, not for using the product.
+        if not _machine_authenticated() and path.startswith(DESK_PREFIXES):
+            raise frappe.PermissionError('运维身份不得建立业务界面会话')
         return
-    validate_grant(grant,frappe.session.user)
+    grant=frappe.session.data.get('dsherp_platform_grant')
+    if grant:
+        validate_grant(grant,user)
+        return
+    # A browser session without a platform grant is exactly what SSO enforcement forbids.
+    if _machine_authenticated():return
+    raise frappe.PermissionError('需要通过企业平台登录后再访问')

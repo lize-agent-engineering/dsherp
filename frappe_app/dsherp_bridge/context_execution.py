@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets
 import time
@@ -69,6 +70,62 @@ def authorize_sources(sources):
                 raise frappe.PermissionError('历史结果的明细字段权限已改变')
         for name in source['records']:
             frappe.get_doc(doctype,name).check_permission('read')
+
+
+# The run capability endpoints answer anything that can address the Site, so the
+# source allowlist and the per-run quota are what keep them a single run's private door.
+CAPABILITY_RATE_PER_SECOND=20
+
+
+def _remote_address():
+    # Deliberately the socket peer, never X-Forwarded-For: a run container talks to
+    # gunicorn directly, and any client could set the forwarded header itself.
+    request=getattr(frappe.local,'request',None)
+    return getattr(request,'remote_addr',None) if request is not None else None
+
+
+def _source_allowed(address):
+    allowed=frappe.conf.get('dsherp_agent_sources')
+    if not allowed:return True
+    if not isinstance(allowed,list):frappe.throw('dsherp_agent_sources 必须是网段列表')
+    if not address:return False
+    try:candidate=ipaddress.ip_address(address)
+    except ValueError:return False
+    for entry in allowed:
+        try:network=ipaddress.ip_network(entry,strict=False)
+        except ValueError:frappe.throw('dsherp_agent_sources 含无效网段')
+        if candidate.version==network.version and candidate in network:return True
+    return False
+
+
+def _capability_guard(run_id,endpoint):
+    """Every use of a run capability is placed and counted before it is honoured."""
+    address=_remote_address()
+    if not _source_allowed(address):
+        events.record_safely(run_id,'capability_denied',{'endpoint':endpoint,'reason':'source','source':address or ''})
+        raise frappe.PermissionError('运行凭据只能从 Agent 网络使用')
+    cache=frappe.cache()
+    limit=frappe.conf.get('dsherp_capability_rate_per_second') or CAPABILITY_RATE_PER_SECOND
+    if type(limit) is not int or limit<1:frappe.throw('dsherp_capability_rate_per_second 无效')
+    window=cache.make_key(f'dsherp_capability:{run_id}:{int(time.time())}')
+    used=cache.incrby(window,1)
+    cache.expire(window,5)
+    total=cache.make_key(f'dsherp_capability_calls:{run_id}')
+    cache.incrby(total,1)
+    cache.expire(total,3600)
+    if used>limit:
+        events.record_safely(run_id,'capability_denied',{'endpoint':endpoint,'reason':'rate',
+                                                        'source':address or '','used':int(used)})
+        raise frappe.PermissionError('运行凭据调用过于频繁')
+    return address
+
+
+def _capability_calls(run_id):
+    # Written by a raw INCRBY, so it must be read raw: get_value would try to unpickle it.
+    cache=frappe.cache()
+    value=cache.get(cache.make_key(f'dsherp_capability_calls:{run_id}'))
+    try:return int(value)
+    except (TypeError,ValueError):return None
 
 
 def _run(run_id,capability):
@@ -173,6 +230,7 @@ def claim_run(runtime_revision):
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def run_status(run_id,capability):
+    _capability_guard(run_id,'run_status')
     run=frappe.db.get_value('DS Model Run',run_id,
         ['name','status','capability_hash','expires_at','domain','needs_input'],as_dict=True)
     if (not run or run.status not in ('Running','Cancelling','NeedsInput') or not run.capability_hash
@@ -194,6 +252,7 @@ def run_status(run_id,capability):
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,model,purpose,runtime_revision,domain='query',claimed_budget=None):
+    _capability_guard(run_id,'reserve_model_call')
     run=_run(run_id,capability)
     if run.status!='Running':raise frappe.PermissionError('运行正在取消')
     if runtime_revision!=run.runtime_revision:raise frappe.PermissionError('模型配置与领取的运行不一致')
@@ -227,13 +286,15 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def run_tool(run_id,capability,tool,arguments):
+    _capability_guard(run_id,'run_tool')
     run=_run(run_id,capability)
     started=time.perf_counter()
     result=_run_tool(run,tool,arguments)
     summary=_tool_summary(tool,result)
     events.record_safely(run.name,'tool_call',{'tool':tool,
         'arguments':arguments if isinstance(arguments,dict) else {'raw':str(arguments)[:200]},
-        'duration_ms':int((time.perf_counter()-started)*1000),'result':summary})
+        'duration_ms':int((time.perf_counter()-started)*1000),'result':summary,
+        'source':_remote_address() or ''})
     return result
 
 
@@ -379,6 +440,7 @@ def _run_tool(run,tool,arguments):
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def record_run_event(run_id,capability,events):
+    _capability_guard(run_id,'record_run_event')
     run=_run(run_id,capability)
     items=json.loads(events) if isinstance(events,str) else events
     from dsherp_bridge import context_events
@@ -387,6 +449,7 @@ def record_run_event(run_id,capability,events):
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def finish_run(run_id,capability,status,answer='',error=''):
+    source=_capability_guard(run_id,'finish_run')
     run=_run(run_id,capability)
     if status not in ('Succeeded','Failed','Cancelled','NeedsInput'):frappe.throw('无效运行结束状态')
     requested_success=status=='Succeeded'
@@ -413,9 +476,11 @@ def finish_run(run_id,capability,status,answer='',error=''):
     proposals=frappe.db.count('DS Operation Proposal',{'model_run':run.name})
     proposal_names=frappe.get_all('DS Operation Proposal',filters={'model_run':run.name},pluck='name')
     executions=frappe.db.count('DS Execution Record',{'proposal':['in',proposal_names],'status':'Succeeded'}) if proposal_names else 0
+    # One line closes the capability's audit: who used it, from where, how many times.
     events.record_safely(run.name,'finished',{'status':status,'answer_chars':len(answer) if isinstance(answer,str) else 0,
         'error':(error or '')[:500],'model_calls':run.model_calls or 0,'provider_failures':provider_failures,
-        'proposals':proposals,'executions':executions,'sources':len(sources)})
+        'proposals':proposals,'executions':executions,'sources':len(sources),
+        'source':source or '','capability_calls':_capability_calls(run.name)})
     values={'status':status,'answer':answer if requested_success else '',
         'error':error if status=='Failed' else '','capability_hash':'','provider_failures':provider_failures}
     if status=='NeedsInput':values['needs_input']=answer

@@ -449,3 +449,11 @@
   font-size: var(--dsh-fs-micro);
   line-height: 1.6;
 }
+
+/* Blocked media and de-linked hrefs stay visible as text: the reader must be able
+   to see that the answer referenced something, and that it was not made clickable. */
+.dsh-blocked-media,
+.dsh-plain-link {
+  color: var(--dsh-text-muted, #6b7280);
+  word-break: break-all;
+}

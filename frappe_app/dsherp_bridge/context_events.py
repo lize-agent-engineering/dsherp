@@ -9,6 +9,7 @@ from frappe.utils import now_datetime
 
 SERVER_KINDS = (
     "queued",
+    "capability_denied",
     "claimed",
     "expired",
     "lease_renewed",

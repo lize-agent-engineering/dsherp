@@ -1,0 +1,312 @@
+# Production stack: one Linux host, images by release tag, no working copy anywhere.
+# Render the ingress and the secrets with dsherp-admin before the first "up".
+name: ${DSHERP_PROJECT:?set DSHERP_PROJECT}
+
+x-frappe: &frappe
+  image: ${DSHERP_IMAGE_REGISTRY:?set DSHERP_IMAGE_REGISTRY}/dsherp-frappe:${DSHERP_IMAGE_TAG:?set DSHERP_IMAGE_TAG}
+  pull_policy: if_not_present
+  restart: unless-stopped
+  logging: &logging
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+
+services:
+  db:
+    image: mariadb@sha256:2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3
+    restart: unless-stopped
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci",
+              "--skip-character-set-client-handshake", "--innodb-buffer-pool-size=${DSHERP_DB_BUFFER_POOL:-1G}"]
+    environment:
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
+      MARIADB_AUTO_UPGRADE: "1"
+    secrets: [db_root_password]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    volumes: ["db-data:/var/lib/mysql"]
+    networks: [backplane]
+    logging: *logging
+
+  redis-cache:
+    image: redis@sha256:d0c875bdacfb5c4d2c2d9124de3f53cee1dc9ceff8936bd459fabc135cb33015
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "${DSHERP_REDIS_CACHE_MAXMEMORY:-256mb}",
+              "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    volumes: ["redis-cache-data:/data"]
+    networks: [backplane]
+    logging: *logging
+
+  redis-queue:
+    image: redis@sha256:d0c875bdacfb5c4d2c2d9124de3f53cee1dc9ceff8936bd459fabc135cb33015
+    restart: unless-stopped
+    # The queue must survive a restart; the cache may not.
+    command: ["redis-server", "--maxmemory", "${DSHERP_REDIS_QUEUE_MAXMEMORY:-256mb}",
+              "--maxmemory-policy", "noeviction", "--save", "60 1", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    volumes: ["redis-queue-data:/data"]
+    networks: [backplane]
+    logging: *logging
+
+  backend:
+    <<: *frappe
+    command: ["start.sh"]
+    # The host worker claims runs and sends heartbeats over this loopback port with the
+    # Site's service credentials. Docker only publishes ports for containers that sit on a
+    # non-internal network, hence the extra `worker` network below; every other network
+    # here is internal. Never bind this to anything but 127.0.0.1.
+    ports: ["127.0.0.1:${DSHERP_BACKEND_LOOPBACK_PORT:-8000}:8000"]
+    environment:
+      GUNICORN_WORKERS: "${DSHERP_GUNICORN_WORKERS:-2}"
+      GUNICORN_THREADS: "${DSHERP_GUNICORN_THREADS:-4}"
+    healthcheck:
+      # A tenant bench serves many Sites; an unknown Host is a 404 from a healthy
+      # process, so only a transport failure or a 5xx counts as unhealthy.
+      test: ["CMD", "python3", "-c",
+             "import urllib.error,urllib.request,sys\ntry:\n sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/method/ping',timeout=5).status<500 else 1)\nexcept urllib.error.HTTPError as error:\n sys.exit(0 if error.code<500 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 60s
+    volumes:
+      - tenant-sites:/home/frappe/frappe-bench/sites
+      - tenant-logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      db: {condition: service_healthy}
+      redis-cache: {condition: service_healthy}
+      redis-queue: {condition: service_healthy}
+    networks: [backplane, site, agent, worker]
+    logging: *logging
+
+  scheduler:
+    <<: *frappe
+    command: ["bench", "schedule"]
+    volumes:
+      - tenant-sites:/home/frappe/frappe-bench/sites
+      - tenant-logs:/home/frappe/frappe-bench/logs
+      - backups:/home/frappe/backups
+    depends_on:
+      db: {condition: service_healthy}
+      redis-queue: {condition: service_healthy}
+    networks: [backplane]
+    logging: *logging
+
+  queue:
+    <<: *frappe
+    command: ["bench", "worker", "--queue", "short,default,long"]
+    volumes:
+      - tenant-sites:/home/frappe/frappe-bench/sites
+      - tenant-logs:/home/frappe/frappe-bench/logs
+      - backups:/home/frappe/backups
+    depends_on:
+      db: {condition: service_healthy}
+      redis-queue: {condition: service_healthy}
+    networks: [backplane]
+    logging: *logging
+
+  frontend:
+    <<: *frappe
+    # The image entrypoint re-links sites/assets at start, which fails on the read-only
+    # sites mount; the bench already owns that link. nginx-entrypoint.sh only renders and serves.
+    entrypoint: []
+    command: ["nginx-entrypoint.sh"]
+    environment:
+      BACKEND: backend:8000
+      SOCKETIO: backend:8000
+      # Tenant Sites are addressed by host name; one entry point serves all of them.
+      FRAPPE_SITE_NAME_HEADER: $$host
+      UPSTREAM_REAL_IP_ADDRESS: ${DSHERP_TRUSTED_PROXY_CIDR:-10.0.0.0/8}
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "on"
+      PROXY_READ_TIMEOUT: "120"
+      CLIENT_MAX_BODY_SIZE: 50m
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import socket,sys;s=socket.create_connection(('127.0.0.1',8080),3);s.close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    volumes:
+      - tenant-sites:/home/frappe/frappe-bench/sites:ro
+    depends_on:
+      backend: {condition: service_healthy}
+    networks: [site, edge]
+    logging: *logging
+
+  platform-backend:
+    <<: *frappe
+    command: ["start.sh"]
+    environment:
+      FRAPPE_SITE: ${DSHERP_PLATFORM_SLUG}.${DSHERP_BASE_DOMAIN}
+      GUNICORN_WORKERS: "${DSHERP_PLATFORM_GUNICORN_WORKERS:-1}"
+      GUNICORN_THREADS: "2"
+    healthcheck:
+      # One Site only, so the check goes all the way through to that Site's ping.
+      test: ["CMD", "python3", "-c",
+             "import os,urllib.request,sys;request=urllib.request.Request('http://127.0.0.1:8000/api/method/ping',headers={'Host':os.environ['FRAPPE_SITE']});sys.exit(0 if urllib.request.urlopen(request,timeout=5).status==200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 60s
+    volumes:
+      - platform-sites:/home/frappe/frappe-bench/sites
+      - platform-logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      db: {condition: service_healthy}
+      redis-cache: {condition: service_healthy}
+      redis-queue: {condition: service_healthy}
+    # Deliberately not on the agent network: a run container must never reach the control plane.
+    networks:
+      backplane:
+        aliases: ["${DSHERP_PLATFORM_SLUG:?set DSHERP_PLATFORM_SLUG}.${DSHERP_BASE_DOMAIN:?set DSHERP_BASE_DOMAIN}"]
+      platform-site:
+    logging: *logging
+
+  platform-scheduler:
+    <<: *frappe
+    command: ["bench", "schedule"]
+    volumes:
+      - platform-sites:/home/frappe/frappe-bench/sites
+      - platform-logs:/home/frappe/frappe-bench/logs
+      - backups:/home/frappe/backups
+    depends_on:
+      db: {condition: service_healthy}
+      redis-queue: {condition: service_healthy}
+    networks: [backplane]
+    logging: *logging
+
+  platform-queue:
+    <<: *frappe
+    command: ["bench", "worker", "--queue", "short,default,long"]
+    volumes:
+      - platform-sites:/home/frappe/frappe-bench/sites
+      - platform-logs:/home/frappe/frappe-bench/logs
+      - backups:/home/frappe/backups
+    depends_on:
+      db: {condition: service_healthy}
+      redis-queue: {condition: service_healthy}
+    networks: [backplane]
+    logging: *logging
+
+  platform-frontend:
+    <<: *frappe
+    # The image entrypoint re-links sites/assets at start, which fails on the read-only
+    # sites mount; the bench already owns that link. nginx-entrypoint.sh only renders and serves.
+    entrypoint: []
+    command: ["nginx-entrypoint.sh"]
+    environment:
+      BACKEND: platform-backend:8000
+      SOCKETIO: platform-backend:8000
+      FRAPPE_SITE_NAME_HEADER: ${DSHERP_PLATFORM_SLUG}.${DSHERP_BASE_DOMAIN}
+      UPSTREAM_REAL_IP_ADDRESS: ${DSHERP_TRUSTED_PROXY_CIDR:-10.0.0.0/8}
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "on"
+      PROXY_READ_TIMEOUT: "120"
+      CLIENT_MAX_BODY_SIZE: 50m
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import socket,sys;s=socket.create_connection(('127.0.0.1',8080),3);s.close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    volumes:
+      - platform-sites:/home/frappe/frappe-bench/sites:ro
+    depends_on:
+      platform-backend: {condition: service_healthy}
+    networks: [platform-site, edge]
+    logging: *logging
+
+  agent-egress:
+    <<: *frappe
+    entrypoint: []
+    command: ["sh", "/opt/dsherp-agent-egress-entrypoint.sh"]
+    mem_limit: 128m
+    environment:
+      DSHERP_PROVIDER_HOST: ${DSHERP_PROVIDER_HOST:-api.deepseek.com}
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import socket,sys;s=socket.create_connection(('127.0.0.1',8890),3);s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    configs:
+      - {source: agent_egress_conf, target: /opt/dsherp-agent-egress.conf}
+      - {source: agent_egress_entrypoint, target: /opt/dsherp-agent-egress-entrypoint.sh}
+    networks: [agent, provider]
+    logging: *logging
+
+  caddy:
+    image: caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    pull_policy: if_not_present
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    healthcheck:
+      # Port 80 only redirects to HTTPS and 443 needs a matching SNI, so a plain
+      # HTTP probe cannot pass; the listener being open is the liveness signal.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "443"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    environment:
+      DSHERP_ACME_EMAIL: ${DSHERP_ACME_EMAIL:?set DSHERP_ACME_EMAIL}
+    configs:
+      - {source: caddyfile, target: /etc/caddy/Caddyfile}
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      frontend: {condition: service_healthy}
+      platform-frontend: {condition: service_healthy}
+    networks: [edge, provider]
+    logging: *logging
+
+networks:
+  # Databases and queues; no route out of the host.
+  backplane: {internal: true}
+  # Front end to tenant backend, and front end to platform backend, kept apart.
+  site: {internal: true}
+  platform-site: {internal: true}
+  # Run containers reach exactly two things here: the tenant backend and the egress proxy.
+  agent: {internal: true}
+  # Caddy to the two front ends.
+  edge: {internal: true}
+  # The only networks with a default route: provider for Caddy/ACME and the egress proxy,
+  # worker so the tenant backend can publish its loopback port to the host worker.
+  provider: {}
+  worker: {}
+
+volumes:
+  db-data:
+  redis-cache-data:
+  redis-queue-data:
+  tenant-sites:
+  tenant-logs:
+  platform-sites:
+  platform-logs:
+  backups:
+  caddy-data:
+  caddy-config:
+
+configs:
+  caddyfile:
+    file: ${DSHERP_RUNTIME_DIR:-../.runtime}/caddy/Caddyfile
+  agent_egress_conf:
+    file: ./nginx/agent-egress.conf
+  agent_egress_entrypoint:
+    file: ./nginx/agent-egress-entrypoint.sh
+
+secrets:
+  db_root_password:
+    file: ${DSHERP_SECRETS_DIR:-../.runtime/control}/db_root_password

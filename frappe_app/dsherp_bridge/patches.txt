@@ -1,0 +1,6 @@
+# Data migrations for this App, in the order bench migrate must apply them.
+# Rule (checked by infra/check_doctype_patches.py): a commit that changes a DocType
+# JSON adds a line here, or states "no-patch:" with the reason in its message.
+[pre_model_sync]
+
+[post_model_sync]

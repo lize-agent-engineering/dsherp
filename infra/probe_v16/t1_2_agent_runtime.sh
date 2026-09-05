@@ -8,7 +8,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 docker volume create "$volume" >/dev/null
 docker run --rm --user 0:0 --entrypoint /bin/sh \
   -v "$volume:/opt/runtime" \
-  -v "$root:/opt/dsherp:ro" \
+  -v "$root/requirements.lock:/opt/dsherp/requirements.lock:ro" \
   "$image" -eu -c '
     test ! -e /opt/runtime/bin/python
     python3 -m venv /opt/runtime

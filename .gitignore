@@ -17,3 +17,8 @@ work/
 .runtime/
 evals/runs/
 *.log
+
+# Filled deployment environments stay on the host.
+infra/env/*.env
+!infra/env/dev.env
+!infra/env/*.env.example

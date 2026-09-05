@@ -44,6 +44,12 @@ server {
 		try_files $uri =404;
 	}
 
+	# Run capabilities are used by run containers that talk to the backend directly.
+	# From the browser edge they have no legitimate caller, so they do not exist here.
+	location ~ ^/api/method/dsherp_bridge\.context_execution\.(run_status|reserve_model_call|run_tool|record_run_event|finish_run)$ {
+		return 404;
+	}
+
 	location ~ ^/protected/(.*) {
 		internal;
 		try_files /${FRAPPE_SITE_NAME_HEADER}/$1 =404;

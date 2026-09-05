@@ -1,0 +1,19 @@
+{
+  "base_image": "frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd",
+  "git_commit": "7482304b0b7ddc4457ae672015bff6db96838171",
+  "images": {
+    "local/dsherp-frappe:v0.3.0-rc1": {
+      "architecture": "arm64",
+      "id": "sha256:17112222806e5bfa7fb6734b9f1c8d632fc6c26d7e8070cfb7353676b5ccea0f",
+      "os": "linux"
+    },
+    "local/dsherp-worker:v0.3.0-rc1": {
+      "architecture": "arm64",
+      "id": "sha256:4602288cde88589830c9fb72520a0cbd8fbbb49559a4152ed32d3b4462cf788b",
+      "os": "linux"
+    }
+  },
+  "platform": "linux/arm64",
+  "registry": "local",
+  "tag": "v0.3.0-rc1"
+}

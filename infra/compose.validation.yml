@@ -52,6 +52,7 @@ services:
       validation:
         aliases: [dsherp-validation.localhost]
       api:
+      agent:
     logging: *logging
 
   frontend:
@@ -82,6 +83,7 @@ services:
       - ./daily.conf:/opt/dsherp-daily.conf:ro
       - ./frappe.conf.template:/opt/dsherp-frappe.conf.template:ro
       - ./nginx-validation.sh:/opt/nginx-validation.sh:ro
+      - ./nginx/security-headers.conf:/etc/nginx/snippets/security_headers.conf:ro
       - ../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
     depends_on: [backend, beta-backend]
     networks: [validation, api]
@@ -204,6 +206,23 @@ services:
     networks: [validation]
     logging: *logging
 
+  agent-egress:
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+    pull_policy: never
+    mem_limit: 96m
+    memswap_limit: 96m
+    cpus: 0.1
+    restart: "unless-stopped"
+    entrypoint: []
+    command: ["sh", "/opt/dsherp-agent-egress-entrypoint.sh"]
+    environment:
+      DSHERP_PROVIDER_HOST: ${DSHERP_PROVIDER_HOST:-api.deepseek.com}
+    volumes:
+      - ./nginx/agent-egress.conf:/opt/dsherp-agent-egress.conf:ro
+      - ./nginx/agent-egress-entrypoint.sh:/opt/dsherp-agent-egress-entrypoint.sh:ro
+    networks: [agent, egress]
+    logging: *logging
+
   platform-frontend:
     image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
     pull_policy: never
@@ -227,6 +246,7 @@ services:
       - v16-platform-sites:/home/frappe/frappe-bench/sites:ro
       - ./frappe.conf.template:/opt/dsherp-frappe.conf.template:ro
       - ./nginx-validation.sh:/opt/nginx-validation.sh:ro
+      - ./nginx/security-headers.conf:/etc/nginx/snippets/security_headers.conf:ro
       - ../frappe_app/dsherp_bridge/public:/home/frappe/frappe-bench/assets/dsherp_bridge:ro
     depends_on: [platform-backend]
     networks: [validation, api]
@@ -236,6 +256,11 @@ networks:
   validation:
     internal: true
   api:
+  # Run containers live here and nowhere else: no route to the Internet and no
+  # route to the control-plane front ends, only the business backend and the proxy.
+  agent:
+    internal: true
+  egress:
 
 volumes:
   v16-sites:

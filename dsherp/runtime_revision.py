@@ -34,8 +34,12 @@ def configuration_revision(settings,root=ROOT):
     for key in KEYS:
         if not isinstance(settings.get(key),str) or not settings[key].strip():
             raise ValueError('Missing runtime configuration: '+key)
+    deployment=settings.get('deployment_digest')
+    # Computed on the host: the container has no compose file and no provisioning script.
+    if not isinstance(deployment,str) or not re.fullmatch('[a-f0-9]{64}',deployment):
+        raise ValueError('Missing runtime configuration: deployment_digest')
     verify_business_skills(root)
     files=[[name,hashlib.sha256((root/name).read_bytes()).hexdigest()] for name in FILES]
     # The digest binds credentials too, but never stores or exposes their value.
-    value=[files,[settings[key] for key in KEYS]]
+    value=[files,[settings[key] for key in KEYS],deployment]
     return hashlib.sha256(json.dumps(value,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()

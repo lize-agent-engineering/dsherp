@@ -34,12 +34,29 @@ export function StatusChip({ status, tone, raw = true }) {
   );
 }
 
+// Everything rendered here reached the model as business data first. An image URL or a
+// link it repeats is an outbound channel out of this page, so images never render and
+// only same-site links stay clickable; anything else degrades to visible text.
+const SAME_SITE = /^\/(?!\/)/;
+
+export const isSameSiteHref = (href) => typeof href === 'string' && SAME_SITE.test(href);
+
 const markdownComponents = {
   table: (props) => (
     <div className="dsh-table-scroll">
       <table {...props} />
     </div>
   ),
+  img: ({ alt }) => <span className="dsh-blocked-media">{alt ? `[图片：${alt}]` : '[图片已屏蔽]'}</span>,
+  a: ({ href, children }) =>
+    isSameSiteHref(href) ? (
+      <a href={href}>{children}</a>
+    ) : (
+      <span className="dsh-plain-link">
+        {children}
+        {href ? `（${href}）` : ''}
+      </span>
+    ),
 };
 
 // Long business answers fold, but only the answer prose: alerts, proposals and
@@ -57,7 +74,14 @@ export function Prose({ children, foldAt = 420 }) {
   return (
     <div className="dsh-fold">
       <div ref={body} className={`dsh-prose${clipped ? ' dsh-fold-clipped' : ''}`}>
-        <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        <ReactMarkdown
+          skipHtml
+          remarkPlugins={[remarkGfm]}
+          components={markdownComponents}
+          // Left intact on purpose: only a site-relative href ever becomes an anchor,
+          // so a javascript: or data: URL can reach the reader as text but never as a link.
+          urlTransform={(url) => url}
+        >
           {children || ''}
         </ReactMarkdown>
       </div>

