@@ -1,6 +1,7 @@
 """Business Desk OAuth adapter. Membership identity is supplied by the platform."""
 import frappe
 import hashlib
+import hmac
 import json
 import requests
 from frappe.utils.password import encrypt,decrypt
@@ -103,9 +104,28 @@ def _password_login_disabled():
 
 
 def _machine_authenticated():
-    # Server-issued API credentials; a browser session never carries these.
+    """True only when the Authorization header carries the session user's own API key.
+
+    A prefix check is not authentication: Frappe silently ignores a malformed token and
+    keeps the cookie session, so a grant-less browser session could add
+    `Authorization: token x` and walk past the grant requirement.
+    """
+    import base64
     header=frappe.get_request_header('Authorization') or ''
-    return header.split(' ',1)[0].lower() in ('token','basic')
+    scheme,_,rest=header.partition(' ')
+    scheme=scheme.lower();rest=rest.strip()
+    if scheme=='basic':
+        try:rest=base64.b64decode(rest).decode()
+        except (ValueError,UnicodeDecodeError):return False
+    elif scheme!='token':return False
+    key,_,secret=rest.partition(':')
+    if not key or not secret:return False
+    user=frappe.session.user
+    stored_key=frappe.db.get_value('User',user,'api_key')
+    if not stored_key or not hmac.compare_digest(stored_key,key):return False
+    from frappe.utils.password import get_decrypted_password
+    stored_secret=get_decrypted_password('User',user,'api_secret',raise_exception=False) or ''
+    return bool(stored_secret) and hmac.compare_digest(stored_secret,secret)
 
 
 def _service_identities():

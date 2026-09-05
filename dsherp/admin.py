@@ -184,23 +184,30 @@ class Bench:
 BENCH_APPS = 'frappe\nerpnext\ndsherp_bridge\ndsherp_platform\n'
 
 
-def bench_config(resolved):
+# RQ queue names come from the bench path, which is the same in every container built
+# from the image; two benches on one redis DB would take each other's jobs. Each bench
+# therefore gets its own redis database index.
+QUEUE_DB = {'tenant': 0, 'platform': 1}
+
+
+def bench_config(resolved, kind='tenant'):
     """Database and queue addresses as the compose services expose them."""
+    queue = QUEUE_DB[kind]
     if resolved['env'] == 'prod':
         return {'db_host': 'db', 'db_port': 3306,
-                'redis_cache': 'redis://redis-cache:6379', 'redis_queue': 'redis://redis-queue:6379',
-                'redis_socketio': 'redis://redis-queue:6379'}
+                'redis_cache': 'redis://redis-cache:6379', 'redis_queue': f'redis://redis-queue:6379/{queue}',
+                'redis_socketio': f'redis://redis-queue:6379/{queue}'}
     return {'db_host': 'db', 'db_port': 3306,
             'redis_cache': 'redis://redis:6379/0', 'redis_queue': 'redis://redis:6379/1',
             'redis_socketio': 'redis://redis:6379/1'}
 
 
-def ensure_bench(bench, resolved):
+def ensure_bench(bench, resolved, kind='tenant'):
     """Bootstrap a bench volume. The image ships placeholders (an apps.txt without our
     Apps, an empty common_site_config.json), so presence means nothing: apps are added
     when missing, the config is written only while it names no database. A config that
     already points at a database is never rewritten: that is how a live Site disappears."""
-    config = json.dumps(bench_config(resolved), indent=1, sort_keys=True)
+    config = json.dumps(bench_config(resolved, kind), indent=1, sort_keys=True)
     apps = ' '.join(BENCH_APPS.split())
     script = (f"cd {SITES} && state=''\n"
               "touch apps.txt; added=0\n"
@@ -213,6 +220,27 @@ def ensure_bench(bench, resolved):
               "if [ -e assets ]; then state=\"$state assets:kept\"; else ln -s ../assets assets; state=\"$state assets:created\"; fi\n"
               "echo \"$state\"")
     return bench.run('sh', '-c', script, timeout=60).split()
+
+
+def ensure_scheduler_enabled(bench, site):
+    body = ("from frappe.utils.scheduler import is_scheduler_disabled,enable_scheduler\n"
+            "if is_scheduler_disabled():enable_scheduler();state='enabled'\n"
+            "else:state='kept'\n"
+            "frappe.db.commit();print(json.dumps(state))")
+    return json.loads(bench.python(site, body).strip().splitlines()[-1])
+
+
+def agent_sources(resolved, runner=subprocess.run):
+    """Subnets a run capability may be used from: the agent network for run containers and
+    the worker network, whose gateway is what the host worker's loopback calls arrive as."""
+    subnets = []
+    for network in (resolved['agent_network'], f"{resolved['project']}_worker"):
+        result = runner(['docker', 'network', 'inspect', network, '--format', '{{(index .IPAM.Config 0).Subnet}}'],
+                        text=True, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+        if result.returncode or not result.stdout.strip():
+            raise Fault(f'读不到网络 {network} 的网段；先 compose up 再开站')
+        subnets.append(result.stdout.strip())
+    return subnets
 
 
 def ensure_role(bench, site, role):
@@ -383,9 +411,10 @@ def provision_platform(resolved, *, root=ROOT, runner=subprocess.run, bench_fact
     admin_password = read_secret(resolved, 'platform_admin_password' if resolved['env'] == 'prod'
                                 else 'admin_password', root)
     db_root = read_secret(resolved, 'db_root_password', root)
-    steps.append(('bench', ' '.join(ensure_bench(platform, resolved))))
+    steps.append(('bench', ' '.join(ensure_bench(platform, resolved, 'platform'))))
     steps.append(('site', ensure_site(platform, resolved, site, admin_password, db_root, apps=())))
     steps.append(('app', ensure_app(platform, site, 'dsherp_platform')))
+    steps.append(('scheduler', ensure_scheduler_enabled(platform, site)))
     # OAuth Clients for tenants are restricted to this role; the platform must own it.
     steps.append(('member-role', ensure_role(platform, site, 'DSHERP Member')))
     changed = ensure_site_config(platform, site, {'host_name': f"{resolved['scheme']}://{site}"})
@@ -396,10 +425,12 @@ def provision_platform(resolved, *, root=ROOT, runner=subprocess.run, bench_fact
 def ensure_healthy(bench, site):
     """The last step answers the only question that matters: does this Site work."""
     body = ("import dsherp_bridge\n"
+            "from frappe.utils.scheduler import is_scheduler_disabled\n"
             "apps=sorted(frappe.get_installed_apps())\n"
             "assert 'dsherp_bridge' in apps,'bridge App 未安装'\n"
             "assert frappe.conf.get('dsherp_runtime_user'),'运行服务身份未配置'\n"
-            "print(json.dumps({'site':frappe.local.site,'apps':apps}))")
+            "assert not is_scheduler_disabled(),'scheduler 未启用'\n"
+            "print(json.dumps({'site':frappe.local.site,'apps':apps,'agent_sources':frappe.conf.get('dsherp_agent_sources')}))")
     return json.loads(bench.python(site, body, timeout=120).strip().splitlines()[-1])
 
 
@@ -412,13 +443,18 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
     steps = []
     admin = read_secret(resolved, 'tenant_admin_password' if resolved['env'] == 'prod' else 'admin_password', root)
     db_root = read_secret(resolved, 'db_root_password', root)
-    steps.append(('bench', ' '.join(ensure_bench(tenant, resolved))))
+    steps.append(('bench', ' '.join(ensure_bench(tenant, resolved, 'tenant'))))
     steps.append(('site', ensure_site(tenant, resolved, site, admin, db_root)))
     steps.append(('app', ensure_app(tenant, site, 'dsherp_bridge')))
+    steps.append(('scheduler', ensure_scheduler_enabled(tenant, site)))
     runtime_user = f'runtime@{site}'
     identity = ensure_runtime_identity(tenant, site, runtime_user, rotate=rotate_runtime_key)
     steps.append(('runtime-identity', identity['state']))
     changed = ensure_site_config(tenant, site, {
+        'dsherp_runtime_user': runtime_user,
+        'host_name': deploy_env.public_origin(resolved, slug),
+        'dsherp_agent_sources': agent_sources(resolved, runner) if resolved['env'] == 'prod' else None,
+    } if resolved['env'] == 'prod' else {
         'dsherp_runtime_user': runtime_user,
         'host_name': deploy_env.public_origin(resolved, slug),
     })
@@ -475,6 +511,25 @@ def retire_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_fac
     save_tenants(resolved, rows, root)
     steps.append(('ingress', str(render_ingress(resolved, rows, root))))
     return {'site': site, 'steps': steps}
+
+
+def agent_firewall_rules(resolved, runner=subprocess.run):
+    """Host rules that keep run containers off the host itself. Docker's `internal`
+    only drops FORWARD traffic; the bridge gateway (the host) stays reachable unless the
+    host's INPUT chain says otherwise. Docker's embedded DNS answers inside the
+    container namespace, so dropping INPUT from the bridge breaks nothing a run needs."""
+    result = runner(['docker', 'network', 'inspect', resolved['agent_network'], '--format', '{{.Id}}'],
+                    text=True, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+    if result.returncode or not result.stdout.strip():
+        raise Fault(f"读不到网络 {resolved['agent_network']}；先 compose up")
+    bridge = 'br-' + result.stdout.strip()[:12]
+    return {'bridge': bridge,
+            'iptables': [f'iptables -I INPUT 1 -i {bridge} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT',
+                         f'iptables -I INPUT 2 -i {bridge} -j DROP'],
+            'nft': [f'nft add rule inet filter input iifname "{bridge}" ct state established,related accept',
+                    f'nft add rule inet filter input iifname "{bridge}" drop'],
+            'undo': [f'iptables -D INPUT -i {bridge} -j DROP',
+                     f'iptables -D INPUT -i {bridge} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT']}
 
 
 def doctor(resolved, root=ROOT, runner=subprocess.run):
@@ -620,6 +675,7 @@ def main(argv=None):
     sub.add_parser('provision-platform', help='幂等开通平台站')
     sub.add_parser('list-tenants', help='列出当前租户')
     sub.add_parser('render-ingress', help='按当前租户清单重新渲染入口配置')
+    sub.add_parser('agent-firewall', help='打印把运行容器挡在宿主之外的 INPUT 规则（需 root 执行）')
     release_parser = sub.add_parser('release', help='升级到新 tag：先备份，逐站 migrate，再逐字段比对')
     release_parser.add_argument('tag')
     rollback_parser = sub.add_parser('rollback', help='回到旧 tag 并从升级前备份恢复')
@@ -647,6 +703,9 @@ def main(argv=None):
             return 0
         if arguments.command == 'list-tenants':
             _print(load_tenants(resolved))
+            return 0
+        if arguments.command == 'agent-firewall':
+            _print(agent_firewall_rules(resolved))
             return 0
         if arguments.command == 'render-ingress':
             _print({'rendered': str(render_ingress(resolved, load_tenants(resolved)))})

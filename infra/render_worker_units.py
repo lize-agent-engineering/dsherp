@@ -47,7 +47,7 @@ NoNewPrivileges=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
-ReadWritePaths={root}/.runtime {root}/work
+ReadWritePaths={root}/.runtime -{root}/work
 
 [Install]
 WantedBy=multi-user.target
