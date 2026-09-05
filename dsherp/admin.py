@@ -147,7 +147,10 @@ class Bench:
 
     def run(self, *arguments, stdin=None, timeout=900, secrets=()):
         command = self._compose('exec', '-T', self.service, *arguments)
-        result = self.runner(command, input=stdin, text=True, capture_output=True, timeout=timeout)
+        # A container command must never inherit the operator's stdin: when this CLI is
+        # driven from a script piped over ssh, bench would read the rest of that script.
+        io = {'input': stdin} if stdin is not None else {'stdin': subprocess.DEVNULL}
+        result = self.runner(command, text=True, capture_output=True, timeout=timeout, **io)
         if result.returncode:
             tail = '\n'.join((result.stderr or result.stdout or '').strip().splitlines()[-6:])
             for value in secrets:

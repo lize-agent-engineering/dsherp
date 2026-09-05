@@ -415,3 +415,16 @@ def test_a_tenant_that_chose_its_own_language_keeps_it_on_rerun():
     result = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench)
     assert dict(result["steps"])["system-settings"] == "kept"
     assert bench.config["language"] == "en"
+
+
+def test_a_container_command_without_input_never_inherits_the_operator_stdin(tmp_path):
+    import subprocess as _subprocess
+    seen = {}
+    def runner(command, **kwargs):
+        seen.update(kwargs)
+        return type("Result", (), {"returncode": 0, "stdout": "present\n", "stderr": ""})()
+    bench = admin.Bench(PROD, "tenant", root=tmp_path, runner=runner)
+    bench.site_state("acme.tenant.example.com")
+    assert seen.get("stdin") is _subprocess.DEVNULL and "input" not in seen
+    bench.python("acme.tenant.example.com", "print(1)")
+    assert "input" in seen and seen["input"].startswith("import json")
