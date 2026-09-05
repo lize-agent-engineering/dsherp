@@ -27,6 +27,9 @@ frappe.destroy()
 
 def test_configuration_native_runtime_reads_then_proposes_without_ddl(model_server,tmp_path):
     settings,requests,state=model_server
+    # Host side only: the run container is handed this digest and must never compute it.
+    from dsherp import deploy_env
+    settings={**settings,'deployment_digest':deploy_env.deployment_digest(deploy_env.settings({'DSHERP_ENV':'dev'}))}
     root="import os,frappe,json\nos.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-beta.localhost');frappe.connect()\n"
     def execute(script):
         result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=root+script,text=True,capture_output=True,timeout=40)

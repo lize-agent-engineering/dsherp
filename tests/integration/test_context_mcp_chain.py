@@ -37,6 +37,9 @@ finally:
 @pytest.mark.parametrize('isolated',[False,True])
 def test_native_context_runtime_reads_actual_erp_through_run_capability(model_server,tmp_path,created,isolated):
     settings,requests,state=model_server
+    # Host side only: the run container is handed this digest and must never compute it.
+    from dsherp import deploy_env
+    settings={**settings,'deployment_digest':deploy_env.deployment_digest(deploy_env.settings({'DSHERP_ENV':'dev'}))}
     if isolated:settings={**settings,'DEEPSEEK_BASE_URL':'http://127.0.0.1:38127/v1'}
     script=r'''
 import os,uuid,json,frappe
