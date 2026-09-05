@@ -88,9 +88,12 @@ DSHERP_ENV=prod ./bin/dsherp-admin provision-tenant "$SLUG"
 
 ```sh
 ./bin/dsherp-admin render-ingress          # 现在含租户站块
+compose up -d scheduler queue platform-scheduler platform-queue   # 定时任务与后台队列
 compose up -d frontend platform-frontend agent-egress caddy
-compose ps    # 全部 healthy
+compose ps    # 13 个服务全部 Up，9 个带探针的全部 healthy
 ```
+
+本地演练时曾漏起四个 scheduler/queue 服务而 `ps` 看起来"全绿"——`compose ps` 只列出已创建的服务，核对时要数服务数，不只看颜色。
 
 Caddy 按当前租户清单逐站签发 HTTP-01 证书，因此 `$SLUG.$DSHERP_BASE_DOMAIN` 与 platform 域名必须已解析到本机 80/443。每次增删租户后重跑 `render-ingress` 并 `compose up -d caddy`。
 
@@ -186,5 +189,5 @@ DSHERP_ENV=prod ./bin/dsherp-admin render-ingress && compose up -d caddy
 ## 已知边界
 
 - **通配证书**：目标拓扑写的是 `*.base_domain` 通配证书；通配必须走 DNS-01，需要带 DNS 提供商插件的 Caddy 构建与 API 凭证。按已裁决 #2 的 ≤3 租户试点规模，本文改为逐站 HTTP-01：不需要插件、不需要 DNS 凭证，代价是每次增删租户要重跑 `render-ingress`。
-- **G1 的执行环境**：本文的命令在本机 macOS arm64 上按 dev 形态逐条验证过（镜像构建、compose 渲染、CLI 幂等、容器边界、systemd unit 渲染），但**尚未在干净的 Linux x86_64 主机上整体执行过**。G1 需由审计方在新 VM 上按本文执行一次才算通过。
+- **G1 的执行环境**：本文已在本机 Docker Desktop 上以**生产形态**整体执行过一次（见"本地 Docker 上的 G1 演练"与[证据](deployment-security-evidence.md)），途中修掉 15 个断点；尚未在真正的 Linux x86_64 主机上跑过，架构、ACME、systemd 三项仍待真机核验。
 - **成员绑定**：`provision-tenant` 已覆盖建站、装 App、运行服务身份、站点配置、DS Enterprise、OAuth Client、Social Login Key、平台端点表、入口渲染与 healthcheck。**把某个平台用户加入某个企业（DS Membership）仍是人工步骤**：按已裁决 #4，成员的业务站短期密钥由 SSO 回调签发属于计划 4，本计划不改这条链路，因此成员绑定沿用平台站 Desk 上的手工创建。

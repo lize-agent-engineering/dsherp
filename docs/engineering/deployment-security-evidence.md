@@ -2,7 +2,7 @@
 
 日期：2026-09-05。分支 `plan3/deployment-security`（基于 `main` `b8e7b13`）。执行方式：按用户 2026-09-05 指示，本计划不再写交给 Codex 的实施计划，由 Claude 直接实施并自行入档；因此本文同时承担计划说明与证据两个角色。覆盖范围按[生产化总体设计](../superpowers/specs/2026-09-03-production-hardening-design.md)实施顺序表第 3 行：工作流 A 全部 + 工作流 B 的出口控制（S1）、非 root 与最小挂载（S7）、SSO 强制（S3）、guest 端点加固（S5/A5）、CSP 与渲染限制（S6/A2 的渲染部分）。放行门 G1、G4。
 
-**总判定**：G4 的全部判据在本机真实容器上实测通过；G1 的制品（镜像、compose、CLI、systemd unit、runbook）齐备并逐件验证，但**"干净 Linux x86_64 主机 60 分钟内拉起"这一执行动作尚未发生**——本机是 macOS arm64，没有可用的 Linux VM。G1 需审计方在新 VM 上按 [runbook](deployment-runbook.md) 执行一次才算通过。本文不宣称生产可用。
+**总判定**：G4 的全部判据先在 dev 容器、后在**生产形态**（发布镜像 + `compose.prod.yml` + `dsherp-admin`）的容器上实测通过；G1 按用户指示用本机 Docker 代替 Linux 主机，以生产形态从 tag 走到 13 个服务全部 Up、9 个带探针的全部 healthy，途中暴露并修复了 15 个只有实跑才会出现的断点（见"本地 Docker 上的 G1 演练"）。与真正 Linux x86_64 主机的残余差别是架构、ACME 与 systemd 三项。本文不宣称生产可用；真实租户接入仍需终验。
 
 ## 勘察
 
@@ -137,6 +137,48 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 
 集成结果：第一轮全量 `20 failed, 177 passed`（14:48）——两簇根因：`finish_run` 用 `get_value` 读裸 `INCRBY` 计数器触发 `UnpicklingError`（15 条）、grant 缓存让撤销不再即时（`test_desk_sso` 5 条）；修复后（提交 `e7a4ca9`）第二轮全量 `4 failed, 193 passed`（14:33）——剩 4 条是三个集成用例手工拼 provider settings 缺 `deployment_digest`，且首次修法（把 digest 放进共享夹具）被 `test_context_worker_chain` 拦下：它把夹具挂进运行容器，容器里本就没有 compose 文件，digest 只能宿主算。改为宿主侧用例补 digest 后这 4 条 `4 passed`（3:21），期间未再改应用代码；合计 **197 条集成用例全部通过**。新增 `tests/integration/test_agent_boundary.py` 6 条包含在内。
 
+## 本地 Docker 上的 G1 演练（2026-09-05，用户指示以本机 docker 代替 Linux 主机）
+
+按 runbook 在本机 Docker Desktop 上以**生产形态**跑第二套栈：项目名 `dsherp`（dev 是 `dsherp-validation`）、`infra/compose.prod.yml`、`local/dsherp-frappe:v0.3.0-rc1` 与 `local/dsherp-worker:v0.3.0-rc1`（`release_images.py --platform linux/arm64`，manifest 记提交 `49c1cb2`）、`DSHERP_BASE_DOMAIN=localhost`、独立的 `.runtime/prod-local/` 运行态与密钥目录。与真正 Linux x86_64 主机的差别只有架构（arm64）、`.localhost` 用 Caddy 内置 CA、笔记本规格的数据面、以及没有 systemd（worker 前台核对）。
+
+真正的价值在于**runbook 一执行就断在哪里**。以下每一条都是只读勘察与离线测试拦不住、只有实跑才会暴露的缺陷，全部已修并各有测试：
+
+| # | 断点 | 现象 | 修法（提交） |
+|---|---|---|---|
+| 1 | CLI 的 compose 调用没带 `--env-file` | `compose.prod.yml` 的 `${…:?}` 在 `exec` 时插值失败 | `Bench._compose` 传入 deploy_env 解析所用的同一份文件（`49c1cb2`） |
+| 2 | 空 sites 卷没有 `apps.txt`/`common_site_config.json` | `bench new-site` 无库地址 | `ensure_bench` 引导三个文件（`49c1cb2`） |
+| 3 | `DSHERP Member` 角色只有 dev 种子脚本会建 | 新平台站的 OAuth Client 因链接不存在失败 | `provision-platform` 自建角色（`49c1cb2`） |
+| 4 | 镜像自带 `apps.txt`（frappe/erpnext）与 `common_site_config.json={}` | `ensure_bench` 把"存在"当"已引导"，什么都没写 | 按内容判断：apps 逐行补缺，配置只在无 `db_host` 时写（`34f0d39`） |
+| 5 | 首次 `new-site` 半途失败留下空壳目录 | 重跑被误判 kept | 站点以 `site_config.json` 为准，空壳目录明确报错（`34f0d39`） |
+| 6 | Fault 吞掉 stderr | 真实原因不可见 | Fault 带脱敏后的 stderr 尾部（`34f0d39`）——第 7 条就是靠它找到的 |
+| 7 | 镜像 `apps.txt` 结尾无换行 | 追加后变成 `erpnextdsherp_bridge`，导入失败 | 追加前补换行，已在真实镜像文件上 `od -c` 验证（`71b66f0`） |
+| 8 | 运行态/密钥目录靠 shell export | 一次漏 export，compose 回落到 `../.runtime/control` 用**开发密钥**初始化了新库，CLI 以生产密钥被拒（db 容器内密钥 digest 与 dev 一致，已核实） | 两个目录进 `prod.env` 由 deploy_env 与 compose 共读，prod 必须绝对路径，`doctor` 对缺项报错（`b9a6032`） |
+| 9 | runbook 用 `$COMPOSE` 变量、入口配置在第一次 `up` 之后才渲染 | zsh 不分词；compose 解析时就要求 configs 文件存在 | 改 shell 函数；`render-ingress` 提前到第一次 `up` 前（`49c1cb2`、`34f0d39`） |
+| 10 | 新站 System Settings 无 `language`/`time_zone` | Frappe 拒绝保存，关密码登录失败 | 两项作为"为空才写"的引导值（`946a0b4`） |
+| 11 | prod frontend 用镜像入口 | 入口启动时 `rm -rf sites/assets`，在 `:ro` 卷上崩溃循环 | 同 dev：`entrypoint: []` 直接跑 `nginx-entrypoint.sh`（`7482304`） |
+| 12 | backend 只接 internal 网络 | 宿主 worker 无路可达；加了回环 `ports:` 仍不通——**Docker 不为只在 internal 网络上的容器发布端口** | backend 额外接非 internal 的 `worker` 网络，只在 `127.0.0.1:8000` 发布；契约测试断言只有 backend 与 Caddy 发布端口且回环绑定（`7482304`） |
+| 13 | Caddy 探针 `wget --spider :80` | 80 只做 HTTPS 重定向，跟随后证书不匹配，永远 unhealthy | 改为 443 监听探测（`7482304`） |
+| 14 | 边缘 `run_status` 返回 500 而非 404 | 屏蔽块只在 dev 模板里，prod 用的是镜像自带模板 | `infra/nginx/site.conf.template`（基底模板 + 屏蔽块）COPY 进镜像，两份模板同一断言（`7482304`） |
+| 15 | runbook 的 `up` 列表从未起过 scheduler/queue | `compose ps` 只列已创建的服务，"9/9 全绿"实为 13 个里的 9 个 | 补进 `up` 列表，runbook 提醒数服务数 |
+| — | `ensure_runtime_identity` 每次 `generate_keys` | 幂等重跑会静默作废运行密钥 | 只在无 api_key 时签发，`--rotate-runtime-key` 显式轮换；密钥只在签发那次出现（`946a0b4`）——本条不是实跑发现，是写 worker profile 时意识到的 |
+
+### 演练结果（最终镜像：manifest 提交 `7482304`，`local/dsherp-frappe` `sha256:1711…`、`local/dsherp-worker` `sha256:4602…`，`linux/arm64`）
+
+| G1 / G4 判据 | 实测 |
+|---|---|
+| 从 tag 到全绿 | `secrets init` → `doctor` 空 findings → `render-ingress` → 数据面 3 服务 healthy → `provision-platform`（18s）→ `provision-tenant g1`（50s；中途断在 #10 后**续跑**：断点前五步全 kept，运行身份未重签）→ 入口/出口/Caddy → **13 个服务全部 Up，9 个带探针的全部 healthy** |
+| 幂等 | 平台重跑 5 步全 kept；租户第二次重跑 15 步除清单/渲染/healthcheck 外全 kept，输出不含密钥 |
+| TLS | Caddy 为 `g1.localhost`、`platform.localhost` 签发（issuer `Caddy Local Authority - ECC Intermediate`），HTTP/2，HSTS；`http://` → 308 到 https |
+| CSP | `https://g1.localhost/login` 200，含 `content-security-policy`（img-src/connect-src 仅 self） |
+| SSO 强制 | `POST /api/method/login` → 401；登录页无密码输入框（`disable_user_pass_login` 由 `provision-tenant` 写入） |
+| 边缘屏蔽 | `run_status`、`finish_run` 经 Caddy → 404 |
+| 平台 | `https://platform.localhost/api/method/ping` 200，登录页 200（平台保留密码登录，它是 SSO 的身份源） |
+| 容器边界（用发布镜像 `local/dsherp-worker` 在 `dsherp_agent` 网络实测） | uid 501/gid 20；公网 DNS 与 IP 均不可达；`agent-egress:8890`、`backend:8000` 可达；`platform-backend`、`db`、`redis-queue` 不可达；`/opt/dsherp/infra`、`.env`、`.runtime`、`/run/secrets` 不存在；`/opt/dsherp` 与 `/opt/runtime` 不可写；provider 仅经代理（401） |
+| 宿主 worker | 停 dev worker 后以 `DSHERP_ENV=prod` 前台跑 40s：`prepare_host` 通过（发布镜像 + `dsherp_agent` 网络）、`/metrics` 9110 应答、**站侧 `dsherp_worker_heartbeat` 已写入**、零 `worker_error`、SIGTERM 干净退出；dev worker 随后恢复 |
+| 门禁（本轮修复后） | 离线 `363 passed`、Node `10 pass`（前端与 dist 自上次无变化） |
+
+与真正的 Linux x86_64 主机仍有的差别：架构（arm64）、`.localhost` 内置 CA 而非 ACME、systemd 守护未实际启用（unit 只做了渲染）、单机上 dev 与 prod 两套栈并存。演练结束后本地 prod 栈连卷拆除、两个发布镜像删除，`.runtime/prod-local/` 一并清理。
+
 ## 偏离 spec 与理由
 
 | spec 原文 | 实际 | 理由 |
@@ -154,7 +196,7 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 
 | 项 | 状态 | 去向 |
 |---|---|---|
-| 干净 Linux x86_64 主机整体拉起 | **未执行**（无 VM） | G1 由审计方按 runbook 执行；本机只验证了每一步的制品 |
+| 干净 Linux x86_64 主机整体拉起 | 已在本机 Docker 以生产形态整体执行（用户指示）；x86_64 架构、ACME 签发、systemd 守护三项未在真机验证 | 有 Linux 主机时按 runbook 再跑一次即可，预期不再有断点 |
 | DS Membership 人工创建 | 沿用平台 Desk 手工 | 已裁决 #4 的短期密钥签发属计划 4，绑定链路不在本计划改 |
 | 平台侧撤销推送端点 | 未做 | 计划 4 与凭证托管一起 |
 | `infra/provision_*.py` 等 17 个 dev 脚本 | 保留 | 四站由它们建成、集成夹具依赖其产物；prod 路径已不经过它们。退役随 dev 收敛另立项 |
@@ -164,4 +206,4 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 
 ## 提交
 
-`7882fb0` 环境分层 → `cf939d9` 自建镜像 → `3f79ac0` 出口控制/非 root/契约 → `1e47cf3` 开站 CLI → `64ed22e` SSO/guest/CSP/渲染 → `5f8e71b` 升级回滚/patches/供应链 → `001c503` OAuth 链与 runbook → 本文。
+`7882fb0` 环境分层 → `cf939d9` 自建镜像 → `3f79ac0` 出口控制/非 root/契约 → `1e47cf3` 开站 CLI → `64ed22e` SSO/guest/CSP/渲染 → `5f8e71b` 升级回滚/patches/供应链 → `001c503` OAuth 链与 runbook → `e7a4ca9` 集成门修复 → `8857788` 证据 → 本地 G1 演练：`49c1cb2`、`34f0d39`、`71b66f0`、`b9a6032`、`946a0b4`、`7482304` → 本文。
