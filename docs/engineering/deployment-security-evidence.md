@@ -1,8 +1,8 @@
 # 计划 3：部署制品与安全边界 证据
 
-日期：2026-09-05。分支 `plan3/deployment-security`（基于 `main` `b8e7b13`）。执行方式：按用户 2026-09-05 指示，本计划不再写交给 Codex 的实施计划，由 Claude 直接实施并自行入档；因此本文同时承担计划说明与证据两个角色。覆盖范围按[生产化总体设计](../superpowers/specs/2026-09-03-production-hardening-design.md)实施顺序表第 3 行：工作流 A 全部 + 工作流 B 的出口控制（S1）、非 root 与最小挂载（S7）、SSO 强制（S3）、guest 端点加固（S5/A5）、CSP 与渲染限制（S6/A2 的渲染部分）。放行门 G1、G4。
+日期：2026-09-05。分支 `plan3/deployment-security`（基于 `main` `b8e7b13`；PR #3 已合入 main `750f043`），收尾——本地与 x86_64 演练、独立审计后的修复——在分支 `plan3/g1-x86`（PR #4）。执行方式：按用户 2026-09-05 指示，本计划不再写交给 Codex 的实施计划，由 Claude 直接实施并自行入档；因此本文同时承担计划说明与证据两个角色。覆盖范围按[生产化总体设计](../superpowers/specs/2026-09-03-production-hardening-design.md)实施顺序表第 3 行：工作流 A 全部 + 工作流 B 的出口控制（S1）、非 root 与最小挂载（S7）、SSO 强制（S3）、guest 端点加固（S5/A5）、CSP 与渲染限制（S6/A2 的渲染部分）。放行门 G1、G4。
 
-**总判定**：G4 的全部判据在 dev 容器、本机生产形态、以及 **x86_64 服务器上的 amd64 发布镜像**三处实测通过；G1 先在本机 Docker 以生产形态走通（15 个断点），再按用户指示在 x86_64 服务器（CentOS 7、共用主机、端口挪到 18080/18443）以生产形态整体执行：源码树 → 原生 amd64 镜像 → 13 服务全 Up、9 探针全 healthy → **systemd 守护下的宿主 worker 写入站侧心跳**，又暴露并修复 7 个（#16–#22）。G1 的三条残余差别只剩 **ACME**（两次演练都没有 80 端口 + 公网域名）。本文不宣称生产可用；真实租户接入仍需终验。
+**总判定**（经 2026-09-05 独立审计修订，见「独立审计」节）：计划 3 的制品与安全边界齐备，G4 的判据在 dev 容器、本机生产形态、x86_64 服务器的 amd64 发布镜像上实测，审计找出并已修复三处 G4 真缺陷（宿主网关可达、SSO 机器认证前缀绕过、边缘屏蔽漏 `/api/v2` 与 `cmd=`）；G1 的 runbook 在本机 Docker 与 x86_64 服务器上各以生产形态完整执行一次并修掉 22 个断点，但**按 spec 判据字面（干净主机、只给 tag/registry、60 分钟）与第 29 行「执行方自报不算通过」，G1 不记为通过**，ACME 亦未验。本文不宣称生产可用；真实租户接入仍需终验。
 
 ## 勘察
 
@@ -28,9 +28,9 @@
 
 ### 1. 环境分层（`dsherp/deploy_env.py`，`infra/env/`）
 
-一个环境文件决定镜像、域名、网络名、容器身份与内部服务地址；进程环境覆盖文件。dev 保留 `dsherp-validation` 项目名与历史端口（`DSHERP_ORIGINS` 覆盖），prod 必须给出明确 tag（拒绝 `latest`/`main`）。`deployment_digest()` 对 9 个部署面文件与 13 个环境键做 sha256。
+一个环境文件决定镜像、域名、网络名、容器身份与内部服务地址；进程环境覆盖文件。dev 保留 `dsherp-validation` 项目名与历史端口（`DSHERP_ORIGINS` 覆盖），prod 必须给出明确 tag（拒绝 `latest`/`main`）。`deployment_digest()` 对 10 个部署面文件与 13 个环境键做 sha256。
 
-验证：`tests/test_deploy_env.py` 11 条。
+验证：`tests/test_deploy_env.py` 12 条（收尾后）。
 
 ### 2. 自建镜像（`infra/docker/*/Dockerfile`，`infra/release_images.py`）
 
@@ -43,13 +43,13 @@
 
 ### 3. compose 与入口（`infra/compose.prod.yml`，`infra/compose.validation.yml`，`infra/caddy/`，`infra/nginx/`）
 
-prod compose：全部第三方镜像按 digest、自建镜像按 `${REGISTRY}/dsherp-*:${TAG}`，`pull_policy: if_not_present`；零 bind mount（契约测试断言每个卷源都是命名卷）；9 个长驻服务全部有 healthcheck 与 `restart: unless-stopped`；六个网络中只有 `provider` 有默认路由，`agent`、`backplane`、`site`、`platform-site`、`edge` 全部 `internal: true`；`platform-backend` 不在 `agent` 网。`docker compose config` 渲染通过。
+prod compose：全部第三方镜像按 digest、自建镜像按 `${REGISTRY}/dsherp-*:${TAG}`，`pull_policy: if_not_present`；零 bind mount（契约测试断言每个卷源都是命名卷）；9 个长驻服务全部有 healthcheck 与 `restart: unless-stopped`；七个网络中只有 `provider`（Caddy/ACME 与出口代理）和 `worker`（backend 向宿主发布回环端口所需）有默认路由；后者让租户 backend 也有了缺省路由，是单主机拓扑下的取舍，`agent`、`backplane`、`site`、`platform-site`、`edge` 全部 `internal: true`；`platform-backend` 不在 `agent` 网。`docker compose config` 渲染通过。
 
 dev compose 只做三处加法：`agent`（internal）与 `egress` 网络、`agent-egress` 服务、两个入口覆盖 `security_headers.conf`；`backend` 额外加入 `agent` 网。现有 8 个 `v16-*` 卷与服务名一个未动。
 
 Caddy：`caddy@sha256:4c6e91c6…`（多架构），`Caddyfile.template` 由 `render-ingress` 按租户清单逐站渲染。
 
-验证：`tests/test_deployment_contract.py` 23 条（原 `test_v16_deployment_contract.py` 改名，硬计数 `== 11` 改为逐文件断言，守门文件集合扩到 7 个含 probe 栈）。
+验证：`tests/test_deployment_contract.py` 27 条（收尾后）（原 `test_v16_deployment_contract.py` 改名，硬计数 `== 11` 改为逐文件断言，守门文件集合扩到 7 个含 probe 栈）。
 
 ### 4. 出口控制与容器边界（S1、S7）—— G4
 
@@ -57,7 +57,7 @@ Caddy：`caddy@sha256:4c6e91c6…`（多架构），`Caddyfile.template` 由 `re
 
 | 判据 | 实测 |
 |---|---|
-| 非 root | `uid=501 gid=20`（宿主 uid；prod 固定 1000） |
+| 非 root | `uid=501 gid=20`（宿主 uid；prod 由 `DSHERP_AGENT_UID` 指定，必须等于服务账号的 uid，x86 演练为 995） |
 | 不能出公网 | `api.deepseek.com:443` gaierror，`1.1.1.1:443` OSError |
 | 只能到 provider 代理与业务站 | `agent-egress:8890` 可达、`dsherp-validation-backend-1:8000` 可达、`platform-frontend:8080` 不可达 |
 | 控制面文件不可见 | `/opt/dsherp/infra`、compose、prepare 脚本、`.env`、`.runtime` 均不存在；`/opt/dsherp` 不可写 |
@@ -110,7 +110,7 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 | `release <tag>` | 逐站备份 → 逐站 migrate → 逐 DocType 逐字段摘要比对 → 报告；有差异退出码 1 |
 | `rollback <tag>` | 必须显式给出每站备份文件；恢复后快照入报告 |
 
-回调、授权、端点、业务站内部地址四类 URL 统一由 `deploy_env` 派生，`infra/provision_desk_oauth.py` 等脚本里的硬编码不再是 prod 路径。验证：`tests/test_admin_cli.py` 16 条（FakeBench 记录每一步对容器提出的命令）。本机 `bin/dsherp-admin doctor` 对 dev 返回空 findings。
+回调、授权、端点、业务站内部地址四类 URL 统一由 `deploy_env` 派生，`infra/provision_desk_oauth.py` 等脚本里的硬编码不再是 prod 路径。验证：`tests/test_admin_cli.py` 27 条（收尾后）（FakeBench 记录每一步对容器提出的命令）。本机 `bin/dsherp-admin doctor` 对 dev 返回空 findings。
 
 ### 9. 升级回滚与 schema（G2 前置）
 
@@ -171,7 +171,7 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 | TLS | Caddy 为 `g1.localhost`、`platform.localhost` 签发（issuer `Caddy Local Authority - ECC Intermediate`），HTTP/2，HSTS；`http://` → 308 到 https |
 | CSP | `https://g1.localhost/login` 200，含 `content-security-policy`（img-src/connect-src 仅 self） |
 | SSO 强制 | `POST /api/method/login` → 401；登录页无密码输入框（`disable_user_pass_login` 由 `provision-tenant` 写入） |
-| 边缘屏蔽 | `run_status`、`finish_run` 经 Caddy → 404 |
+| 边缘屏蔽 | `run_status`、`finish_run` 经 Caddy 转到 frontend nginx → 404（屏蔽在 frontend 的站点模板里，Caddyfile 只做反代；审计发现 `/api/v2/method/` 与 `?cmd=` 两条 Frappe 路由曾漏掉，已补） |
 | 平台 | `https://platform.localhost/api/method/ping` 200，登录页 200（平台保留密码登录，它是 SSO 的身份源） |
 | 容器边界（用发布镜像 `local/dsherp-worker` 在 `dsherp_agent` 网络实测） | uid 501/gid 20；公网 DNS 与 IP 均不可达；`agent-egress:8890`、`backend:8000` 可达；`platform-backend`、`db`、`redis-queue` 不可达；`/opt/dsherp/infra`、`.env`、`.runtime`、`/run/secrets` 不存在；`/opt/dsherp` 与 `/opt/runtime` 不可写；provider 仅经代理（401） |
 | 宿主 worker | 停 dev worker 后以 `DSHERP_ENV=prod` 前台跑 40s：`prepare_host` 通过（发布镜像 + `dsherp_agent` 网络）、`/metrics` 9110 应答、**站侧 `dsherp_worker_heartbeat` 已写入**、零 `worker_error`、SIGTERM 干净退出；dev worker 随后恢复 |
@@ -205,13 +205,38 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 | TLS | Caddy 内置 CA（issuer `Caddy Local Authority - ECC Intermediate`），HSTS；`http://…:18080` → 308 |
 | CSP | `login` 200，`Content-Security-Policy` 与 HSTS 头在 |
 | SSO 强制 | `POST /api/method/login` → 401；登录页无密码输入框 |
-| 边缘屏蔽 | `run_status`、`finish_run` 经 Caddy → 404 |
+| 边缘屏蔽 | `run_status`、`finish_run` 经 Caddy 转到 frontend nginx → 404（屏蔽在 frontend 的站点模板里，Caddyfile 只做反代；审计发现 `/api/v2/method/` 与 `?cmd=` 两条 Frappe 路由曾漏掉，已补） |
 | 平台 / 回环 | 平台 ping 200；宿主 `127.0.0.1:8000`（Host g1）→ 200（worker 网络 + 回环发布在 x86 上同样成立） |
 | 容器边界（**amd64 发布镜像** `local/dsherp-worker:v0.3.0-rc2` 在 `dsherp_agent`） | `machine=x86_64`、uid 995；公网 DNS/IP 不可达；`agent-egress`、`backend` 可达；`platform-backend`、`db` 不可达；无控制面文件；代码不可写；provider 仅经代理（401） |
 | 完整锁在 amd64 容器内 | `deepseek-harness-runtime-bin 0.1.1rc1` 在 worker 镜像里可导入——`manylinux_2_28` wheel 在 bookworm（glibc 2.36）容器内正常，只有宿主 CentOS 7 装不了 |
 | 宿主 worker / systemd | 先按原样在 `/home` 根下 `systemctl start`：如 #20 所料 `OSError: [Errno 30] Read-only file system: …/.runtime/business-sessions`，`Restart=always` 反复拉起；挪到 `/srv/dsherp` 后又暴露 #22（无 `DSHERP_ENV`）；修后 `enable --now`：**`active (running)`、`Type=notify`（READY=1 被 systemd 接受）、`WatchdogUSec=1min`、跨过看门狗周期无重启**、`/metrics` 9109 应答、**站侧 `dsherp_worker_heartbeat` 经 `127.0.0.1:8000` 写入**、journal 仅有 219 对 `ProtectSystem=strict` 的解析告警与新站的 `ops_snapshot_stale`。宿主 venv 为不含 SDK 的子集（#16），provider 凭据为合成值，演练未调用 provider |
 
-服务器上的源码树是 `dde55f0`（`git archive`）加 `3ca26ca` 的渲染器修复；两个镜像由 `dde55f0` 构建，渲染器修复只影响宿主侧。演练结束后按收尾脚本把 unit、栈、卷、我拉的六个镜像、`/srv/dsherp`、`dsherp` 账号全部清除，其他人的服务与 80/443 不受影响。
+服务器上的源码树在演练时是 `dde55f0`（`git archive`）加 `3ca26ca` 的渲染器热修（`admin.py` 仍是 `dde55f0` 版本，#21 的 stdin 修复靠驱动脚本的 `</dev/null` 绕过，未在该主机验证）；两个镜像由 `dde55f0` 构建。**栈在演练后没有立即拆除**——先留给独立审计做只读复验，审计确认的问题修复后再次在同一栈上复验（见「独立审计」节），然后才清除。本文早先版本在栈仍在运行时就写了「已全部清除」，是不实陈述，由审计指出并在此更正。
+
+**时长与判据字面**：从首个 `sudo` 到 worker active 共 68.5 分钟（其中原生构建 34 分钟、两次安装根/unit 返工约 5 分钟），G1 的「60 分钟内」**未满足**；主机不「干净」（共用 ECS、30 个他人容器、80/443 被占）且违反 runbook 自己的两条前置（glibc ≥ 2.28、systemd ≥ 242）；没有 git tag（只有镜像 tag）、没有 registry（目标机自建）。因此按 spec「验收门」的字面与第 29 行「执行方自报不算通过」，**G1 不能记为通过**；本文能宣称的是：runbook 的每一步在 x86_64 上都以生产形态执行过并留下可复核的结果，且执行中暴露的断点全部已修。
+
+## 独立审计（2026-09-05，5 名互不知情的子代理 + 逐条复核，服务器栈保持存活供只读复验）
+
+按 spec 第 29 行「执行方自报不算通过」，在合并前对本文与 PR #4 做了一轮独立审计：仓库核实、服务器只读复验、runbook 漂移、对抗性反驳 G4、对抗性反驳 G1，每条问题另派一名复核员确认或推翻。44 名代理完成，11 名 runbook 漂移复核员因会话额度中断（其问题由执行方逐条自行判定，全部采纳）。结果：**确认 38 条**（阻断 1、major 14、minor 22、info 1），无一被复核推翻。处置如下。
+
+**代码级真缺陷（已修，均有测试）**
+
+| 审计结论 | 修复 |
+|---|---|
+| **阻断**：平台 bench 与租户 bench 共用一个 redis 队列库，RQ 队列名来自相同的 bench 路径，平台 worker 取走租户作业并以 `IncorrectSitePath` 失败（实测 13 条）；两站 scheduler 均 disabled；四个 bench 进程无探针 | 两个 bench 各用一个队列库（`/0`、`/1`）；`provision-*` 启用 scheduler，healthcheck 断言其启用；四个服务加存活探针，契约测试要求 13 个服务全部有探针 |
+| **major（G4）**：Docker `internal` 只隔离 FORWARD，运行容器能连到网桥网关即宿主（sshd :22 握手成功） | `dsherp-admin agent-firewall` 打印按 agent 网桥限定的 INPUT 规则；runbook 第 8 步加规则；`infra/probe_agent_boundary.py` 用真实运行容器参数探测并断言宿主网关不可达 |
+| **major（G4）**：SSO 的「机器认证」只看 `Authorization` 前缀，cookie 会话加假 token 即跳过 grant | 核对会话用户自己的 api_key/api_secret（常量时间比较）；`tests/integration/test_sso_machine_auth.py` 覆盖无头/假 token/裸前缀/错 secret/真密钥 |
+| **major（G4）**：边缘 404 漏了 `/api/v2/method/` 与 `?cmd=`；来源白名单未配置时 fail-open；且只写 agent 网段会拒掉宿主 worker 自己经回环的 `finish_run` | 两份模板加 v2 路由与 `$arg_cmd` 屏蔽；`provision-tenant` 写入 agent + worker 两个网段，healthcheck 断言存在 |
+| minor（G4）：两个 bench 共用 `backups` 卷；real_ip 信任网段与 Caddy 实际地址不符；Caddy 以 root 带全部能力运行 | 卷分开；edge 子网钉死为 real_ip 信任源；Caddy `cap_drop ALL` + `NET_BIND_SERVICE` |
+| minor：`ReadWritePaths` 指向尚不存在的 `work/`，在真正生效的 systemd 上会让命名空间搭建失败 | `-` 前缀，缺失即忽略 |
+
+**runbook 按原文不可执行（已重写）**：CLI 步骤依赖尚未创建的 venv 与 prod.env（顺序调整）；`nologin` 账号与 `sudo -iu` 互斥、以 dsherp 向 root 目录 clone 必失败（账号模型一节 + 第 1 步）；第 3–8 步未说明执行账号（`admin()`/`compose()` 函数统一以 dsherp 执行）；`DSHERP_AGENT_UID` 必须等于服务账号 uid（明写）；unit 渲染到 `/etc/systemd/system` 无 sudo（dsherp 渲染、root 安装）；uv 与 Python 发布包来源未写；`$DSHERP_PROJECT` 等从未 export（`set -a; . prod.env`）；`zstd` 主机上没有（gzip）；第 9 步的 pytest 写死 dev 栈（改为 `probe_agent_boundary.py`）；密钥落盘方式只是散文（写成可执行的 Python 管道）。
+
+**证据的不实与过期陈述（已更正）**：「演练结束后已全部清除」写在清除发生之前（栈当时仍在跑）；runbook 第 201 行仍说未在 x86_64 跑过；`prod 固定 1000`；网络数 6→7、部署面文件 9→10、三个测试文件条数；「经 Caddy → 404」未说明屏蔽在 frontend nginx；未给出总时长。
+
+**接受并如实记录的偏离**：G1 字面判据未满足（见「时长与判据字面」）；宿主 venv 为不含 SDK 的子集（#16，主机 glibc 所致）；Caddy 之后各跳为内部网络上的明文 HTTP（spec「全链路 TLS」的字面未达，TLS 终止在 Caddy，内部跳段在 internal 网络内）；租户 backend 因 `worker` 网络获得缺省路由；演练栈的 18443/18080 曾对公网开放（共用 ECS，未配安全组，演练后已拆）；心跳时间戳为站点本地时间（计划 2 的既有行为，记为 info）；从未在该主机上执行过一次真实运行（provider 凭据为合成值）。
+
+**修复后的服务器复验**：在同一栈上把修复落地后逐项复验（frappe 镜像由 `f9bd051` 重建；worker 镜像保留 `dde55f0` 版本，容器内运行代码本次未改）：平台 bench 改用队列库 `/1`（在用 bench 的配置由 CLI 拒绝改写，演练里显式迁移）；`compose up -d` 后 **13/13 healthy**（四个 bench 进程探针生效；钉子网的 `edge` 网络需先显式重建，compose 对有容器挂着的网络重建会交互式询问）；`provision-platform`/`provision-tenant g1` 重跑报 `scheduler: enabled`、`site-config: changed:dsherp_agent_sources`；两站 `bench scheduler status` 均 enabled；租户 `frappe.enqueue('frappe.ping')` 在**租户**队列执行、3 分钟内 `IncorrectSitePath` 为 0；`dsherp_agent_sources = ['192.168.0.0/20','192.168.16.0/20']`，回环假凭据调用返回「Could not find run」而非来源拒绝；`agent-firewall` 两条 INPUT 规则加到 `br-db512087a978`；unit 重渲染（`-work`）重启后 active、心跳 13:30:15；`infra/probe_agent_boundary.py`（真实运行容器参数）`failures: {}`，其中 **`host_gateway_ssh: False`、`host_gateway_loopback_port: False`**、`no_new_privs: True`、能力集为空；边缘 `/api/method`、`/api/v2/method`、`?cmd=` 三种写法均 404；SSO 机器认证在生产 backend 用临时普通 System User 复验：`{"no_header": "refused", "bogus_token": "refused", "bare_prefix": "refused", "wrong_secret": "refused", "real_key": "allowed"}`（运行服务身份按设计豁免 grant，它无密码且站点已关密码登录）。复验后按收尾脚本拆除，含撤销防火墙规则。
 
 ## 偏离 spec 与理由
 
@@ -230,7 +255,7 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 
 | 项 | 状态 | 去向 |
 |---|---|---|
-| 干净 Linux x86_64 主机整体拉起 | 本机 Docker 与 x86_64 服务器各以生产形态整体执行一次；仅 ACME 签发未验（需要 80 端口 + 公网域名的专用主机） | 首台真实生产主机开通时顺带核 ACME；其余无遗留断点 |
+| 干净 Linux x86_64 主机整体拉起 | runbook 在本机 Docker 与 x86_64 共用服务器各完整执行一次；G1 字面判据（干净主机、只给 tag/registry、≤60 分钟、全部探针）未满足，ACME 未验 | 需要一台满足前置（glibc ≥ 2.28、systemd ≥ 242、80/443 空闲、有公网域名）的专用主机，由审计方按 runbook 计时执行 |
 | DS Membership 人工创建 | 沿用平台 Desk 手工 | 已裁决 #4 的短期密钥签发属计划 4，绑定链路不在本计划改 |
 | 平台侧撤销推送端点 | 未做 | 计划 4 与凭证托管一起 |
 | `infra/provision_*.py` 等 17 个 dev 脚本 | 保留 | 四站由它们建成、集成夹具依赖其产物；prod 路径已不经过它们。退役随 dev 收敛另立项 |

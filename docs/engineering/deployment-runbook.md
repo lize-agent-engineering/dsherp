@@ -229,5 +229,5 @@ DSHERP_ENV=prod ./bin/dsherp-admin render-ingress && compose up -d caddy
 ## 已知边界
 
 - **通配证书**：目标拓扑写的是 `*.base_domain` 通配证书；通配必须走 DNS-01，需要带 DNS 提供商插件的 Caddy 构建与 API 凭证。按已裁决 #2 的 ≤3 租户试点规模，本文改为逐站 HTTP-01：不需要插件、不需要 DNS 凭证，代价是每次增删租户要重跑 `render-ingress`。
-- **G1 的执行环境**：本文已在本机 Docker Desktop 上以**生产形态**整体执行过一次（见"本地 Docker 上的 G1 演练"与[证据](deployment-security-evidence.md)），途中修掉 15 个断点；尚未在真正的 Linux x86_64 主机上跑过，架构、ACME、systemd 三项仍待真机核验。
+- **G1 的执行环境**：本文在本机 Docker Desktop 与一台 x86_64 CentOS 7 共用服务器上各以生产形态完整执行过一次（见[证据](deployment-security-evidence.md)），共修掉 22 个断点；两台主机都不满足 G1 判据字面（干净、专用、前置齐全），G1 与 ACME 仍待一台合规主机由审计方按本文计时执行。
 - **成员绑定**：`provision-tenant` 已覆盖建站、装 App、运行服务身份、站点配置、DS Enterprise、OAuth Client、Social Login Key、平台端点表、入口渲染与 healthcheck。**把某个平台用户加入某个企业（DS Membership）仍是人工步骤**：按已裁决 #4，成员的业务站短期密钥由 SSO 回调签发属于计划 4，本计划不改这条链路，因此成员绑定沿用平台站 Desk 上的手工创建。
