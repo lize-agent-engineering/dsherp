@@ -330,6 +330,8 @@ def test_the_bench_bootstrap_never_rewrites_an_existing_database_address():
     # Presence is not configuration: only a config that names a database is left alone.
     assert "grep -q '\"db_host\"' common_site_config.json" in body and "redis-queue" in body and "redis-cache" in body
     assert "grep -qx" in body and "touch apps.txt" in body
+    # The base image ships apps.txt without a final newline; a blind append fused two names.
+    assert 'tail -c1 apps.txt' in body and body.index('tail -c1 apps.txt') < body.index('grep -qx')
     assert "dsherp_bridge" in body and "dsherp_platform" in body
 
 

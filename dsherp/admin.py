@@ -198,6 +198,8 @@ def ensure_bench(bench, resolved):
     apps = ' '.join(BENCH_APPS.split())
     script = (f"cd {SITES} && state=''\n"
               "touch apps.txt; added=0\n"
+              # The image's apps.txt has no trailing newline; appending to it would fuse names.
+              "if [ -s apps.txt ] && [ -n \"$(tail -c1 apps.txt)\" ]; then echo >> apps.txt; fi\n"
               f"for app in {apps}; do grep -qx \"$app\" apps.txt || {{ echo \"$app\" >> apps.txt; added=$((added+1)); }}; done\n"
               "if [ \"$added\" -eq 0 ]; then state=\"$state apps.txt:kept\"; else state=\"$state apps.txt:added=$added\"; fi\n"
               "if [ -f common_site_config.json ] && grep -q '\"db_host\"' common_site_config.json; then state=\"$state config:kept\"; "
