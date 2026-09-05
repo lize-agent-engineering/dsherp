@@ -105,11 +105,11 @@ sudo -u dsherp install -m 600 /dev/null /opt/dsherp/.runtime/context-worker-site
 sudo -u dsherp $EDITOR /opt/dsherp/.runtime/context-worker-sites.json
 ```
 
-profile 形如（`business_url` 走 agent 网络内的服务名，`base_url` 走内部入口）：
+profile 形如：`base_url` 是宿主 worker 自己领取运行、发心跳用的地址——它在宿主上，而 compose 的网络全是 internal，所以 backend 只在 `127.0.0.1:8000` 发布一个回环端口给它（`DSHERP_BACKEND_LOOPBACK_PORT` 可改；为此 backend 额外接了一个非 internal 的 `worker` 网络——Docker 不会为只在 internal 网络上的容器发布端口，本地演练时正是在这里断过）；`business_url` 是运行容器在 agent 网络内访问业务站的服务名：
 
 ```json
 {"slots": 3, "metrics_port": 9109,
- "sites": [{"site": "<slug>.<base domain>", "base_url": "http://backend:8000",
+ "sites": [{"site": "<slug>.<base domain>", "base_url": "http://127.0.0.1:8000",
             "business_url": "http://backend:8000",
             "api_key": "<第 5 步输出>", "api_secret": "<第 5 步输出>"}]}
 ```

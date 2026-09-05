@@ -87,6 +87,33 @@ def test_production_mounts_no_working_copy_and_no_host_path():
         assert re.fullmatch("[a-z0-9-]+", source), volume
 
 
+def test_production_publishes_only_the_ingress_and_a_loopback_port_for_the_host_worker():
+    body = PROD_COMPOSE.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+    published = {}
+    for service in re.findall(r"^  ([a-z0-9-]+):$", body, re.MULTILINE):
+        block = _block(body, service)
+        if "ports:" in block:
+            published[service] = re.findall(r'"([^"]+)"', _block(block, "ports", indent=4) or block.split("ports:", 1)[1].split("\n", 1)[0])
+    assert set(published) == {"caddy", "backend"}, published
+    assert all(entry.startswith("127.0.0.1:") for entry in published["backend"]), published["backend"]
+    assert {entry.split(":")[0] for entry in published["caddy"]} == {"80", "443"}
+    # Docker publishes nothing for a container that is only on internal networks.
+    networks = PROD_COMPOSE.split("\nnetworks:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+    assert "internal" not in _block(networks, "worker")
+    assert "worker" in _block(_block(body, "backend"), "networks", indent=4)
+    assert not [service for service in re.findall(r"^  ([a-z0-9-]+):$", body, re.MULTILINE)
+                if service != "backend" and "worker" in (_block(_block(body, service), "networks", indent=4) or "")]
+
+
+def test_production_front_ends_serve_a_read_only_sites_volume_without_the_image_entrypoint():
+    body = PROD_COMPOSE.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+    for service, volume in (("frontend", "tenant-sites"), ("platform-frontend", "platform-sites")):
+        block = _block(body, service)
+        assert f"{volume}:/home/frappe/frappe-bench/sites:ro" in block, service
+        # The image entrypoint would rm -rf sites/assets on start and die on :ro.
+        assert "entrypoint: []" in block and 'command: ["nginx-entrypoint.sh"]' in block, service
+
+
 def test_production_keeps_every_long_lived_service_supervised_and_probed():
     body = PROD_COMPOSE.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
     services = re.findall(r"^  ([a-z0-9-]+):$", body, re.MULTILINE)
@@ -134,11 +161,16 @@ def test_the_browser_gets_a_content_security_policy_from_a_versioned_file():
 
 
 def test_the_public_edge_does_not_expose_the_run_capability_endpoints():
-    template = (ROOT / "infra/frappe.conf.template").read_text()
-    block = template.split("dsherp_bridge\\.context_execution", 1)[1].split("}", 1)[0]
-    for endpoint in ("run_status", "reserve_model_call", "run_tool", "record_run_event", "finish_run"):
-        assert endpoint in block
-    assert "return 404;" in block
+    # Development renders infra/frappe.conf.template; the release image ships its own
+    # template over the base image's, so both must carry the same block.
+    for name in ("infra/frappe.conf.template", "infra/nginx/site.conf.template"):
+        template = (ROOT / name).read_text()
+        block = template.split("dsherp_bridge\\.context_execution", 1)[1].split("}", 1)[0]
+        for endpoint in ("run_status", "reserve_model_call", "run_tool", "record_run_event", "finish_run"):
+            assert endpoint in block, name
+        assert "return 404;" in block, name
+    dockerfile = (ROOT / "infra/docker/frappe/Dockerfile").read_text()
+    assert "COPY infra/nginx/site.conf.template /templates/nginx/frappe.conf.template" in dockerfile
 
 
 def test_compose_uses_only_fresh_v16_named_volumes():

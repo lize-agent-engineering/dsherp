@@ -189,6 +189,7 @@ DEPLOYMENT_FILES = (
     'infra/docker/frappe/Dockerfile',
     'infra/docker/worker/Dockerfile',
     'infra/nginx/security-headers.conf',
+    'infra/nginx/site.conf.template',
     'infra/nginx/agent-egress.conf',
     'infra/nginx/agent-egress-entrypoint.sh',
     'infra/caddy/Caddyfile.template',

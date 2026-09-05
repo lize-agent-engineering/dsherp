@@ -62,6 +62,11 @@ services:
   backend:
     <<: *frappe
     command: ["start.sh"]
+    # The host worker claims runs and sends heartbeats over this loopback port with the
+    # Site's service credentials. Docker only publishes ports for containers that sit on a
+    # non-internal network, hence the extra `worker` network below; every other network
+    # here is internal. Never bind this to anything but 127.0.0.1.
+    ports: ["127.0.0.1:${DSHERP_BACKEND_LOOPBACK_PORT:-8000}:8000"]
     environment:
       GUNICORN_WORKERS: "${DSHERP_GUNICORN_WORKERS:-2}"
       GUNICORN_THREADS: "${DSHERP_GUNICORN_THREADS:-4}"
@@ -81,7 +86,7 @@ services:
       db: {condition: service_healthy}
       redis-cache: {condition: service_healthy}
       redis-queue: {condition: service_healthy}
-    networks: [backplane, site, agent]
+    networks: [backplane, site, agent, worker]
     logging: *logging
 
   scheduler:
@@ -112,6 +117,9 @@ services:
 
   frontend:
     <<: *frappe
+    # The image entrypoint re-links sites/assets at start, which fails on the read-only
+    # sites mount; the bench already owns that link. nginx-entrypoint.sh only renders and serves.
+    entrypoint: []
     command: ["nginx-entrypoint.sh"]
     environment:
       BACKEND: backend:8000
@@ -193,6 +201,9 @@ services:
 
   platform-frontend:
     <<: *frappe
+    # The image entrypoint re-links sites/assets at start, which fails on the read-only
+    # sites mount; the bench already owns that link. nginx-entrypoint.sh only renders and serves.
+    entrypoint: []
     command: ["nginx-entrypoint.sh"]
     environment:
       BACKEND: platform-backend:8000
@@ -241,7 +252,9 @@ services:
     restart: unless-stopped
     ports: ["80:80", "443:443", "443:443/udp"]
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:80"]
+      # Port 80 only redirects to HTTPS and 443 needs a matching SNI, so a plain
+      # HTTP probe cannot pass; the listener being open is the liveness signal.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "443"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -269,8 +282,10 @@ networks:
   agent: {internal: true}
   # Caddy to the two front ends.
   edge: {internal: true}
-  # The only networks with a default route.
+  # The only networks with a default route: provider for Caddy/ACME and the egress proxy,
+  # worker so the tenant backend can publish its loopback port to the host worker.
   provider: {}
+  worker: {}
 
 volumes:
   db-data:
