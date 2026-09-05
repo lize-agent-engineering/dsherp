@@ -1,0 +1,5 @@
+#!/bin/sh
+# Single operator entry point. Keeps the repository's own interpreter and root.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec "${DSHERP_PYTHON:-$root/.venv/bin/python}" -m dsherp.admin "$@"
