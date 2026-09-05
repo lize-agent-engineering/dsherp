@@ -29,6 +29,9 @@ User={user}
 Group={group}
 SupplementaryGroups=docker
 WorkingDirectory={root}
+# The unit is the production supervisor: without this the worker resolves the
+# development environment and looks for a Runtime volume that only exists there.
+Environment=DSHERP_ENV=prod
 ExecStart={python} -m dsherp.context_worker --profile {profile} --provider-env {provider_env}
 KillSignal=SIGTERM
 TimeoutStopSec={stop_timeout}

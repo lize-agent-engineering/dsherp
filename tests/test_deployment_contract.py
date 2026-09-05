@@ -277,6 +277,8 @@ def test_the_production_worker_unit_restarts_itself_and_owns_only_two_directorie
     assert f"ExecStart={ROOT}/.venv/bin/python -m dsherp.context_worker" in unit
     assert "TimeoutStopSec=120" in unit
     assert "User=dsherp" in unit
+    # Found on the x86_64 drill: an unset DSHERP_ENV made the worker check for the dev volume.
+    assert "Environment=DSHERP_ENV=prod" in unit
 
 
 def test_the_worker_unit_refuses_an_unusable_account_or_watchdog(tmp_path):
