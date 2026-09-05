@@ -70,8 +70,10 @@ def test_the_agent_container_never_runs_as_root():
     assert deploy_env.settings(PROD)["agent_user"] == "1000:1000"
 
 
-def test_agent_uid_defaults_to_the_calling_host_user():
-    values = deploy_env.settings({key: value for key, value in PROD.items() if not key.startswith("DSHERP_AGENT_")})
+def test_agent_uid_defaults_to_the_calling_host_user(tmp_path):
+    # root=tmp_path: a local, gitignored infra/env/prod.env must not reach a unit test.
+    values = deploy_env.settings({key: value for key, value in PROD.items() if not key.startswith("DSHERP_AGENT_")},
+                                 root=tmp_path)
     assert values["agent_user"] == f"{os.getuid()}:{os.getgid()}"
 
 
@@ -114,3 +116,15 @@ def test_the_environment_file_supplies_values_and_the_process_environment_wins(t
 def test_missing_environment_file_for_production_fails_loudly(tmp_path):
     with pytest.raises(ValueError):
         deploy_env.settings({"DSHERP_ENV": "prod"}, root=tmp_path)
+
+
+def test_the_host_directories_come_from_the_environment_file_and_are_absolute_in_production(tmp_path):
+    values = deploy_env.settings({**PROD, "DSHERP_RUNTIME_DIR": "/srv/dsherp/state",
+                                  "DSHERP_SECRETS_DIR": "/srv/dsherp/state/control"})
+    assert str(values["runtime_dir"]) == "/srv/dsherp/state"
+    assert str(values["secrets_dir"]) == "/srv/dsherp/state/control"
+    defaults = deploy_env.settings(DEV, root=tmp_path)
+    assert defaults["runtime_dir"] == tmp_path / ".runtime"
+    assert defaults["secrets_dir"] == tmp_path / ".runtime" / "control"
+    with pytest.raises(ValueError):
+        deploy_env.settings({**PROD, "DSHERP_RUNTIME_DIR": "relative/state"})

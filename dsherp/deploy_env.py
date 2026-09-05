@@ -37,6 +37,9 @@ DEFAULTS = {
     # Server-to-server addresses inside the compose network; never browser facing.
     'DSHERP_TENANT_INTERNAL_URL': 'http://backend:8000',
     'DSHERP_PLATFORM_INTERNAL_URL': 'http://platform-backend:8000',
+    # Host directories compose and the CLI must agree on; empty means <repo>/.runtime.
+    'DSHERP_RUNTIME_DIR': '',
+    'DSHERP_SECRETS_DIR': '',
 }
 
 
@@ -142,6 +145,13 @@ def settings(environ=None, root=ROOT):
     for key in ('tenant_internal_url', 'platform_internal_url'):
         if not resolved[key].startswith(('http://', 'https://')):
             raise ValueError('Invalid internal service URL: ' + key)
+    runtime_dir = Path(_text(values, 'DSHERP_RUNTIME_DIR') or Path(root) / '.runtime')
+    secrets_dir = Path(_text(values, 'DSHERP_SECRETS_DIR') or runtime_dir / 'control')
+    for key, path in (('DSHERP_RUNTIME_DIR', runtime_dir), ('DSHERP_SECRETS_DIR', secrets_dir)):
+        if name == 'prod' and not path.is_absolute():
+            raise ValueError(f'{key} must be absolute in production: ' + str(path))
+    resolved['runtime_dir'] = runtime_dir
+    resolved['secrets_dir'] = secrets_dir
     if not resolved['agent_provider_base_url'].startswith(('http://', 'https://')):
         raise ValueError('Invalid agent provider base URL')
     return resolved

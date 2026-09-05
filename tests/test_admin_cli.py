@@ -370,3 +370,14 @@ def test_a_failed_container_command_reports_its_stderr_without_the_secrets_it_wa
         bench.run("bench", "new-site", "x", "--db-root-password", "hunter2", secrets=("hunter2",))
     message = str(failure.value)
     assert "MySQL error with password [redacted]" in message and "hunter2" not in message
+
+
+def test_doctor_refuses_a_production_file_that_lets_compose_fall_back_to_development_secrets(tmp_path):
+    directory = tmp_path / "infra" / "env"
+    directory.mkdir(parents=True)
+    directory.joinpath("prod.env").write_text("DSHERP_ENV=prod\nDSHERP_PROJECT=dsherp\n")
+    findings = admin.doctor(PROD, tmp_path)
+    assert [row for row in findings if "DSHERP_SECRETS_DIR" in row and "prod.env" in row]
+    directory.joinpath("prod.env").write_text(
+        "DSHERP_RUNTIME_DIR=/srv/dsherp/state\nDSHERP_SECRETS_DIR=/srv/dsherp/state/control\n")
+    assert not [row for row in admin.doctor(PROD, tmp_path) if "DSHERP_SECRETS_DIR" in row]

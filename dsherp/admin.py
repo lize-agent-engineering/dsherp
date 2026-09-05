@@ -40,11 +40,14 @@ class Fault(Exception):
 
 
 def runtime_dir(resolved, root=ROOT):
-    return Path(os.environ.get('DSHERP_RUNTIME_DIR') or Path(root) / '.runtime')
+    # deploy_env already merged the environment file and the process environment, so
+    # this is the same value compose interpolates from the same file.
+    return Path(os.environ.get('DSHERP_RUNTIME_DIR') or resolved.get('runtime_dir') or Path(root) / '.runtime')
 
 
 def secrets_dir(resolved, root=ROOT):
-    return Path(os.environ.get('DSHERP_SECRETS_DIR') or runtime_dir(resolved, root) / 'control')
+    return Path(os.environ.get('DSHERP_SECRETS_DIR') or resolved.get('secrets_dir')
+                or runtime_dir(resolved, root) / 'control')
 
 
 def _write_private(path, text):
@@ -473,6 +476,12 @@ def doctor(resolved, root=ROOT, runner=subprocess.run):
                 findings.append(f'compose 插值需要 {key}，但既不在进程环境也不在 infra/env/prod.env')
         if not resolved['registry']:
             findings.append('生产必须给出镜像仓库地址，否则 compose 的 image 无法解析')
+        env_file = deploy_env.env_file('prod', root)
+        text = env_file.read_text() if env_file.exists() else ''
+        for key in ('DSHERP_RUNTIME_DIR', 'DSHERP_SECRETS_DIR'):
+            if not re.search(rf'^{key}=\S', text, re.MULTILINE):
+                findings.append(f'{key} 必须写在 infra/env/prod.env 里：compose 与 CLI 才会读到同一个目录，'
+                                '否则 compose 会回落到 ../.runtime 下的开发密钥')
         if resolved['agent_uid'] == 0:
             findings.append('Agent 容器身份解析为 root')
     return findings

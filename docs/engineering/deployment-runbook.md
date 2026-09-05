@@ -61,7 +61,7 @@ DSHERP_ENV=prod ./bin/dsherp-admin doctor      # 必须输出空 findings 才继
 compose 在解析时就要求每个 `configs:`/`secrets:` 文件存在，所以入口配置要先渲染一次（此时只有 platform 一个站块）：
 
 ```sh
-export DSHERP_ENV=prod DSHERP_RUNTIME_DIR=/opt/dsherp/.runtime DSHERP_SECRETS_DIR=/opt/dsherp/.runtime/control
+export DSHERP_ENV=prod
 ./bin/dsherp-admin render-ingress
 compose() { docker compose --env-file infra/env/prod.env -f infra/compose.prod.yml "$@"; }
 compose up -d db redis-cache redis-queue
@@ -70,7 +70,7 @@ compose ps    # 三个服务 healthy 后再继续
 
 用函数而不是 `$COMPOSE` 变量：zsh 默认不对变量做分词，同一行在 bash 与 zsh 下行为不同。
 
-`DSHERP_RUNTIME_DIR` 与 `DSHERP_SECRETS_DIR` 决定 CLI 与 compose 在哪里找租户清单、Caddyfile 与密钥；两者必须在整个 runbook 中保持同一个值。
+`DSHERP_RUNTIME_DIR` 与 `DSHERP_SECRETS_DIR`（租户清单、Caddyfile、密钥所在目录）**只写在 `infra/env/prod.env` 里，不要 export**：compose 的 `${…}` 插值与 CLI 都读这份文件，这是两者读到同一目录的唯一保证。本地演练时曾因只在 shell 里 export 而漏掉一次，compose 回落到 `../.runtime/control` 用开发密钥初始化了新库，CLI 随即以生产密钥被拒——`doctor` 现在对此报错。
 
 ## 5. 开通平台站与第一个租户站
 
