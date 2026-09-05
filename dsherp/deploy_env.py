@@ -34,6 +34,9 @@ DEFAULTS = {
     'DSHERP_ORIGINS': '',
     'DSHERP_AGENT_PROVIDER_BASE_URL': 'http://agent-egress:8890',
     'DSHERP_PROVIDER_HOST': 'api.deepseek.com',
+    # Server-to-server addresses inside the compose network; never browser facing.
+    'DSHERP_TENANT_INTERNAL_URL': 'http://backend:8000',
+    'DSHERP_PLATFORM_INTERNAL_URL': 'http://platform-backend:8000',
 }
 
 
@@ -133,7 +136,12 @@ def settings(environ=None, root=ROOT):
         # The run container has no route to the Internet; this is the proxy in front of the provider.
         'agent_provider_base_url': _text(values, 'DSHERP_AGENT_PROVIDER_BASE_URL'),
         'provider_host': _match(DOMAIN, _text(values, 'DSHERP_PROVIDER_HOST'), 'Invalid provider host'),
+        'tenant_internal_url': _text(values, 'DSHERP_TENANT_INTERNAL_URL').rstrip('/'),
+        'platform_internal_url': _text(values, 'DSHERP_PLATFORM_INTERNAL_URL').rstrip('/'),
     }
+    for key in ('tenant_internal_url', 'platform_internal_url'):
+        if not resolved[key].startswith(('http://', 'https://')):
+            raise ValueError('Invalid internal service URL: ' + key)
     if not resolved['agent_provider_base_url'].startswith(('http://', 'https://')):
         raise ValueError('Invalid agent provider base URL')
     return resolved
@@ -172,7 +180,8 @@ DEPLOYMENT_FILES = (
 )
 DEPLOYMENT_KEYS = ('env', 'project', 'base_domain', 'platform_site', 'image_tag',
                    'frappe_image', 'worker_image', 'agent_network', 'agent_user',
-                   'agent_provider_base_url', 'provider_host')
+                   'agent_provider_base_url', 'provider_host',
+                   'tenant_internal_url', 'platform_internal_url')
 
 
 def deployment_digest(resolved, root=ROOT):

@@ -160,13 +160,14 @@ class Bench:
         return listed.strip().endswith('yes')
 
 
-def ensure_site(bench, resolved, site, admin_password, db_root_password):
+def ensure_site(bench, resolved, site, admin_password, db_root_password, apps=('erpnext',)):
     """Create the Site only when its directory is absent; never touch an existing one."""
     if bench.site_exists(site):
         return 'kept'
+    install = [argument for app in apps for argument in ('--install-app', app)]
     bench.run('bench', 'new-site', site, '--db-host', 'db', '--db-root-username', 'root',
               '--db-root-password', db_root_password, '--admin-password', admin_password,
-              '--mariadb-user-host-login-scope', '%', '--install-app', 'erpnext', timeout=1800)
+              '--mariadb-user-host-login-scope', '%', *install, timeout=1800)
     return 'created'
 
 
@@ -211,6 +212,116 @@ def ensure_runtime_identity(bench, site, user):
     return json.loads(bench.python(site, body).strip().splitlines()[-1])
 
 
+def ensure_enterprise(bench, resolved, slug, site):
+    """One platform record per tenant; an existing one is corrected, never duplicated."""
+    values = {'enterprise_id': slug, 'title': slug, 'site': site,
+              'base_url': resolved['tenant_internal_url'], 'status': 'Ready'}
+    body = (f"values=json.loads({json.dumps(json.dumps(values))})\n"
+            "if not frappe.db.exists('DS Enterprise',values['enterprise_id']):\n"
+            "    frappe.get_doc({'doctype':'DS Enterprise',**values}).insert();state='created'\n"
+            "else:\n"
+            "    doc=frappe.get_doc('DS Enterprise',values['enterprise_id'])\n"
+            "    drift=[key for key in ('site','base_url') if doc.get(key)!=values[key]]\n"
+            "    state='kept'\n"
+            "    if drift:\n"
+            "        for key in drift:doc.set(key,values[key])\n"
+            "        doc.save();state='updated:'+','.join(drift)\n"
+            "frappe.db.commit();print(json.dumps(state))")
+    return json.loads(bench.python(site_for_platform(resolved), body).strip().splitlines()[-1])
+
+
+def site_for_platform(resolved):
+    return resolved['platform_site']
+
+
+def ensure_oauth_client(bench, resolved, slug):
+    """The tenant's OAuth Client on the platform; its secret is returned, never regenerated."""
+    app_name = f'DSHERP {slug} Desk'
+    callback = deploy_env.callback_url(resolved, slug)
+    body = (f"app_name={app_name!r};callback={callback!r}\n"
+            "name=frappe.db.get_value('OAuth Client',{'app_name':app_name},'name')\n"
+            "if not name:\n"
+            "    import secrets as _s\n"
+            "    client=frappe.get_doc({'doctype':'OAuth Client','app_name':app_name,\n"
+            "        'client_secret':_s.token_urlsafe(32),'scopes':'openid',\n"
+            "        'redirect_uris':callback,'default_redirect_uri':callback,\n"
+            "        'grant_type':'Authorization Code','response_type':'Code','skip_authorization':0,\n"
+            "        'allowed_roles':[{'role':'DSHERP Member'}]}).insert();state='created'\n"
+            "else:\n"
+            "    client=frappe.get_doc('OAuth Client',name);state='kept'\n"
+            "    if client.default_redirect_uri!=callback:\n"
+            "        client.redirect_uris=callback;client.default_redirect_uri=callback\n"
+            "        client.save();state='updated'\n"
+            "frappe.db.commit()\n"
+            "print(json.dumps({'state':state,'client_id':client.client_id,'client_secret':client.get_password('client_secret')}))")
+    return json.loads(bench.python(site_for_platform(resolved), body).strip().splitlines()[-1])
+
+
+def ensure_platform_endpoints(bench, resolved, rows):
+    """Where the platform reaches each business Site, and where a browser enters it."""
+    business = {row['site']: resolved['tenant_internal_url'] for row in rows}
+    desk = {row['site']: deploy_env.start_url(resolved, row['slug']) for row in rows}
+    return ensure_site_config(bench, site_for_platform(resolved),
+                              {'dsherp_business_sites': business, 'dsherp_desk_sites': desk})
+
+
+def ensure_social_login_key(bench, resolved, slug, site, credentials):
+    """The business Site's view of the platform; secrets come from the caller, once."""
+    platform = resolved['platform_internal_url']
+    values = {
+        'doctype': 'Social Login Key', 'provider_name': 'DSHERP Platform',
+        'social_login_provider': 'Custom', 'enable_social_login': 0, 'sign_ups': 'Deny',
+        'client_id': credentials['client_id'], 'client_secret': credentials['client_secret'],
+        'base_url': platform,
+        'authorize_url': f"{deploy_env.public_origin(resolved, resolved['platform_slug'])}"
+                         '/api/method/frappe.integrations.oauth2.authorize',
+        'access_token_url': platform + '/api/method/frappe.integrations.oauth2.get_token',
+        'api_endpoint': platform + '/api/method/dsherp_platform.api.desk_identity',
+        'redirect_url': deploy_env.callback_url(resolved, slug),
+        'auth_url_data': json.dumps({'response_type': 'code', 'scope': 'openid'}),
+        'user_id_property': 'sub',
+    }
+    body = (f"values=json.loads({json.dumps(json.dumps(values))})\n"
+            "name=frappe.db.get_value('Social Login Key',{'provider_name':values['provider_name']},'name')\n"
+            "if not name:\n"
+            "    doc=frappe.get_doc(values).insert();state='created'\n"
+            "else:\n"
+            "    doc=frappe.get_doc('Social Login Key',name)\n"
+            "    drift=[key for key,value in values.items() if key not in ('doctype','client_secret') and doc.get(key)!=value]\n"
+            "    state='kept'\n"
+            "    if drift:\n"
+            "        for key in drift:doc.set(key,values[key])\n"
+            "        doc.save();state='updated:'+','.join(sorted(drift))\n"
+            "frappe.db.commit();print(json.dumps({'state':state,'provider':doc.name}))")
+    return json.loads(bench.python(site, body).strip().splitlines()[-1])
+
+
+def provision_platform(resolved, *, root=ROOT, runner=subprocess.run, bench_factory=None):
+    """The control-plane Site. Separate bench and separate volume from every tenant."""
+    site = resolved['platform_site']
+    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
+    platform = factory('platform')
+    steps = []
+    admin_password = read_secret(resolved, 'platform_admin_password' if resolved['env'] == 'prod'
+                                else 'admin_password', root)
+    db_root = read_secret(resolved, 'db_root_password', root)
+    steps.append(('site', ensure_site(platform, resolved, site, admin_password, db_root, apps=())))
+    steps.append(('app', ensure_app(platform, site, 'dsherp_platform')))
+    changed = ensure_site_config(platform, site, {'host_name': f"{resolved['scheme']}://{site}"})
+    steps.append(('site-config', 'changed:' + ','.join(changed) if changed else 'kept'))
+    return {'site': site, 'steps': steps}
+
+
+def ensure_healthy(bench, site):
+    """The last step answers the only question that matters: does this Site work."""
+    body = ("import dsherp_bridge\n"
+            "apps=sorted(frappe.get_installed_apps())\n"
+            "assert 'dsherp_bridge' in apps,'bridge App 未安装'\n"
+            "assert frappe.conf.get('dsherp_runtime_user'),'运行服务身份未配置'\n"
+            "print(json.dumps({'site':frappe.local.site,'apps':apps}))")
+    return json.loads(bench.python(site, body, timeout=120).strip().splitlines()[-1])
+
+
 def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_factory=None):
     """Bring one tenant from nothing to reachable; every step is resumable."""
     site = deploy_env.site_name(resolved, slug)
@@ -233,11 +344,23 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
         # Production reaches a business Site through the platform only.
         hardened = ensure_system_settings(tenant, site, {'disable_user_pass_login': 1})
         steps.append(('password-login', 'disabled' if hardened else 'kept'))
+    platform = factory('platform')
+    steps.append(('enterprise', ensure_enterprise(platform, resolved, slug, site)))
+    credentials = ensure_oauth_client(platform, resolved, slug)
+    steps.append(('oauth-client', credentials['state']))
+    steps.append(('social-login-key',
+                  ensure_social_login_key(tenant, resolved, slug, site, credentials)['state']))
+    changed = ensure_site_config(tenant, site, {'dsherp_platform_oauth': {
+        'provider': 'dsherp_platform', 'enterprise': slug, 'platform_site': resolved['platform_site']}})
+    steps.append(('platform-oauth', 'changed' if changed else 'kept'))
     rows = [row for row in load_tenants(resolved, root) if row['slug'] != slug]
     rows.append({'slug': slug, 'site': site, 'origin': deploy_env.public_origin(resolved, slug)})
     save_tenants(resolved, rows, root)
     steps.append(('tenant-list', 'saved'))
+    steps.append(('platform-endpoints',
+                  'changed' if ensure_platform_endpoints(platform, resolved, rows) else 'kept'))
     steps.append(('ingress', str(render_ingress(resolved, rows, root))))
+    steps.append(('healthcheck', ensure_healthy(tenant, site)['site']))
     return {'site': site, 'steps': steps, 'runtime_identity': identity}
 
 
@@ -394,6 +517,7 @@ def main(argv=None):
     retire = sub.add_parser('retire-tenant', help='归档后下线一个租户站')
     retire.add_argument('slug')
     retire.add_argument('--no-archive', action='store_true')
+    sub.add_parser('provision-platform', help='幂等开通平台站')
     sub.add_parser('list-tenants', help='列出当前租户')
     sub.add_parser('render-ingress', help='按当前租户清单重新渲染入口配置')
     release_parser = sub.add_parser('release', help='升级到新 tag：先备份，逐站 migrate，再逐字段比对')
@@ -411,6 +535,9 @@ def main(argv=None):
             return 1 if findings else 0
         if arguments.command == 'secrets':
             _print(ensure_secrets(resolved))
+            return 0
+        if arguments.command == 'provision-platform':
+            _print(provision_platform(resolved))
             return 0
         if arguments.command == 'provision-tenant':
             _print(provision_tenant(resolved, arguments.slug))

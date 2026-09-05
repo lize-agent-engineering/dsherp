@@ -29,6 +29,7 @@ class FakeBench:
     def __init__(self, existing_sites=(), installed=(), config=None):
         self.calls = []
         self.verbs = []
+        self.oauth_callbacks = []
         self.existing = set(existing_sites)
         self.installed = set(installed)
         self.config = dict(config or {})
@@ -50,8 +51,24 @@ class FakeBench:
 
     def python(self, site, body, timeout=900):
         self.calls.append(("python", site, body.splitlines()[0][:40]))
+        if "dsherp_runtime_user" in body and "assert" in body:
+            return json.dumps({"site": site, "apps": ["dsherp_bridge", "erpnext", "frappe"]}) + "\n"
+        if "DS Enterprise" in body:
+            state = "kept" if self.config.get("enterprise") else "created"
+            self.config["enterprise"] = True
+            return json.dumps(state) + "\n"
+        if "OAuth Client" in body:
+            state = "kept" if self.config.get("oauth") else "created"
+            self.config["oauth"] = True
+            self.oauth_callbacks.append(body.split("callback=", 1)[1].split("'")[1])
+            return json.dumps({"state": state, "client_id": "cid", "client_secret": "csecret"}) + "\n"
+        if "Social Login Key" in body:
+            state = "kept" if self.config.get("social") else "created"
+            self.config["social"] = True
+            return json.dumps({"state": state, "provider": "dsherp_platform"}) + "\n"
         if "get_installed_apps" in body:
-            return json.dumps("dsherp_bridge" in self.installed) + "\n"
+            app = body.split("'")[1]
+            return json.dumps(app in self.installed) + "\n"
         if "generate_keys" in body:
             return json.dumps({"user": f"runtime@{site}", "api_key": "k", "api_secret": "s"}) + "\n"
         if "System Settings" in body:
@@ -108,6 +125,17 @@ def test_provisioning_a_new_tenant_creates_the_site_once_and_records_it(host):
     assert dict(result["steps"])["site"] == "created"
     assert dict(result["steps"])["app"] == "created"
     assert dict(result["steps"])["password-login"] == "disabled"
+    assert dict(result["steps"])["healthcheck"] == "acme.tenant.example.com"
+    assert dict(result["steps"])["enterprise"] == "created"
+    assert dict(result["steps"])["oauth-client"] == "created"
+    assert dict(result["steps"])["social-login-key"] == "created"
+    assert bench.oauth_callbacks == ["https://acme.tenant.example.com/api/method/dsherp_bridge.sso.callback"]
+    assert bench.config["dsherp_platform_oauth"] == {
+        "provider": "dsherp_platform", "enterprise": "acme",
+        "platform_site": "platform.tenant.example.com"}
+    assert bench.config["dsherp_business_sites"] == {"acme.tenant.example.com": "http://backend:8000"}
+    assert bench.config["dsherp_desk_sites"] == {
+        "acme.tenant.example.com": "https://acme.tenant.example.com/api/method/dsherp_bridge.sso.start"}
     rows = admin.load_tenants(PROD)
     assert rows == [{"slug": "acme", "site": "acme.tenant.example.com",
                      "origin": "https://acme.tenant.example.com"}]
@@ -125,6 +153,9 @@ def test_provisioning_the_same_tenant_again_changes_nothing(host):
     assert dict(again["steps"])["app"] == "kept"
     assert dict(again["steps"])["site-config"] == "kept"
     assert dict(again["steps"])["password-login"] == "kept"
+    assert dict(again["steps"])["enterprise"] == "kept"
+    assert dict(again["steps"])["oauth-client"] == "kept"
+    assert dict(again["steps"])["social-login-key"] == "kept"
     assert not [call for call in bench.calls if call[:3] == ("run", "bench", "new-site")]
     assert len(admin.load_tenants(PROD)) == 1
 
@@ -251,3 +282,18 @@ def test_snapshot_comparison_names_added_removed_and_changed_doctypes():
     assert differences[0]["after"] == {"count": 0, "digest": None}
     assert differences[2]["before"] == {"count": 0, "digest": None}
     assert admin.compare_snapshots(before, dict(before)) == []
+
+
+def test_the_platform_site_is_created_without_erpnext_and_with_its_own_app():
+    admin.ensure_secrets(PROD)
+    bench = FakeBench()
+    result = admin.provision_platform(PROD, bench_factory=lambda kind: bench)
+    assert result["site"] == "platform.tenant.example.com"
+    created = [verb for verb in bench.verbs if "new-site" in verb][0]
+    assert "--install-app erpnext" not in created
+    assert any("install-app dsherp_platform" in verb for verb in bench.verbs)
+    bench.calls.clear()
+    bench.verbs.clear()
+    again = admin.provision_platform(PROD, bench_factory=lambda kind: bench)
+    assert dict(again["steps"])["site"] == "kept" and dict(again["steps"])["app"] == "kept"
+    assert not [verb for verb in bench.verbs if "new-site" in verb]
