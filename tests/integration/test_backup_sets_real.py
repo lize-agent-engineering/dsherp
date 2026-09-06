@@ -66,3 +66,27 @@ def test_a_real_backup_stages_one_set_with_matching_digests_and_split_permission
     assert status["sites"][site]["backup"]["last_success"]["set_id"] == set_id
     snapshot = json.loads(_exec("platform-backend", "sh", "-c", f"cat {data_dir}/snapshot.json", timeout=600))
     assert snapshot["site"] == site and snapshot["tables"], "the snapshot is the G2 reader's output"
+
+
+def test_the_staged_set_is_the_shape_the_sync_and_the_drill_expect():
+    """The two halves live in different volumes with different permissions, and the manifests
+    bind them; this is what upload_sets and restore-drill read back."""
+    resolved = deploy_env.settings({"DSHERP_ENV": "dev"})
+    site = resolved["platform_site"]
+    status = backup_status.load(backup.status_path(resolved))
+    if status is None:
+        pytest.fail("no backup record; run the generation test first")
+    proven = [row for row in backup_status.sets_of(status, site)]
+    if not proven:
+        pytest.fail(f"no set recorded for {site}")
+    set_id = proven[-1]["set_id"]
+    data = _exec("platform-backend", "sh", "-c", f"stat -c '%a' /home/frappe/backups/sets/{site}/{set_id}").strip()
+    secret = _exec("platform-backend", "sh", "-c", f"stat -c '%a' /home/frappe/backup-secrets/{site}/{set_id}").strip()
+    assert secret == "700" and data in ("700", "755")
+    set_doc = json.loads(_exec("platform-backend", "sh", "-c", f"cat /home/frappe/backups/sets/{site}/{set_id}/set.json"))
+    pair = json.loads(_exec("platform-backend", "sh", "-c", f"cat /home/frappe/backup-secrets/{site}/{set_id}/pair.json"))
+    assert backup_sets.pair_matches(set_doc, pair)
+    assert set_doc["image_id"].startswith("sha256:"), "the build the Site ran is on record"
+    listed = _exec("platform-backend", "sh", "-c",
+                   f"ls -1 /home/frappe/backup-secrets/{site}/{set_id}").split()
+    assert set(listed) == {backup_sets.CONFIG_PIECE, "pair.json"}, "the secret half holds nothing else"
