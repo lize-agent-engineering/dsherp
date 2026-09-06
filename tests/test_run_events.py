@@ -167,22 +167,38 @@ def test_flush_batches_and_never_raises():
     assert all(len(body["events"]) <= 100 and body["run_id"] == "r" for body in seen)
 
 
-def test_provider_failure_vocabulary_matches_the_codes_the_shipped_runtime_emits():
-    """Plan-2 re-audit 批评 1: the server counted 'QUOTA_EXCEEDED' but the runtime emits 'QUOTA',
-    so a provider with no balance never opened the circuit. Pin the server tuple to the codes
-    found in the shipped runtime binary, plus the credential/HTTP classes it also emits."""
+def _provider_failures_module():
+    import importlib.util
+    from pathlib import Path
+    path=Path(__file__).resolve().parents[1]/'frappe_app/dsherp_bridge/provider_failures.py'
+    spec=importlib.util.spec_from_file_location('provider_failures',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
+
+
+def test_provider_failures_are_counted_by_what_makes_every_run_fail_regardless_of_input():
+    """Plan-2 re-audit 批评 1, as behaviour: the count that opens the circuit must include the
+    codes the shipped runtime really emits (a provider with no balance says 'QUOTA', a
+    malformed key 'INVALID_CREDENTIAL', an unclassified 4xx 'HTTP_<status>') and must leave
+    out failures caused by this turn's input or by nothing identifiable."""
+    failures=_provider_failures_module()
+    counted=['TRANSPORT','TIMEOUT','SERVER','AUTH','INVALID_CREDENTIAL','RATE_LIMIT','QUOTA','QUOTA_EXCEEDED','HTTP_402','HTTP_404']
+    ignored=['CONTEXT_WINDOW_EXCEEDED','INVALID_REQUEST','EMPTY_RESPONSE','PI_AI_ERROR','UNKNOWN','ProviderError','HTTPX_ERROR','',None]
+    assert all(failures.is_provider_failure(code) for code in counted),counted
+    assert not any(failures.is_provider_failure(code) for code in ignored),ignored
+    assert failures.count_provider_failures(counted+ignored)==len(counted)
+    assert failures.count_provider_failures([])==0
+
+
+def test_the_vocabulary_is_the_one_the_shipped_runtime_emits():
+    """Not a source-string check of our code: the runtime binary is the contract."""
     import glob
     from pathlib import Path
     root=Path(__file__).resolve().parents[1]
-    source=(root/'frappe_app/dsherp_bridge/context_execution.py').read_text()
-    tuple_line=[line for line in source.splitlines() if line.startswith('PROVIDER_FAILURE_ERROR_CLASSES=')][0]
-    for code in ('TRANSPORT','TIMEOUT','SERVER','AUTH','INVALID_CREDENTIAL','RATE_LIMIT','QUOTA','QUOTA_EXCEEDED'):
-        assert f"'{code}'" in tuple_line,code
-    for code in ('CONTEXT_WINDOW_EXCEEDED','INVALID_REQUEST','EMPTY_RESPONSE','UNKNOWN','ProviderError'):
-        assert f"'{code}'" not in tuple_line,code
-    assert "'like','HTTP\\\\_%'" in source or "'like','HTTP_%'" in source
     binaries=[path for path in glob.glob(str(root/'.venv/lib/python3.*/site-packages/deepseek_harness_runtime/runtime/dsh-jsonrpc-agent-pkg-*'))
               if not path.endswith(('-rg','-spawn-helper'))]
-    if binaries:
-        assert any(b'QUOTA_EXCEEDED_CODE = "QUOTA"' in Path(path).read_bytes() for path in binaries),\
-            'runtime vocabulary changed; re-check the server tuple'
+    if not binaries:
+        pytest.skip('shipped runtime binary not installed here')
+    blob=b''.join(Path(path).read_bytes() for path in binaries)
+    assert b'QUOTA_EXCEEDED_CODE = "QUOTA"' in blob
+    assert _provider_failures_module().is_provider_failure('QUOTA')

@@ -583,14 +583,16 @@ class Coordinator:
                 try:
                     finish=post(site['client'],'finish_run',**cap,**result)
                 except ToolFailure as error:
-                    # The server answered and refused (a definite non-200). A refused Succeeded
-                    # write-back used to leave the run Running until the lease sweep called it
-                    # '运行已过期'; close it as Failed with the real reason instead. A lost
-                    # response is not a refusal and is still never retried (see the test
-                    # about unknown finish responses).
-                    worker_log.log('finish_rejected',run_id=cap.get('run_id'),status=result['status'],
-                                   error_class=type(error).__name__)
-                    if result['status']!='Succeeded':raise
+                    # Only a definite refusal (the server answered 4xx: permission/validation)
+                    # gets a second, Failed write-back with the real reason; it used to leave
+                    # the run Running until the lease sweep called it '运行已过期'. A 5xx or a
+                    # lost response is an unknown outcome: the server may have accepted the
+                    # Succeeded write, so no second terminal write is ever sent.
+                    definite=error.classification.get('error_class') in ('permission','validation')
+                    worker_log.log('finish_rejected' if definite else 'finish_outcome_unknown',
+                                   run_id=cap.get('run_id'),status=result['status'],
+                                   http_status=error.classification.get('http_status'))
+                    if result['status']!='Succeeded' or not definite:raise
                     finish=post(site['client'],'finish_run',**cap,status='Failed',answer='',
                                 error='结果回写被服务端拒绝，运行按失败结束；请重试或联系管理员')
                 completed=finish.get('status',result['status'])

@@ -1129,3 +1129,38 @@ def test_a_site_whose_claims_time_out_is_skipped_even_while_its_heartbeats_succe
             coordinator.tick(now=round_index)
     assert contacted.count('claim_run')<=3,contacted
     assert 'site_skipped' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('first_response',('503','504','transport'))
+def test_an_unknown_outcome_of_the_success_write_back_is_never_followed_by_a_failed_one(tmp_path,first_response):
+    """Reviewer finding: ToolFailure also wraps 5xx (transient); after a 503/504 the server
+    may well have accepted Succeeded, so a second terminal write must not be sent."""
+    calls=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];body=json.loads(request.content);calls.append((method,body))
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'a'*64,'capability':'cap',
+            'domain':'query','budget':{'run_total_seconds':300}}})
+        if method=='finish_run':
+            if first_response=='transport':raise httpx.ConnectError('gateway down',request=request)
+            return httpx.Response(int(first_response),json={'exception':'upstream timeout'})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'ok'})
+    finishes=[body for method,body in calls if method=='finish_run']
+    assert [body['status'] for body in finishes]==['Succeeded'],finishes
+
+
+@pytest.mark.parametrize('status_code',(403,417))
+def test_only_a_definite_refusal_of_the_success_write_back_gets_the_failed_fallback(tmp_path,status_code):
+    calls=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];body=json.loads(request.content);calls.append((method,body))
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'a'*64,'capability':'cap',
+            'domain':'query','budget':{'run_total_seconds':300}}})
+        if method=='finish_run' and body['status']=='Succeeded':
+            return httpx.Response(status_code,json={'exc_type':'PermissionError' if status_code==403 else 'ValidationError','exception':'refused'})
+        return httpx.Response(200,json={'message':{'status':'Failed'} if method=='finish_run' else {'recorded':1,'last_seq':1}})
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'ok'})
+    finishes=[body for method,body in calls if method=='finish_run']
+    assert [body['status'] for body in finishes]==['Succeeded','Failed'],finishes

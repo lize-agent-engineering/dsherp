@@ -365,3 +365,54 @@ finally:
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=60)
     assert result.returncode==0 and 'OK' in result.stdout,result.stdout+result.stderr
+
+
+def test_a_refusal_whose_fact_cannot_be_persisted_is_an_infrastructure_error_not_a_quiet_refusal():
+    """Reviewer finding: record_safely swallowed the insert failure, so run_tool could answer a
+    clean 403 while the tool_refused fact finish_run depends on never existed."""
+    script=r'''
+import os,uuid,json,frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from frappe.utils import now_datetime
+from dsherp_bridge import context_api as api,context_execution as execution
+actor='dsherp-reader@example.invalid'
+payload={'schema_version':1,'page_type':'form','route':['Form','Item','DSHERP-TEST-ITEM'],'doctype':'Item','name':'DSHERP-TEST-ITEM','version':None,'dirty':False}
+had='dsherp_runtime_user' in frappe.conf;original=frappe.conf.get('dsherp_runtime_user');session=None
+try:
+    execution._set_worker_heartbeat(now_datetime())
+    frappe.set_user(actor)
+    session=api.send_message('读取我无权的单据',payload,uuid.uuid4().hex);frappe.db.commit()
+    frappe.conf.dsherp_runtime_user=actor
+    claim=execution.claim_run('a'*64);frappe.db.commit()
+    cap={'run_id':claim['run_id'],'capability':claim['capability']}
+    frappe.set_user('Guest')
+    real_record=execution.events.record
+    def broken(*args,**kwargs):raise RuntimeError('synthetic event store outage')
+    execution.events.record=broken
+    try:
+        execution.run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Customer','name':'DSHERP-TEST-OTHER-CUSTOMER'})
+        raise AssertionError('refused read did not raise')
+    except execution.RefusalNotPersisted as error:
+        assert isinstance(error.__cause__,RuntimeError),repr(error.__cause__)
+        assert isinstance(error.refusal,frappe.PermissionError),repr(error.refusal)
+    except frappe.PermissionError:
+        raise AssertionError('refusal returned as if its fact had been persisted')
+    finally:
+        execution.events.record=real_record
+    frappe.db.rollback()
+    assert frappe.db.count('DS Run Event',{'run':cap['run_id'],'kind':'tool_refused'})==0
+    print('OK')
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    if had:frappe.conf.dsherp_runtime_user=original
+    else:frappe.conf.pop('dsherp_runtime_user',None)
+    if session:
+        run=session['active_run']
+        frappe.db.delete('DS Run Event',{'run':run})
+        if frappe.db.exists('DS Model Run',run):frappe.delete_doc('DS Model Run',run,ignore_permissions=True)
+        if frappe.db.exists('DS Conversation',session['id']):frappe.delete_doc('DS Conversation',session['id'],ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=90)
+    assert result.returncode==0 and 'OK' in result.stdout,result.stdout+result.stderr

@@ -19,18 +19,14 @@ from dsherp_bridge import context_permissions
 TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
        'erp_read_record':(erp.read_record,{'doctype','name'}),
        'erp_search_records':(erp.search_records,{'doctype','query','filters','fields'})}
-# 判据是"provider 是否不可用"，不是"是否 5xx"：换错 key、限流、配额耗尽同样让每条
-# 运行必败，熔断必须打开。由本轮输入造成的失败（上下文超长、请求非法、空响应）不算。
-# 词表按已发布 runtime 实际发出的码：余额不足是 'QUOTA'（不是 'QUOTA_EXCEEDED'，两者都留），
-# 密钥格式错误是 'INVALID_CREDENTIAL'，未归类的 4xx 是 'HTTP_<status>'（在 _provider_failures 里
-# 按前缀计）。UNKNOWN 与 guard 的兜底 'ProviderError' 不计：它们说明不了 provider 是否可用。
-PROVIDER_FAILURE_ERROR_CLASSES=('TRANSPORT','TIMEOUT','SERVER','AUTH','INVALID_CREDENTIAL','RATE_LIMIT','QUOTA','QUOTA_EXCEEDED')
+# 判据是"provider 是否不可用"，不是"是否 5xx"；词表与判定在 provider_failures.py（纯 Python，
+# 单元测试直接按行为验证），这里只负责取出该运行的 model_error 事件逐条计数。
+from dsherp_bridge.provider_failures import PROVIDER_FAILURE_ERROR_CLASSES,count_provider_failures
 
 
 def _provider_failures(run_name):
-    named=frappe.db.count('DS Run Event',{'run':run_name,'kind':'model_error','error_class':['in',PROVIDER_FAILURE_ERROR_CLASSES]})
-    http=frappe.db.count('DS Run Event',{'run':run_name,'kind':'model_error','error_class':['like','HTTP\\_%']})
-    return named+http
+    classes=frappe.get_all('DS Run Event',filters={'run':run_name,'kind':'model_error'},pluck='error_class',limit_page_length=0)
+    return count_provider_failures(classes)
 # 积压最严重时清扫最长，而清扫排在领取之前：不封顶会让 claim 越慢越领不到，形成正反馈。
 SWEEP_LIMIT=50
 # 任何一条只有执行者才写得出的事件都算确认；只有 queued/claimed 说明没人接手。
@@ -111,8 +107,8 @@ def _capability_guard(run_id,endpoint):
     """Every use of a run capability is placed and counted before it is honoured."""
     address=_remote_address()
     if not _source_allowed(address):
-        _persist_refusal(run_id,'capability_denied',{'endpoint':endpoint,'reason':'source','source':address or ''})
-        raise frappe.PermissionError('运行凭据只能从 Agent 网络使用')
+        _refuse(run_id,'capability_denied',{'endpoint':endpoint,'reason':'source','source':address or ''},
+                frappe.PermissionError('运行凭据只能从 Agent 网络使用'))
     cache=frappe.cache()
     limit=frappe.conf.get('dsherp_capability_rate_per_second') or CAPABILITY_RATE_PER_SECOND
     if type(limit) is not int or limit<1:frappe.throw('dsherp_capability_rate_per_second 无效')
@@ -123,9 +119,8 @@ def _capability_guard(run_id,endpoint):
     cache.incrby(total,1)
     cache.expire(total,3600)
     if used>limit:
-        _persist_refusal(run_id,'capability_denied',{'endpoint':endpoint,'reason':'rate',
-                                                    'source':address or '','used':int(used)})
-        raise frappe.PermissionError('运行凭据调用过于频繁')
+        _refuse(run_id,'capability_denied',{'endpoint':endpoint,'reason':'rate','source':address or '','used':int(used)},
+                frappe.PermissionError('运行凭据调用过于频繁'))
     return address
 
 
@@ -298,17 +293,36 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
     return {'allowed':True}
 
 
-def _persist_refusal(run_name,kind,payload,error_class=None):
-    """A refusal raises, and in an HTTP request the handler then rolls back everything the
-    request wrote. The fact that the server refused must outlive that: the request's partial
-    work is discarded here first (the handler would discard it anyway), then the event is
-    recorded and committed on its own, then the refusal propagates. Outside a request
-    (in-process callers such as integration scripts) the event simply joins the caller's
-    transaction. The runner never writes this kind, so it cannot be faked."""
+class RefusalNotPersisted(Exception):
+    """The server refused a call but could not persist the fact finish_run depends on.
+    Surfaced as an infrastructure error (HTTP 500, transient for the runner) instead of the
+    refusal itself: a clean 403 would claim a fact that does not exist."""
+    def __init__(self,refusal,cause):
+        super().__init__(f'拒绝事实无法持久化（{type(cause).__name__}）；原拒绝：{refusal}')
+        self.refusal=refusal
+        self.__cause__=cause
+
+
+def _refuse(run_name,kind,payload,refusal,error_class=None):
+    """Persist the refusal fact, then raise the refusal.
+
+    In an HTTP request the handler rolls back everything the request wrote once the
+    refusal propagates, so the request's partial work is discarded first (the handler
+    would discard it anyway) and the event is committed on its own. Outside a request
+    (in-process callers such as integration scripts) the event joins the caller's
+    transaction. The write is not best-effort: this event is the fact finish_run judges
+    completion by, so a failure to persist it is raised, not logged."""
     in_request=getattr(frappe.local,'request',None) is not None
-    if in_request:frappe.db.rollback()
-    events.record_safely(run_name,kind,payload,error_class=error_class)
-    if in_request:frappe.db.commit()
+    try:
+        if in_request:frappe.db.rollback()
+        events.record(run_name,kind,payload,error_class=error_class or type(refusal).__name__)
+        if in_request:frappe.db.commit()
+    except Exception as error:
+        if in_request:
+            try:frappe.db.rollback()
+            except Exception:pass
+        raise RefusalNotPersisted(refusal,error) from error
+    raise refusal
 
 
 @frappe.whitelist(allow_guest=True,methods=['POST'])
@@ -319,9 +333,7 @@ def run_tool(run_id,capability,tool,arguments):
     try:
         result=_run_tool(run,tool,arguments)
     except (frappe.PermissionError,frappe.ValidationError,frappe.DoesNotExistError) as error:
-        _persist_refusal(run.name,'tool_refused',{'tool':tool,'reason':str(error)[:200],
-            'source':_remote_address() or ''},error_class=type(error).__name__)
-        raise
+        _refuse(run.name,'tool_refused',{'tool':tool,'reason':str(error)[:200],'source':_remote_address() or ''},error)
     summary=_tool_summary(tool,result)
     events.record_safely(run.name,'tool_call',{'tool':tool,
         'arguments':arguments if isinstance(arguments,dict) else {'raw':str(arguments)[:200]},
