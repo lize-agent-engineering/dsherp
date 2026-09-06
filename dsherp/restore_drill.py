@@ -41,6 +41,9 @@ RESTORE = (
     "    frappe.init(site=payload['site'],sites_path='/home/frappe/frappe-bench/sites')\n"
     "    existing=frappe.conf.db_name\n"
     "    frappe.destroy()\n"
+    # `bench new-site` does exactly this before _new_site: without new_site=True the config
+    # reader refuses a Site directory that does not exist yet.
+    "frappe.init(payload['site'],new_site=True)\n"
     "_new_site(existing or payload['db_name'],payload['site'],db_root_username='root',"
     "db_root_password=payload['root_password'],admin_password=payload['admin_password'],verbose=False,"
     "source_sql=payload['database'],force=True,db_host='db',mariadb_user_host_login_scope='%')\n"
@@ -101,8 +104,11 @@ class DrillStack:
             'DSHERP_AGENT_GID': str(resolved.get('agent_gid') or 1000),
         }
 
-    def _compose(self, *arguments):
-        return ['docker', 'compose', '-p', self.project, '-f', str(self.root / DRILL_COMPOSE), *arguments]
+    def _compose(self, *arguments, profile=None):
+        command = ['docker', 'compose', '-p', self.project, '-f', str(self.root / DRILL_COMPOSE)]
+        if profile:
+            command += ['--profile', profile]
+        return command + list(arguments)
 
     def _run(self, command, timeout=900):
         import os
@@ -114,9 +120,13 @@ class DrillStack:
         return result.stdout
 
     def volumes_exist(self):
+        """Whether a previous drill left restored data behind. restic's own cache is not
+        evidence of anything and is not counted: it survives an ordinary teardown and would
+        otherwise block every drill after the first."""
         result = self.runner(['docker', 'volume', 'ls', '-q', '--filter', f'name={self.project}_'],
                              text=True, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
-        return bool((result.stdout or '').strip())
+        names = [name for name in (result.stdout or '').split() if not name.endswith('restore-cache')]
+        return bool(names)
 
     def up(self, clock=time.time, sleep=time.sleep):
         self._run(self._compose('up', '-d', 'db', 'redis-cache', 'redis-queue', 'backend'), timeout=1800)
@@ -156,7 +166,9 @@ class DrillStack:
                            compose_file=self.root / DRILL_COMPOSE, environment=self.environment, service='backend')
 
     def down(self, volumes):
-        self._run(self._compose('down', *(['-v'] if volumes else []), '--remove-orphans'), timeout=900)
+        # The fetch services live behind a profile; without naming it their volumes stay and
+        # the next drill would see a phantom leftover.
+        self._run(self._compose('down', *(['-v'] if volumes else []), '--remove-orphans', profile='fetch'), timeout=900)
 
 
 def newest_complete(status, site):

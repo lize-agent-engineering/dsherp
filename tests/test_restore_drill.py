@@ -35,7 +35,11 @@ class DrillRunner:
             out = "\n".join(json.dumps({"Service": service, "Health": health})
                             for service in ("db", "redis-cache", "redis-queue", "backend"))
         elif command[:3] == ["docker", "volume", "ls"]:
-            out = "dsherp-restore_restore-db\n" if self.volumes else ""
+            names = getattr(self, "volume_names", None)
+            if names is not None:
+                out = "\n".join(names) + "\n"
+            else:
+                out = "dsherp-restore_restore-db\n" if self.volumes else ""
         elif command[:2] == ["docker", "inspect"]:
             out = f"local/dsherp-frappe:v0.4.0 {self.image_id}\n"
         elif "run" in command and any(word.startswith("restore-fetch-") for word in command):
@@ -196,6 +200,19 @@ def test_a_drift_a_failed_decryption_or_a_broken_pair_fails_the_drill_and_keeps_
         status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
         assert status["sites"][SITE]["verified"]["last_attempt"]["ok"] is False
         assert status["sites"][SITE]["verified"]["last_success"] is None
+
+
+def test_the_restic_cache_alone_is_not_a_leftover_and_the_teardown_names_the_fetch_profile(host):
+    """The cache volume survives an ordinary teardown; counting it as a leftover would make
+    every drill after the first refuse to start."""
+    bench, restic, sets = _complete_set(host)
+    drill_runner = DrillRunner(bench)
+    drill_runner.volume_names = ["dsherp-restore_restore-cache"]
+    report = _drill(bench, restic, drill_runner, DrillBench(bench, SAME), sites=[SITE])
+    assert report["ok"] is True, "a cache volume is not evidence of a failed drill"
+    downs = [" ".join(command) for command in drill_runner.calls if "down" in command]
+    assert downs and all("--profile fetch" in call for call in downs), \
+        "the fetch services' volumes are in scope of the teardown"
 
 
 def test_a_leftover_failed_drill_blocks_the_next_one_until_it_is_discarded(host):

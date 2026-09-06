@@ -268,7 +268,19 @@ admin provision-tenant "$SLUG"      # 幂等重跑：核对运行身份、站点
 
 ## 12. 备份与容灾
 
+两个 restic 服务带 `profiles: [ops]`，不随 `compose up` 常驻，只由 `dsherp-admin backup-sync`/`restore-drill` 以 `compose run --rm` 拉起，所以第 6 步的服务清单与健康检查不包含它们。
+
 **判据**：任一站点（平台站与全部租户站）在任一时刻都有一份 24 小时内的异地备份可恢复；RTO 8 小时。年龄按备份**数据本身的时点**算，不是上传完成时刻。
+
+**验收行**（第 9 节的表之外，这一节自己的）：
+
+```sh
+systemctl list-timers 'dsherp-backup*'          # 两个定时器都在，下一次触发时间合理
+DSHERP_ENV=prod ./bin/dsherp-admin doctor       # 五份备份密钥材料齐全且 0600
+curl -s 127.0.0.1:9109/metrics | grep dsherp_backup_
+```
+
+`dsherp_backup_sites_rpo_ok` 应等于 `dsherp_backup_sites_expected`，`dsherp_backup_offsite_oldest_hours` 小于 24 且不为 -1，`dsherp_backup_last_run_ok` 为 1。
 
 **周期**：`dsherp-backup.timer` 每天 02:00 与 14:00（Asia/Shanghai）跑 `dsherp-admin backup --sync`；`dsherp-backup-drill.timer` 每周日 04:00 跑 `dsherp-admin restore-drill`。两者失败时 systemd 触发 `dsherp-backup-failure@.service`，它直接写 journal 并投递 profile 里的 `alert_webhook`——worker 停止时这条路仍在。装单元：
 
