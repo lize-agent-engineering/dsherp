@@ -1,7 +1,18 @@
 """Real native platform sessions and server-owned enterprise bindings."""
 import httpx
+import pytest
 import subprocess
 from contextlib import contextmanager
+
+
+@pytest.fixture(scope="module", autouse=True)
+def live_business_credentials():
+    """The platform borrows a credential with a twelve-hour window (S2), and a member's
+    login is what renews it. Reads through the platform therefore need a member who has
+    logged in - so this suite logs one in, for real, before it starts."""
+    from sso_login import establish_all
+    establish_all()
+    yield
 
 PLATFORM = 'http://127.0.0.1:18083'
 
@@ -117,6 +128,11 @@ def test_member_revocation_applies_to_existing_session_and_binding_changes_fail_
             assert member.get('/api/method/dsherp_platform.api.desk_identity',params={'enterprise':'alpha'}).status_code==403
         finally:
             assert operator.put(path,json={'enabled':original['enabled'],'erp_user':original['erp_user']}).status_code==200
+            # Disabling the membership revoked the credential it had lent out (S2). Restoring
+            # the binding does not bring that credential back: the member logs in again, which
+            # is the product's own way of getting a new one.
+            from sso_login import establish, ENTERPRISES
+            establish(ENTERPRISES['alpha'])
 
 
 def test_real_field_and_record_permissions_are_preserved_through_platform():
@@ -212,7 +228,10 @@ try:
         assert record['name']==supplier.name and schema['doctype']=='Supplier'
         assert calls==['/api/method/dsherp_bridge.api.read_record','/api/method/dsherp_bridge.api.read_schema']
 
-        frappe.set_user('Administrator');policy.enabled=0;policy.save();frappe.set_user(actor)
+        # A policy change has to say why, and may not reuse the last reason (ruling #3).
+        frappe.set_user('Administrator');policy.enabled=0
+        policy.change_reason='集成测试：临时停用 Supplier 策略以验证闸门 '+frappe.generate_hash(length=8)
+        policy.save();frappe.set_user(actor)
         try:read_schema('alpha','Supplier');raise AssertionError('disabled Supplier policy was allowed')
         except frappe.PermissionError as error:assert 'DS DocType 策略未启用' in str(error),error
 

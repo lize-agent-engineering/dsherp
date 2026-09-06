@@ -133,10 +133,12 @@ try:
     execution.finish_run(run_id=next_claim['run_id'],capability=next_claim['capability'],status='Failed',error='End synthetic run');frappe.db.commit()
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
+    # An audit record refuses deletion through the Document API (ruling #3); the database
+    # path is the documented boundary, and this fixture's synthetic rows are why it exists.
     for name in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):
         frappe.db.delete('DS Run Event',{'run':name})
-        frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
-    frappe.delete_doc('DS Conversation',doc['id'],ignore_permissions=True)
+        frappe.db.delete('DS Model Run',{'name':name})
+    frappe.db.delete('DS Conversation',{'name':doc['id']})
     frappe.db.commit();frappe.destroy()
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=30)
@@ -173,7 +175,11 @@ from frappe.utils.oauth import create_oauth_state
 frappe.conf.dsherp_platform_oauth={'provider':'dsherp','enterprise':'alpha'}
 info={'sub':'member@example.invalid','email':'dsherp-reader@example.invalid','site':frappe.local.site,'enterprise':'alpha','binding_version':'v1','enterprise_version':'v1'}
 calls=[]
+delivered=[]
 sso.exchange=lambda code:(calls.append(code) or (info,'synthetic-oauth-token'))
+# The platform is not reachable from this synthetic context; what matters here is that the
+# callback hands it a credential at all, and which one.
+sso.deliver_credential=lambda identity,token,pair:delivered.append((identity,token,pair))
 try:sso.callback('code','invalid');raise AssertionError('invalid state accepted')
 except frappe.PermissionError:pass
 assert not calls
@@ -186,6 +192,13 @@ assert frappe.session.user==info['email']
 assert frappe.response['location']=='/desk/dsherp-agent'
 grant=frappe.session.data.dsherp_platform_grant
 assert 'synthetic-oauth-token' not in grant
+assert len(delivered)==1 and delivered[0][1]=='synthetic-oauth-token'
+pair=delivered[0][2]
+assert pair['api_key'] and pair['api_secret'] and pair['expires_at'] and pair['version']>=1
+from dsherp_bridge import credentials
+record=credentials.record('dsherp-reader@example.invalid')
+assert record and str(record['expires_at'])==str(pair['expires_at'])
+assert credentials.require('dsherp-reader@example.invalid')
 sso.identity_for_token=lambda token:info
 assert sso.validate_grant(grant,info['email'])==info
 frappe.local.request=SimpleNamespace(path='/api/method/dsherp_bridge.context_api.list_sessions')

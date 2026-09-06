@@ -4,3 +4,4 @@
 [pre_model_sync]
 
 [post_model_sync]
+dsherp_platform.patches.v1.business_credentials

@@ -83,7 +83,9 @@ def test_the_export_carries_the_person_s_own_content_and_the_facts_about_them():
 def test_clearing_a_run_writes_the_declared_columns_and_nothing_else():
     values = user_data.cleared("DS Model Run")
     assert set(values) == {"question", "page_context", "answer", "needs_input", "error", "platform_grant"}
-    assert set(values.values()) == {""}
+    # Text columns go empty; the page snapshot goes to a snapshot that still reads as one.
+    assert set(values.values()) == {"", values["page_context"]}
+    assert values["question"] == "" and values["answer"] == "" and values["platform_grant"] == ""
     with pytest.raises(KeyError):
         user_data.cleared("DS Run Event")
 
@@ -164,3 +166,27 @@ def test_a_user_who_has_nothing_here_is_said_so_rather_than_reported_as_deleted(
                                     bench_factory=lambda kind: bench, confirm=True)
     assert report["plan"]["counts"]["runs"] == 0 and report["applied"] is True
     assert report["cleared"]["runs"] == 1 or report["cleared"]["runs"] == 0
+
+
+def test_a_cleared_page_snapshot_is_still_a_page_snapshot_the_site_can_read():
+    """Clearing this column to an empty string turned a deleted person's old conversations
+    into server errors on the real Site: the reader validates it as JSON on every read."""
+    from dsherp import user_data
+
+    value = user_data.cleared("DS Model Run")["page_context"]
+    context = json.loads(value)
+    assert context["schema_version"] == 1 and context["page_type"] == "unknown" and context["route"] == []
+    source = (Path(__file__).resolve().parents[1] / "frappe_app/dsherp_bridge/context_api.py").read_text()
+    allowed = source.split("allowed = {", 1)[1].split("}", 1)[0]
+    allowed = {piece.strip().strip("'") for piece in allowed.split(",")}
+    assert set(context) <= allowed, "the replacement carries a key the page validator rejects"
+    assert set(context) <= {"schema_version", "route", "page_type", "reason"}, "an unknown page carries nothing else"
+
+
+def test_every_cleared_value_is_declared_per_column_rather_than_assumed_empty():
+    from dsherp import user_data
+
+    for doctype, rules in user_data.BOUNDARY.items():
+        assert isinstance(rules["clear"], dict), doctype
+        for column, value in rules["clear"].items():
+            assert isinstance(value, str), (doctype, column)

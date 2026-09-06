@@ -25,17 +25,26 @@ REBIND_SCRIPT = """import os, json, frappe
 os.chdir('/home/frappe/frappe-bench/sites')
 frappe.init(site={site!r}); frappe.connect(); frappe.set_user('Administrator')
 rebound = 0
+from dsherp_platform import business_credentials as policy
+from frappe.utils import now_datetime
 for name in frappe.get_all('DS Membership', filters={{'erp_user': {user!r}, 'api_key': {api_key!r}}}, pluck='name'):
-    doc = frappe.get_doc('DS Membership', name); doc.api_secret = {api_secret!r}; doc.save(); rebound += 1
+    doc = frappe.get_doc('DS Membership', name); doc.api_secret = {api_secret!r}
+    # The window the Site just gave this key, so the platform does not judge it by an older one.
+    doc.credential_issued_at = now_datetime(); doc.credential_expires_at = policy.expiry(now_datetime())
+    doc.credential_version = int(doc.credential_version or 0) + 1; doc.credential_erp_user = doc.erp_user
+    doc.save(); rebound += 1
 frappe.db.commit()
 print(json.dumps({{'rebound': rebound}}))
 frappe.destroy()
 """
+# Issued through the Site's own credential module, not `generate_keys` directly: a key with
+# no recorded window is refused by the Site (S2), so a rotation that skipped the record would
+# hand these fixtures a secret that authenticates and is then turned away.
 REISSUE_SCRIPT = """import os, json, frappe
 os.chdir('/home/frappe/frappe-bench/sites')
 frappe.init(site={site!r}); frappe.connect(); frappe.set_user('Administrator')
-from frappe.core.doctype.user.user import generate_keys
-keys = generate_keys({user!r}); frappe.db.commit()
+from dsherp_bridge import credentials
+keys = credentials.issue({user!r}, issued_for='validation-provision'); frappe.db.commit()
 print(json.dumps({{'api_key': keys['api_key'], 'api_secret': keys['api_secret']}}))
 frappe.destroy()
 """

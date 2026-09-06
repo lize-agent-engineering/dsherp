@@ -1352,7 +1352,7 @@ def _user_clear_script(instructions):
             "    for name in spec['names']:\n"
             "        if not frappe.db.exists(doctype,name):\n"
             "            missing+=1;continue\n"
-            "        frappe.db.set_value(doctype,name,{column:'' for column in spec['columns']})\n"
+            "        frappe.db.set_value(doctype,name,spec['columns'])\n"
             "        changed+=1\n"
             "        for row in frappe.get_all('Version',filters={'ref_doctype':doctype,'docname':name},\n"
             "                                  fields=['name','data'],limit_page_length=0):\n"
@@ -1441,8 +1441,7 @@ def delete_user_data(resolved, site, user, *, root=ROOT, runner=subprocess.run, 
         report['next'] = f'确认后重跑：dsherp-admin delete-user-data {site} {user} --confirm'
         report['path'] = str(_write_json(_user_file(resolved, root, 'delete-plan', site, user), report))
         return report
-    instructions = {doctype: {'columns': list(user_data_module.BOUNDARY[doctype]['clear']),
-                              'names': names[doctype]}
+    instructions = {doctype: {'columns': user_data_module.cleared(doctype), 'names': names[doctype]}
                     for doctype in names if names[doctype]}
     if instructions:
         line = _last_line(bench.python(site, _user_clear_script(instructions), timeout=900))
@@ -1454,6 +1453,90 @@ def delete_user_data(resolved, site, user, *, root=ROOT, runner=subprocess.run, 
     report['applied'] = True
     report['path'] = str(_write_json(_user_file(resolved, root, 'delete', site, user), report))
     return report
+
+
+CREDENTIAL_REPORT = ("from frappe.utils import now_datetime\n"
+                     "rows=frappe.get_all('DS Business Credential',fields=['user','api_key','issued_at',"
+                     "'expires_at','version','revoked','legacy','issued_for'],limit_page_length=0,"
+                     "order_by='user asc') if frappe.db.exists('DocType','DS Business Credential') else []\n"
+                     "recorded={row['user'] for row in rows}\n"
+                     "service={'Administrator','Guest',frappe.conf.get('dsherp_runtime_user')}\n"
+                     "keyed=frappe.get_all('User',filters={'enabled':1},fields=['name','api_key'],limit_page_length=0)\n"
+                     "unrecorded=sorted(row['name'] for row in keyed\n"
+                     "                  if row['api_key'] and row['name'] not in recorded and row['name'] not in service)\n"
+                     "print('DSHERP_CREDENTIALS '+json.dumps({'now':str(now_datetime()),\n"
+                     "      'service':sorted(name for name in service if name),'rows':rows,\n"
+                     "      'unrecorded':unrecorded},default=str))")
+
+
+def _credential_issue_script(user, enterprise):
+    return ("from dsherp_bridge import credentials\n"
+            "pair=credentials.issue(" + repr(user) + ",issued_for=" + repr(enterprise or 'operator') + ")\n"
+            "frappe.db.commit()\n"
+            "print('DSHERP_CREDENTIAL_ISSUED '+json.dumps(pair))")
+
+
+def _credential_store_script(site, user, pair):
+    """Store the pair on the platform's membership. The secret travels on stdin only."""
+    return ("pair=json.loads(" + repr(json.dumps(pair)) + ")\n"
+            "from frappe.utils import now_datetime\n"
+            "name=None\n"
+            "for row in frappe.get_all('DS Membership',filters={'erp_user':" + repr(user) + ",'enabled':1},\n"
+            "                          fields=['name','enterprise'],limit_page_length=0):\n"
+            "    if frappe.db.get_value('DS Enterprise',row['enterprise'],'site')==" + repr(site) + ":\n"
+            "        name=row['name'];enterprise=row['enterprise'];break\n"
+            "if name is None:\n"
+            "    print('DSHERP_CREDENTIAL_STORED '+json.dumps({'membership':None,'enterprise':None}))\n"
+            "else:\n"
+            "    document=frappe.get_doc('DS Membership',name)\n"
+            "    document.api_key=pair['api_key'];document.api_secret=pair['api_secret']\n"
+            "    document.credential_issued_at=now_datetime();document.credential_expires_at=pair['expires_at']\n"
+            "    document.credential_version=int(pair['version'])\n"
+            "    document.save(ignore_permissions=True);frappe.db.commit()\n"
+            "    print('DSHERP_CREDENTIAL_STORED '+json.dumps({'membership':name,'enterprise':enterprise}))")
+
+
+def _marked(bench, site, script, marker, timeout=300):
+    line = _last_line(bench.python(site, script, timeout=timeout))
+    if not line.startswith(marker + ' '):
+        raise Fault(f'{site} 没有返回 {marker} 结果')
+    return json.loads(line[len(marker) + 1:])
+
+
+def credentials_report(resolved, site, *, root=ROOT, runner=subprocess.run, bench_factory=None):
+    """What credentials this Site has lent out, and until when (S2).
+
+    The Site reports its own clock: its datetimes are naive local times, and judging them
+    against the host's clock would call a live credential dead the moment the two differ."""
+    from dsherp import business_credentials as policy
+    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
+    bench = _user_site_bench(resolved, root, factory, site)
+    answer = _marked(bench, site, CREDENTIAL_REPORT, 'DSHERP_CREDENTIALS')
+    now = policy.moment(answer['now'])
+    rows = [dict(row, state=policy.state(row, now)) for row in answer['rows']]
+    return {'site': site, 'now': answer['now'], 'credentials': rows,
+            'unrecorded': answer['unrecorded'], 'service': answer['service'],
+            'stale': sum(1 for row in rows if row['state'] in ('expired', 'revoked')),
+            'window_hours': policy.TTL_HOURS}
+
+
+def issue_credential(resolved, site, user, *, root=ROOT, runner=subprocess.run, bench_factory=None):
+    """Issue a short-lived credential for one business user and hand it to the platform.
+
+    The operator path for a member who cannot log in through the platform to renew, and the
+    way a freshly provisioned identity gets its first window. The secret goes from the Site
+    to the platform over stdin and is never returned here."""
+    _user_checked(user)
+    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
+    bench = _user_site_bench(resolved, root, factory, site)
+    platform = factory('platform')
+    pair = _marked(bench, site, _credential_issue_script(user, 'operator'), 'DSHERP_CREDENTIAL_ISSUED')
+    stored = _marked(platform, resolved['platform_site'],
+                     _credential_store_script(site, user, pair), 'DSHERP_CREDENTIAL_STORED')
+    return {'site': site, 'user': user, 'version': pair['version'], 'expires_at': pair['expires_at'],
+            'api_key': pair['api_key'], 'stored': stored,
+            'note': ('平台已收到新凭据' if stored.get('membership')
+                     else '该业务用户在平台上没有启用中的绑定，凭据只存在于业务站')}
 
 
 def _print(payload):
@@ -1486,6 +1569,11 @@ def main(argv=None):
     sessions_parser = sub.add_parser('sessions', help='查看宿主上的原生会话目录；--sweep 清掉超过保留期的（默认 90 天）')
     sessions_parser.add_argument('--sweep', action='store_true')
     sessions_parser.add_argument('--days', type=int, default=None)
+    credentials_parser = sub.add_parser('credentials',
+                                        help='查看某站点借出的短期业务凭据及其有效期；--issue 为某个业务用户重新签发并交给平台')
+    credentials_parser.add_argument('site')
+    credentials_parser.add_argument('--issue', metavar='USER', default=None,
+                                    help='为该业务用户签发新凭据（无法通过平台登录续签时的运维路径）')
     export_user = sub.add_parser('export-user-data', help='导出某个站点里属于某个人的全部数据（只读，不改站点）')
     export_user.add_argument('site')
     export_user.add_argument('user', help='站点里的登录名，通常是邮箱')
@@ -1573,6 +1661,14 @@ def main(argv=None):
             report = sessions_report(resolved, days=arguments.days, sweep=arguments.sweep)
             _print(report)
             return 0
+        if arguments.command == 'credentials':
+            if arguments.issue:
+                _print(issue_credential(resolved, arguments.site, arguments.issue))
+                return 0
+            report = credentials_report(resolved, arguments.site)
+            _print(report)
+            # An API key nobody recorded a window for is a finding, not a detail.
+            return 0 if not report['unrecorded'] else 1
         if arguments.command == 'export-user-data':
             _print(export_user_data(resolved, arguments.site, arguments.user))
             return 0
