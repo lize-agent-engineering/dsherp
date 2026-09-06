@@ -444,6 +444,8 @@ def notify_failure(resolved, unit, *, root=ROOT, profile_path=None, client=None)
 
 
 REACH_TIMEOUT_SECONDS = 60
+# Listing and reading a manifest are small calls; anything slower means the endpoint is sick.
+LIST_TIMEOUT_SECONDS = 300
 
 
 def reachable(resolved, *, root=ROOT, runner=subprocess.run):
@@ -498,7 +500,7 @@ def _snapshot_ids(resolved, side, set_id, *, root, runner):
     one - a retried upload leaves the earlier attempt behind - so the caller tries them in
     turn rather than trusting the newest to be the good one."""
     rows = json.loads(restic(resolved, side, ['snapshots', '--json', '--tag', f'set={set_id}'],
-                             root=root, runner=runner, timeout=300) or '[]')
+                             root=root, runner=runner, timeout=LIST_TIMEOUT_SECONDS) or '[]')
     matching = [row for row in rows if f'set={set_id}' in (row.get('tags') or []) and row.get('id')]
     return [row['id'] for row in sorted(matching, key=lambda row: row.get('time') or '', reverse=True)][:CANDIDATES]
 
@@ -610,7 +612,7 @@ def _remote_sets(resolved, status, *, root, runner):
     the record does not know is not assumed complete: it is offered to the pairing check."""
     held = {}
     for side in ('data', 'secrets'):
-        rows = json.loads(restic(resolved, side, ['snapshots', '--json'], root=root, runner=runner, timeout=900) or '[]')
+        rows = json.loads(restic(resolved, side, ['snapshots', '--json'], root=root, runner=runner, timeout=LIST_TIMEOUT_SECONDS) or '[]')
         for row in rows:
             tags = dict(tag.split('=', 1) for tag in (row.get('tags') or []) if '=' in tag)
             set_id = tags.get('set')
@@ -649,6 +651,17 @@ def backup_sync(resolved, *, root=ROOT, runner=subprocess.run, clock=time.time, 
             report['ok'] = False
             report['warnings'].append('备份状态文件损坏：本次不做异地淘汰（保护"最后一份已验证副本"的依据在里面）；'
                                       '先检查 backups/status.json')
+        # Before anything that talks to the repositories: restic retries a dead endpoint for a
+        # quarter of an hour per call, and a run has to fit inside its own schedule.
+        unreachable = reachable(resolved, root=root, runner=runner)
+        if unreachable:
+            report['ok'] = False
+            report['errors'] += unreachable
+            report['check_ok'] = False
+            backup_status.record_run(status, 'sync', at=backup_status.now_iso(clock), ok=False,
+                                     error='；'.join(unreachable)[:500])
+            save_status(resolved, status, root)
+            return report
         # The record is not evidence: ask both repositories what they actually hold, and
         # demote any set whose copy is gone before deciding anything else with it.
         listing = {}
@@ -678,15 +691,6 @@ def backup_sync(resolved, *, root=ROOT, runner=subprocess.run, clock=time.time, 
             row['data_snapshot'], row['secrets_snapshot'] = held.get('data'), held.get('secrets')
             report['ok'] = False
             report['errors'].append(f'备份集 {set_id} 在异地不再完整（{row["state"]}）：已退回待补齐')
-        unreachable = reachable(resolved, root=root, runner=runner)
-        if unreachable:
-            report['ok'] = False
-            report['errors'] += unreachable
-            backup_status.record_run(status, 'sync', at=backup_status.now_iso(clock), ok=False,
-                                     error='；'.join(unreachable)[:500])
-            save_status(resolved, status, root)
-            report['check_ok'] = False
-            return report
         pending = [dict(row, set_id=set_id) for set_id, row in status['sets'].items()
                    if row.get('state') not in ('complete', 'verified')]
         try:

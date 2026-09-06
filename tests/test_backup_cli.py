@@ -629,8 +629,9 @@ def test_unreachable_storage_is_reported_in_seconds_and_changes_nothing(host):
         "restic answers `cat config` from its local cache, so the probe must bypass it"
     assert report["ok"] is False and report["check_ok"] is False
     assert any("data" in error for error in report["errors"])
-    assert not [command for command in dead.calls if any(verb in command for verb in ("backup", "forget", "prune", "check"))], \
-        "nothing is uploaded, expired or checked against a repository that did not answer"
+    assert not [command for command in dead.calls if any(verb in command for verb in
+                                                        ("backup", "forget", "prune", "check", "snapshots"))], \
+        "nothing is listed, uploaded, expired or checked against a repository that did not answer"
     status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
     assert status["runs"]["sync"]["last_attempt"]["ok"] is False
 
