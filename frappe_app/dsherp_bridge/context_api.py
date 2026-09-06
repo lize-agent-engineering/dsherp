@@ -350,11 +350,13 @@ def send_message(question, context, request_id, session_id=None, domain='query')
     else:
         doc=frappe.get_doc({'doctype':'DS Conversation','title':question.strip()[:100],
                             'runtime_session':uuid.uuid4().hex}).insert(ignore_permissions=True)
-    frappe.get_doc({'doctype':'DS Model Run','name':run_id,'conversation':doc.name,
-        'platform_grant':grant,'domain':domain,
+    frappe.get_doc({'doctype':'DS Model Run','name':run_id,'conversation':doc.name,'domain':domain,
         'request_id':request_id,'request_digest':digest,'question':question.strip(),
         'page_context':_json(snapshot),'status':'Queued','sources':'[]',
         'queue_expires_at':add_to_date(now,seconds=limits['queue_expires_seconds'])}).insert(ignore_permissions=True,set_name=run_id)
+    # The authorization the executor will act under lives beside the run, not in it (R7).
+    from dsherp_bridge import grants
+    grants.stash(run_id,grant,domain)
     from dsherp_bridge import context_events as events
     events.record_safely(run_id,'queued',{'domain':domain,'question_chars':len(question.strip()),'page_type':snapshot.get('page_type')})
     return _public(doc)
@@ -377,6 +379,8 @@ def cancel_run(session_id,run_id,request_id):
         events.record_safely(run.name,'cancel_requested',{'to_status':run.status})
         if run.status=='Cancelled':
             events.record_safely(run.name,'finished',{'status':'Cancelled'})
+            from dsherp_bridge import grants
+            grants.drop(run.name)
     return _public(doc)
 
 

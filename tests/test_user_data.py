@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_the_boundary_names_every_field_it_touches_and_says_why():
     plan = user_data.BOUNDARY
     run = plan["DS Model Run"]
-    assert set(run["clear"]) == {"question", "page_context", "answer", "needs_input", "error", "platform_grant"}
+    assert set(run["clear"]) == {"question", "page_context", "answer", "needs_input", "error"}
     assert set(run["keep"]) >= {"name", "owner", "status", "sources", "domain", "model_calls",
                                 "actual_input_tokens", "conversation", "request_digest"}
     assert list(plan["DS Run Event"]["clear"]) == [], "an event is never rewritten"
@@ -82,10 +82,10 @@ def test_the_export_carries_the_person_s_own_content_and_the_facts_about_them():
 
 def test_clearing_a_run_writes_the_declared_columns_and_nothing_else():
     values = user_data.cleared("DS Model Run")
-    assert set(values) == {"question", "page_context", "answer", "needs_input", "error", "platform_grant"}
+    assert set(values) == {"question", "page_context", "answer", "needs_input", "error"}
     # Text columns go empty; the page snapshot goes to a snapshot that still reads as one.
     assert set(values.values()) == {"", values["page_context"]}
-    assert values["question"] == "" and values["answer"] == "" and values["platform_grant"] == ""
+    assert values["question"] == "" and values["answer"] == ""
     with pytest.raises(KeyError):
         user_data.cleared("DS Run Event")
 

@@ -14,6 +14,7 @@ from frappe.utils import now_datetime,add_to_date,get_datetime
 from dsherp_bridge import api as erp
 from dsherp_bridge import context_api as conversations
 from dsherp_bridge import context_events as events
+from dsherp_bridge import grants
 from dsherp_bridge import context_permissions
 
 TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
@@ -40,9 +41,15 @@ def _actor(run):
         frappe.set_user(run.owner)
         conversations._user()
         identity=None
-        if run.get('platform_grant'):
-            from dsherp_bridge.sso import validate_grant
-            identity=validate_grant(run.platform_grant,run.owner)
+        from dsherp_bridge import grants
+        from dsherp_bridge.sso import validate_grant,_password_login_disabled
+        grant=grants.of(run.name)
+        if grant:
+            identity=validate_grant(grant,run.owner)
+        elif _password_login_disabled():
+            # Every business session on this Site comes through the platform; an executor
+            # acting for a member with no authorization on file is not acting for anyone (R6).
+            raise frappe.PermissionError('运行缺少企业平台授权，不能继续执行')
         yield identity
     finally:
         frappe.set_user(original)
@@ -183,6 +190,7 @@ def claim_run(runtime_revision):
         frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':error})
         events.record_safely(name,'expired',{'reason':'queue_expired'})
         events.record_safely(name,'finished',{'status':'Failed','error':'queue_expired'})
+        grants.drop(name)
     for name in frappe.get_all('DS Model Run',filters={'status':['in',['Running','Cancelling']], 'expires_at':['<=',now]},pluck='name',order_by='creation asc, name asc',limit_page_length=SWEEP_LIMIT):
         # 没有任何一条执行者写入的事件，说明这次领取的响应从未到达 worker：
         # 这条运行从来没被执行过，说"已过期"会把用户引向完全无关的原因。
@@ -190,6 +198,7 @@ def claim_run(runtime_revision):
         error='运行已过期，未自动重试' if contacted else '助手未能启动本次运行，请重试'
         frappe.db.set_value('DS Model Run',name,{'status':'Failed','error':error,'capability_hash':''})
         events.record_safely(name,'expired',{'reason':'lease_expired' if contacted else 'claim_unacked'})
+        grants.drop(name)
     # 执行者在交还会话前死掉时，问题本身仍然有效：只收回凭据，不把用户的问题作废。
     for name in frappe.get_all('DS Model Run',filters={'status':'NeedsInput','capability_hash':['!=',''],'expires_at':['<=',now]},
                                pluck='name',order_by='creation asc, name asc',limit_page_length=SWEEP_LIMIT):
@@ -221,6 +230,7 @@ def claim_run(runtime_revision):
         error='当前用户已无法读取会话来源'
         frappe.db.set_value('DS Model Run',run.name,{'status':'Failed','error':error,'capability_hash':''})
         events.record_safely(run.name,'finished',{'status':'Failed','error':error})
+        grants.drop(run.name)
         return None
     capability=secrets.token_urlsafe(32)
     domain=run.domain
@@ -435,7 +445,8 @@ def _run_tool(run,tool,arguments):
                            and source.get('schema_version')==arguments['version'] for source in sources):
                     frappe.throw('请先读取当前业务结构，再提出创建操作')
                 from dsherp_bridge.operations import propose_create as propose
-            return propose(run.conversation,**arguments,grant=run.platform_grant,model_run=run.name)
+            from dsherp_bridge import grants
+            return propose(run.conversation,**arguments,grant=grants.of(run.name),model_run=run.name)
     if tool not in TOOLS:frappe.throw('未知工具')
     if isinstance(arguments,str):arguments=json.loads(arguments)
     if tool=='erp_search_records' and isinstance(arguments,dict):
@@ -545,4 +556,7 @@ def finish_run(run_id,capability,status,answer='',error=''):
         if flagged:
             events.record_safely(run.name,'unverified_completion_claim',{'proposals':proposals,'executions':executions})
     frappe.db.set_value('DS Model Run',run.name,values)
+    if status in ('Succeeded','Failed','Cancelled'):
+        # The executor is done acting for the member; nothing keeps the authorization now.
+        grants.drop(run.name)
     return {'run_id':run.name,'status':status,'provider_failures':provider_failures}

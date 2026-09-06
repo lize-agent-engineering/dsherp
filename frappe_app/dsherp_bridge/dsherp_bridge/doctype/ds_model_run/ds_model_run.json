@@ -10,7 +10,6 @@
   "sort_order": "DESC",
   "field_order": [
     "domain",
-    "platform_grant",
     "conversation",
     "request_id",
     "request_digest",
@@ -48,12 +47,6 @@
       "options": "query\noperation\nconfiguration",
       "default": "query",
       "reqd": 1
-    },
-    {
-      "fieldname": "platform_grant",
-      "label": "Encrypted platform authorization",
-      "fieldtype": "Long Text",
-      "hidden": 1
     },
     {
       "fieldname": "runtime_revision",

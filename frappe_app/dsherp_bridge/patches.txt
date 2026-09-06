@@ -8,3 +8,4 @@ dsherp_bridge.patches.v1.audit_immutability
 dsherp_bridge.patches.v1.backfill_run_usage
 dsherp_bridge.patches.v1.backfill_execution_targets
 dsherp_bridge.patches.v1.business_credentials
+dsherp_bridge.patches.v1.drop_run_grant
