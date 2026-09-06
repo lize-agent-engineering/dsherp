@@ -33,7 +33,7 @@ v16 迁移已完成，四站为本机隔离合成环境。两轮审计的总判�
 | G1 白盒部署 | 一台干净的 Linux x86_64 主机，只给仓库 tag、镜像仓库地址与密钥文件，按文档 60 分钟内拉起 platform + 一个租户站 + worker，全部 healthcheck 绿 | 审计方在新 VM 上按 runbook 执行 |
 | G2 升级与回滚 | 对含真实形状数据的租户站执行 `bench migrate` 升级到新 tag，再回滚到旧 tag，业务单据与 DS-* 记录逐字段一致 | 自动化演练脚本，输出比对报告 |
 | G3 容灾 | 从异地备份在另一台主机恢复全部站点，RPO ≤ 24h、RTO ≤ 8h；`site_config` 密钥与库转储分离存放 | 季度演练脚本 + 首次由审计方执行 |
-| G4 安全边界 | Agent 容器只能到达 provider 与业务站；非 root；控制面文件不在租户容器内；全链路 TLS；guest 端点有速率限制与审计日志；SSO 强制 | 集成测试断言 + 外部安全审查清单 |
+| G4 安全边界 | Agent 容器只能到达 provider 与业务站；非 root；控制面文件不在租户容器内；公网入口与一切外联走 TLS，单主机内部各跳限于受控主机的 internal 网络（已裁决 #8）；guest 端点有速率限制与审计日志；SSO 强制；宿主 INPUT 规则随开机恢复并在网络重建后可核验 | 集成测试断言 + 外部安全审查清单 + 宿主防火墙单元的重启/重建演练 |
 | G5 并发与容量 | 两站同时运行不互相阻塞；单站 3 用户同时提问时按序执行、不丢不重、排队状态可见；100 轮历史会话下 `run_status` P95 < 1s；取消 5s 内落地 | 负载脚本 + 混沌用例（杀 worker、断 provider、断 docker） |
 | G6 可观测 | 每次运行有结构化日志与事件流落库；失败运行能回放"模型看到了什么"；provider 失败率、队列深度、运行时长有指标与告警 | 注入故障后告警在 5 分钟内触发 |
 | G7 审计不可篡改 | 执行记录、提案、运行不可删改（任何角色，含 Administrator）；DocType Policy 变更有版本；管理员可跨用户查审计 | 集成测试断言 + 权限矩阵表 |
@@ -132,12 +132,12 @@ Internet ──TLS──▶ 反向代理（Caddy，自动证书，*.tenant.examp
 **目标**：数据不会因单机损毁而丢失，schema 可演进，审计不可篡改，租户数据可导出可删除。
 
 设计：
-- **备份全站化与异地化（T1、T7）**。scheduler 每日对 platform 与全部租户站执行四件套备份（原生 `scheduled_backup`，强制未压缩以维持验证不变量），`dsherp-admin backup-sync` 把备份加密后推到对象存储（restic 或 rclone + age），`site_config_backup.json` 单独进密钥桶，与库转储永不同目录同权限；保留策略 7 日 + 4 周 + 3 月；RPO 24h、RTO 4h 写入 runbook。恢复演练脚本泛化 `verify_daily_backup.py`：接受任意站名与从对象存储拉取，不再硬编码合成夹具。
+- **备份全站化与异地化（T1、T7）**。scheduler 每日对 platform 与全部租户站执行四件套备份（原生 `scheduled_backup`，强制未压缩以维持验证不变量），`dsherp-admin backup-sync` 把备份加密后推到对象存储（restic 或 rclone + age），`site_config_backup.json` 单独进密钥桶，与库转储永不同目录同权限；保留策略 7 日 + 4 周 + 3 月；RPO 24h、RTO 8h（已裁决 #2）写入 runbook。恢复演练脚本泛化 `verify_daily_backup.py`：接受任意站名与从对象存储拉取，不再硬编码合成夹具。
 - **schema 演进（D4）**。两个 App 建立 `patches.txt`；CI 规则：DocType JSON 变更必须伴随 patch 或 `no-patch:` 说明；每个 JSON payload 字段的 `schema_version` 变更必须附回填 patch；迁移测试在 CI 中对"上一 tag 的备份"执行 `bench migrate` 并做逐字段比对（即 G2 的自动化形态）。
-- **审计不可篡改（T2）**。DS Model Run、DS Operation Proposal、DS Execution Record、DS Configuration * 全部加 `on_trash` 守卫（无条件拒绝，含 Administrator）、`track_changes: 1`；DS Doctype Policy 加 `track_changes` 与变更原因字段。租户下线时整站归档而非删记录。
+- **审计不可篡改（T2）**。DS Model Run、DS Operation Proposal、DS Execution Record、DS Configuration * 全部加 `on_trash` 守卫（无条件拒绝，含 Administrator）、`track_changes: 1`（DS Run Event 已自计划 1 起无条件拒绝改写与删除）；DS Doctype Policy 加 `track_changes` 与变更原因字段。租户下线时整站归档而非删记录（计划 3 收口后归档落在 backend 的 `tenant-archive` 卷，命令回读归档路径）。
 - **业务单据关联（T3）**。执行记录增加 `Dynamic Link`（target_doctype/target_name）指向产生的单据，单据侧通过原生 Connections 反查；单据取消/删除时执行记录保留并标注。
 - **会话存储纳管（T4）**。`.runtime/business-sessions/*` 改为按 `(site, user, conversation)` 的可枚举目录，加密静态存储（宿主级磁盘加密作为最低要求），会话归档 90 天后清理；转录关键内容已在 DS Run Event 落库，原生会话目录不再是唯一真相。
-- **保留、导出与删除（T4）**。`dsherp-admin export-user-data <site> <user>` 与 `delete-user-data`（删除会话、运行、事件与原生会话目录，保留执行记录与提案的脱敏审计副本）。
+- **保留、导出与删除（T4）**。`dsherp-admin export-user-data <site> <user>` 与 `delete-user-data`。删除的边界按已裁决 #10：删除原生会话目录与非审计的个人内容；运行、事件、提案、执行记录及其动作、对象、版本、确认与执行结果等审计事实一律保留，保留量必须仍能回放与追责；已有事件禁止改写，若必须物理清除事件内的个人信息，只能以明确登记的受控脱敏迁移作为不可变承诺的例外执行；界面遮挡不算删除。字段级边界由计划 4 的实施计划逐字段列出。
 - **用量计量（T5）**。DS Model Run 增加 `model`、`provider_request_ids`、`actual_input_tokens`、`actual_output_tokens`、`duration_ms`、`skill_versions`；每租户每月用量由平台聚合报表展示。
 - **读放大与时区（T8）**。为 conversation、status、expires_at 加索引；`_summaries` 改为聚合查询；时间统一 UTC 存储。
 
@@ -185,9 +185,9 @@ Internet ──TLS──▶ 反向代理（Caddy，自动证书，*.tenant.examp
 | 序 | 计划 | 覆盖 | 关键放行门 | 依赖 |
 |---|---|---|---|---|
 | 1 | 可观测与失败回放（2026-09-03 C4 通过） | 工作流 D 全部；F 的评估集导出（只导出，不做断言） | G6；历史失败运行全部导出为评估用例，新失败运行可从事件流回放到工具级（计划：[2026-09-03-observability-replay](../plans/2026-09-03-observability-replay.md)） | 无。先做的理由：后续所有计划的验证都依赖事件流与日志 |
-| 2 | 运行底座可靠性（2026-09-05 终审阻断项已逐项关闭，待审计放行） | 工作流 C 全部；H 的错误透传与 ErrorBoundary | G5；崩溃安全负例全绿（计划：[2026-09-04-runtime-reliability](../plans/2026-09-04-runtime-reliability.md)） | 1（用事件流验证） |
-| 3 | 部署制品与安全边界（2026-09-05 由 Claude 直接实施并经独立审计：G4 判据在 dev、本机生产形态与 x86_64 服务器实测，审计发现的三处 G4 缺陷已修；runbook 在两种主机上完整执行并修掉 22 个断点，但 G1 字面判据与 ACME 仍待合规专用主机由审计方执行） | 工作流 A 全部；B 的出口控制、非 root、SSO 强制、guest 加固、CSP | G1、G4（证据：[deployment-security-evidence](../../engineering/deployment-security-evidence.md)，runbook：[deployment-runbook](../../engineering/deployment-runbook.md)） | 2（worker 多站形态确定后再打包） |
-| 4 | 数据治理与容灾 | 工作流 E 全部；B 的凭证托管与轮换 | G2、G3、G7 | 3（对象存储与 CLI 属部署制品） |
+| 2 | 运行底座可靠性（2026-09-05 终审阻断项逐项关闭；2026-09-06 架构方派 12 个互不知情的代理独立复核 13 项关闭，7 项成立、6 项被推翻——其中熔断探针地址一项为计划 3 引入的回归，已在计划 3 收口修复，其余 5 项 major 残余列在证据文档「放行前独立复核」节；**未放行**，残余的处置待用户裁决） | 工作流 C 全部；H 的错误透传与 ErrorBoundary | G5；崩溃安全负例全绿（计划：[2026-09-04-runtime-reliability](../plans/2026-09-04-runtime-reliability.md)，证据：[runtime-reliability-evidence](../../engineering/runtime-reliability-evidence.md)） | 1（用事件流验证） |
+| 3 | 部署制品与安全边界（2026-09-05 由 Claude 直接实施并经独立审计：G4 判据在 dev、本机生产形态与 x86_64 服务器实测；2026-09-06 按[项目状态审查](../../engineering/project-state-review-2026-09-05.md)收口：归档落持久卷、发布来源可核实、宿主防火墙随开机恢复，各以真实路径演练。状态：**主体实现完成、验收未闭合**——G1 字面判据与 ACME 仍待合规专用主机由审计方执行，按已裁决 #9 不再阻塞计划 4 开工） | 工作流 A 全部；B 的出口控制、非 root、SSO 强制、guest 加固、CSP | G1、G4（证据：[deployment-security-evidence](../../engineering/deployment-security-evidence.md)，runbook：[deployment-runbook](../../engineering/deployment-runbook.md)） | 2（worker 多站形态确定后再打包） |
+| 4 | 数据治理与容灾（切片顺序已议定：G2 升级校验先修——现有 `release` 只比对每个 DocType 的行数与摘要，子表与单值文档不在其内，合法迁移的元数据变化又会误判为不一致，且从未对真实站点跑过；随后是备份切片「定时生成 → 异地同步 → 失败可见 → 异机恢复验证」（本机两站今日无任何定时备份任务，T1 从零建）；再审计保留与数据生命周期；最后短期凭据与轮换） | 工作流 E 全部；B 的凭证托管与轮换 | G2、G3、G7 | 3 的制品已合入 main 即可开工；G1/ACME 的外部主机验收按已裁决 #9 与本计划解耦，仍是真实租户接入前的必要验收 |
 | 5 | 质量门禁 | 工作流 G 全部；H 剩余项 | G9 | 3（CI 需镜像与 compose.prod） |
 | 6 | Agent 质量与成本 | 工作流 F 全部；B 的注入信封 | G8 | 5（串行执行，见已裁决 #7） |
 | 终 | 生产浸泡终验 | 全部 | G10 + 十道门复审 | 1–6 |
@@ -213,6 +213,9 @@ Internet ──TLS──▶ 反向代理（Caddy，自动证书，*.tenant.examp
 | 5 | 注入防护深度 | 信封标签 + 渲染限制 + 评估用例 | 工作流 B/F 按现文执行；不做独立输出复检调用，写入仍由 HITL 兜底 |
 | 6 | 预算常量正式值 | 由计划 6 用评估集数据裁定；2026-09-03 裁决时的 operation 临时值为 10 次 / 30720 token / 120s，计划 2 后实际临时值为 10 次 / 30720 token / 90s | 计划 2 的单请求 `≤90s` 全局约束覆盖了原 120s；这项数值变化与“只配置化、不改数值”的原文冲突，列为终审偏离，正式值仍由计划 6 裁定 |
 | 7 | 执行模式 | Claude 架构+审计、Codex 执行，六个计划串行 | 实施顺序表按 1→2→3→4→5→6→终验串行；计划 6 不与 4、5 并行 |
+| 8 | 单主机内部 HTTP（2026-09-05 裁决） | 接受：TLS 终止在 Caddy，同一受控主机 internal 网络内各跳为明文；公网入口、provider 与任何跨主机连接继续 HTTPS | G4 判据改写为「公网入口与一切外联走 TLS，单主机内部各跳限于受控主机的 internal 网络」；配套要求宿主防火墙规则持久化并经重启/网络重建验证（计划 3 收口已做） |
+| 9 | 外部主机验收与研发解耦（2026-09-05 裁决） | 计划 3 收口后允许计划 4 本地研发开工；G1/ACME 保持未通过，仍作为真实租户接入前的必要验收 | 实施顺序表第 4 行的依赖改为「制品合入即可」；裁决 #7 的串行只约束研发顺序，不再把外部验收当作开工前置 |
+| 10 | 用户删除与审计保留的边界（2026-09-05 裁决） | 保留动作、对象、版本、确认与执行结果等必要审计事实；删除会话目录与非审计个人内容；已有事件禁止改写，物理清除事件内个人信息只能走明确登记的受控脱敏迁移；界面遮挡不算删除 | 工作流 E 的 T4 按此改写；字段级边界由计划 4 的实施计划逐字段列出，不能只写「保留骨架、脱敏字段」就施工 |
 
 ## 与既有文档关系
 

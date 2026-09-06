@@ -1,0 +1,24 @@
+# Build context for infra/docker/*/Dockerfile: only what the Dockerfiles COPY, never
+# host state. Without this the daemon receives .runtime (credentials), filled
+# environment files and the tooling trees.
+.git
+.runtime
+.venv
+work
+infra/env
+infra/releases
+frontend/node_modules
+frontend/dist
+evals/runs
+docs
+tests
+.superpowers
+.agents
+.pytest_cache
+.ruff_cache
+**/__pycache__
+*.py[cod]
+*.log
+.env
+.env.*
+.DS_Store

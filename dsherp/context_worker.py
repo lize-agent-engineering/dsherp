@@ -17,7 +17,7 @@ import uuid
 from urllib.parse import urlsplit
 import httpx
 from dsherp import alerts,deploy_env,metrics,sd_notify,worker_log
-from dsherp.runtime_host import ROOT,IMAGE,agent_settings,load_settings
+from dsherp.runtime_host import ROOT,IMAGE,agent_settings,container_base,load_settings
 from dsherp.context_container import docker_command
 from dsherp.context_mcp import BusinessRuntimeError,post
 from dsherp.provider_circuit import CircuitBreaker,probe_models
@@ -37,6 +37,8 @@ LAST_CLAIM=REGISTRY.gauge('dsherp_last_claim_timestamp_seconds','Unix time of la
 PROVIDER_FAILURES=REGISTRY.counter('dsherp_provider_call_failures_total','Provider call failures')
 SLOTS_BUSY=REGISTRY.gauge('dsherp_slots_busy','Busy business runtime slots')
 PROVIDER_CIRCUIT_OPEN=REGISTRY.gauge('dsherp_provider_circuit_open','Provider circuit open state')
+HOST_ISOLATION_OK=REGISTRY.gauge('dsherp_host_isolation_ok','Run containers cannot reach the host (1); claims stop at 0')
+_isolation_ok=None
 _consecutive=0
 
 
@@ -86,7 +88,8 @@ def monitor_ops(client,notifier,state,now=None):
             orphan=alerts.orphan_containers()
         if orphan is not None:ORPHAN_CONTAINERS.set(orphan)
     notifier.emit(alerts.evaluate(status,{
-        'consecutive_run_failures':_consecutive,'orphan_containers':orphan},now),now)
+        'consecutive_run_failures':_consecutive,'orphan_containers':orphan,
+        'host_isolation_ok':_isolation_ok},now),now)
 
 
 def _note_run(status,duration_ms):
@@ -136,7 +139,44 @@ def normalize_profile(profile):
     return {'slots':slots,'metrics_port':metrics_port,'alert_webhook':webhook,'sites':sites}
 
 
-def prepare_host(runner=subprocess.run,cleanup=None,resolved=None):
+# Where dsherp-agent-firewall.service records the bridge it applied the host rules to.
+FIREWALL_STATE=Path('/run/dsherp-agent-firewall')
+# Runs inside a throwaway container on the agent network. Only a timeout proves the SYN
+# was dropped by the host's INPUT rules. A refusal or a reset is the host's kernel
+# answering (nothing dropped the packet); a route error or anything else cannot prove
+# isolation either, so it is reported as an error verdict and the worker refuses. Two
+# ports are tried at once: a real service (sshd) and one nobody listens on, so a host
+# with a default-drop policy but an allow for sshd is still caught.
+ISOLATION_PROBE=r"""
+import json,os,socket,threading
+gateway=os.environ['DSHERP_PROBE_GATEWAY'];verdicts={}
+def attempt(port):
+    try:
+        socket.create_connection((gateway,port),3).close();verdicts[port]='connected'
+    except TimeoutError:
+        verdicts[port]='blocked'
+    except ConnectionRefusedError:
+        verdicts[port]='refused'
+    except ConnectionResetError:
+        verdicts[port]='reset'
+    except OSError as error:
+        verdicts[port]='error:'+type(error).__name__
+    except Exception as error:
+        verdicts[port]='error:'+type(error).__name__
+threads=[threading.Thread(target=attempt,args=(port,)) for port in (22,9)]
+for thread in threads:thread.start()
+for thread in threads:thread.join()
+values=set(verdicts.values())
+if values=={'blocked'}:verdict='blocked'
+else:verdict=next((v for v in ('connected','refused','reset') if v in values),None) or sorted(values-{'blocked'})[0]
+print('DSHERP_ISOLATION '+json.dumps({'gateway':gateway,'verdict':verdict,'ports':{str(k):v for k,v in verdicts.items()}}))
+"""
+# While healthy the probe repeats this often (rules flushed from the kernel on the same
+# bridge are noticed within it); while failing it repeats on every check.
+ISOLATION_PROBE_INTERVAL=30
+
+
+def prepare_host(runner=subprocess.run,cleanup=None,resolved=None,firewall_state=FIREWALL_STATE):
     """Reclaim crash leftovers before checking dependencies.
 
     A leftover container still holds the run.json mount and therefore the provider
@@ -145,6 +185,8 @@ def prepare_host(runner=subprocess.run,cleanup=None,resolved=None):
 
     Development runs the pinned base image plus a prepared Runtime volume; production
     runs one release image that already carries the Runtime, so it checks that instead.
+    Production also verifies host isolation and returns the gate the coordinator keeps
+    re-checking; development returns None.
     """
     resolved=resolved or deploy_env.settings()
     (cleanup or cleanup_stale_runtime_artifacts)(runner=runner)
@@ -156,6 +198,100 @@ def prepare_host(runner=subprocess.run,cleanup=None,resolved=None):
     # A run container reaches the provider only through the egress proxy, so its
     # address must resolve inside the agent network before the first user request.
     runner(['docker','network','inspect',resolved['agent_network']],check=True,stdout=subprocess.DEVNULL)
+    if resolved['env']!='prod':
+        return None
+    isolation=HostIsolation(resolved,runner=runner,state_dir=Path(firewall_state))
+    isolation.verify()
+    return isolation
+
+
+class HostIsolation:
+    """Production gate on the host rules that keep run containers off the host.
+
+    Two facts are required: dsherp-agent-firewall.service recorded the bridge of the
+    agent network as it is now (so the unit ran, for this network), and a container on
+    that network cannot reach the host gateway (so the rules actually work). Verified
+    before the worker serves; the record is rechecked every tick; the probe is repeated
+    whenever the network's id changes, every ISOLATION_PROBE_INTERVAL seconds while
+    healthy (rules flushed from the kernel on the same bridge are caught within it) and on
+    every check while failing. While it fails the coordinator claims nothing and says so.
+    """
+    def __init__(self,resolved,runner=subprocess.run,state_dir=FIREWALL_STATE,clock=time.monotonic,
+                 probe_interval=ISOLATION_PROBE_INTERVAL):
+        self.resolved=resolved
+        self.runner=runner
+        self.state_dir=Path(state_dir)
+        self.clock=clock
+        self.probe_interval=probe_interval
+        self.verified=None
+        self._probed_at=None
+        self._failure=None
+
+    def _inspect(self,template):
+        result=self.runner(['docker','network','inspect',self.resolved['agent_network'],'--format',template],
+                           check=True,capture_output=True,text=True,timeout=30)
+        return (result.stdout or '').strip()
+
+    def _record(self,network_id):
+        bridge='br-'+network_id[:12]
+        state=self.state_dir/self.resolved['agent_network']
+        if not state.is_file():
+            raise RuntimeError(f"宿主防火墙单元没有为 agent 网络 {self.resolved['agent_network']} 留下记录（{state}）："
+                               '先 systemctl enable --now dsherp-agent-firewall（dsherp-agent-firewall），worker 不启动')
+        recorded=state.read_text().strip()
+        if recorded!=bridge:
+            raise RuntimeError(f'宿主防火墙规则绑定的网桥 {recorded} 已不是 agent 网络当前的 {bridge}'
+                               '（dsherp-agent-firewall）；先 systemctl restart dsherp-agent-firewall 再启动 worker')
+
+    def _probe(self):
+        gateway=self._inspect('{{(index .IPAM.Config 0).Gateway}}')
+        if not gateway:
+            raise RuntimeError('读不到 agent 网络的网关地址，无法核验宿主隔离；不假定隔离成立')
+        command=container_base('dsherp-isolation-'+uuid.uuid4().hex,self.resolved)+[
+            '-e',f'DSHERP_PROBE_GATEWAY={gateway}','--entrypoint','python3',self.resolved['worker_image'],
+            '-c',ISOLATION_PROBE]
+        result=self.runner(command,capture_output=True,text=True,timeout=90)
+        lines=[line for line in (result.stdout or '').splitlines() if line.startswith('DSHERP_ISOLATION ')]
+        if result.returncode or not lines:
+            raise RuntimeError(f'宿主隔离探针容器没有给出结论（退出码 {result.returncode}）；不假定隔离成立')
+        verdict=json.loads(lines[-1].split(' ',1)[1])
+        if verdict.get('verdict')!='blocked':
+            raise RuntimeError(f"运行容器仍能连到宿主网关 {gateway}（{verdict.get('verdict')}）：宿主 INPUT 规则没有生效，"
+                               'worker 停止领取（dsherp-agent-firewall）')
+        return verdict
+
+    def verify(self):
+        network_id=self._inspect('{{.Id}}')
+        self._record(network_id)
+        self._probe()
+        self.verified=network_id
+        self._probed_at=self.clock()
+        return network_id
+
+    def allows(self):
+        global _isolation_ok
+        try:
+            network_id=self._inspect('{{.Id}}')
+            due=(network_id!=self.verified or self._failure is not None or self._probed_at is None
+                 or self.clock()-self._probed_at>=self.probe_interval)
+            if due:
+                self.verify()
+            else:
+                self._record(network_id)
+        except Exception as error:
+            reason=str(error)
+            if self._failure!=reason:
+                worker_log.log('host_isolation_failed',error_class=type(error).__name__,reason=reason)
+            self._failure=reason
+            ok=False
+        else:
+            if self._failure is not None:
+                worker_log.log('host_isolation_restored')
+            self._failure=None
+            ok=True
+        _isolation_ok=1 if ok else 0
+        HOST_ISOLATION_OK.set(_isolation_ok)
+        return ok
 
 
 def cleanup_stale_runtime_artifacts(runner=subprocess.run,resolved=None):
@@ -264,11 +400,14 @@ def run_container(task,settings,directory,timeout=170):
 
 
 class Coordinator:
-    def __init__(self,sites,settings_loader,slots,execute,breaker,probe,state_root,clock=time.monotonic,notifier=None):
+    def __init__(self,sites,settings_loader,slots,execute,breaker,probe,state_root,clock=time.monotonic,notifier=None,
+                 isolation=None):
         if not isinstance(sites,list) or not sites:raise ValueError('Missing coordinator sites')
         if type(slots) is not int or slots<1:raise ValueError('Invalid coordinator slots')
         if not callable(settings_loader) or not callable(execute) or not callable(probe) or not callable(clock):
             raise ValueError('Invalid coordinator dependency')
+        if isolation is not None and not callable(isolation):raise ValueError('Invalid coordinator dependency')
+        self.isolation=isolation
         self.sites=sites
         self.settings_loader=settings_loader
         self.slots=slots
@@ -459,6 +598,8 @@ class Coordinator:
         self._heartbeat_sites(now)
         retry_pending_removals()
         busy=self._reap()
+        # Heartbeats keep flowing (users see a queue, not a 503); nothing new is claimed.
+        if self.isolation is not None and not self.isolation():return 0
         allowed,trial=self._circuit_allows(now)
         if busy>=self.slots:
             self._release_trial(trial);return 0
@@ -513,6 +654,17 @@ def poll_once(client,settings,state_root,*,business=None):
         WORKER_ERRORS.inc(error_class=type(error).__name__)
         worker_log.log('worker_error',error_class=type(error).__name__,status_code=error.status_code)
         return False
+
+
+def host_probe(provider_env,probe=probe_models):
+    """The circuit probe runs on the host, so it must use the provider address the host's
+    own .env names. The container's settings (agent_settings) point at the egress proxy's
+    compose name, which only resolves inside the agent network: probing that from the host
+    fails every time, and an opened circuit would never close again (plan-2 re-audit)."""
+    def run():
+        current=load_settings(provider_env)
+        return probe(current['DEEPSEEK_BASE_URL'],current['DEEPSEEK_API_KEY'])
+    return run
 
 
 @contextmanager
@@ -582,7 +734,7 @@ def main():
     with (ROOT/'.runtime'/'agent-worker.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         with worker_pid(ROOT/'.runtime'/'agent-worker.pid'):
-            prepare_host()
+            isolation=prepare_host()
             with ExitStack() as stack:
                 sites=[]
                 for item in profile['sites']:
@@ -594,10 +746,9 @@ def main():
                 if not args.once:
                     notifier=alerts.Notifier(webhook=profile.get('alert_webhook'),cooldown=600)
                 settings_loader=lambda:agent_settings(args.provider_env)
-                def probe():
-                    current=settings_loader()
-                    return probe_models(current['DEEPSEEK_BASE_URL'],current['DEEPSEEK_API_KEY'])
-                coordinator=Coordinator(sites,settings_loader,profile['slots'],run_container,CircuitBreaker(),probe,state_root,notifier=notifier)
+                coordinator=Coordinator(sites,settings_loader,profile['slots'],run_container,CircuitBreaker(),
+                                        host_probe(args.provider_env),state_root,notifier=notifier,
+                                        isolation=isolation.allows if isolation else None)
                 if args.once:
                     run_once(sites[0]['client'],settings,state_root,business=sites[0]['business'])
                     return 0

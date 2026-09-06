@@ -66,7 +66,7 @@ Caddy：`caddy@sha256:4c6e91c6…`（多架构），`Caddyfile.template` 由 `re
 
 6 条全绿（29.9s）。关于最后一条：这是一次对 provider 免费端点 `GET /models` 的连通性探测，携带无效 token，不产生费用、不调用 chat/completions；与计划 2 混沌演练中经授权使用的探针是同一端点。
 
-出口代理是 nginx 反向代理（复用基底镜像，未引入新镜像），`proxy_ssl_verify on` 校验上游证书，只反代 `DSHERP_PROVIDER_HOST` 一个域名；容器拿到的 `DEEPSEEK_BASE_URL=http://agent-egress:8890`，宿主熔断探针仍走 `.env` 里自己的地址（`runtime_host.agent_settings()` 与 `load_settings()` 分开）。
+出口代理是 nginx 反向代理（复用基底镜像，未引入新镜像），`proxy_ssl_verify on` 校验上游证书，只反代 `DSHERP_PROVIDER_HOST` 一个域名；容器拿到的 `DEEPSEEK_BASE_URL=http://agent-egress:8890`，宿主熔断探针仍走 `.env` 里自己的地址（`runtime_host.agent_settings()` 与 `load_settings()` 分开）。（**2026-09-06 更正**：这句在 `3f79ac0` 之后并不成立——该提交把探针的 settings 换成了 `agent_settings()`，宿主探针实际拿到的是容器的代理地址，宿主上无法解析，熔断打开后不会再关闭；计划 3 收口以 `context_worker.host_probe` 改回 `.env` 直连地址并加单元测试锁定，见「计划 3 收口」节。）
 
 ### 5. SSO 强制与 guest 加固（S3、S5、A5、S8）
 
@@ -107,7 +107,7 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 | `provision-tenant <slug>` | 建站 → 装 `dsherp_bridge` → 运行服务身份 → `site_config` → 关密码登录（prod）→ DS Enterprise → OAuth Client → Social Login Key → `dsherp_platform_oauth` → 租户清单 → 平台端点表 → 入口渲染 → healthcheck；每步先查后改，重复执行全为 kept |
 | `retire-tenant <slug>` | 先 `bench backup --with-files` 再 `drop-site`；站不存在即拒绝 |
 | `render-ingress` | 按租户清单渲染 Caddyfile |
-| `release <tag>` | 逐站备份 → 逐站 migrate → 逐 DocType 逐字段摘要比对 → 报告；有差异退出码 1 |
+| `release <tag>` | 逐站备份 → 逐站 migrate → 按 DocType 比对行数与整表摘要 → 报告；有差异退出码 1。**2026-09-06 更正**：这不是逐字段比对——子表（`istable`）与单值文档（`issingle`）被排除，读取异常被静默跳过，而 Patch Log、DocType、Custom Field 等随 migrate 合法变动的表都在比对之内，因此任何改 schema 的发布都会报不一致；`SNAPSHOT` 脚本没有被任何测试执行过，也没有对真实站点跑过一次。G2 按此只是骨架，可核验的升级校验是计划 4 首片（见项目状态审查 D 项） |
 | `rollback <tag>` | 必须显式给出每站备份文件；恢复后快照入报告 |
 
 回调、授权、端点、业务站内部地址四类 URL 统一由 `deploy_env` 派生，`infra/provision_desk_oauth.py` 等脚本里的硬编码不再是 prod 路径。验证：`tests/test_admin_cli.py` 27 条（收尾后）（FakeBench 记录每一步对容器提出的命令）。本机 `bin/dsherp-admin doctor` 对 dev 返回空 findings。
@@ -266,3 +266,79 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 ## 提交
 
 `7882fb0` 环境分层 → `cf939d9` 自建镜像 → `3f79ac0` 出口控制/非 root/契约 → `1e47cf3` 开站 CLI → `64ed22e` SSO/guest/CSP/渲染 → `5f8e71b` 升级回滚/patches/供应链 → `001c503` OAuth 链与 runbook → `e7a4ca9` 集成门修复 → `8857788` 证据 → 本地 G1 演练：`49c1cb2`、`34f0d39`、`71b66f0`、`b9a6032`、`946a0b4`、`7482304`、`6401f3c`（PR #3 `750f043` 合入）→ x86_64 演练（分支 `plan3/g1-x86`）：`4178ee2` 端口参数化、`dde55f0`、`1a3a35a` stdin、`3ca26ca` unit 环境 → 本文。
+
+## 计划 3 收口（2026-09-06，分支 `plan3/closeout`）
+
+依据：[项目状态审查](project-state-review-2026-09-05.md)（GPT，2026-09-05）经 Claude 逐条核验后成立的 A/B/C 三项，以及用户采纳的四项裁决（spec 已裁决 #8/#9/#10 与实施顺序表）。范围按裁决 #4 限定为 A/B/C、必要文档与对应验证；D（升级校验漏报与误报）留作计划 4 首片；新合成企业的用户闭环放进终验。复核计划 2 关闭项时发现的一处**计划 3 回归**（熔断探针地址）因属本计划引入，一并在此修复。所有代码改动先写失败测试再实现（非集成门从 370 增至 386 条）。
+
+### 修复
+
+| 项 | 改动 | 测试 |
+|---|---|---|
+| A 归档进容器临时层 | `retire_tenant` 先在容器里证明 `/home/frappe/frappe-bench/archived/sites` 可写，再 `bench backup --with-files`，再 `bench drop-site --archived-sites-path` 显式指到该目录，然后回读新增的归档目录（含 Frappe 重名时的数字后缀）与其中 `site_config.json`、`private/backups` 文件清单，最后才改租户清单与入口；归档缺失时报错且清单不动。`compose.prod.yml` 给 backend 挂 `tenant-archive` 卷；镜像 `install -d -o frappe -g frappe …/archived`——空命名卷在镜像里没有对应目录时会是 root 所有，drop-site 会在库已删掉之后才搬目录失败 | `test_admin_cli.py` 3 条（归档路径与备份清单、不可写时不动站点、重名后缀与归档丢失报错）、`test_deployment_contract.py` 1 条 |
+| B 发布来源不绑定 | `release_images.source()`：要求构建上下文有 `.git`、`git rev-parse --show-toplevel` 等于该目录、`git status --porcelain` 只允许 `infra/releases/` 下的清单未跟踪、tag 必须指向 HEAD；`--git-commit` 只作交叉核对。`write_manifest` 核对两个镜像的 `org.opencontainers.image.revision/version` 标签。新增 `.dockerignore`（`.git`、`.runtime`、`.venv`、`infra/env`、`work`、`docs`、`tests` 等）。第一版曾接受 `git archive` 导出树（靠 `export-subst` 替换的 `infra/RELEASE_SOURCE`），审查者实际改了导出目录里的 `context_worker.py` 后来源检查仍放行——标记只记录导出时的来源，证明不了当前内容——已整个撤掉：没有 `.git` 的树一律拒绝，目标主机只装镜像 | `test_release_images.py` 5 条（含「无 `.git` 拒绝」）、`test_deployment_contract.py` 1 条
+| C 宿主隔离不持久 | `infra/systemd/dsherp-agent-firewall.sh`（POSIX sh，`apply/check/remove`，规则带 `-m comment --comment dsherp-agent-firewall`，`apply` 先删旧标签规则再按当前网桥插入并把网桥名写到 `/run/dsherp-agent-firewall/<网络名>`）；`render_worker_units.py` 新增 `render_firewall_unit`（oneshot + RemainAfterExit，`Requires/After=docker.service`），worker unit 改为 `Requires=docker.service dsherp-agent-firewall.service`。worker 侧 `HostIsolation`（生产）：启动时记录文件缺失或网桥不符都拒绝启动（第一版缺失只记日志，审查指出后改为 fail-closed），并用发布镜像在 agent 网络里起探针容器连网关——`refused`/`connected` 都判失败，只有超时算隔离；运行中每 tick 重查记录与网桥，网络 id 变化即重新探针；失败期间不领取、`dsherp_host_isolation_ok=0`、告警 `host_isolation_failed`（critical）；`dsherp-admin agent-firewall` 打印的规则加同一标签并给出 unit/脚本路径 | `test_deployment_contract.py` 2 条、`test_context_worker.py` 4 条（缺记录/网桥过期拒绝、探针 refused/connected/无结论拒绝、网络变化重探针、隔离失败不领取）、`test_alerts.py` 1 条、`test_admin_cli.py` 断言扩展
+| 计划 3 回归：熔断探针 | `3f79ac0` 把探针 settings 换成 `agent_settings()`，其 `DEEPSEEK_BASE_URL` 是容器用的 `http://agent-egress:8890`，宿主解析不了，`probe_models` 恒为 False，熔断打开后直到进程重启都不关闭。新增 `context_worker.host_probe()` 读 `.env` 直连地址；`main()` 改用它 | `test_context_worker.py` 1 条（锁定探针地址 ≠ 容器地址，且 `main()` 用 `host_probe`） |
+| 本机验收凭据漂移 | 根因：`tests/integration/test_sso_machine_auth.py`（`f9bd051`）对共享 reader 调 `generate_keys`。测试改为自建/删除临时探针用户；`infra/run_validation_provision.py` 新增 `--reissue <actor>`，在 backend 容器内只对该演员 `generate_keys`、核对 api_key 未变后原地改写 `erp-users.json` 与 `erp-<actor>.json`（0600，原子替换） | `test_validation_provisioner.py` 2 条；真实执行后 reader `get_logged_user`/`read_schema(Customer)` 200、denied 403；改后的集成测试跑完 reader 仍 200、无残留探针用户 |
+
+### 真实路径验证
+
+**C：x86_64 共用服务器（`yibao-ecs`，CentOS 7、systemd 219、Docker 26），2026-09-06。** 用仓库脚本与渲染出的 unit 在一个临时 `--internal` 网络 `dsherp_agent` 上演练，全程只碰匹配我们网桥的 INPUT 规则，结束后全部清除（残留规则 0、残留 unit 0）：
+
+| 步骤 | 实测 |
+|---|---|
+| 未装规则 | agent 网络内容器可连到网关 `192.168.112.1:22`（REACHABLE） |
+| `systemctl start dsherp-agent-firewall` | `active`；`check` → `ok on br-ffb1d54825b3`；两条带注释规则在 INPUT 链首；状态文件为该网桥；容器再连网关 :22 → BLOCKED |
+| `docker network rm/create` 重建网络（网桥换成 `br-6e15112f7d1c`） | `check` 退出 1，提示 stale；`systemctl restart` 后 `check` ok、状态文件更新、规则只剩新网桥的 2 条、网关 `192.168.128.1:22` BLOCKED |
+| 模拟重启：手工删掉内核里的两条规则 | `check` 退出 1，网关 REACHABLE；`systemctl restart` 后 `check` ok，网关 BLOCKED |
+| `systemctl stop` | 规则 0 条、状态文件删除，网关 REACHABLE |
+
+补修 fail-closed 与探针后，在同一台服务器上用 `python:3.12-alpine` 容器跑 worker 的探针代码（`ISOLATION_PROBE` 原文），核对分类与内核行为一致（2026-09-06）：
+
+| 状态 | 探针结论 | 耗时 |
+|---|---|---|
+| 未装规则 | `connected`（sshd :22 应答）→ 判失败 | 0.7s |
+| 单元启动后 | `blocked`（两个端口各 3s 超时）→ 判隔离 | 6.5s |
+| 网络重建、规则过期 | `connected` → 判失败 | 0.5s |
+| `systemctl restart` 后 | `blocked` | 6.5s |
+
+演练后全部清除（残留规则 0）。worker 的完整启动/领取门只在单元测试里用假 docker 验证（真实 worker 需要宿主 venv，该机 glibc 2.17 装不上运行时锁），端到端仍待合规主机。
+
+第二轮复审又指出两处（2026-09-06）：同一网桥上规则被清掉不会被发现（网络 id 不变时只重读记录文件，探针只跑一次）；探针把 `ConnectionResetError` 等一切 `OSError` 都当成隔离成功。修法：健康时每 `ISOLATION_PROBE_INTERVAL`（30s）重探一次、失败期间每次检查都探（假时钟单元测试：规则清除后在一个间隔内被发现并停止领取，恢复后回到间隔节奏）；探针改为同时连 :22 与 :9，只有超时算 `blocked`，`connected/refused/reset` 判宿主可达，其它异常记 `error:<类名>` 判无法证明，worker 一律拒绝（在进程内执行探针脚本、注入各类异常的单元测试逐一锁定）。
+
+**B：本机。** 工作树有未提交改动时 `release_images.py` 拒绝并列出脏文件，不调用 docker；提交 `1cd8927` 打本地 tag `v0.3.1-rc1` 后构建成功，manifest 记 `git_commit=1cd8927dac49…`，两个镜像标签 `version=v0.3.1-rc1 / revision=1cd8927dac49…`（arm64）；镜像内 `/home/frappe/frappe-bench/archived` 为 `frappe:frappe` 所有。当时还验证了 `git archive` 导出树的标记替换与校验，但审查者随后证明导出树改文件后仍放行，该路径已撤销（见修复表）。清单文件 `infra/releases/v0.3.1-rc1.json` 的来源提交是 `1cd8927`，文件本身在 `3beb5cf` 入库；tag 未推送，B/C 补修后应另打 `v0.3.1-rc2` 重建。
+
+**A：本机 Docker Desktop 上以生产形态演练「下线 → 重建容器 → 从归档恢复」（2026-09-06，项目名 `dsherp`，镜像 `local/dsherp-frappe:v0.3.1-rc1`，独立 `.runtime/prod-local/`）。** 只起 db、两个 redis、platform-backend 与 backend；platform-backend 的探针在平台站开通前必然是 404，本演练脚本在这里多等了 5 分钟才继续（runbook 本来就不在此等待，非缺陷）。
+
+| 步骤 | 实测 |
+|---|---|
+| `secrets init` → `doctor`（空 findings）→ `render-ingress` → `provision-platform` → `provision-tenant g1` | 10:44:04 开始，10:45:28 两站可用（healthcheck `g1.localhost`） |
+| 在 g1 插入一条标记 ToDo | 1 行 |
+| `retire-tenant g1` | `backup: created` → `site: dropped` → `archive: /home/frappe/frappe-bench/archived/sites/g1.localhost`，`backups` 列出 `20260906_104530-g1_localhost-{database.sql.gz, files.tar, private-files.tar, site_config_backup.json}`；租户清单变空、Caddyfile 重渲染 |
+| `compose up -d --force-recreate backend`（容器 id `8edb6b80…` → `179c461c…`） | 新容器内归档目录仍在：4 个备份文件（库转储 884,595 字节）+ `site_config.json`，`ARCHIVE-PRESENT` |
+| 恢复：`provision-tenant g1`（新建空站）→ `bench --site g1.localhost restore <归档>/private/backups/…database.sql.gz --with-public-files … --with-private-files … --force` | `Site g1.localhost has been restored with files`；标记 ToDo 回来了：1 行 |
+| `provision-tenant g1` 幂等重跑 | `site: kept`、`runtime-identity: kept`、healthcheck 通过 |
+
+演练后按 `teardown` 拆除：`compose down -v`、删除两个发布镜像、清理 `.runtime/prod-local/` 与 `infra/env/prod.env`；dev 栈全程未动。`infra/releases/v0.3.1-rc1.json` 作为本次构建的清单入库（提交 `1cd8927`）。
+
+### 门禁（本轮代码提交 `1cd8927` 上）
+
+| 门 | 结果 |
+|---|---|
+| 非集成 `pytest tests --ignore=tests/integration` | `389 passed`（收口前 370；新增 19 条全部先红后绿，含 B/C 补修的 6 条） |
+| Node Runtime `node --test runtime/*.test.cjs` | `tests 10 / pass 10 / fail 0` |
+| 前端 `npm test` | 22 个文件 `202 passed`；dist 无变化 |
+| 集成（只跑本轮改动的一条）`tests/integration/test_sso_machine_auth.py` | `1 passed`（跑前先停 `scheduler` 让 `scheduler-worker` 排空 25 条 `run_scheduled_job`，跑后重启）；跑完 reader 仍 200，无残留探针用户 |
+| DocType/Report/hooks | 无变更，不需要 migrate |
+
+### 对既有陈述的更正
+
+- 第 69 行「宿主熔断探针仍走 .env 里自己的地址」在 `3f79ac0` 之后曾不成立（见该行随附更正），本轮修复后重新成立。
+- 第 110 行 `release` 的「逐字段比对」改为按 DocType 的行数与整表摘要，并说明子表/单值文档缺失与合法迁移误判；G2 未实现。
+- runbook 第 8 节此前说「规则不随重启保留，按发行版的方式持久化」并把持久化留给操作者，现由 unit 负责且 worker fail-closed；第 1、2 节的「手工记提交号」改为「构建机必须是干净 git checkout，无 git 的主机只装镜像」；第 11 节补了归档位置与恢复路径。
+
+### 仍未闭合
+
+- G1 字面判据（干净专用主机、只给 tag/registry、≤60 分钟）与 ACME：仍待合规专用主机由审计方执行；按已裁决 #9 不再阻塞计划 4 开工。
+- D（G2 升级校验）：计划 4 首片。
+- 计划 2 放行前独立复核的 5 项 major 残余：见 [runtime-reliability-evidence.md](runtime-reliability-evidence.md) 末节，处置待用户裁决。

@@ -133,3 +133,14 @@ def test_orphan_probe_failures_only_log_and_skip(error, capsys):
     assert lines[0]["event"] == "orphan_probe_failed"
     assert lines[0]["error_class"] == type(error).__name__
     assert "synthetic docker unavailable" not in json.dumps(lines)
+
+
+def test_host_isolation_failure_is_a_critical_alert():
+    """Claims stop while run containers can reach the host; that must be visible, not silent."""
+    from dsherp import alerts
+    snapshot={'age_seconds':1,'snapshot':{'queued':0,'running_stuck':0,'backup_age_hours':1}}
+    keys=[alert.key for alert in alerts.evaluate(snapshot,{'host_isolation_ok':0},now=0)]
+    assert 'host_isolation_failed' in keys
+    assert [alert.severity for alert in alerts.evaluate(snapshot,{'host_isolation_ok':0},now=0) if alert.key=='host_isolation_failed']==['critical']
+    assert 'host_isolation_failed' not in [alert.key for alert in alerts.evaluate(snapshot,{'host_isolation_ok':1},now=0)]
+    assert 'host_isolation_failed' not in [alert.key for alert in alerts.evaluate(snapshot,{},now=0)]  # development: no gate

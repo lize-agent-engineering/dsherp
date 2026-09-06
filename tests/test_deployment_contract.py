@@ -178,6 +178,33 @@ def test_production_keeps_the_two_benches_apart_and_caddy_without_capabilities()
     assert "${DSHERP_EDGE_SUBNET:-10.90.0.0/24}" in _block(_block(body, "frontend"), "environment", indent=4)
 
 
+def test_a_retired_site_lands_on_a_volume_the_image_prepared_for_the_bench_user():
+    """`bench drop-site` moves the whole Site directory under the bench's archived/; the
+    backend only persisted sites/ and logs/, so a retired tenant lived in the container's
+    writable layer until the next recreate. The directory must exist in the image owned by
+    the bench user, or the empty named volume is root-owned and the move fails after the
+    database is already gone."""
+    backend = _block(PROD_COMPOSE, "backend")
+    assert "tenant-archive:/home/frappe/frappe-bench/archived" in backend
+    assert "tenant-archive:" in PROD_COMPOSE.split("\nvolumes:\n", 1)[1]
+    dockerfile = (ROOT / "infra/docker/frappe/Dockerfile").read_text()
+    assert re.search(r"install -d .*-o frappe -g frappe .*/home/frappe/frappe-bench/archived", dockerfile), dockerfile
+    from dsherp import admin
+    assert admin.ARCHIVE == "/home/frappe/frappe-bench/archived/sites"
+
+
+def test_the_build_context_excludes_runtime_state_secrets_and_tooling():
+    """The release images are built from the working directory; without a .dockerignore the
+    daemon receives .runtime (credentials), infra/env (filled environments) and the venv."""
+    ignored = (ROOT / ".dockerignore").read_text().split()
+    for entry in (".git", ".runtime", ".venv", "work", "infra/env", "frontend/node_modules", "evals/runs", "*.log"):
+        assert entry in ignored, entry
+    # What the Dockerfiles COPY must not be shadowed by an ignore pattern.
+    for kept in ("frappe_app", "infra/nginx", "requirements.lock", "dsherp", "config", "runtime", "business-skills"):
+        assert not any(pattern in (kept, kept + "/", "**/" + kept) for pattern in ignored), kept
+    assert not any(pattern in ("dist", "dist/", "**/dist") for pattern in ignored)
+
+
 def test_the_public_edge_does_not_expose_the_run_capability_endpoints():
     # Development renders infra/frappe.conf.template; the release image ships its own
     # template over the base image's, so both must carry the same block.
@@ -299,6 +326,41 @@ def test_the_production_worker_unit_restarts_itself_and_owns_only_two_directorie
     assert "User=dsherp" in unit
     # Found on the x86_64 drill: an unset DSHERP_ENV made the worker check for the dev volume.
     assert "Environment=DSHERP_ENV=prod" in unit
+
+
+def test_the_firewall_unit_applies_host_rules_before_the_worker_and_the_worker_requires_it(tmp_path):
+    """The INPUT rules that keep run containers off the host did not survive a reboot or a
+    recreated agent network: only a printed suggestion existed. A oneshot unit re-derives the
+    bridge and applies them; the worker cannot start without it."""
+    from infra.render_worker_units import FIREWALL_UNIT_NAME, render_firewall_unit, render_systemd_unit
+
+    assert FIREWALL_UNIT_NAME == "dsherp-agent-firewall.service"
+    unit = render_firewall_unit(ROOT, agent_network="dsherp_agent", target=tmp_path / "fw.service").read_text()
+    assert "Type=oneshot" in unit and "RemainAfterExit=yes" in unit
+    assert "ExecStart=/usr/local/sbin/dsherp-agent-firewall apply dsherp_agent" in unit
+    assert "ExecStop=/usr/local/sbin/dsherp-agent-firewall remove dsherp_agent" in unit
+    assert re.search(r"^Requires=docker.service$", unit, re.MULTILINE)
+    assert re.search(r"^After=docker.service$", unit, re.MULTILINE)
+    assert "WantedBy=multi-user.target" in unit
+    worker = render_systemd_unit(ROOT, user="dsherp", group="dsherp", target=tmp_path / "worker.service").read_text()
+    assert re.search(r"^Requires=docker.service dsherp-agent-firewall.service$", worker, re.MULTILINE)
+    assert re.search(r"^After=docker.service network-online.target dsherp-agent-firewall.service$", worker, re.MULTILINE)
+    for bad in ("bad name", "", "dsherp agent;rm"):
+        with pytest.raises(ValueError):
+            render_firewall_unit(ROOT, agent_network=bad, target=tmp_path / "bad.service")
+
+
+def test_the_firewall_script_tags_its_rules_records_the_bridge_and_is_valid_shell():
+    import subprocess
+
+    script = ROOT / "infra/systemd/dsherp-agent-firewall.sh"
+    text = script.read_text()
+    assert text.startswith("#!/bin/sh")
+    assert script.stat().st_mode & 0o111, "must be executable"
+    for needle in ("apply)", "check)", "remove)", "docker network inspect", "-m comment --comment",
+                   "ESTABLISHED,RELATED", "-j DROP", "/run/dsherp-agent-firewall"):
+        assert needle in text, needle
+    assert subprocess.run(["sh", "-n", str(script)], capture_output=True).returncode == 0
 
 
 def test_the_worker_unit_refuses_an_unusable_account_or_watchdog(tmp_path):

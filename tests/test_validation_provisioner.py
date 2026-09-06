@@ -118,3 +118,70 @@ def test_alpha_writer_provisioning_reuses_the_native_sales_baseline_fixture():
         assert value in fixture
     assert "frappe.get_doc" in fixture
     assert "frappe.db.sql" not in fixture
+
+
+def _existing_profiles(tmp_path):
+    from infra import run_validation_provision
+
+    profiles = {
+        "reader": {"user": "dsherp-reader@example.invalid", "api_key": "reader-key", "api_secret": "stale-secret",
+                   "base_url": "http://127.0.0.1:18081", "site": "dsherp-validation.localhost"},
+        "denied": {"user": "dsherp-denied@example.invalid", "api_key": "denied-key", "api_secret": "denied-secret",
+                   "base_url": "http://127.0.0.1:18081", "site": "dsherp-validation.localhost"},
+    }
+    run_validation_provision._write_private(tmp_path / "erp-users.json", profiles)
+    run_validation_provision._write_private(tmp_path / "erp-reader.json", profiles["reader"])
+    run_validation_provision._write_private(tmp_path / "erp-denied.json", profiles["denied"])
+    return profiles
+
+
+def test_reissuing_one_actor_rotates_its_secret_on_the_site_and_rewrites_only_its_profile(tmp_path):
+    """A test that calls generate_keys on the shared reader leaves the files stale (reader → 401)."""
+    from infra import run_validation_provision
+
+    _existing_profiles(tmp_path)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs.get("input")))
+
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"api_key": "reader-key", "api_secret": "fresh-secret"}) + "\n"
+            stderr = ""
+        return Result()
+
+    result = run_validation_provision.reissue("reader", tmp_path, run=run)
+    assert result == {"actor": "reader", "user": "dsherp-reader@example.invalid", "api_key": "reader-key"}
+    command, script = calls[0]
+    assert command[:4] == ["docker", "compose", "-f", "infra/compose.validation.yml"]
+    assert "exec" in command and "backend" in command
+    assert "generate_keys" in script and "dsherp-reader@example.invalid" in script
+    users = json.loads((tmp_path / "erp-users.json").read_text())
+    assert users["reader"]["api_secret"] == "fresh-secret" and users["reader"]["api_key"] == "reader-key"
+    assert users["reader"]["base_url"] == "http://127.0.0.1:18081" and users["reader"]["site"] == "dsherp-validation.localhost"
+    assert users["denied"]["api_secret"] == "denied-secret"
+    assert json.loads((tmp_path / "erp-reader.json").read_text()) == users["reader"]
+    assert json.loads((tmp_path / "erp-denied.json").read_text()) == users["denied"]
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600
+               for path in (tmp_path / "erp-users.json", tmp_path / "erp-reader.json"))
+
+
+def test_reissuing_refuses_an_unknown_actor_a_missing_profile_and_a_mismatched_key(tmp_path):
+    from infra import run_validation_provision
+
+    def run(command, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"api_key": "other-key", "api_secret": "fresh-secret"}) + "\n"
+            stderr = ""
+        return Result()
+
+    with pytest.raises(RuntimeError, match="profile"):
+        run_validation_provision.reissue("reader", tmp_path, run=run)
+    profiles = _existing_profiles(tmp_path)
+    with pytest.raises(ValueError):
+        run_validation_provision.reissue("writer", tmp_path, run=run)
+    with pytest.raises(RuntimeError, match="api_key"):
+        run_validation_provision.reissue("reader", tmp_path, run=run)
+    assert json.loads((tmp_path / "erp-users.json").read_text()) == profiles

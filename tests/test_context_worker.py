@@ -874,7 +874,181 @@ def test_site_client_never_reuses_an_idle_backend_socket():
         server.shutdown();server.server_close();thread.join()
 
 
-def test_production_checks_the_release_image_and_the_agent_network_not_a_prepared_volume():
+def test_the_host_circuit_probe_uses_the_direct_provider_address_not_the_container_proxy(tmp_path):
+    """Plan-2 re-audit: 3f79ac0 switched the probe to agent_settings(), whose base URL is the
+    egress proxy's compose name. That name resolves only inside the agent network, so on the
+    host the probe always failed and an opened circuit never closed until a restart."""
+    from dsherp import context_worker,runtime_host
+    env=tmp_path/'provider.env'
+    env.write_text('DEEPSEEK_API_KEY=sk-test-key\nDEEPSEEK_BASE_URL=https://provider.example.test/v1\n')
+    probed=[]
+    def fake_probe(base_url,api_key):
+        probed.append((base_url,api_key));return True
+    assert context_worker.host_probe(env,probe=fake_probe)() is True
+    assert probed==[('https://provider.example.test/v1','sk-test-key')]
+    container=runtime_host.agent_settings(env)
+    assert container['DEEPSEEK_BASE_URL']!=probed[0][0] and 'agent-egress' in container['DEEPSEEK_BASE_URL']
+    # main() must hand the coordinator this probe, not one built from the container settings.
+    source=(context_worker.ROOT/'dsherp/context_worker.py').read_text()
+    assert 'host_probe(args.provider_env)' in source
+    assert "probe_models(current['DEEPSEEK_BASE_URL']" not in source
+
+
+PRODUCTION=None
+def _production():
+    from dsherp import deploy_env
+    return deploy_env.settings({'DSHERP_ENV':'prod','DSHERP_PROJECT':'dsherp',
+        'DSHERP_BASE_DOMAIN':'tenant.example.com','DSHERP_PLATFORM_SLUG':'platform',
+        'DSHERP_IMAGE_TAG':'v0.3.0','DSHERP_IMAGE_REGISTRY':'registry.example.com/dsherp',
+        'DSHERP_AGENT_UID':'1000','DSHERP_AGENT_GID':'1000'})
+
+
+def _host_runner(network_id='db512087a978abcdef0123456789',verdict='blocked',calls=None):
+    """Fake docker: network inspects answer the id and gateway; `docker run` is the probe."""
+    calls=calls if calls is not None else []
+    def runner(command,**kwargs):
+        calls.append(command)
+        if command[1:3]==['network','inspect'] and '--format' in command:
+            template=command[command.index('--format')+1]
+            out=network_id if 'Id' in template else '172.20.0.1'
+            return subprocess.CompletedProcess(command,0,stdout=out+'\n',stderr='')
+        if command[:2]==['docker','run']:
+            if verdict is None:
+                return subprocess.CompletedProcess(command,125,stdout='',stderr='docker: no such image')
+            return subprocess.CompletedProcess(command,0,stdout='DSHERP_ISOLATION '+json.dumps({'gateway':'172.20.0.1','verdict':verdict})+'\n',stderr='')
+        return subprocess.CompletedProcess(command,0,stdout='',stderr='')
+    runner.calls=calls
+    return runner
+
+
+def test_production_refuses_to_serve_without_the_firewall_record_or_with_a_stale_bridge(tmp_path):
+    """Reviewer finding: a missing record was only logged and a present one only compared the
+    bridge name. Missing means the unit never ran; stale means a recreated network."""
+    from dsherp import context_worker
+    production=_production()
+    state=tmp_path/'dsherp_agent'
+    with pytest.raises(RuntimeError,match='dsherp-agent-firewall'):
+        context_worker.prepare_host(runner=_host_runner(),cleanup=lambda runner:None,resolved=production,firewall_state=tmp_path)
+    state.write_text('br-000000000000\n')
+    with pytest.raises(RuntimeError,match='br-db512087a978'):
+        context_worker.prepare_host(runner=_host_runner(),cleanup=lambda runner:None,resolved=production,firewall_state=tmp_path)
+    state.write_text('br-db512087a978\n')
+    context_worker.prepare_host(runner=_host_runner(),cleanup=lambda runner:None,resolved=production,firewall_state=tmp_path)
+
+
+def test_production_probes_the_real_isolation_from_a_container_and_refuses_when_the_host_answers(tmp_path):
+    """The record proves the unit ran; only a container on the agent network proves the rules
+    work. A refused connection is the host's kernel answering, i.e. no DROP rule in the way."""
+    from dsherp import context_worker
+    production=_production()
+    (tmp_path/'dsherp_agent').write_text('br-db512087a978\n')
+    for verdict in ('refused','connected','reset','error:OSError'):
+        with pytest.raises(RuntimeError,match='网关'):
+            context_worker.HostIsolation(production,runner=_host_runner(verdict=verdict),state_dir=tmp_path).verify()
+    with pytest.raises(RuntimeError):  # the probe itself could not run: refuse rather than assume
+        context_worker.HostIsolation(production,runner=_host_runner(verdict=None),state_dir=tmp_path).verify()
+    runner=_host_runner(verdict='blocked')
+    isolation=context_worker.HostIsolation(production,runner=runner,state_dir=tmp_path)
+    assert isolation.verify()=='db512087a978abcdef0123456789'
+    probe=[command for command in runner.calls if command[:2]==['docker','run']][0]
+    assert '--network' in probe and probe[probe.index('--network')+1]=='dsherp_agent'
+    assert probe[probe.index('--user')+1]=='1000:1000' and '--cap-drop=ALL' in probe and '--read-only' in probe
+    assert 'registry.example.com/dsherp/dsherp-worker:v0.3.0' in probe
+    assert 'DSHERP_PROBE_GATEWAY=172.20.0.1' in probe
+
+
+def test_isolation_is_rechecked_every_tick_and_reprobed_when_the_network_changes(tmp_path):
+    """A network recreated while the worker runs gets a new bridge; the gate must notice
+    without a restart, and claims stop until the unit is restarted."""
+    from dsherp import context_worker
+    production=_production()
+    (tmp_path/'dsherp_agent').write_text('br-db512087a978\n')
+    runner=_host_runner()
+    isolation=context_worker.HostIsolation(production,runner=runner,state_dir=tmp_path)
+    isolation.verify()
+    probes=lambda:sum(1 for command in runner.calls if command[:2]==['docker','run'])
+    assert isolation.allows() is True and probes()==1  # unchanged network: no second probe
+    runner.calls.clear()
+    changed=_host_runner(network_id='6e15112f7d1cabcdef0123456789',verdict='blocked',calls=runner.calls)
+    isolation.runner=changed
+    assert isolation.allows() is False  # record still names the old bridge
+    (tmp_path/'dsherp_agent').write_text('br-6e15112f7d1c\n')  # unit restarted by the operator
+    assert isolation.allows() is True and probes()==1  # re-probed exactly once for the new network
+    assert isolation.allows() is True and probes()==1
+
+
+def test_the_isolation_probe_calls_only_a_timeout_isolation(capsys,monkeypatch):
+    """Reviewer finding: every OSError, a connection reset included, fell through as 'blocked'.
+    Only a timeout proves the SYN was dropped; a refusal or reset is the host answering, and
+    anything else cannot prove isolation."""
+    import errno,socket
+    from dsherp import context_worker
+    monkeypatch.setenv('DSHERP_PROBE_GATEWAY','172.20.0.1')
+    def run(outcomes):
+        def fake(address,timeout):
+            outcome=outcomes[address[1]]
+            if isinstance(outcome,BaseException):raise outcome
+            class Sock:
+                def close(self):pass
+            return Sock()
+        monkeypatch.setattr(socket,'create_connection',fake)
+        exec(context_worker.ISOLATION_PROBE,{'__name__':'probe'})
+        line=[l for l in capsys.readouterr().out.splitlines() if l.startswith('DSHERP_ISOLATION ')][-1]
+        return json.loads(line.split(' ',1)[1])['verdict']
+    assert run({22:TimeoutError(),9:TimeoutError()})=='blocked'
+    assert run({22:ConnectionRefusedError(),9:TimeoutError()})=='refused'
+    assert run({22:ConnectionResetError(),9:TimeoutError()})=='reset'
+    assert run({22:None,9:TimeoutError()})=='connected'
+    assert run({22:OSError(errno.EHOSTUNREACH,'no route'),9:TimeoutError()})=='error:OSError'
+    assert run({22:TimeoutError(),9:socket.timeout()})=='blocked'
+
+
+def test_rules_lost_on_the_same_bridge_are_caught_within_the_probe_interval(tmp_path,capsys):
+    """Reviewer finding: with an unchanged network id only the record was re-read, so rules
+    flushed from the kernel were never noticed. The probe repeats on a fixed interval while
+    healthy and on every check while failing."""
+    from dsherp import context_worker
+    production=_production()
+    (tmp_path/'dsherp_agent').write_text('br-db512087a978\n')
+    clock=[0.0];state={'verdict':'blocked'};calls=[]
+    def runner(command,**kwargs):
+        return _host_runner(verdict=state['verdict'],calls=calls)(command,**kwargs)
+    isolation=context_worker.HostIsolation(production,runner=runner,state_dir=tmp_path,clock=lambda:clock[0])
+    probes=lambda:sum(1 for command in calls if command[:2]==['docker','run'])
+    isolation.verify();assert probes()==1
+    state['verdict']='refused'  # rules flushed from the kernel; bridge and record unchanged
+    clock[0]=1.0;assert isolation.allows() is True and probes()==1   # inside the interval: not yet noticed
+    clock[0]=context_worker.ISOLATION_PROBE_INTERVAL+0.5
+    assert isolation.allows() is False and probes()==2               # interval elapsed: probed and refused
+    clock[0]+=1;assert isolation.allows() is False and probes()==3    # failing: probed on every check
+    state['verdict']='blocked'                                       # operator restarted the unit
+    clock[0]+=1;assert isolation.allows() is True and probes()==4
+    clock[0]+=1;assert isolation.allows() is True and probes()==4    # healthy again: back to the interval
+    err=capsys.readouterr().err
+    assert 'host_isolation_failed' in err and 'host_isolation_restored' in err
+    assert context_worker.ISOLATION_PROBE_INTERVAL<=60
+
+
+def test_the_coordinator_claims_nothing_while_host_isolation_fails(tmp_path):
+    from dsherp.context_worker import Coordinator
+    claim_calls=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='claim_run':
+            claim_calls.append(1)
+            return httpx.Response(200,json={'message':None})
+        return httpx.Response(200,json={'message':{'ok':True}})
+    client=httpx.Client(transport=httpx.MockTransport(handler),base_url='http://alpha')
+    sites=[{'site':'alpha','client':client,'business':{}}]
+    gate=[False]
+    coordinator=Coordinator(sites,lambda:SETTINGS,2,lambda *a,**k:None,None,lambda:False,tmp_path,isolation=lambda:gate[0])
+    assert coordinator.tick(0)==0 and not claim_calls
+    gate[0]=True
+    coordinator.tick(1)
+    assert claim_calls
+
+
+def test_production_checks_the_release_image_and_the_agent_network_not_a_prepared_volume(tmp_path):
     """生产没有 Runtime 卷：镜像自带运行时，出网只有代理，两者缺一就不该开工。"""
     from dsherp import context_worker,deploy_env
     production=deploy_env.settings({'DSHERP_ENV':'prod','DSHERP_PROJECT':'dsherp',
@@ -882,10 +1056,12 @@ def test_production_checks_the_release_image_and_the_agent_network_not_a_prepare
         'DSHERP_IMAGE_TAG':'v0.3.0','DSHERP_IMAGE_REGISTRY':'registry.example.com/dsherp',
         'DSHERP_AGENT_UID':'1000','DSHERP_AGENT_GID':'1000'})
     checked=[]
+    host=_host_runner()
     def runner(command,**kwargs):
         checked.append(tuple(command[1:3])+(command[3],))
-        return subprocess.CompletedProcess(command,0,stdout='',stderr='')
-    context_worker.prepare_host(runner=runner,cleanup=lambda runner:None,resolved=production)
+        return host(command,**kwargs)
+    (tmp_path/'dsherp_agent').write_text('br-db512087a978\n')
+    context_worker.prepare_host(runner=runner,cleanup=lambda runner:None,resolved=production,firewall_state=tmp_path)
     assert ('image','inspect','registry.example.com/dsherp/dsherp-worker:v0.3.0') in checked
     assert ('network','inspect','dsherp_agent') in checked
     assert not [row for row in checked if row[0]=='volume']

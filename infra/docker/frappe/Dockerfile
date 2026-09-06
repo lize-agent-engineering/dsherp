@@ -17,7 +17,10 @@ COPY --chown=frappe:frappe frappe_app /opt/dsherp-frappe
 COPY infra/nginx/security-headers.conf /etc/nginx/snippets/security_headers.conf
 COPY infra/nginx/site.conf.template /templates/nginx/frappe.conf.template
 # Desk loads /assets/dsherp_bridge/dist/*; the built bundle ships in the image, not on a mount.
+# `bench drop-site` archives under this directory; it must pre-exist owned by the bench
+# user or an empty named volume mounted here is root-owned and the move fails.
 RUN set -eu; \
+    install -d -m 755 -o frappe -g frappe /home/frappe/frappe-bench/archived; \
     rm -rf /opt/dsherp-frappe/*/__pycache__ /opt/dsherp-frappe/*/*/__pycache__; \
     test -f /opt/dsherp-frappe/dsherp_bridge/public/dist/context-agent.js; \
     ln -sfn /opt/dsherp-frappe/dsherp_bridge/public /home/frappe/frappe-bench/assets/dsherp_bridge; \

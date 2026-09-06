@@ -492,25 +492,55 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
     return result
 
 
+# Where `bench drop-site` moves a Site directory (backup included). Named explicitly so
+# it is the same path the backend persists as a volume (compose) and the image prepared
+# for the bench user (Dockerfile): an archive left in the container's writable layer
+# vanished on the next recreate, and a root-owned empty volume fails the move after the
+# database is already gone.
+ARCHIVE = '/home/frappe/frappe-bench/archived/sites'
+
+
+def _listing(bench, path):
+    text = bench.run('sh', '-c', f'ls -1 {path} 2>/dev/null || true', timeout=60)
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
 def retire_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_factory=None, archive=True):
-    """Archive first, drop second; the archive path is reported before anything is removed."""
+    """Prove the archive is writable, back up, drop (which moves the whole Site directory
+    under ARCHIVE), read the archive back, and only then take the tenant off the list."""
     site = deploy_env.site_name(resolved, slug)
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     tenant = factory('tenant')
     if not tenant.site_exists(site):
         raise Fault(f'站点 {site} 不存在；不要用下线命令清理残留')
+    writable = tenant.run('sh', '-c', f'mkdir -p {ARCHIVE} && test -w {ARCHIVE} && echo writable', timeout=60)
+    if writable.strip().splitlines()[-1:] != ['writable']:
+        raise Fault(f'归档目录 {ARCHIVE} 不存在或不可写；先修正 backend 的 tenant-archive 卷挂载再下线，站点未动')
+    before = set(_listing(tenant, ARCHIVE))
     steps = []
     if archive:
         tenant.run('bench', '--site', site, 'backup', '--with-files', timeout=3600)
-        steps.append(('archive', 'created'))
-    tenant.run('bench', 'drop-site', site, '--db-root-username', 'root',
-               '--db-root-password', read_secret(resolved, 'db_root_password', root),
-               '--no-backup', timeout=1800)
+        steps.append(('backup', 'created'))
+    db_root = read_secret(resolved, 'db_root_password', root)
+    tenant.run('bench', 'drop-site', site, '--db-root-username', 'root', '--db-root-password', db_root,
+               '--no-backup', '--archived-sites-path', ARCHIVE, timeout=1800, secrets=(db_root,))
     steps.append(('site', 'dropped'))
+    added = sorted(set(_listing(tenant, ARCHIVE)) - before)
+    # Frappe suffixes a counter when the same Site was archived before.
+    candidates = [name for name in added if name == site or (name.startswith(site) and name[len(site):].isdigit())]
+    if len(candidates) != 1:
+        raise Fault(f'站点 {site} 已删除，但 {ARCHIVE} 下没有出现唯一的归档目录（新增：{"、".join(added) or "无"}）；'
+                    '不要重跑下线命令，先检查该目录与备份，租户清单未改')
+    path = f'{ARCHIVE}/{candidates[0]}'
+    present = tenant.run('sh', '-c', f'test -f {path}/site_config.json && echo present', timeout=60)
+    if present.strip().splitlines()[-1:] != ['present']:
+        raise Fault(f'归档目录 {path} 缺少 site_config.json；不要重跑下线命令，先检查该目录，租户清单未改')
+    backups = _listing(tenant, f'{path}/private/backups')
+    steps.append(('archive', path))
     rows = [row for row in load_tenants(resolved, root) if row['slug'] != slug]
     save_tenants(resolved, rows, root)
     steps.append(('ingress', str(render_ingress(resolved, rows, root))))
-    return {'site': site, 'steps': steps}
+    return {'site': site, 'archive': path, 'backups': backups, 'steps': steps}
 
 
 def agent_firewall_rules(resolved, runner=subprocess.run):
@@ -523,13 +553,19 @@ def agent_firewall_rules(resolved, runner=subprocess.run):
     if result.returncode or not result.stdout.strip():
         raise Fault(f"读不到网络 {resolved['agent_network']}；先 compose up")
     bridge = 'br-' + result.stdout.strip()[:12]
+    tag = '-m comment --comment dsherp-agent-firewall'
+    # The same rules dsherp-agent-firewall.service applies at boot; printed for a host
+    # without systemd or for inspection. The tag lets either side replace the other's.
     return {'bridge': bridge,
-            'iptables': [f'iptables -I INPUT 1 -i {bridge} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT',
-                         f'iptables -I INPUT 2 -i {bridge} -j DROP'],
-            'nft': [f'nft add rule inet filter input iifname "{bridge}" ct state established,related accept',
-                    f'nft add rule inet filter input iifname "{bridge}" drop'],
-            'undo': [f'iptables -D INPUT -i {bridge} -j DROP',
-                     f'iptables -D INPUT -i {bridge} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT']}
+            'iptables': [f'iptables -I INPUT 1 -i {bridge} -m conntrack --ctstate ESTABLISHED,RELATED {tag} -j ACCEPT',
+                         f'iptables -I INPUT 2 -i {bridge} {tag} -j DROP'],
+            'nft': [f'nft add rule inet filter input iifname "{bridge}" ct state established,related '
+                    'comment "dsherp-agent-firewall" accept',
+                    f'nft add rule inet filter input iifname "{bridge}" comment "dsherp-agent-firewall" drop'],
+            'undo': [f'iptables -D INPUT -i {bridge} {tag} -j DROP',
+                     f'iptables -D INPUT -i {bridge} -m conntrack --ctstate ESTABLISHED,RELATED {tag} -j ACCEPT'],
+            'unit': 'dsherp-agent-firewall.service',
+            'script': '/usr/local/sbin/dsherp-agent-firewall'}
 
 
 def doctor(resolved, root=ROOT, runner=subprocess.run):
@@ -675,7 +711,7 @@ def main(argv=None):
     sub.add_parser('provision-platform', help='幂等开通平台站')
     sub.add_parser('list-tenants', help='列出当前租户')
     sub.add_parser('render-ingress', help='按当前租户清单重新渲染入口配置')
-    sub.add_parser('agent-firewall', help='打印把运行容器挡在宿主之外的 INPUT 规则（需 root 执行）')
+    sub.add_parser('agent-firewall', help='打印把运行容器挡在宿主之外的 INPUT 规则；生产由 dsherp-agent-firewall.service 在开机时应用')
     release_parser = sub.add_parser('release', help='升级到新 tag：先备份，逐站 migrate，再逐字段比对')
     release_parser.add_argument('tag')
     rollback_parser = sub.add_parser('rollback', help='回到旧 tag 并从升级前备份恢复')
