@@ -188,10 +188,13 @@ def _fetched_root(bench, side, site, set_id, base=FETCHED):
     return listed[-1]
 
 
-def verify_fetched(bench, site, set_id, base=FETCHED):
-    """Prove the two fetched halves describe one set before anything is restored from them."""
+def verify_fetched(bench, site, set_id, base=FETCHED, secrets_base=None):
+    """Prove the two fetched halves describe one set before anything is restored from them.
+
+    The drill stack keeps both halves under one root on two volumes; a cold-start keeps the
+    secret half on the Site's own secrets volume, so it may name a second base (R5)."""
     data = _fetched_root(bench, 'data', site, set_id, base=base)
-    secrets_root = _fetched_root(bench, 'secrets', site, set_id, base=base)
+    secrets_root = _fetched_root(bench, 'secrets', site, set_id, base=secrets_base or base)
     set_doc = json.loads(bench.run('sh', '-c', f'cat {data}/set.json', timeout=120))
     pair = json.loads(bench.run('sh', '-c', f'cat {secrets_root}/pair.json', timeout=120))
     if set_doc.get('set_id') != set_id or not backup_sets.pair_matches(set_doc, pair):
@@ -212,7 +215,12 @@ def verify_fetched(bench, site, set_id, base=FETCHED):
     return set_doc, data, snapshot, config
 
 
-def restore_into(bench, site, data_root, config, *, root_password, admin_password):
+def restore_into(bench, site, data_root, config, *, root_password, admin_password, reopen=True):
+    """Load the dump and files into the Site and give it back its encryption key.
+
+    `reopen` is for the isolated drill stack, which has no route to anyone: it may come up
+    serving. A cold-start on a real host passes False and stays in maintenance until every
+    check has passed (R4)."""
     bench.script(_script(RESTORE, {'site': site, 'root_password': root_password, 'admin_password': admin_password,
                                    'db_name': 'restore_' + tokens.token_hex(6),
                                    'database': f'{data_root}/database.sql.gz', 'files': f'{data_root}/files.tar',
@@ -221,7 +229,7 @@ def restore_into(bench, site, data_root, config, *, root_password, admin_passwor
     carried = {key: config[key] for key in CARRIED_KEYS if key in config}
     if not carried:
         raise Fault(f'{site} 的密钥副本里没有 encryption_key，恢复后的密码字段无法解密')
-    bench.script(_script(SITE_CONFIG, {'site': site, 'values': {**carried, 'maintenance_mode': 0,
+    bench.script(_script(SITE_CONFIG, {'site': site, 'values': {**carried, 'maintenance_mode': 0 if reopen else 1,
                                                                'pause_scheduler': 1, 'mute_emails': 1}}),
                  timeout=300, secrets=tuple(carried.values()))
     return carried
@@ -367,44 +375,69 @@ def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.ru
         if row.get('image_id') and running != row['image_id']:
             raise Fault(f'本机 {service} 运行的镜像 id 是 {running}，备份集记录的是 {row["image_id"]}；'
                         f'先把 prod.env 的 tag 改成 {row.get("image_tag")} 并 compose up -d，再恢复')
-        target = f'{backup.BACKUPS}/incoming/{row["set_id"]}'
-        volume = f'{resolved["project"]}_{"platform" if kind == "platform" else "tenant"}-backups'
-        for side in ('data', 'secrets'):
-            arguments = ['restore', row[f'{side}_snapshot'], '--target', f'/incoming/{side}']
-            backup.restic(resolved, side, arguments, root=root, runner=runner, timeout=3600,
-                          mounts=[f'{volume}:/incoming'])
-        data_root = _fetched_root(bench, 'data', site, row['set_id'], base=f'{backup.BACKUPS}/incoming')
-        set_doc, data_root, expected, config = verify_fetched(bench, site, row['set_id'],
-                                                              base=f'{backup.BACKUPS}/incoming')
-        # 2. the Site, by the normal path, so this host's own configuration is derived here
-        provision = provision or (lambda: admin.provision_tenant(resolved, site.split('.')[0], root=root, runner=runner)
-                                  if kind == 'tenant' else admin.provision_platform(resolved, root=root, runner=runner))
-        provision()
-        root_password = admin.read_secret(resolved, 'db_root_password', root)
-        admin_password = admin.read_secret(resolved, 'tenant_admin_password' if kind == 'tenant'
-                                           else 'platform_admin_password', root)
-        restore_into(bench, site, data_root, config, root_password=root_password, admin_password=admin_password)
-        restored = admin.take_snapshot(resolved, site, bench=bench, hash_columns=admin._hash_columns_of(expected))
-        comparison = admin.compare_snapshots(expected, restored, admin.RESTORE_EXPECTATIONS)
-        report = {'site': site, 'set_id': row['set_id'], 'image_tag': set_doc['image_tag'],
-                  'comparison': comparison['summary'], 'clean': comparison['clean'],
-                  'seconds': round(time.monotonic() - started, 1)}
-        if not comparison['clean']:
+        # Each half comes back onto the volume that already holds that half's kind of data,
+        # with that volume's own ownership and readers: the data half onto the backups volume,
+        # the secret half onto the secrets volume. Putting the site_config copy on the data
+        # volume would hand the data-side sync container the encryption key (R5).
+        bench_name = 'platform' if kind == 'platform' else 'tenant'
+        volumes = {'data': f'{resolved["project"]}_{bench_name}-backups',
+                   'secrets': f'{resolved["project"]}_{bench_name}-backup-secrets'}
+        bases = {'data': f'{backup.BACKUPS}/incoming', 'secrets': f'{backup.BACKUP_SECRETS}/incoming'}
+        report = {'site': site, 'set_id': row['set_id'], 'maintenance': 'kept'}
+        report_path = admin.runtime_dir(resolved, root) / 'backups' / f'restore-{site}.json'
+        try:
+            for side in ('data', 'secrets'):
+                arguments = ['restore', row[f'{side}_snapshot'], '--target', f'/incoming/{side}']
+                backup.restic(resolved, side, arguments, root=root, runner=runner, timeout=3600,
+                              mounts=[f'{volumes[side]}:/incoming'])
+            set_doc, data_root, expected, config = verify_fetched(bench, site, row['set_id'],
+                                                                  base=bases['data'], secrets_base=bases['secrets'])
+            report['image_tag'] = set_doc['image_tag']
+            # 2. the Site, by the normal path, so this host's own configuration is derived here.
+            # From here on it exists on a host that serves, and it stays closed until the end.
+            provision = provision or (lambda: admin.provision_tenant(resolved, site.split('.')[0], root=root, runner=runner)
+                                      if kind == 'tenant' else admin.provision_platform(resolved, root=root, runner=runner))
+            provision()
             admin._set_flag(bench, site, 'maintenance_mode', 1)
-            report['maintenance'] = 'kept'
-            admin._write_json(admin.runtime_dir(resolved, root) / 'backups' / f'restore-{site}.json', report)
-            raise Fault(f'{site} 恢复后与备份窗口内的快照有 {comparison["summary"]["undeclared"]} 处未声明差异；'
-                        '站点保持维护模式，先看报告再决定')
-        decrypted = decrypt_check(bench, site)
-        report['decrypt_checked'] = decrypted['checked']
-        # 3. host-specific configuration again, now that the data is in place
-        provision()
+            root_password = admin.read_secret(resolved, 'db_root_password', root)
+            admin_password = admin.read_secret(resolved, 'tenant_admin_password' if kind == 'tenant'
+                                               else 'platform_admin_password', root)
+            restore_into(bench, site, data_root, config, root_password=root_password, admin_password=admin_password,
+                         reopen=False)
+            restored = admin.take_snapshot(resolved, site, bench=bench, hash_columns=admin._hash_columns_of(expected))
+            comparison = admin.compare_snapshots(expected, restored, admin.RESTORE_EXPECTATIONS)
+            report.update({'comparison': comparison['summary'], 'clean': comparison['clean']})
+            if not comparison['clean']:
+                raise Fault(f'{site} 恢复后与备份窗口内的快照有 {comparison["summary"]["undeclared"]} 处未声明差异；'
+                            '站点保持维护模式，先看报告再决定')
+            decrypted = decrypt_check(bench, site)
+            report['decrypt_checked'] = decrypted['checked']
+            # 3. host-specific configuration again, now that the data is in place
+            provision()
+        except BaseException as error:
+            # Whatever failed - a fetch, the comparison, a decryption, the second provision -
+            # the Site does not open. The flag is re-asserted in case the failure came from a
+            # step that never set it, and the report says so before the error leaves.
+            report['error'] = str(error)[:500]
+            report['seconds'] = round(time.monotonic() - started, 1)
+            if bench.site_exists(site):
+                try:
+                    admin._set_flag(bench, site, 'maintenance_mode', 1)
+                except Fault as flag_error:
+                    report['maintenance'] = f'unknown: {flag_error}'
+            admin._write_json(report_path, report)
+            raise
+        finally:
+            # No copy of either half is left behind on the volumes, whichever way it went.
+            for side in ('data', 'secrets'):
+                bench.run('sh', '-c', f'rm -rf {bases[side]}/{side}', timeout=600)
         admin._set_flag(bench, site, 'maintenance_mode', 0)
         report['maintenance'] = 'released'
+        report['seconds'] = round(time.monotonic() - started, 1)
         backup_status.record_site(status, site, 'verified', at=backup_status.now_iso(clock), ok=True,
                                   set_id=row['set_id'], image_tag=set_doc['image_tag'])
         backup.save_status(resolved, status, root)
-        admin._write_json(admin.runtime_dir(resolved, root) / 'backups' / f'restore-{site}.json', report)
+        admin._write_json(report_path, report)
     return report
 
 

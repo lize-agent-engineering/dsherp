@@ -354,3 +354,136 @@ def test_the_cli_wires_the_migration_drill(monkeypatch):
     monkeypatch.setattr(deploy_env, "settings", lambda *a, **k: RELEASE)
     assert admin.main(["migrate-drill", "v0.5.0", SITE]) == 0
     assert seen["tag"] == "v0.5.0" and seen["sites"] == [SITE]
+
+
+class ColdStartBench(StagingBench):
+    """A real host's bench during a cold start: serves the fetched halves from what was staged,
+    records every flag it was asked to set, and can be told to fail the decryption check."""
+
+    def __init__(self, *args, decrypt_failed=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.existing = set()
+        self.decrypt_failed = list(decrypt_failed)
+        self.flag_history = []
+
+    def _staged(self, path):
+        rest = path.split("/incoming/", 1)[1]
+        side, _, tail = rest.partition("/backups/")
+        _, _, inner = tail.partition("/")
+        return ("/home/frappe/backups/" + inner) if side == "data" else ("/home/frappe/backup-secrets/" + inner)
+
+    def run(self, *arguments, stdin=None, timeout=900, secrets=()):
+        text = arguments[2] if arguments[:2] == ("sh", "-c") else ""
+        if "/incoming/" in text:
+            self.verbs.append(" ".join(arguments))
+            if text.startswith("ls -d "):
+                return text.split("ls -d ", 1)[1].split()[0].replace("*", "tenant") + "\n"
+            if text.startswith("cat "):
+                path = text.split("cat ", 1)[1].strip()
+                if path.endswith("site_config_backup.json"):
+                    return json.dumps({"db_password": "old", "encryption_key": "FERNET-KEY=="})
+                return json.dumps(self.written[self._staged(path)])
+            if "sha256sum" in text:
+                lines = []
+                for name in [w for w in text.split() if w.endswith((".sql.gz", ".tar", ".json"))]:
+                    leaf = name.rsplit("/", 1)[-1]
+                    if leaf == "snapshot.json":
+                        lines.append(f"{self.written[self._staged(name.replace('/snapshot.json', '/set.json'))]['snapshot_sha256']}  {name}")
+                    elif leaf == "site_config_backup.json":
+                        lines.append(f"{self.written[self._staged(name.rsplit('/', 1)[0] + '/pair.json')]['config_sha256']}  {name}")
+                    else:
+                        lines.append(f"{'ab' * 32}  {name}")
+                return "\n".join(lines) + "\n"
+            return ""
+        if arguments[:2] == ("bench", "--site") and arguments[3] == "set-config":
+            self.flag_history.append((arguments[5], arguments[6]))
+        return super().run(*arguments, stdin=stdin, timeout=timeout, secrets=secrets)
+
+    def script(self, body, timeout=900, secrets=()):
+        self.scripts.append(body) if hasattr(self, "scripts") else None
+        if "source_sql" in body:
+            self.existing.add(SITE)
+            return "DSHERP_RESTORED {}\n"
+        if "update_site_config" in body:
+            payload = json.loads(body.split("payload=", 1)[1].split("\n", 1)[0])
+            for key, value in payload["values"].items():
+                self.flag_history.append((key, str(value)))
+            return "DSHERP_CONFIG []\n"
+        return "DSHERP_DONE {}\n"
+
+    def python(self, site, body, timeout=900):
+        if "DSHERP_DECRYPT" in body:
+            return "DSHERP_DECRYPT " + json.dumps({"checked": 3, "failed": self.decrypt_failed}) + "\n"
+        return super().python(site, body, timeout=timeout)
+
+
+def _cold_start(host, **bench_kwargs):
+    bench, restic, sets = _complete_set(host)
+    cold = ColdStartBench([SAME, SAME], **bench_kwargs)
+    cold.written = bench.written
+    cold.snapshots = [SAME]
+    return cold, restic, sets
+
+
+def test_a_cold_start_keeps_the_site_closed_until_the_last_check_and_opens_it_only_then(host):
+    cold, restic, sets = _cold_start(host)
+    report = restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic,
+                                        provision=lambda: None)
+    assert report["clean"] is True and report["maintenance"] == "released"
+    flags = [(key, value) for key, value in cold.flag_history if key == "maintenance_mode"]
+    assert flags[0] == ("maintenance_mode", "1"), "closed as soon as the site exists on this host"
+    assert flags[-1] == ("maintenance_mode", "0"), "opened only at the very end"
+    assert ("maintenance_mode", "0") not in flags[:-1], "never opened in between"
+
+
+def test_a_failed_decryption_leaves_the_cold_started_site_closed_and_says_so(host):
+    """The comparison used to be the only failure that kept maintenance on; a decryption
+    failure, a snapshot error or a failing second provision all left the Site open (R4)."""
+    cold, restic, sets = _cold_start(host, decrypt_failed=[["User", "Administrator", "api_secret"]])
+    with pytest.raises(admin.Fault, match="无法解密"):
+        restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic,
+                                   provision=lambda: None)
+    flags = [value for key, value in cold.flag_history if key == "maintenance_mode"]
+    assert flags and flags[-1] == "1" and "0" not in flags
+    report = json.loads((admin.runtime_dir(RELEASE) / "backups" / f"restore-{SITE}.json").read_text())
+    assert report["maintenance"] == "kept" and "无法解密" in report["error"]
+
+
+def test_a_failing_second_provision_also_keeps_the_site_closed(host):
+    cold, restic, sets = _cold_start(host)
+    calls = []
+
+    def provision():
+        calls.append(1)
+        if len(calls) == 2:
+            raise admin.Fault("synthetic provision failure")
+    with pytest.raises(admin.Fault, match="synthetic provision failure"):
+        restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic, provision=provision)
+    flags = [value for key, value in cold.flag_history if key == "maintenance_mode"]
+    assert flags[-1] == "1" and "0" not in flags
+
+
+def test_the_secret_half_is_fetched_onto_the_secrets_volume_and_both_halves_are_removed_afterwards(host):
+    """Both halves used to land on the data backups volume, which the data-side sync
+    container reads whole: one restore handed it the encryption key (R5)."""
+    cold, restic, sets = _cold_start(host)
+    restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic, provision=lambda: None)
+    mounts = {}
+    for command in restic.calls:
+        if "restore" in command:
+            side = next(w for w in command if w.startswith("backup-sync-")).removeprefix("backup-sync-")
+            mounts[side] = command[command.index("-v") + 1]
+    assert mounts["data"].endswith("tenant-backups:/incoming")
+    assert mounts["secrets"].endswith("tenant-backup-secrets:/incoming")
+    assert mounts["data"] != mounts["secrets"]
+    removed = [verb for verb in cold.verbs if verb.startswith("sh -c rm -rf ")]
+    assert any("/home/frappe/backups/incoming/data" in verb for verb in removed)
+    assert any("/home/frappe/backup-secrets/incoming/secrets" in verb for verb in removed)
+
+
+def test_the_halves_are_removed_even_when_the_cold_start_fails(host):
+    cold, restic, sets = _cold_start(host, decrypt_failed=[["User", "Administrator", "api_secret"]])
+    with pytest.raises(admin.Fault):
+        restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic, provision=lambda: None)
+    removed = [verb for verb in cold.verbs if verb.startswith("sh -c rm -rf ")]
+    assert len(removed) == 2
