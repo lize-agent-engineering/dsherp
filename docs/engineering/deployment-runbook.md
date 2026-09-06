@@ -315,7 +315,13 @@ sudo systemctl daemon-reload && sudo systemctl enable --now dsherp-backup.timer 
 
 **每周恢复验证**：`restore-drill [站…]` 在独立 compose 项目 `dsherp-restore` 里进行——`internal` 网络、无端口、无 worker/调度/队列/入口，只有两个取回容器能出网，且各自只挂自己那一半。流程：按各站最新完整集记录的 `(image_tag, image_id)` 分组 → 用该 tag 起栈并核对运行镜像 id 与集记录一致 → 取回两侧 → 核对配对与全部摘要（三件数据、`snapshot.json`、`site_config`）→ 进程内建站与恢复（root 与 admin 口令、`encryption_key` 只走解释器 stdin，不上命令行，`bench.log` 不再新增明文口令）→ 注入 `encryption_key`（只这一项；`db_password`、`host_name`、`dsherp_agent_sources` 等属于原主机，不带）→ **不 migrate**（升级是随后显式的 `release`）→ 与集内快照比对 → 对 `__Auth` 抽样解密。成功 `down -v` 只删本次演练自己的容器与卷；失败保留栈与 `<runtime>/backups/drills/<id>/` 诊断包（上限 14 天，但失败当时就告警、就处理），下一次演练拒绝启动直到 `--discard-failed`。
 
-**异机恢复（G3）**：在新主机按第 1–9 步拉起，带入上面五份密钥材料，`backup-init` 应报 `kept`，然后逐站 `restore-site <站>`（见下）。升级到更新的 tag 是随后显式的 `release`。
+**异机恢复（G3）**：在新主机按第 1–9 步拉起，带入上面五份密钥材料，`backup-init` 应报 `kept`，然后逐站：
+
+```sh
+DSHERP_ENV=prod ./bin/dsherp-admin restore-site acme.tenant.example.com     # 也可 --set <备份集 id>
+```
+
+`restore-site` 的契约：目标站在本机**必须不存在**（不覆盖、不自动清理）；先读回并核对两侧清单与全部摘要；本机运行的镜像 tag 与 id 必须等于该集记录的那次构建（不符即拒绝，先把 `prod.env` 改到那个 tag 再 `compose up -d`）；随后按常规 `provision-*` 建站、恢复、注入 `encryption_key`、与集内快照比对、再 `provision-*` 一次让主机相关配置按**这台**主机重算，最后抽样解密；只有比对干净才解除维护。任一步失败站点保持维护模式，报告在 `<runtime>/backups/restore-<站>.json`。升级到更新的 tag 是随后显式的 `release`。
 
 **保留与用户数据删除（裁决 #10）**：备份是个人数据的副本。删除只作用于在线数据；已生成的集不改写，按上面的保留规则随运行淘汰；`kind=retire` 的集是否最终清除，与审计保留切片一起裁决。将来的 `delete-user-data` 只影响其后产生的集。
 
