@@ -17,7 +17,8 @@
 - 宿主侧文件用 `admin._write_json`（0600、原子）写在 `admin.runtime_dir(resolved, root)` 下；密钥文件 0600 且不打印。
 - 所有拒绝都是 `admin.Fault`（中文，说明查什么，不说怎么强行通过）→ 退出码 2；有站失败退出码 1。
 - 备份集四件：`database.sql.gz`、`files.tar`、`private-files.tar`（数据侧）与 `site_config_backup.json`（密钥侧）；不用 `--compress`。
-- 提交信息用中文 `feat:/fix:/test:/docs:` 前缀，分支 `plan4/backup`；每个任务结束跑 `.venv/bin/python -m pytest -q --ignore=tests/integration`。
+- 提交信息用中文 `feat:/fix:/test:/docs:` 前缀，分支 `plan4/backup`。**执行节奏（第二次审阅）**：每个任务跑该任务相关的行为测试；每个阶段末跑全量非集成回归 + 该阶段的真实链路（阶段 1：dev 栈真实生成一套并核对；阶段 2：本机 MinIO 双仓库真实上传/单边失败/错配拒绝/淘汰；阶段 3：隔离栈真实恢复与第二栈冷启动恢复；阶段 4：调度表达式与失败通知真实验证），然后停下给检查点。
+- **计划中的代码块是候选方案**（第二次审阅）：不锁死等价实现、函数名或源码布局；与设计 2.1 或下列"契约修订"冲突时以契约为准。测试按行为验证，不固定服务数量、DocType 数或文本排版。
 
 ## 文件结构
 
@@ -44,6 +45,8 @@
 ## 阶段 1：备份集协议、稳定窗口、生成与状态记录
 
 ### Task 1: 备份集协议（`dsherp/backup_sets.py`）
+
+> **契约修订（第二次审阅）**：slug 保留连字符（`dsherp-validation.localhost` → `dsherp-validation_localhost`），`parse_set_id` 按位置解析（前 15 位 stamp、第 16 位 `-`、末 6 位 token、倒数第 7 位 `-`，中间为 slug，slug 只含 `[a-z0-9_-]`），测试必须覆盖 `dsherp-validation.localhost`、`dsherp-daily.localhost`、`acme.tenant.example.com`；`pair_manifest` 增加 `config_sha256`（`site_config_backup.json` 字节的 sha256，由调用方算好传入）与 `format`；`pair_matches` 一并核对。摘要定义见设计 §4.0（2.1）。
 
 **Files:**
 - Create: `dsherp/backup_sets.py`
@@ -228,6 +231,8 @@ git commit -m "feat: 备份集协议——set_id、set.json/pair.json 生成与�
 ```
 
 ### Task 2: 站点保持文件与 worker 的保持门（`dsherp/site_holds.py`）
+
+> **契约修订（第二次审阅）**：保持只负责"停止领取"。另加服务端闸门：`frappe_app/dsherp_bridge/context_execution.py` 的 `claim_run` 在 `frappe.conf.get('dsherp_hold')` 为真时拒绝领取（返回明确错误码 `site_held`，worker 侧把它当作"无可领取"而不是站点故障计数）；本任务补该端点的行为测试（`tests/test_context_execution.py` 或集成测试）。
 
 **Files:**
 - Create: `dsherp/site_holds.py`
@@ -580,6 +585,8 @@ git commit -m "feat: 两个 bench 挂载备份卷与独立的备份密钥卷，�
 ```
 
 ### Task 5: `dsherp-admin backup`——操作锁、稳定窗口、暂存、本地修剪、状态
+
+> **契约修订（第二次审阅）**：`backup_window` 的顺序改为——写保持文件 → `set-config dsherp_hold 1` → 等待 `Running`/`Cancelling` 归零（**不数 `Queued`/`NeedsInput`**，它们被保持冻结；上限 10 分钟，超时 `deferred(busy)`）→ `maintenance_mode=1`、`pause_scheduler=1` → 排空写入者：容器脚本轮询"本站 RQ 排队/执行中作业数 == 0 且 `information_schema.processlist` 中本站库用户非 Sleep 的活动连接（排除本连接）== 0"，连续两次为 0，上限 2 分钟，超时 `deferred(draining)` → 备份 + 快照 → **逆序撤销**每一步已完成的动作（用记录动作栈的上下文管理器，任一步失败也按栈清理）。`set.json` 的 `image_tag`/`image_id` 来自 `admin._running_images`（真实容器），dev 记 `dev` + 真实 id；取不到 id 即该站失败。状态文件**损坏**（存在但读不出）时：生成继续但跳过本地修剪并在报告与状态里标注，`backup-sync` 拒绝 forget/prune。测试至少覆盖："Queued 存在但无执行者仍能备份""正在领取时建立保持（服务端拒绝）""HTTP/后台写入未结束时等待、超时推迟""标志设了一半失败时的逆序清理""镜像 id 为空即失败"。计划里的 `backup_window` 代码块据此重写，不照抄。
 
 **Files:**
 - Create: `dsherp/backup.py`
@@ -986,6 +993,8 @@ git commit -m "feat: dsherp-admin backup——操作锁、逐站稳定窗口、�
 ```
 
 ### Task 6: 发布与下线也产出备份集；归档分目录分权限
+
+> **契约修订（第二次审阅）**：`DSHERP_ENV=prod` 下 `retire-tenant` 与 `release` 在任何破坏性动作前要求两个仓库已配置（否则 Fault），不存在 `if backup_repository` 的隐式跳过；dev 环境只有显式 `--local-only` 才跳过上传。`retire` 的最终集必须按设计 §4.0（2.1）读回核对为 `complete` 才 drop。本阶段（阶段 1）尚无 `upload_sets`：本任务在 prod 路径上直接以 `Fault('异地上传尚未接入')` 占位并有测试证明 prod 下 retire 不会 drop——阶段 2 的 Task 9 替换为真实上传；不得留下"跳过"分支。
 
 **Files:**
 - Modify: `dsherp/admin.py`（`_archive_backup` :731-749、`retire_tenant` :509-548、`release` :953-975）
@@ -1399,6 +1408,8 @@ git commit -m "feat: 异地保留按站点从备份集时间戳选择 7 日/4 �
 
 ### Task 9: `backup-init` / `backup-sync`——上传、配对、淘汰、完整性检查、事件式上传
 
+> **契约修订（第二次审阅）**：`complete` 的判定按设计 §4.0/§4.2（2.1）：`snapshots --json --tag set=<id>` 取**完整** `id` → `restic dump <id> <路径>/set.json`（数据侧）与 `dump <id> <路径>/pair.json`（密钥侧）读回 → 核对 `set_id`、`site`、`format`、各件 sha256、`set_sha256`、`config_sha256` → 才 `complete`；状态文件里已有的快照 id 每次也重新 `dump` 核对，不凭本地记录跳过；`_remote_sets` 对状态文件不认识的远端集按 pending 处理并核对，只有核对过的集参与淘汰。`FakeRestic` 需要能回答 `dump`（返回配置好的清单文本、可配置成"错配"）。测试补："错配的 pair.json 保持 pending 并告警""已记录 id 的远端快照被删后退回 pending""未知远端集先核对再入 complete"。状态文件损坏时拒绝 forget/prune。计划里的 `upload_sets`/`_remote_sets` 代码块据此重写。
+
 **Files:**
 - Modify: `dsherp/backup.py`（追加）、`dsherp/admin.py`（CLI）
 - Test: `tests/test_backup_cli.py`（追加）
@@ -1766,6 +1777,8 @@ git commit -m "feat: backup-init/backup-sync——两侧上传后读回配对才
 
 ### Task 10: 隔离恢复栈 `infra/compose.restore.yml`
 
+> **契约修订（第二次审阅）**：两个 fetch 服务各挂各自的取回卷（`restore-fetched-data:/fetched`、`restore-fetched-secrets:/fetched`），只有 backend 同时挂两个（`/home/frappe/fetched/data`、`/home/frappe/fetched/secrets`）。契约测试断言的是行为：所有服务只在 `restore` 网络（fetch 服务另加 `provider`）、没有 `ports:`、fetch 服务互不共享卷、backend 镜像来自 `${DSHERP_IMAGE_REGISTRY}/dsherp-frappe:${DSHERP_IMAGE_TAG}`、第三方镜像 digest 与生产一致；不固定服务集合的精确相等，也不锁文本排版。
+
 **Files:**
 - Create: `infra/compose.restore.yml`
 - Modify: `dsherp/deploy_env.py:190-205`（`DEPLOYMENT_FILES` 加该文件）、`tests/test_deployment_contract.py`（`IMAGE_SOURCES` 加该文件；新增行为测试）
@@ -1824,6 +1837,8 @@ git commit -m "feat: 隔离恢复栈 compose——internal 网络、无入口无
 ```
 
 ### Task 11: `dsherp-admin restore-drill`——取回、隔离恢复、比对、解密抽样、精确清理
+
+> **契约修订（第二次审阅）**：① **先元数据后起栈**：在生产栈用 `backup.restic(resolved, 'data', ['dump', <完整 id>, <路径>/set.json])` 读回各站最新 `complete` 集的 `set.json`，按 `(image_tag, image_id)` 分组，每组用该 tag 起隔离栈，并用 `docker inspect` 核对隔离栈 backend 的运行镜像 id == 集的 `image_id`（清单存在时也 == 清单）；镜像不在本机即该组失败。② **接线**：`admin.Bench` 增加可选 `project`、`compose_file`、`env` 参数（默认不变），`DrillStack.bench()` 用同一份环境（tag、密钥目录）构造；增加 `Bench.script(body, secrets=())`：`env/bin/python -` 读 stdin 的进程内脚本（不连站点），用于 `frappe.installer._new_site(...)` 与恢复函数——root/admin 口令与 `encryption_key` 只出现在 stdin 脚本里，隔离栈的 `common_site_config.json` 只含 db/redis 地址。③ 取回核对增加 `snapshot_sha256`（重算 `snapshot.json`）与 `config_sha256`。④ 阶段 3 末用真实隔离栈跑通（冷启动 bench、凭据、CA、镜像核验），假 Bench 只覆盖分支。计划里的 `restore_drill` 代码块据此重写。
 
 **Files:**
 - Create: `dsherp/restore_drill.py`
@@ -2223,6 +2238,8 @@ git commit -m "feat: restore-drill——最新完整配对集在隔离栈按记�
 
 ### Task 12: `dsherp-admin restore-site`（G3 异机恢复路径）
 
+> **契约修订（第二次审阅）**：按设计 §4.5（2.1）的冷启动契约实现与测试：① 目标站已存在即拒绝；② 先读回核对元数据与制品（两侧 dump 配对、各件/快照/config 摘要），再核对本栈运行镜像 tag/id == 集记录；③ 取回到本栈备份卷的临时目录，凭据只在 `Bench.script` 里使用，**不**把 root 口令写进生产共享的 `common_site_config.json`；④ provision → 进程内恢复 → 注入 `encryption_key` → 快照比对 → 再 provision → 解密抽样；⑤ 全部通过才解除维护并写 `current.json`，失败保持维护。测试覆盖每个拒绝点与成功路径；阶段 3 末在第二个本机栈真实跑通。
+
 **Files:**
 - Modify: `dsherp/restore_drill.py`（追加）、`dsherp/admin.py`（CLI）
 - Test: `tests/test_restore_drill.py`（追加）
@@ -2279,6 +2296,8 @@ git commit -m "feat: restore-site——在新栈上从最新完整配对的异�
 ## 阶段 4：定时、可见性、worker 停止时的兜底、文档与演练
 
 ### Task 13: systemd 单元（两对 timer/service + `OnFailure` 模板）与 `notify-failure`
+
+> **契约修订（第二次审阅）**：`OnCalendar=*-*-* 02,14:00:00 Asia/Shanghai`（systemd 小时列表语法 + 显式时区）；单元测试只断言表达式与关键指令（`Type`、`ExecStart`、`User`、`OnFailure`、`Persistent`、沙箱行），阶段 4 末在带 systemd 的 Linux 容器里用 `systemd-analyze calendar` 核对下一次触发时刻并记入证据。`notify_failure` 直接 `httpx.post(...).raise_for_status()`，成功才返回 `posted`；失败返回 `failed` + 错误类，退出码 1；journal 行始终打印；不使用会吞异常的 `Notifier`。测试用抛 `ConnectionError` 的假客户端证明不伪报。计划里的 `notify_failure` 代码块据此重写。
 
 **Files:**
 - Modify: `infra/render_worker_units.py`（新模板与 `render_backup_units`、`main()` 输出）
@@ -2449,6 +2468,8 @@ git commit -m "feat: 备份每 12h、演练每周的 systemd 单元，OnFailure 
 ```
 
 ### Task 14: 状态文件 → gauge/告警（`backup_status.evaluate`）与 worker 接入
+
+> **契约修订（第二次审阅）**：期望站点只来自 `tenants.json` + 平台站；清单读不出来时不回退到 worker profile、不缩小范围计算，只发 `backup_scope_unknown`（critical）并把 `dsherp_backup_sites_expected` 置 -1。状态文件缺失与损坏都发 `backup_status_missing`。测试补这两条。
 
 **Files:**
 - Modify: `dsherp/backup_status.py`（追加 `evaluate` 与常量）、`dsherp/context_worker.py`（gauge、读取、`serve_once`/`monitor_ops`）、`dsherp/alerts.py`（无新规则，只复用 `Alert`）

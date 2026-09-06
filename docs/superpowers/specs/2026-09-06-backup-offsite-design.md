@@ -1,6 +1,6 @@
-# 计划 4 切片 2：备份——定时生成 → 异地同步 → 失败可见 → 异机恢复验证（设计，第 2 版）
+# 计划 4 切片 2：备份——定时生成 → 异地同步 → 失败可见 → 异机恢复验证（设计，第 2.1 版）
 
-日期：2026-09-06。第 1 版（`faa4d38`）经 [备份设计审阅](../../engineering/backup-design-review-2026-09-06.md) 修订：采纳方案 A 的架构，六项裁决与七条行为契约全部纳入本版。上位文档：[生产加固总体设计](2026-09-03-production-hardening-design.md) 工作流 E、门 G3/G6/G10、已裁决 #2（RTO 8h）、#8（跨主机 TLS）、#10（删除边界）。切片 1（G2）已合入 main `30cf6fb`。
+日期：2026-09-06。第 1 版（`faa4d38`）经 [备份设计审阅](../../engineering/backup-design-review-2026-09-06.md) 修订为第 2 版（`7602585`）；第 2 版与实施计划再经 [设计 v2 与实施计划审阅](../../engineering/backup-v2-plan-review-2026-09-06.md) 修订为本版（2.1）：架构与默认取值已放行，六组契约按审阅收紧（§4.0、§4.1、§4.2、§4.3、§4.4、§4.5、§4.6 标注"2.1"的段落）。上位文档：[生产加固总体设计](2026-09-03-production-hardening-design.md) 工作流 E、门 G3/G6/G10、已裁决 #2（RTO 8h）、#8（跨主机 TLS）、#10（删除边界）。切片 1（G2）已合入 main `30cf6fb`。
 
 ## 1. 判据
 
@@ -36,28 +36,28 @@
 
 ### 4.0 备份集协议
 
-- **backup_set_id**：`<stamp>-<site_slug>-<6 位随机>`，例 `20260906_020007-acme_tenant_example_com-k3f9qx`；stamp 为稳定窗口开始时刻（UTC）。同一个 id 出现在：暂存目录名、两个 restic 快照的 `set=<id>` 标签、`set.json`、`pair.json` 与状态文件。
+- **backup_set_id**：`<stamp>-<site_slug>-<6 位随机>`，例 `20260906_020007-acme_tenant_example_com-k3f9qx`；stamp 为稳定窗口开始时刻（UTC）。（2.1）slug 保留站名里的连字符（`dsherp-validation.localhost` → `dsherp-validation_localhost`），解析按位置：前 15 位是 stamp、后 6 位是 token、中间是 slug，而不是靠正则字符类；项目现有真实站名都必须能通过。同一个 id 出现在：暂存目录名、两个 restic 快照的 `set=<id>` 标签、`set.json`、`pair.json` 与状态文件。
 - **数据侧** `sets/<site>/<set_id>/`：`database.sql.gz`、`files.tar`、`private-files.tar`、`snapshot.json`（G2 口径的站点数据快照）、`set.json`：
   `{"format":1,"set_id","site","kind":"scheduled|release|retire","stamp","window":{"started","finished"},"image_tag","image_id","frappe_version","pieces":{name:{"sha256","bytes"}},"snapshot_sha256"}`。
-- **密钥侧** `secrets/<site>/<set_id>/`：`site_config_backup.json` + `pair.json`（`set_id`、站名、数据侧各件 sha256 的副本、`set.json` 的 sha256）。两侧互相能证明属于同一集。
-- **状态机**（记录在状态文件 `sets[set_id].state`）：`staged` → `data_uploaded` / `secrets_uploaded`（两者之一，pending）→ `complete`（两个仓库都读回到 `set=<id>` 的快照且 `pair.json` 与 `set.json` 一致）→ `verified`（恢复演练成功）。**同步成功时间 = 变为 `complete` 的时刻**；恢复只选最新的 `complete` 集，绝不各取两个仓库的 latest。pending 集由下一次运行先补齐缺失的一侧。
+- **密钥侧** `secrets/<site>/<set_id>/`：`site_config_backup.json` + `pair.json`（`set_id`、站名、`format`、数据侧各件 sha256 的副本、`set.json` 的 sha256、以及（2.1）`config_sha256` = `site_config_backup.json` 文件字节的 sha256）。两侧互相能证明属于同一集。（2.1）**摘要定义**：文件类摘要都是文件原始字节的 sha256（`sha256sum`）；`snapshot_sha256` 是写入 `snapshot.json` 的那串 JSON 文本（`sort_keys=True, ensure_ascii=False, default=str`，无缩进）的 sha256，恢复时对取回的 `snapshot.json` 原样重算；`set_sha256` 是 `set.json` 规范化 JSON（`sort_keys=True, separators=(",", ":")`）的 sha256。任何摘要不符都在报告里给出"期望/实际/来源文件"。
+- **状态机**（记录在状态文件 `sets[set_id].state`）：`staged` → `data_uploaded` / `secrets_uploaded`（两者之一，pending）→ `complete` → `verified`（恢复演练成功）。（2.1）**complete 的判定**：不是"两侧各有一个快照 id"，而是：用**完整**快照 id 从数据仓库 `restic dump <id> …/set.json`、从密钥仓库 `restic dump <id> …/pair.json` 读回两份清单，核对 `set_id`、`site`、`format`、各件 sha256、`set_sha256`、`config_sha256` 全部一致，才标 `complete` 并记录两个完整快照 id。状态文件里已记录的快照 id 每次同步都要重新 `dump` 核对（远端副本可能已被人删除或损坏），核对不过就退回 pending 并告警；pending/失败的集不能作为 RPO 满足或下线前置。**同步成功时间 = 变为 `complete` 的时刻**；恢复只选最新的 `complete` 集，绝不各取两个仓库的 latest。pending 集由下一次运行先补齐缺失的一侧。
 - `kind=release`（发布前备份）与 `kind=retire`（下线最终备份）用同一协议，由事件触发生成与上传（§4.1）。
 
 ### 4.1 稳定窗口与生成：`dsherp-admin backup`
 
 1. **互斥**：宿主级操作锁 `<runtime>/operations.lock`（flock，非阻塞）。`backup`、`release`、`rollback`、`retire-tenant` 都持有它；拿不到即 Fault（说明是谁在跑），不排队。
-2. **站点保持**：对每个目标站先写 `<runtime>/holds/<site>`；worker 每 tick 读取保持文件，对被保持的站不再领取（沿用防火墙状态文件的读取模式，Coordinator 新增 `holds` 门）。然后等待该站在途运行归零（`_site_flags().active == 0`），上限 10 分钟；超时则该站记 `deferred(busy)`，撤保持，继续下一站。
-3. **窗口**：`maintenance_mode=1`、`pause_scheduler=1` → 记 `window.started` → `bench --site S backup --with-files`（不 `--compress`）→ 站点数据快照（`release_snapshot.container_script`，与 G2 同口径）→ 记 `window.finished` → 恢复原标志 → 撤保持。窗口内没有任何业务写入，四件套与快照对应同一状态。快照与 `bench backup` 任一失败即该站失败，标志照样恢复。
-4. **暂存**（backend/platform-backend 新增挂载各自的 `*-backups` 卷于 `/home/frappe/backups`）：按 `BACKUP_PIECES` 前缀发现四件；数据三件**复制**到 `sets/<site>/<set_id>/`，config 件**移动**到 `secrets/<site>/<set_id>/`（`private/backups` 里不再留 config 件；目录 0700、文件 0600）；写 `snapshot.json`、`set.json`、`pair.json`；逐件回读 sha256 核对。`private/backups` 里的三件数据留给 Frappe 自己清理（Desk 下载页与 ops 的 `backup_age_hours` 继续看那里）。
+2. **站点保持（2.1：停止领取 ≠ 等待执行者退出）**：对每个目标站，(a) 写 `<runtime>/holds/<site>`——worker 每 tick 读取，对被保持的站不再领取（Coordinator 新增 `holds` 门，心跳照旧）；(b) `set-config dsherp_hold 1`——服务端 `claim_run` 在该标志下拒绝领取，关闭"worker 已过保持检查、claim 尚未落地"的窗口；(c) 等待**实际在途执行者**归零：只数 `Running`/`Cancelling`（`Queued` 与 `NeedsInput` 被保持冻结，不计入，也不会让备份永久推迟），上限 10 分钟；超时则该站记 `deferred(busy)`，撤 (b)(a)，继续下一站。
+3. **窗口（2.1：明确排空写入者）**：`maintenance_mode=1`（新请求立即 503）、`pause_scheduler=1`（不再入队新作业）→ 排空已在途的写入者：轮询直到该站 RQ 队列里没有本站的排队/执行中作业（`frappe.utils.background_jobs.get_jobs(site)` 与 started registry）且 MariaDB 里本站数据库用户的活动连接为 0（`information_schema.processlist` 中 `command <> 'Sleep'` 且非本连接；每站独立库用户，因此只见本站线程），连续两次为 0 才算排空，上限 2 分钟，超时该站 `deferred(draining)` → 记 `window.started` → `bench --site S backup --with-files`（不 `--compress`）→ 站点数据快照（`release_snapshot.container_script`，与 G2 同口径）→ 记 `window.finished` → 逆序撤销：恢复原标志、清 `dsherp_hold`、撤保持文件。窗口内没有任何业务写入，四件套与快照对应同一状态。任一步失败（含标志只设了一半）都按已完成的动作逆序清理，该站记失败，`last_success` 不动。
+4. **暂存**（backend/platform-backend 新增挂载各自的 `*-backups` 卷于 `/home/frappe/backups`）（2.1：`set.json` 的 `image_tag`/`image_id` 取自**实际运行**该站的 bench 容器——沿用 G2 的 `_running_images` 读 `docker inspect`，dev 环境记 `image_tag=dev` 与真实 id；空 id 视为生成失败）：按 `BACKUP_PIECES` 前缀发现四件；数据三件**复制**到 `sets/<site>/<set_id>/`，config 件**移动**到 `secrets/<site>/<set_id>/`（`private/backups` 里不再留 config 件；目录 0700、文件 0600）；写 `snapshot.json`、`set.json`、`pair.json`；逐件回读 sha256 核对。`private/backups` 里的三件数据留给 Frappe 自己清理（Desk 下载页与 ops 的 `backup_age_hours` 继续看那里）。
 5. **本地保留**：每站最多 3 套；永不删除"最新 `complete` 集"与"最新 `verified` 集"（两者可能相同）；数据侧与密钥侧同删。
 6. **状态**：每阶段开始/成功/失败都更新状态文件（§4.4），保留 `last_success` 与 `last_attempt`，失败不抹掉上次成功。
 7. 任一站失败退出码 1，不中断其他站；`--sync` 时接着做 §4.2。
-8. **事件式备份集**：`release` 的升级前备份与 `retire-tenant` 的最终备份改用同一暂存函数生成 `kind=release|retire` 的集（`release` 在既有静默窗口内，`retire` 在 drop-site 之前），并在配置了仓库时**立即上传配对**：`retire` 上传失败则 Fault，站点不 drop、不移出清单（最终状态必须先离开本机）；`release` 上传失败记入状态并告警（`backup_run_failed`），发布本身继续（本地与归档卷仍有该集）。`_archive_backup` 与下线归档也改为数据/密钥分目录分权限，不再把 config 件与转储放在一起。
+8. **事件式备份集（2.1）**：`release` 的升级前备份与 `retire-tenant` 的最终备份改用同一暂存函数生成 `kind=release|retire` 的集（`release` 在既有静默窗口内，`retire` 在 drop-site 之前），并**立即上传配对**。`DSHERP_ENV=prod` 下 `retire-tenant` 与 `release` 都以"两个仓库已配置且可达"为前置，未配置即在任何破坏性动作前 Fault，不存在"缺配置就跳过上传"的隐式路径；dev 环境可用显式 `--local-only` 跳过（只影响本机演练）。`retire` 的最终集必须 `complete` 才 drop、才移出清单；`release` 的上传失败记入状态并告警（`backup_run_failed`），发布本身继续（本地与归档卷仍有该集）。`_archive_backup` 与下线归档也改为数据/密钥分目录分权限，不再把 config 件与转储放在一起。
 
 ### 4.2 异地同步与保留：`dsherp-admin backup-sync`
 
 - **两个一次性 compose 服务**（`profiles: [ops]`，不常驻）：`backup-sync-data` 只挂 `tenant-backups`/`platform-backups` 的 `sets/` 子树（只读）、只带数据仓库口令与数据存储凭据；`backup-sync-secrets` 只挂 `secrets/` 子树（只读）、只带密钥仓库口令与密钥存储凭据。两者：`restic/restic:<版本>@sha256:…`（实施时固定，linux/amd64 + arm64），`cap_drop: [ALL]`、`no-new-privileges`、`read_only: true`、非 root 用户、`backup-cache` 卷、网络 `provider`、`RESTIC_CACERT` 可选。
-- **上传**：对每个非 `complete` 的集，`restic backup --host <compose 项目名> --tag site=<site> --tag set=<set_id> --tag kind=<kind> <目录>`；之后在两个仓库各 `restic snapshots --json --tag set=<set_id>` 读回，两侧都在且 `pair.json`/`set.json` 一致才标 `complete`。半成功保留为 pending，状态与告警如实显示。
+- **上传（2.1）**：对每个非 `complete`/`verified` 的集，缺哪一侧传哪一侧：`restic backup --host <compose 项目名> --tag site=<site> --tag set=<set_id> --tag kind=<kind> <目录>`；然后按 §4.0 的判定读回核对（`snapshots --json` 取完整 id → `dump` 两份清单 → 逐项核对）才标 `complete`。已记录 id 的一侧同样重新 `dump` 核对，不凭本地记录跳过。半成功或核对不过保留为 pending，状态与告警如实显示。远端存在但状态文件不认识的集（如状态文件重建后）先按 pending 处理并读回核对，通过后才进入 `complete`；保留淘汰只针对核对过的 `complete`/`verified` 集。
 - **保留**：不用 restic 的分组规则。宿主侧纯函数 `retention.select(sets, now)` 以**站点**为维度、以 `set.json` 的 stamp 为时间，按 7 日 + 4 周 + 3 月选出保留集；额外保护：每站最新 `complete` 集、最新 `verified` 集；`kind=retire` 集不自动淘汰（等审计保留切片裁决）；`kind=release` 集与日常集同策略。选出后对两个仓库分别 `restic forget <快照 id…>`（只删两侧都在淘汰名单里的集）再 `restic prune`。淘汰只在任务运行时发生；本函数有真实日期的测试。
 - **完整性检查**（每次运行）：两个仓库 `restic check`（结构）+ `--read-data-subset=<n>/7`（按天轮换，一周读完全部数据）；任一失败记入状态并告警。结构检查不替代恢复演练（§4.5）。
 - `dsherp-admin backup-init`：一次性 `restic init` 两个仓库，幂等（先 `cat config`）。
@@ -65,9 +65,9 @@
 
 ### 4.3 定时：systemd
 
-- `dsherp-backup.timer`/`.service`：`OnCalendar=*-*-* 02:00,14:00:00`、`Persistent=true`、`RandomizedDelaySec=5min`；`Type=oneshot`、`ExecStart={root}/bin/dsherp-admin backup --sync`、`TimeoutStartSec=3h`、`User/Group`、`SupplementaryGroups=docker`、`Environment=DSHERP_ENV=prod`、沙箱同 worker unit（`ReadWritePaths={root}/.runtime`）。
+- `dsherp-backup.timer`/`.service`：`OnCalendar=*-*-* 02,14:00:00 Asia/Shanghai`（2.1：systemd 的小时列表语法，时区显式为 Asia/Shanghai；备份集 stamp 与年龄计算仍是 UTC；Linux 上用 `systemd-analyze calendar` 核对下一次触发时刻，本机无 systemd 时在容器里核对）、`Persistent=true`、`RandomizedDelaySec=5min`；`Type=oneshot`、`ExecStart={root}/bin/dsherp-admin backup --sync`、`TimeoutStartSec=3h`、`User/Group`、`SupplementaryGroups=docker`、`Environment=DSHERP_ENV=prod`、沙箱同 worker unit（`ReadWritePaths={root}/.runtime`）。
 - `dsherp-backup-drill.timer`/`.service`：每周 `Sun *-*-* 04:00:00`，`ExecStart={root}/bin/dsherp-admin restore-drill --all`，`TimeoutStartSec=6h`。
-- 两个 service 都带 `OnFailure=dsherp-backup-failure@%n.service`：模板 unit 运行 `{root}/bin/dsherp-admin notify-failure %i`，向 journal 写一行结构化失败记录，并在 profile 配置了 `alert_webhook` 时直接投递——不经过 worker，worker 停止时失败通知仍然存在（裁决 6）。
+- 两个 service 都带 `OnFailure=dsherp-backup-failure@%n.service`：模板 unit 运行 `{root}/bin/dsherp-admin notify-failure %i`，向 journal 写一行结构化失败记录，并在 profile 配置了 `alert_webhook` 时直接投递——不经过 worker，worker 停止时失败通知仍然存在（裁决 6）。（2.1）**只有确认投递成功才报 `posted`**：直接 `httpx.post` 并 `raise_for_status`，失败返回 `{"webhook": "failed", "error": …}` 且退出码 1，journal 行始终写；不用会吞异常的 `Notifier`。失败演练资料保留 14 日是上限，失败当时就通知并处理。
 - `render_worker_units.py` 新增 `render_backup_units`；测试验证行为指令（`Type`、`OnCalendar`、`Persistent`、`ExecStart`、`User`、`OnFailure`、沙箱行），不锁整段文本。本机 dev 不装定时器。
 
 ### 4.4 可见性
@@ -87,7 +87,7 @@
  "sets": {"<set_id>": {"site","kind","stamp","state","data_snapshot","secrets_snapshot","updated"}}}
 ```
 
-- **监控范围来自清单**：worker 每 tick（mtime 变化才解析）读状态文件，期望站点 = `resolved['platform_site']` + `tenants.json`，不是状态文件里出现过的站。纯函数 `backup_status.evaluate(status, expected_sites, now)` 产出 gauge 与告警。
+- **监控范围来自清单（2.1）**：worker 每 tick（mtime 变化才解析）读状态文件，期望站点 = `resolved['platform_site']` + `tenants.json`，不是状态文件里出现过的站，也不是 worker profile。清单读不出来时**不缩小范围计算**：只发 `backup_scope_unknown`（critical）并把 `dsherp_backup_sites_expected` 置 -1。状态文件存在但损坏与缺失分开对待：worker 两者都发 `backup_status_missing`；操作命令遇到损坏的状态文件一律拒绝执行保留/本地修剪等删除动作（Fault 提示先修复或显式重建），生成与上传可以继续但报告里标注"状态损坏，未修剪"。纯函数 `backup_status.evaluate(status, expected_sites, now)` 产出 gauge 与告警。
 - gauge（无标签，聚合）：`dsherp_backup_sites_expected`、`dsherp_backup_sites_rpo_ok`、`dsherp_backup_offsite_oldest_hours`（各站最新 complete 集数据时点年龄的最大值；有站从未完整则为 -1）、`dsherp_backup_local_oldest_hours`、`dsherp_backup_status_age_seconds`、`dsherp_backup_last_run_ok`、`dsherp_backup_unverified_days_max`。
 - 告警键（`alerts.evaluate` 纯函数、常量阈值、边界测试）：`backup_rpo_warning`（warning：某站最新 complete 集 ≥ 20h）、`backup_rpo_unmet`（critical：≥ 24h 或从未完整；消息列站名）、`backup_run_failed`（warning：任一阶段的 `last_attempt` 失败且晚于 `last_success`）、`backup_status_missing`（critical：状态文件缺失/损坏，或 `runs.backup.last_attempt` 距今 > 13h——定时器失联）、`restore_unverified`（warning：某站 `verified.last_success` > 8 日或从未，新站宽限 8 日）。既有 `backup_stale`（ops 快照口径）保留。
 - `doctor`：配置了仓库 URL 时四个密钥文件存在且 0600；prod 下仓库 URL 必须 `https`；本机存在 `dsherp-backup.timer` 时不做检查（systemd 状态由 runbook 验收行覆盖）。
@@ -95,21 +95,21 @@
 
 ### 4.5 恢复验证
 
-**隔离恢复栈**（复用"隔离预览"经验）：`infra/compose.restore.yml`，compose 项目 `dsherp-restore`：`db`、`redis-cache`、`redis-queue`、`backend`（本项目镜像，tag = 该集 `set.json` 记录的 `image_tag`，运行镜像 id 须等于清单记录，复用 G2 的 `_manifest_image_id`）、`restore-fetch-data`、`restore-fetch-secrets`（restic 一次性，各带自己那一侧的口令与凭据）；网络 `internal: true`，没有端口、caddy、worker、scheduler、queue、egress；自己的具名卷；站点配置 `mute_emails=1`、`pause_scheduler=1`、`maintenance_mode=0`（无入口可达）。root 口令经 stdin 喂给 Frappe 的 `getpass` 回退，不上 argv，`bench.log` 不再新增明文口令。
+**隔离恢复栈**（复用"隔离预览"经验）：`infra/compose.restore.yml`，compose 项目 `dsherp-restore`：`db`、`redis-cache`、`redis-queue`、`backend`（本项目镜像）、`restore-fetch-data`、`restore-fetch-secrets`（restic 一次性，各带自己那一侧的口令与凭据，（2.1）各挂**各自**的取回卷 `restore-fetched-data`/`restore-fetched-secrets`，互相看不见；只有隔离栈的 backend 同时挂两个取回卷）；网络 `internal: true`，没有端口、caddy、worker、scheduler、queue、egress；自己的具名卷；站点配置 `mute_emails=1`、`pause_scheduler=1`、`maintenance_mode=0`（无入口可达）。（2.1）**按备份的版本启动**：先在生产栈用 `backup-sync-data` 的 `restic dump` 读回各站最新 `complete` 集的 `set.json`，按 `(image_tag, image_id)` 分组，每组用该 tag 拉起隔离栈，并用 `docker inspect` 核对隔离栈 backend 的运行镜像 id 等于集记录的 `image_id`（清单存在时也等于清单 id）；不是"先用当前 tag 起栈再拒绝不同的集"。该 tag 的镜像不在本机即该组失败并说明。（2.1）**凭据与接线**：`Bench` 支持指定 compose 项目、compose 文件与进程环境（镜像 tag、密钥目录），隔离栈的 bench 与拉栈用同一份环境；root/admin 口令与 `encryption_key` 只出现在 `Bench.script`（`env/bin/python -` 读 stdin 的进程内脚本，直接调用 `frappe.installer._new_site` 与 `frappe.commands.site` 的恢复函数）里，不上 argv、不写入任何共享卷；隔离栈自身的 `common_site_config.json` 只含 db/redis 地址。冷启动的 bench 初始化、凭据、私有 CA、镜像核验都走真实接线在阶段 3 末验证，假 Bench 只覆盖分支。
 
 **`dsherp-admin restore-drill [--all | <site>…]`（每周，加：首次 `backup-init` 后、集的 `image_tag` 与上次验证不同时、`set.json` 格式号变化时）**：
 
 1. 拒绝：上一次失败演练的卷仍在（除非已过 14 日保留期或显式 `--discard-failed`）；持有操作锁。
-2. 起隔离栈 → 两个 fetch 服务把每站最新 `complete` 集取到项目内的 `restore` 卷 → 按 `set.json`/`pair.json` 核对 sha256 与配对。
-3. 逐站：`bench new-site <site>`（同名，栈隔离所以不冲突）→ `bench restore <db> --with-public-files … --with-private-files … --force` → 注入 `encryption_key`（只这一项）→ 不 migrate（版本相同）→ 快照 → 与 `snapshot.json` 用 `release_compare` 比对（容忍项只有 `RESTORE_EXPECTATIONS`）→ 容器脚本对 `__Auth` 抽样 `get_decrypted_password`，任一失败即该站验证失败。
+2. 读回元数据并按版本分组（见上）→ 起该版本的隔离栈并核对镜像 id → 两个 fetch 服务把每站的集取到各自的取回卷 → 按 `set.json`/`pair.json` 核对：三件数据 sha256、`config_sha256`、`snapshot.json` 重算的 `snapshot_sha256`、`set_sha256`、配对一致。
+3. 逐站：进程内 `_new_site`（同名，栈隔离所以不冲突）→ 进程内恢复（转储 + 两个 files tar，`force`）→ 注入 `encryption_key`（只这一项）→ 不 migrate（版本相同）→ 快照 → 与 `snapshot.json` 用 `release_compare` 比对（容忍项只有 `RESTORE_EXPECTATIONS`）→ 容器脚本对 `__Auth` 抽样 `get_decrypted_password`，任一失败即该站验证失败。
 4. 清理：成功 → `compose -p dsherp-restore down -v`（只删本项目自己的容器与卷，这是本次演练确切拥有的全部）；失败 → `down`（保留卷）+ 诊断包 `<runtime>/backups/drills/<drill_id>/`（报告、脱敏日志尾部，保留 14 日），状态记失败并告警。
 5. 状态写 `verified`（含 `set_id`、`image_tag`）；`--all` 覆盖平台站与全部租户；退出码 0/1/2 同其他命令。
 
-**`dsherp-admin restore-site <site> [--set <set_id>]`（G3 路径，runbook 新 §12）**：在按 runbook §1–§6 拉起、`prod.env` tag = 该集 `image_tag` 的新栈上：取回指定/最新 complete 集 → `provision-platform`/`provision-tenant` 幂等建站 → `bench restore --force` → 注入 `encryption_key` → 快照比对 → 再跑一次 provision 让主机相关配置按新主机重算（runbook §11 既有做法）→ 报告与用时。升级到更新的 tag 是随后显式的 `release`（G2）。本切片以本机第二个 compose 项目（`dsherp-drill`：独立数据库、卷、网络、runtime 目录）+ 本机 MinIO（按 digest 固定、私有 CA、restic 实际校验证书）做工程自证，并核实库账号 host 范围（G2 留项）；证据明确写"证明工具链，不证明物理异机容灾、真实异地副本与正式 RTO"。
+**`dsherp-admin restore-site <site> [--set <set_id>]`（G3 路径，runbook 新 §12；2.1 冷启动契约）**：在按 runbook §1–§6 拉起的新栈上，带入四个密钥文件（与 CA），`backup-init` 报 `kept`。契约：① 目标站在新栈上**必须不存在**，存在即拒绝（不覆盖，不自动清理）；② 先读回并核对元数据与制品：两侧 `dump` 清单配对、各件与快照摘要，再核对新栈运行镜像的 tag/id 等于集记录（不符即拒绝，提示先把 `prod.env` 切到该 tag）；③ 取回到本栈备份卷的临时目录（`compose run` 覆盖挂载为可写），凭据只在进程内脚本里使用；④ `provision-platform`/`provision-tenant` 幂等建站（新 db 口令、本机部署键）→ 进程内恢复 → 注入 `encryption_key` → 快照与集内快照比对 → 再跑一次 provision 让主机相关配置按新主机重算 → 解密抽样；⑤ 全部通过才解除维护并写 `current.json`（tag = 集的 tag）；任一步失败站点保持维护模式、报告说明、不自动重试。升级到更新的 tag 是随后显式的 `release`（G2）。本切片以本机第二个 compose 项目（`dsherp-drill`：独立数据库、卷、网络、runtime 目录）+ 本机 MinIO（按 digest 固定、私有 CA、restic 实际校验证书）做工程自证，并核实库账号 host 范围（G2 留项）；证据明确写"证明工具链，不证明物理异机容灾、真实异地副本与正式 RTO"。
 
 ### 4.6 配置、密钥与保管
 
-- prod.env：`DSHERP_BACKUP_REPOSITORY`、`DSHERP_BACKUP_SECRETS_REPOSITORY`（`deploy_env.DEFAULTS` + 正则 + `prod.env.example`）；留空 = 未配置：`backup --sync`/`backup-init`/`restore-*` 拒绝，`doctor` 报告，`retire`/`release` 不上传。
+- prod.env：`DSHERP_BACKUP_REPOSITORY`、`DSHERP_BACKUP_SECRETS_REPOSITORY`（`deploy_env.DEFAULTS` + 正则 + `prod.env.example`）；留空 = 未配置：`backup --sync`/`backup-init`/`restore-*` 拒绝，`doctor` 报告；（2.1）`DSHERP_ENV=prod` 下 `retire-tenant` 与 `release` 也拒绝（见 §4.1 第 8 条），dev 只能用显式 `--local-only`。
 - 密钥目录：`backup_repository_password`、`backup_secrets_repository_password`（`secrets init` 生成）；`backup_storage_credentials`、`backup_secrets_storage_credentials`（运维提供，`AWS_ACCESS_KEY_ID=…`/`AWS_SECRET_ACCESS_KEY=…`；两个仓库用**不同的访问身份**，runbook 写明 IAM/桶策略：数据身份只能读写数据桶）；`backup_storage_ca.pem`（可选）。`ensure_secrets` 只生成前两者；后两者由 `doctor` 检查存在与 0600。
 - 保管：两个口令 + 两份凭据 + CA 必须另存于对象存储之外（运维密码库/离线介质）；runbook 写明"丢失即等于丢失全部异地备份"；恢复主机靠授权的人带入，数据-only 身份无法解密密钥仓库。
 
@@ -149,6 +149,6 @@ runbook：§3 密钥（四个文件、两个身份、保管）、§6（两个一
 
 ## 6. 裁决记录与待确认
 
-已采纳（审阅 2026-09-06）：① 宿主 timer，每 12h；② 一次性 restic 服务，按行为验证；③ 每周完整恢复 + 事件触发，日常做完整性与同步检查；④ 本机第二项目自证；⑤ 本地三套并保护最后一套已验证副本，下线/发布备份事件式异地保存；⑥ 状态文件 → worker，加 systemd `OnFailure` 通知。
+已采纳（第二次审阅 2026-09-06）：架构与默认取值放行；02:00/14:00 为 Asia/Shanghai；执行节奏为同会话顺序 TDD、每任务跑相关测试、阶段末全量回归 + 该阶段真实链路、四阶段末各一次检查点。已采纳（第一次审阅 2026-09-06）：① 宿主 timer，每 12h；② 一次性 restic 服务，按行为验证；③ 每周完整恢复 + 事件触发，日常做完整性与同步检查；④ 本机第二项目自证；⑤ 本地三套并保护最后一套已验证副本，下线/发布备份事件式异地保存；⑥ 状态文件 → worker，加 systemd `OnFailure` 通知。
 
-待确认的次级取值（默认按此实施）：定时 02:00/14:00；RPO 预警 20h；定时失联判据 13h；恢复验证阈值 8 日；失败演练保留 14 日；`kind=retire` 集不自动淘汰；两个仓库默认两份不同的存储凭据。
+已确认的取值：定时 02:00/14:00 Asia/Shanghai；RPO 预警 20h；定时失联判据 13h；恢复验证阈值 8 日；失败演练保留上限 14 日（失败当时即通知处理）；`kind=retire` 集不自动淘汰；两个仓库两份不同的存储身份。
