@@ -16,7 +16,7 @@ import time
 import uuid
 from urllib.parse import urlsplit
 import httpx
-from dsherp import alerts,backup_status,deploy_env,metrics,sd_notify,site_holds,worker_log
+from dsherp import alerts,backup_status,deploy_env,metrics,sd_notify,sessions,site_holds,worker_log
 from dsherp.runtime_host import ROOT,IMAGE,agent_settings,container_base,load_settings
 from dsherp.context_container import docker_command
 from dsherp.context_mcp import BusinessRuntimeError,ToolFailure,post
@@ -603,12 +603,17 @@ class Coordinator:
                 scope=task.get('scope_id')
                 if not isinstance(scope,str) or not re.fullmatch('[a-f0-9]{64}',scope):
                     raise ValueError('Invalid server session scope')
+                # The scope still names the directory the runner gets; it now sits under the
+                # Site and the conversation, so a person's sessions can be found again and a
+                # rotated scope no longer leaves an unattributable directory (T4).
+                session_dir=sessions.directory(self.state_root,site=site['site'],
+                                               conversation=task.get('session_id'),scope=scope)
                 budget=task.get('budget')
                 total=None if not isinstance(budget,dict) else budget.get('run_total_seconds')
                 if type(total) is not int or total<1:raise ValueError('Missing run total budget')
                 timeout=total+30
                 result=self.execute({**task,**site.get('business',{}),'resume':'inspect'},settings,
-                                    self.state_root/scope,timeout)
+                                    session_dir,timeout)
                 if not isinstance(result,dict) or result.get('status') not in ('Succeeded','Cancelled','NeedsInput'):
                     raise RuntimeError('Invalid business runtime result')
             except Exception as error:

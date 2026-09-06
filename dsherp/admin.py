@@ -1255,6 +1255,38 @@ def usage_report(resolved, month, *, root=ROOT, runner=subprocess.run, bench_fac
     return report
 
 
+SESSION_ROOT = 'business-sessions'
+
+
+def sessions_report(resolved, *, root=ROOT, days=None, sweep=False):
+    """What the host holds of users' native sessions, and the 90-day sweep (T4).
+
+    Sessions written before the enumerable layout are one-way hashes: they are reported, never
+    guessed at. Everything else is removed once it has been untouched for the window."""
+    from dsherp import sessions as sessions_module
+    state_root = runtime_dir(resolved, root) / SESSION_ROOT
+    window = sessions_module.RETENTION_DAYS if days is None else days
+    if type(window) is not int or window < 1:
+        raise Fault('会话保留天数必须是正整数')
+    if sweep:
+        report = sessions_module.sweep(state_root, days=window)
+    else:
+        report = {'removed': [], 'kept': 0, 'unattributed': []}
+        if state_root.is_dir():
+            for site in sorted(state_root.iterdir()):
+                if not site.is_dir():
+                    continue
+                if sessions_module.SCOPE.fullmatch(site.name):
+                    report['unattributed'].append(site.name)
+                    continue
+                for conversation in sorted(site.iterdir()):
+                    report['kept'] += sum(1 for scope in conversation.iterdir() if scope.is_dir())
+    report['root'] = str(state_root)
+    report['retention_days'] = window
+    report['swept'] = bool(sweep)
+    return report
+
+
 def _print(payload):
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -1282,6 +1314,9 @@ def main(argv=None):
     restore_parser = sub.add_parser('restore-site', help='在新主机上从异地备份集恢复一个站（G3 冷启动；见 runbook 第 12 节）')
     restore_parser.add_argument('site')
     restore_parser.add_argument('--set', dest='set_id', metavar='SET_ID', help='指定备份集；缺省用该站最新的完整配对')
+    sessions_parser = sub.add_parser('sessions', help='查看宿主上的原生会话目录；--sweep 清掉超过保留期的（默认 90 天）')
+    sessions_parser.add_argument('--sweep', action='store_true')
+    sessions_parser.add_argument('--days', type=int, default=None)
     usage_parser = sub.add_parser('usage', help='按月汇总每个站点的真实用量（模型调用、token、时长）')
     usage_parser.add_argument('month', help='YYYY-MM')
     migrate_drill_parser = sub.add_parser('migrate-drill', help='把旧构建的备份集恢复进运行新构建的隔离栈并 migrate，按 G2 口径判定（发布前跑）')
@@ -1355,6 +1390,10 @@ def main(argv=None):
         if arguments.command == 'restore-site':
             from dsherp import restore_drill as drill_module
             _print(drill_module.restore_site(resolved, arguments.site, set_id=arguments.set_id))
+            return 0
+        if arguments.command == 'sessions':
+            report = sessions_report(resolved, days=arguments.days, sweep=arguments.sweep)
+            _print(report)
             return 0
         if arguments.command == 'usage':
             report = usage_report(resolved, arguments.month)

@@ -23,7 +23,7 @@ def _fake_container(payload):
 
 def test_worker_claims_one_scoped_run_and_finishes_without_replay(tmp_path):
     calls=[];executed=[]
-    claim={'run_id':'r','scope_id':'a'*64,'capability':'cap','native_session_id':'n','question':'q','context':{},
+    claim={'run_id':'r','session_id':'conv1','scope_id':'a'*64,'capability':'cap','native_session_id':'n','question':'q','context':{},
            'domain':'query','budget':{'run_total_seconds':300}}
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];calls.append((method,json.loads(request.content)))
@@ -35,7 +35,7 @@ def test_worker_claims_one_scoped_run_and_finishes_without_replay(tmp_path):
         return {'status':'Succeeded','answer':'answer'}
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         assert run_once(client,SETTINGS,tmp_path,execute=execute)
-    assert executed==[tmp_path/('a'*64)]
+    assert executed==[tmp_path/'legacy'/'conv1'/('a'*64)]   # <site>/<conversation>/<scope>
     assert [m for m,_ in calls]==['claim_run','record_run_event','finish_run']
     assert len(calls[0][1]['runtime_revision'])==64
     assert calls[-1][1]['answer']=='answer'
@@ -66,7 +66,7 @@ def test_bad_scope_is_failed_without_opening_any_directory(tmp_path):
 
 
 def test_worker_injects_the_selected_business_site_without_alpha_hardcoding(tmp_path):
-    claim={'run_id':'r','scope_id':'c'*64,'capability':'cap','domain':'query',
+    claim={'run_id':'r','session_id':'conv1','scope_id':'c'*64,'capability':'cap','domain':'query',
            'budget':{'run_total_seconds':300}}
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1]
@@ -144,7 +144,7 @@ def test_worker_records_container_outcome_before_finishing(tmp_path):
     calls=[]
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];calls.append((method,json.loads(request.content)))
-        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'d'*64,'capability':'cap',
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','session_id':'conv1','scope_id':'d'*64,'capability':'cap',
             'domain':'query','budget':{'run_total_seconds':300}}})
         return httpx.Response(200,json={'message':{'recorded':1,'last_seq':9} if method=='record_run_event' else {'status':'Failed'}})
     def execute(task,settings,directory,timeout):raise RuntimeError('boom')
@@ -162,7 +162,7 @@ def test_event_writeback_failure_does_not_change_the_run_result(tmp_path,capsys)
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];calls.append(method)
         if method=='record_run_event':return httpx.Response(503)
-        return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'e'*64,'capability':'cap',
+        return httpx.Response(200,json={'message':{'run_id':'r','session_id':'conv1','scope_id':'e'*64,'capability':'cap',
             'domain':'query','budget':{'run_total_seconds':300}} if method=='claim_run' else {'status':'Succeeded'}})
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'ok'})
@@ -177,7 +177,7 @@ def test_event_writeback_timeout_does_not_change_the_run_result(tmp_path,capsys)
         if method=='record_run_event':
             timeouts.append(request.extensions['timeout'])
             raise httpx.TimeoutException('synthetic slow event sink',request=request)
-        return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'f'*64,'capability':'cap',
+        return httpx.Response(200,json={'message':{'run_id':'r','session_id':'conv1','scope_id':'f'*64,'capability':'cap',
             'domain':'query','budget':{'run_total_seconds':300}} if method=='claim_run' else {'status':'Succeeded'}})
     started=time.monotonic()
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler),timeout=30) as client:
@@ -222,7 +222,7 @@ def test_run_once_updates_claim_result_and_duration_metrics(tmp_path,monkeypatch
     monkeypatch.setattr(worker,'RUNS_TOTAL',runs)
     monkeypatch.setattr(worker,'RUN_DURATION',duration)
     monkeypatch.setattr(worker,'set_consecutive_failures',lambda value:failures.append(value))
-    claim={'run_id':'r','scope_id':'a'*64,'capability':'cap','domain':'query',
+    claim={'run_id':'r','session_id':'conv1','scope_id':'a'*64,'capability':'cap','domain':'query',
            'budget':{'run_total_seconds':300}}
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1]
@@ -344,7 +344,7 @@ def test_coordinator_round_robins_sites_and_respects_slots(tmp_path):
             method=request.url.path.rsplit('.',1)[-1];body=json.loads(request.content)
             if method=='claim_run':
                 queue=claims[site]
-                return httpx.Response(200,json={'message':{'run_id':queue.pop(0),'scope_id':site*64,
+                return httpx.Response(200,json={'message':{'run_id':queue.pop(0),'session_id':'conv1','scope_id':site*64,
                     'capability':'c','domain':'query','budget':{'run_total_seconds':300}} if queue else {}})
             if method=='finish_run':
                 finished.append((site,body['run_id']))
@@ -377,7 +377,7 @@ def test_run_claimed_never_escapes_and_records_provider_failure(tmp_path):
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1]
         if method=='claim_run':
-            return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'a'*64,'capability':'c',
+            return httpx.Response(200,json={'message':{'run_id':'r','session_id':'conv1','scope_id':'a'*64,'capability':'c',
                 'domain':'query','budget':{'run_total_seconds':300}}})
         if method=='finish_run':return httpx.Response(403,json={'exc_type':'PermissionError'})
         return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
@@ -425,7 +425,7 @@ def test_coordinator_never_claims_beyond_free_slots(tmp_path):
                 claim_calls.append(site)
                 run_id=available.pop(0) if available else None
                 return httpx.Response(200,json={'message':None if run_id is None else {
-                    'run_id':run_id,'scope_id':site*64,'capability':'c','domain':'query',
+                    'run_id':run_id,'session_id':'conv1','scope_id':site*64,'capability':'c','domain':'query',
                     'budget':{'run_total_seconds':300}}})
             return httpx.Response(200,json={'message':{'status':'Succeeded','provider_failures':0}})
         client=httpx.Client(base_url='http://'+site,transport=httpx.MockTransport(handler))
@@ -459,7 +459,7 @@ def test_coordinator_probe_resets_open_circuit_after_sixty_seconds(tmp_path):
         if method=='claim_run':
             run_id=claims.pop(0) if claims else None
             return httpx.Response(200,json={'message':None if run_id is None else {
-                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'run_id':run_id,'session_id':'conv1','scope_id':'a'*64,'capability':'c','domain':'query',
                 'budget':{'run_total_seconds':300}}})
         if method=='finish_run':
             return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
@@ -488,7 +488,7 @@ def test_coordinator_failed_probe_keeps_open_circuit_from_claiming(tmp_path):
         if method=='claim_run':
             run_id=claims.pop(0) if claims else None
             return httpx.Response(200,json={'message':None if run_id is None else {
-                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'run_id':run_id,'session_id':'conv1','scope_id':'a'*64,'capability':'c','domain':'query',
                 'budget':{'run_total_seconds':300}}})
         if method=='finish_run':
             return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
@@ -521,7 +521,7 @@ def test_circuit_open_period_starts_when_slow_run_finishes(tmp_path):
         if method=='claim_run':
             run_id=claims.pop(0) if claims else None
             return httpx.Response(200,json={'message':None if run_id is None else {
-                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'run_id':run_id,'session_id':'conv1','scope_id':'a'*64,'capability':'c','domain':'query',
                 'budget':{'run_total_seconds':300}}})
         if method=='finish_run':return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
         return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
@@ -575,7 +575,7 @@ def test_tick_refreshes_site_heartbeats_while_slots_are_full(tmp_path):
         if method=='claim_run':
             run_id=queue.pop(0) if queue else None
             return httpx.Response(200,json={'message':None if run_id is None else {
-                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'run_id':run_id,'session_id':'conv1','scope_id':'a'*64,'capability':'c','domain':'query',
                 'budget':{'run_total_seconds':300}}})
         return httpx.Response(200,json={'message':{'status':'Succeeded','provider_failures':0}})
     def execute(*args):
@@ -612,7 +612,7 @@ def test_run_once_finishes_needs_input_and_clears_consecutive_failures(tmp_path,
     failures=[]
     monkeypatch.setattr(worker,'set_consecutive_failures',lambda value:failures.append(value))
     calls=[]
-    claim={'run_id':'r','scope_id':'a'*64,'capability':'cap','domain':'query',
+    claim={'run_id':'r','session_id':'conv1','scope_id':'a'*64,'capability':'cap','domain':'query',
            'budget':{'run_total_seconds':300}}
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];calls.append((method,json.loads(request.content)))
@@ -649,7 +649,7 @@ def test_three_provider_failure_runs_emit_one_provider_circuit_open_alert(tmp_pa
         if method=='claim_run':
             run_id=claims.pop(0) if claims else None
             return httpx.Response(200,json={'message':None if run_id is None else {
-                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'run_id':run_id,'session_id':'conv1','scope_id':'a'*64,'capability':'c','domain':'query',
                 'budget':{'run_total_seconds':300}}})
         if method=='finish_run':
             return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
@@ -731,7 +731,7 @@ def test_probe_recovery_risks_exactly_one_trial_run_not_a_full_slate(tmp_path):
         if method=='claim_run':
             run_id=claims.pop(0) if claims else None
             return httpx.Response(200,json={'message':None if run_id is None else {
-                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'run_id':run_id,'session_id':'conv1','scope_id':'a'*64,'capability':'c','domain':'query',
                 'budget':{'run_total_seconds':300}}})
         if method=='finish_run':
             return httpx.Response(200,json={'message':{'status':'Failed','provider_failures':1}})
@@ -769,7 +769,7 @@ def test_a_black_hole_site_is_skipped_and_never_starves_a_healthy_one(tmp_path):
         if method=='claim_run':
             run_id=next(healthy,None)
             return httpx.Response(200,json={'message':None if run_id is None else {
-                'run_id':run_id,'scope_id':'a'*64,'capability':'c','domain':'query',
+                'run_id':run_id,'session_id':'conv1','scope_id':'a'*64,'capability':'c','domain':'query',
                 'budget':{'run_total_seconds':300}}})
         if method=='finish_run':return httpx.Response(200,json={'message':{'status':'Succeeded','provider_failures':0}})
         return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
@@ -1080,7 +1080,7 @@ def test_a_rejected_success_write_back_is_followed_by_a_failed_one_so_the_run_ca
     calls=[]
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];body=json.loads(request.content);calls.append((method,body))
-        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'a'*64,'capability':'cap',
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','session_id':'conv1','scope_id':'a'*64,'capability':'cap',
             'domain':'query','budget':{'run_total_seconds':300}}})
         if method=='finish_run' and body['status']=='Succeeded':
             return httpx.Response(417,json={'exception':'frappe.exceptions.ValidationError: 成功结果必须包含实际读取或服务端记录的工具失败'})
@@ -1138,7 +1138,7 @@ def test_an_unknown_outcome_of_the_success_write_back_is_never_followed_by_a_fai
     calls=[]
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];body=json.loads(request.content);calls.append((method,body))
-        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'a'*64,'capability':'cap',
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','session_id':'conv1','scope_id':'a'*64,'capability':'cap',
             'domain':'query','budget':{'run_total_seconds':300}}})
         if method=='finish_run':
             if first_response=='transport':raise httpx.ConnectError('gateway down',request=request)
@@ -1155,7 +1155,7 @@ def test_only_a_definite_refusal_of_the_success_write_back_gets_the_failed_fallb
     calls=[]
     def handler(request):
         method=request.url.path.rsplit('.',1)[-1];body=json.loads(request.content);calls.append((method,body))
-        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'a'*64,'capability':'cap',
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','session_id':'conv1','scope_id':'a'*64,'capability':'cap',
             'domain':'query','budget':{'run_total_seconds':300}}})
         if method=='finish_run' and body['status']=='Succeeded':
             return httpx.Response(status_code,json={'exc_type':'PermissionError' if status_code==403 else 'ValidationError','exception':'refused'})
