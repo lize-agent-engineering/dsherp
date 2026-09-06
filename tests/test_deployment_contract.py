@@ -164,6 +164,26 @@ def test_the_browser_gets_a_content_security_policy_from_a_versioned_file():
     assert "COPY infra/nginx/security-headers.conf /etc/nginx/snippets/security_headers.conf" in dockerfile
 
 
+def test_the_benches_can_stage_backup_sets_in_a_data_volume_and_a_separate_secrets_volume():
+    """A backup set's data half and secret half never share a volume, so a sync container for
+    one half cannot even see the other."""
+    body = PROD_COMPOSE.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+    for service, prefix in (("backend", "tenant"), ("platform-backend", "platform")):
+        block = _block(body, service)
+        assert f"{prefix}-backups:/home/frappe/backups" in block, service
+        assert f"{prefix}-backup-secrets:/home/frappe/backup-secrets" in block, service
+    volumes = PROD_COMPOSE.split("\nvolumes:\n", 1)[1].split("\n\n", 1)[0]
+    for name in ("tenant-backup-secrets", "platform-backup-secrets"):
+        assert f"  {name}:" in volumes, name
+    # The two benches never share either kind of staging volume.
+    assert "tenant-backup-secrets" not in _block(body, "platform-backend")
+    assert "platform-backups" not in _block(body, "backend")
+    dockerfile = (ROOT / "infra/docker/frappe/Dockerfile").read_text()
+    assert "/home/frappe/backups" in dockerfile and "/home/frappe/backup-secrets" in dockerfile
+    for name in ("v16-backups", "v16-backup-secrets", "v16-platform-backups", "v16-platform-backup-secrets"):
+        assert f"  {name}:" in DEV_COMPOSE, name
+
+
 def test_production_keeps_the_two_benches_apart_and_caddy_without_capabilities():
     body = PROD_COMPOSE.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
     for service in ("scheduler", "queue"):
@@ -228,6 +248,8 @@ def test_compose_uses_only_fresh_v16_named_volumes():
     expected = {
         "v16-sites", "v16-logs", "v16-db-data", "v16-redis-data",
         "v16-platform-sites", "v16-platform-logs", "v16-beta-sites", "v16-beta-logs",
+        # Backup sets are staged here in development too, so a drill exercises the real layout.
+        "v16-backups", "v16-backup-secrets", "v16-platform-backups", "v16-platform-backup-secrets",
     }
     volumes_section = DEV_COMPOSE.split("\nvolumes:\n", 1)[1].split("\nsecrets:\n", 1)[0]
     declared = set(re.findall(r"^  ([a-z0-9-]+):$", volumes_section, re.MULTILINE))

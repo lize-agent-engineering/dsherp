@@ -85,6 +85,11 @@ services:
       # `bench drop-site` moves a retired Site (its final backup included) here; the
       # directory exists in the image owned by the bench user so the volume starts writable.
       - tenant-archive:/home/frappe/frappe-bench/archived
+      # Backup sets staged by `dsherp-admin backup`: the three data pieces and the snapshot
+      # here, the site_config copy in a volume of its own, so the two sync containers each
+      # see one half and neither can read the other's.
+      - tenant-backups:/home/frappe/backups
+      - tenant-backup-secrets:/home/frappe/backup-secrets
     depends_on:
       db: {condition: service_healthy}
       redis-cache: {condition: service_healthy}
@@ -179,6 +184,8 @@ services:
       - platform-logs:/home/frappe/frappe-bench/logs
       # release archives the platform's pre-upgrade backup set here (see backend).
       - platform-archive:/home/frappe/frappe-bench/archived
+      - platform-backups:/home/frappe/backups
+      - platform-backup-secrets:/home/frappe/backup-secrets
     depends_on:
       db: {condition: service_healthy}
       redis-cache: {condition: service_healthy}
@@ -332,7 +339,9 @@ volumes:
   platform-logs:
   platform-archive:
   tenant-backups:
+  tenant-backup-secrets:
   platform-backups:
+  platform-backup-secrets:
   caddy-data:
   caddy-config:
 

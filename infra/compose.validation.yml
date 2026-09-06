@@ -47,6 +47,8 @@ services:
     volumes:
       - v16-sites:/home/frappe/frappe-bench/sites
       - v16-logs:/home/frappe/frappe-bench/logs
+      - v16-backups:/home/frappe/backups
+      - v16-backup-secrets:/home/frappe/backup-secrets
       - ../frappe_app:/opt/dsherp-frappe:ro
     networks:
       validation:
@@ -184,6 +186,8 @@ services:
     volumes:
       - v16-platform-sites:/home/frappe/frappe-bench/sites
       - v16-platform-logs:/home/frappe/frappe-bench/logs
+      - v16-platform-backups:/home/frappe/backups
+      - v16-platform-backup-secrets:/home/frappe/backup-secrets
       - ../frappe_app:/opt/dsherp-frappe:ro
     networks:
       validation:
@@ -263,6 +267,10 @@ networks:
   egress:
 
 volumes:
+  v16-backups:
+  v16-backup-secrets:
+  v16-platform-backups:
+  v16-platform-backup-secrets:
   v16-sites:
   v16-logs:
   v16-db-data:
