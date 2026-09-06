@@ -1,4 +1,5 @@
 """Operating one deployment: every step asks what exists before it changes anything."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -267,36 +268,43 @@ def test_a_tenant_slug_that_is_not_a_slug_never_reaches_a_command(host):
     assert not bench.calls
 
 
+def _retire_bench():
+    """A bench that can also answer the final backup's staging verbs and its snapshot."""
+    bench = SnapshotBench([SAME])
+    bench.existing = set()
+    return bench
+
+
 def test_retiring_a_tenant_archives_before_it_drops_and_leaves_the_ingress_correct(host):
-    admin.ensure_secrets(PROD)
-    bench = FakeBench()
-    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
-    admin.provision_tenant(PROD, "beta", bench_factory=lambda kind: bench, runner=fake_networks)
+    admin.ensure_secrets(RELEASE)
+    bench = _retire_bench()
+    admin.provision_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    admin.provision_tenant(RELEASE, "beta", bench_factory=lambda kind: bench, runner=fake_networks)
     bench.calls.clear()
-    result = admin.retire_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    result = admin.retire_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=_restic(bench))
     verbs = [call for call in bench.calls if call[0] == "run"]
     assert ("run", "bench", "--site", "acme.tenant.example.com") in verbs
     assert ("run", "bench", "drop-site", "acme.tenant.example.com") in bench.calls
     assert verbs.index(("run", "bench", "--site", "acme.tenant.example.com")) < \
         verbs.index(("run", "bench", "drop-site", "acme.tenant.example.com"))
     assert dict(result["steps"])["site"] == "dropped"
-    assert [row["slug"] for row in admin.load_tenants(PROD)] == ["beta"]
-    ingress = (admin.runtime_dir(PROD) / "caddy" / "Caddyfile").read_text()
+    assert [row["slug"] for row in admin.load_tenants(RELEASE)] == ["beta"]
+    ingress = (admin.runtime_dir(RELEASE) / "caddy" / "Caddyfile").read_text()
     assert "acme.tenant.example.com" not in ingress and "beta.tenant.example.com" in ingress
 
 
 def test_retiring_moves_the_whole_site_into_the_persistent_archive_and_reports_the_path(host):
     """drop-site moves the site directory, and the backup just taken inside it, to the
     bench's archive; that archive must be on a volume, named explicitly, and read back."""
-    admin.ensure_secrets(PROD)
-    bench = FakeBench()
-    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    admin.ensure_secrets(RELEASE)
+    bench = _retire_bench()
+    admin.provision_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
     bench.calls.clear(); bench.verbs.clear()
-    result = admin.retire_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    result = admin.retire_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=_restic(bench))
     drop = [verb for verb in bench.verbs if verb.startswith("bench drop-site")][0]
     assert f"--archived-sites-path {admin.ARCHIVE}" in drop
     assert result["archive"] == f"{admin.ARCHIVE}/acme.tenant.example.com"
-    assert result["backups"] == ["20260905_120000-acme-database.sql.gz", "20260905_120000-acme-files.tar"]
+    assert [name for name in result["backups"] if name.endswith("-database.sql.gz")], result["backups"]
     assert dict(result["steps"])["archive"] == result["archive"]
     # The archive location is proven writable before anything is backed up or dropped.
     order = [verb.split()[0] + " " + verb.split()[1] for verb in bench.verbs]
@@ -316,26 +324,27 @@ def test_retiring_refuses_to_drop_anything_when_the_archive_location_is_not_writ
 
 
 def test_retiring_reports_a_collision_suffixed_archive_and_fails_loudly_when_none_appears(host):
-    admin.ensure_secrets(PROD)
-    bench = FakeBench()
-    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    admin.ensure_secrets(RELEASE)
+    bench = _retire_bench()
+    admin.provision_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
     bench.config["archive_collision"] = True
-    result = admin.retire_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    result = admin.retire_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=_restic(bench))
     assert result["archive"] == f"{admin.ARCHIVE}/acme.tenant.example.com1"
 
-    admin.provision_tenant(PROD, "beta", bench_factory=lambda kind: bench, runner=fake_networks)
+    admin.provision_tenant(RELEASE, "beta", bench_factory=lambda kind: bench, runner=fake_networks)
+    bench.snapshots = [SAME]
     bench.config["archive_lost"] = True
     with pytest.raises(admin.Fault, match="不要重跑"):
-        admin.retire_tenant(PROD, "beta", bench_factory=lambda kind: bench)
+        admin.retire_tenant(RELEASE, "beta", bench_factory=lambda kind: bench, runner=_restic(bench))
     # The Site is gone but nothing else was touched: the operator must look before the list changes.
-    assert [row["slug"] for row in admin.load_tenants(PROD)] == ["beta"]
+    assert [row["slug"] for row in admin.load_tenants(RELEASE)] == ["beta"]
 
 
 def test_retiring_a_site_that_does_not_exist_is_refused_rather_than_treated_as_cleanup(host):
-    admin.ensure_secrets(PROD)
+    admin.ensure_secrets(RELEASE)
     bench = FakeBench()
     with pytest.raises(admin.Fault):
-        admin.retire_tenant(PROD, "ghost", bench_factory=lambda kind: bench)
+        admin.retire_tenant(RELEASE, "ghost", bench_factory=lambda kind: bench)
     assert not [call for call in bench.calls if call[0] == "run"]
 
 
@@ -354,9 +363,14 @@ class SnapshotBench(FakeBench):
     Snapshots are recognised by the reader's marker, backups by the set the fake writes
     into the site's private/backups, migrate/restore by their verbs."""
 
-    def __init__(self, snapshots, active_runs=0, expectations=None, backup_pieces=4):
+    def __init__(self, snapshots, active_runs=0, expectations=None, backup_pieces=4, active_writers=None):
         super().__init__(existing_sites=("acme.tenant.example.com", "platform.tenant.example.com"),
                          installed=("dsherp_bridge",))
+        self.active_writers = list(active_writers or [0])
+        self.drain_only = None
+        self.written = {}
+        self.staged = []
+        self.local_sets = {}
         self.snapshots = list(snapshots)
         self.active_runs = active_runs
         self.expectations = expectations or []
@@ -366,6 +380,26 @@ class SnapshotBench(FakeBench):
         self.site_status = None   # {'Queued': n, 'Running': n, ...}; defaults to active_runs as Running
 
     def run(self, *arguments, stdin=None, timeout=900, secrets=()):
+        text = arguments[2] if arguments[:2] == ("sh", "-c") else ""
+        if any(mark in text for mark in ("/home/frappe/backups", "/home/frappe/backup-secrets", "sha256sum", "wc -c")):
+            self.calls.append(("run",) + arguments[:3])
+            self.verbs.append(" ".join(arguments))
+            self.staged.append(text)
+            if "cat > " in text:
+                self.written[text.split("cat > ", 1)[1].split()[0]] = json.loads(stdin)
+                return ""
+            if "sha256sum" in text:
+                names = [word for word in text.split() if word.endswith((".sql.gz", ".tar", ".json"))]
+                return "".join(f"{'ab' * 32}  {name}\n" for name in names)
+            if "wc -c" in text:
+                return "4096\n"
+            if text.startswith("ls -1 ") and "/sets/" in text:
+                site = text.split("/sets/", 1)[1].split()[0]
+                names = self.local_sets if isinstance(self.local_sets, list) else self.local_sets.get(site, [])
+                return "".join(name + "\n" for name in names)
+            if "test -w" in text:
+                return "" if self.config.get("staging_unwritable") else "writable\n"
+            return ""
         handled = ((arguments[:2] == ("bench", "--site") and arguments[3] in ("set-config", "backup"))
                    or (arguments[:2] == ("sh", "-c") and any(mark in arguments[2] for mark in ("private/backups", "archived/releases", "test -s "))))
         if handled:
@@ -377,7 +411,8 @@ class SnapshotBench(FakeBench):
         if arguments[:2] == ("bench", "--site") and arguments[3] == "backup":
             return "Backup Summary for " + arguments[2] + "\n"
         if arguments[:2] == ("sh", "-c") and "ls -1 " in arguments[2] and "private/backups" in arguments[2]:
-            slug = "acme_tenant_example_com" if "acme" in arguments[2] else "platform_tenant_example_com"
+            path = arguments[2].split("ls -1 ", 1)[1].split()[0]
+            slug = path.split("/sites/", 1)[1].split("/", 1)[0].replace(".", "_")
             pieces = [f"20260906_120000-{slug}-database.sql.gz", f"20260906_120000-{slug}-site_config_backup.json",
                       f"20260906_120000-{slug}-files.tar", f"20260906_120000-{slug}-private-files.tar"]
             return "".join(piece + "\n" for piece in pieces[:self.backup_pieces])
@@ -389,6 +424,14 @@ class SnapshotBench(FakeBench):
         return super().run(*arguments, stdin=stdin, timeout=timeout, secrets=secrets)
 
     def python(self, site, body, timeout=900):
+        if "DSHERP_WRITERS" in body:
+            self.calls.append(("writers", site))
+            if self.drain_only is not None and site != self.drain_only:
+                return "DSHERP_WRITERS " + json.dumps({"jobs": 0, "connections": 0}) + "\n"
+            remaining = self.active_writers.pop(0) if self.active_writers else 0
+            return "DSHERP_WRITERS " + json.dumps({"jobs": remaining, "connections": 0}) + "\n"
+        if "frappe.__version__" in body:
+            return "16.31.0\n"
         if "DSHERP_SNAPSHOT" in body:
             self.calls.append(("python-body", site, body))
             self.calls.append(("snapshot", site))
@@ -422,6 +465,65 @@ def _snap(values_by_table, singles=None, patches=("frappe.patches.v16_0.old",)):
             "patches": sorted(patches)}
 
 
+def _restic(bench, fail=(), missing=(), corrupt=()):
+    """A pair of repositories that hold whatever the bench staged. `fail` names (side, verb)
+    pairs that error, `missing` names sides that lose the snapshot, `corrupt` names sides
+    whose read-back manifest does not match."""
+    state = {"data": {}, "secrets": {}}
+
+    def answer(command):
+        service = next(word for word in command if word.startswith("backup-sync-"))
+        side = service.removeprefix("backup-sync-")
+        verb = command[command.index(service) + 1]
+        if (side, verb) in fail:
+            return 1, "", f"Fatal: {verb} failed on the {side} repository"
+        if verb == "backup":
+            set_id = next(word for word in command if word.startswith("set=")).removeprefix("set=")
+            path = command[-1]
+            if side not in missing:
+                digest = hashlib.sha256((set_id + side).encode()).hexdigest()   # restic ids are 64 hex chars
+                state[side][set_id] = {"id": digest, "path": path}
+            return 0, "", ""
+        if verb == "snapshots":
+            wanted = [word.removeprefix("set=") for word in command if word.startswith("set=")]
+            rows = [{"id": row["id"], "short_id": row["id"][:8], "time": "2026-09-06T02:01:00Z",
+                     "tags": [f"set={set_id}"], "paths": [row["path"]]}
+                    for set_id, row in state[side].items() if not wanted or set_id in wanted]
+            return 0, json.dumps(rows), ""
+        if verb == "dump":
+            path = command[-1]
+            document = bench.written.get(_container_path(path))
+            if document is None:
+                return 1, "", f"file not found in snapshot: {path}"
+            if side in corrupt:
+                document = {**document, "set_sha256": "0" * 64}
+            return 0, json.dumps(document), ""
+        if verb in ("cat", "init", "forget", "prune", "check"):
+            if verb == "cat" and not state[side]:
+                return 1, "", "repository does not exist"
+            return 0, "", ""
+        return 0, "", ""
+
+    def _container_path(path):
+        """/backups/<bench>/... inside the sync container is /home/frappe/... on the bench."""
+        rest = path.removeprefix("/backups/")
+        _, _, tail = rest.partition("/")
+        return ("/home/frappe/backups/" + tail) if tail.startswith("sets/") else ("/home/frappe/backup-secrets/" + tail)
+
+    calls = []
+
+    def runner(command, **kwargs):
+        if command[:2] == ["docker", "compose"] and "run" in command and any(w.startswith("backup-sync-") for w in command):
+            calls.append(list(command))
+            code, out, err = answer(command)
+            return type("Result", (), {"returncode": code, "stdout": out, "stderr": err})()
+        return RUNNING_NEW(command, **kwargs)
+
+    runner.state = state
+    runner.calls = calls
+    return runner
+
+
 def _docker(images):
     """Answers `compose ps -q <service>` and `docker inspect` for the two bench services."""
     def runner(command, **kwargs):
@@ -444,13 +546,18 @@ RUNNING_OLD = _docker({"backend": "registry.example.com/dsherp/dsherp-frappe:v0.
 
 SAME = _snap({"tabItem": {"A": {"name": "A", "item_name": "a"}}, "tabDS Model Run": {"r": {"name": "r", "status": "Succeeded"}}})
 DRIFTED = _snap({"tabItem": {"A": {"name": "A", "item_name": "edited"}}, "tabDS Model Run": {"r": {"name": "r", "status": "Succeeded"}}})
-RELEASE = deploy_env.settings({**{k: v for k, v in [
+# A production deployment is configured for off-site backups; every destructive command
+# refuses without them (test_production_refuses_to_retire_or_release_... covers that).
+REPOSITORIES = {"DSHERP_BACKUP_REPOSITORY": "s3:https://s3.example.com/dsherp-data",
+                "DSHERP_BACKUP_SECRETS_REPOSITORY": "s3:https://s3.example.com/dsherp-secrets"}
+RELEASE = deploy_env.settings({**REPOSITORIES, **{k: v for k, v in [
     ("DSHERP_ENV", "prod"), ("DSHERP_PROJECT", "dsherp"), ("DSHERP_BASE_DOMAIN", "tenant.example.com"),
     ("DSHERP_PLATFORM_SLUG", "platform"), ("DSHERP_IMAGE_TAG", "v0.4.0"),
     ("DSHERP_IMAGE_REGISTRY", "registry.example.com/dsherp"), ("DSHERP_AGENT_UID", "1000"), ("DSHERP_AGENT_GID", "1000")]}})
+UNCONFIGURED = {**RELEASE, "backup_repository": "", "backup_secrets_repository": ""}
 
 
-BACK = deploy_env.settings({**{k: v for k, v in [
+BACK = deploy_env.settings({**REPOSITORIES, **{k: v for k, v in [
     ("DSHERP_ENV", "prod"), ("DSHERP_PROJECT", "dsherp"), ("DSHERP_BASE_DOMAIN", "tenant.example.com"),
     ("DSHERP_PLATFORM_SLUG", "platform"), ("DSHERP_IMAGE_TAG", "v0.3.0"),
     ("DSHERP_IMAGE_REGISTRY", "registry.example.com/dsherp"), ("DSHERP_AGENT_UID", "1000"), ("DSHERP_AGENT_GID", "1000")]}})
@@ -1177,3 +1284,59 @@ def test_the_cli_passes_an_explicit_manifest_to_release_and_rollback(monkeypatch
     assert seen["release"]["manifest"] == "/tmp/v0.4.0.json" and seen["release"]["from_tag"] == "v0.3.0"
     assert admin.main(["rollback", "v0.4.0", "--manifest", "/tmp/v0.3.0.json"]) == 0
     assert seen["rollback"]["manifest"] == "/tmp/v0.3.0.json"
+
+
+def test_a_release_stages_its_pre_upgrade_backup_as_a_release_set_and_keeps_the_archive_secrets_apart(host):
+    """The set a rollback depends on must be able to leave the host under the same protocol,
+    and the archive copy no longer puts site_config next to the dump."""
+    from tests.test_backup_cli import StagingBench
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = StagingBench([SAME] * 4)
+    report = admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench, runner=RUNNING_NEW, from_tag="v0.3.0")
+    assert report["clean"]
+    row = report["sites"]["acme.tenant.example.com"]
+    assert row["backup"]["site_config"].startswith(admin.ARCHIVED_RELEASES + "/v0.4.0/acme.tenant.example.com/secrets/")
+    assert row["backup"]["database"].startswith(admin.ARCHIVED_RELEASES + "/v0.4.0/acme.tenant.example.com/2")
+    assert any("chmod 700" in verb and "/v0.4.0/acme.tenant.example.com/secrets" in verb for verb in bench.verbs)
+    set_id = row["set_id"]
+    staged = bench.written[f"/home/frappe/backups/sets/acme.tenant.example.com/{set_id}/set.json"]
+    assert staged["kind"] == "release" and staged["image_tag"] == "v0.3.0", "the set records the build it was taken on"
+    from dsherp import backup_status
+    status = backup_status.load(admin.runtime_dir(RELEASE) / "backups" / "status.json")
+    assert status["sets"][set_id]["state"] == "staged" and status["sets"][set_id]["kind"] == "release"
+
+
+def test_retiring_a_tenant_stages_its_final_set_and_refuses_to_drop_until_it_has_left_the_host(host):
+    """The last backup of a tenant is the one nothing will ever take again: the Site is not
+    destroyed until that set is complete in both repositories."""
+    from tests.test_backup_cli import StagingBench
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = StagingBench([SAME])
+    with pytest.raises(admin.Fault, match="没能完整到达异地"):
+        admin.retire_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=RUNNING_NEW)
+    assert not [verb for verb in bench.verbs if "drop-site" in verb], "nothing destructive ran"
+    assert admin.load_tenants(RELEASE), "the tenant list is untouched"
+    staged = [key for key in bench.written if key.endswith("set.json")]
+    assert staged and bench.written[staged[0]]["kind"] == "retire"
+    assert any("dsherp_hold 1" in verb for verb in bench.verbs), "the final backup runs in a stable window"
+
+
+def test_production_refuses_to_retire_or_release_before_the_off_site_repositories_are_configured(host):
+    """The final state of a retired tenant must leave the host; a deployment without
+    repositories has no way to do that, so the destructive step never starts."""
+    from tests.test_backup_cli import StagingBench
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    untouched = StagingBench([SAME] * 4)
+    with pytest.raises(admin.Fault, match="DSHERP_BACKUP_REPOSITORY"):
+        admin.retire_tenant(UNCONFIGURED, "acme", bench_factory=lambda kind: untouched)
+    assert not [verb for verb in untouched.verbs if "drop-site" in verb]
+    assert admin.load_tenants(RELEASE), "the tenant list is untouched"
+    with pytest.raises(admin.Fault, match="DSHERP_BACKUP_REPOSITORY"):
+        admin.release(UNCONFIGURED, "v0.4.0", bench_factory=lambda kind: untouched, runner=RUNNING_NEW, from_tag="v0.3.0")
+    assert not [verb for verb in untouched.verbs if "migrate" in verb]
+    # Development may drill without object storage, but only when it says so.
+    dev = deploy_env.settings({"DSHERP_ENV": "dev"})
+    assert dev["backup_repository"] == ""

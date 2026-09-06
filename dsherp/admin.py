@@ -523,9 +523,24 @@ def _retire_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_fa
         raise Fault(f'归档目录 {ARCHIVE} 不存在或不可写；先修正 backend 的 tenant-archive 卷挂载再下线，站点未动')
     before = set(_listing(tenant, ARCHIVE))
     steps = []
+    set_id = None
     if archive:
-        tenant.run('bench', '--site', site, 'backup', '--with-files', timeout=3600)
+        # The final state of a tenant is the one backup nothing will ever take again, so it is
+        # produced in a stable window, staged as a set, and must reach the off-site
+        # repositories before the Site is destroyed.
+        from dsherp import backup as backup_module
+        backup_module.require_repositories(resolved)
+        images = _running_images(resolved, runner, root)
+        outcome = backup_module.backup_window(resolved, tenant, site, 'tenant', root=root, kind='retire', images=images)
+        if isinstance(outcome, str):
+            raise Fault(f'站点 {site} 仍有在途运行或写入（{outcome}），无法在稳定窗口里做最终备份；先停 worker 再下线，站点未动')
+        status_doc = backup_module.load_status(resolved, root)
+        backup_module.backup_status.record_set(status_doc, outcome, 'staged')
+        backup_module.save_status(resolved, status_doc, root)
         steps.append(('backup', 'created'))
+        backup_module.send_set(resolved, outcome, root=root, runner=runner, fatal=True)
+        set_id = outcome['set_id']
+        steps.append(('set', set_id))
     db_root = read_secret(resolved, 'db_root_password', root)
     tenant.run('bench', 'drop-site', site, '--db-root-username', 'root', '--db-root-password', db_root,
                '--no-backup', '--archived-sites-path', ARCHIVE, timeout=1800, secrets=(db_root,))
@@ -545,7 +560,7 @@ def _retire_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_fa
     rows = [row for row in load_tenants(resolved, root) if row['slug'] != slug]
     save_tenants(resolved, rows, root)
     steps.append(('ingress', str(render_ingress(resolved, rows, root))))
-    return {'site': site, 'archive': path, 'backups': backups, 'steps': steps}
+    return {'site': site, 'archive': path, 'backups': backups, 'set_id': set_id, 'steps': steps}
 
 
 def agent_firewall_rules(resolved, runner=subprocess.run):
@@ -752,12 +767,22 @@ def _archive_backup(bench, site, tag):
     if missing:
         raise Fault(f'站点 {site} 的备份集不完整，缺 {"、".join(missing)}；不迁移')
     target = f'{ARCHIVED_RELEASES}/{tag}/{site}'
-    sources = ' '.join(f'{SITES}/{site}/private/backups/{name}' for name in pieces.values())
-    bench.run('sh', '-c', f'mkdir -p {target} && cp {sources} {target}/', timeout=600)
+    config = pieces['site_config_backup.json']
+    data = ' '.join(f'{SITES}/{site}/private/backups/{pieces[piece]}'
+                    for piece in ('database.sql.gz', 'files.tar', 'private-files.tar'))
+    # The copy of site_config carries the database password and the encryption key; it never
+    # shares a directory or a mode with the dump (design §4.1, runbook §11).
+    bench.run('sh', '-c', f'umask 077 && mkdir -p {target}/secrets && chmod 700 {target}/secrets && '
+                          f'cp {data} {target}/ && cp {SITES}/{site}/private/backups/{config} {target}/secrets/ && '
+                          f'chmod 600 {target}/secrets/{config}', timeout=600)
     return {'database': f"{target}/{pieces['database.sql.gz']}",
-            'site_config': f"{target}/{pieces['site_config_backup.json']}",
+            'site_config': f"{target}/secrets/{config}",
             'files': f"{target}/{pieces['files.tar']}",
             'private_files': f"{target}/{pieces['private-files.tar']}"}
+
+
+def bench_service_of(resolved, site):
+    return SERVICES[resolved['env']]['platform' if site == resolved['platform_site'] else 'tenant']
 
 
 def _running_images(resolved, runner, root):
@@ -936,6 +961,8 @@ def _release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=N
                     '先改环境文件并 compose up -d，再发布')
     if from_tag is not None and not deploy_env.TAG.fullmatch(from_tag):
         raise Fault('--from 必须是一个 tag')
+    from dsherp import backup as backup_module
+    backup_module.require_repositories(resolved)
     images = _running_images(resolved, runner, root)
     _require_image_names(images, resolved['frappe_image'])
     # The manifest is the only record of which build this tag is; without a valid one the
@@ -984,6 +1011,7 @@ def _release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=N
         step = 'backup'
         try:
             bench.run('bench', '--site', site, 'backup', '--with-files', timeout=3600)
+            pieces = backup_module.find_pieces(bench, site)
             backup = _archive_backup(bench, site, tag)
             _write_json(record / 'backup.json', backup)
             report['steps'].append((site, 'backed-up'))
@@ -991,6 +1019,21 @@ def _release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=N
             before = take_snapshot(resolved, site, bench=bench)
             _write_json(record / 'before.json', before)
             report['steps'].append((site, 'snapshot-before'))
+            step = 'stage-set'
+            # The same set protocol the scheduled backup uses, so this one can leave the host
+            # and be restored on another one; it records the build being upgraded away from.
+            set_doc = backup_module.stage_set(
+                bench, site, pieces, kind='release', stamp=time.strftime('%Y%m%d_%H%M%S', time.gmtime()),
+                token=secrets.token_hex(3), window={'started': started_at, 'finished': backup_module.backup_status.now_iso()},
+                image_tag=previous, image_id=(previous_images or {}).get(bench_service_of(resolved, site), {}).get(
+                    'image_id') or images[bench_service_of(resolved, site)]['image_id'],
+                snapshot=before, frappe_version=backup_module.site_version(bench, site))
+            status_doc = backup_module.load_status(resolved, root)
+            backup_module.backup_status.record_set(status_doc, set_doc, 'staged')
+            backup_module.save_status(resolved, status_doc, root)
+            report['steps'].append((site, 'staged'))
+            step = 'offsite'
+            offsite = backup_module.send_set(resolved, set_doc, root=root, runner=runner, fatal=False)
             step = 'migrate'
             migrated = bench.run('bench', '--site', site, 'migrate', timeout=3600)
             report['steps'].append((site, 'migrated'))
@@ -1009,7 +1052,8 @@ def _release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=N
             report['path'] = str(_release_report(resolved, f'release-{tag}', report, root))
             raise Fault(f'站点 {site} 在 {step} 阶段失败，站点保持维护模式；用 rollback {tag} 回到升级前的备份。'
                         f'\n{error}') from error
-        report['sites'][site] = {'backup': backup, 'comparison': comparison, 'patches_executed': executed,
+        report['sites'][site] = {'backup': backup, 'set_id': set_doc['set_id'], 'offsite': offsite,
+                                 'comparison': comparison, 'patches_executed': executed,
                                  'expectations_ignored': [entry for entry in declared if entry['patch'] not in executed],
                                  'migrate_tail': migrated.strip().splitlines()[-20:],
                                  'seconds': round(time.monotonic() - started, 1),

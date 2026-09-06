@@ -11,50 +11,7 @@ from tests.test_admin_cli import RELEASE, RUNNING_NEW, SAME, SnapshotBench, _ten
 from tests.test_admin_cli import host  # noqa: F401  the autouse fixture that isolates runtime and secrets dirs
 
 
-class StagingBench(SnapshotBench):
-    """SnapshotBench plus the staging verbs: writability probe, sha256sum, cp/mv, cat > manifest."""
-
-    def __init__(self, *args, **kwargs):
-        self.active_writers = kwargs.pop("active_writers", [0])
-        super().__init__(*args, **kwargs)
-        self.written = {}
-        self.staged = []
-        self.local_sets = []
-
-    def run(self, *arguments, stdin=None, timeout=900, secrets=()):
-        text = arguments[2] if arguments[:2] == ("sh", "-c") else ""
-        if any(mark in text for mark in ("/home/frappe/backups", "/home/frappe/backup-secrets", "sha256sum", "wc -c")):
-            self.calls.append(("run",) + arguments[:3])
-            self.verbs.append(" ".join(arguments))
-            self.staged.append(text)
-            if "cat > " in text:
-                self.written[text.split("cat > ", 1)[1].split()[0]] = json.loads(stdin)
-                return ""
-            if "sha256sum" in text:
-                names = [word for word in text.split() if word.endswith((".sql.gz", ".tar", ".json"))]
-                return "".join(f"{'ab' * 32}  {name}\n" for name in names)
-            if "wc -c" in text:
-                return "4096\n"
-            if text.startswith("ls -1 ") and "/sets/" in text:
-                site = text.split("/sets/", 1)[1].split()[0]
-                names = self.local_sets if isinstance(self.local_sets, list) else self.local_sets.get(site, [])
-                return "".join(name + "\n" for name in names)
-            if "test -w" in text:
-                return "" if self.config.get("staging_unwritable") else "writable\n"
-            return ""
-        return super().run(*arguments, stdin=stdin, timeout=timeout, secrets=secrets)
-
-    def python(self, site, body, timeout=900):
-        if "DSHERP_WRITERS" in body:
-            self.calls.append(("writers", site))
-            only = getattr(self, "drain_only", None)
-            if only is not None and site != only:
-                return "DSHERP_WRITERS " + json.dumps({"jobs": 0, "connections": 0}) + "\n"
-            remaining = self.active_writers.pop(0) if self.active_writers else 0
-            return "DSHERP_WRITERS " + json.dumps({"jobs": remaining, "connections": 0}) + "\n"
-        if "frappe.__version__" in body:
-            return "16.31.0\n"
-        return super().python(site, body, timeout=timeout)
+StagingBench = SnapshotBench  # the bench fake now answers the staging verbs for every test
 
 
 def _prepare():
@@ -262,3 +219,159 @@ def test_the_cli_wires_backup_with_and_without_sync(monkeypatch):
     monkeypatch.setattr(deploy_env, "settings", lambda *a, **k: RELEASE)
     assert admin.main(["backup"]) == 0 and seen["sync"] is False
     assert admin.main(["backup", "--sync"]) == 0 and seen["sync"] is True
+
+
+def _staged_set(bench, site="acme.tenant.example.com"):
+    """Run one real backup window so a genuine set exists in the fake's staging area."""
+    report = _backup(bench)
+    return report["sets"][site]
+
+
+def test_a_set_is_complete_only_after_both_manifests_are_read_back_and_agree(host):
+    """Two snapshot ids only say something was uploaded. complete means the data half's
+    set.json and the secret half's pair.json were read out again and describe one set."""
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    restic = _restic(bench)
+    status = backup_status.empty()
+    outcome = backup.upload_sets(RELEASE, [set_doc], runner=restic, status=status)
+    assert outcome["complete"] == [set_doc["set_id"]] and not outcome["failed"]
+    row = status["sets"][set_doc["set_id"]]
+    assert row["state"] == "complete" and row["data_snapshot"] and row["secrets_snapshot"]
+    assert status["sites"]["acme.tenant.example.com"]["offsite"]["last_success"]["set_id"] == set_doc["set_id"]
+    dumps = [command for command in restic.calls if "dump" in command]
+    assert len(dumps) == 2 and {command[-1].rsplit("/", 1)[-1] for command in dumps} == {"set.json", "pair.json"}
+    for command in dumps:
+        snapshot = command[command.index("dump") + 1]
+        assert len(snapshot) == 64, "a full snapshot id addresses exactly one snapshot"
+
+
+def test_a_half_uploaded_set_stays_pending_and_the_next_run_only_sends_the_missing_side(host):
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    status = backup_status.empty()
+    broken = _restic(bench, fail=(("secrets", "backup"),))
+    outcome = backup.upload_sets(RELEASE, [set_doc], runner=broken, status=status)
+    assert outcome["pending"] == [set_doc["set_id"]] and "secrets" in outcome["failed"][set_doc["set_id"]]
+    row = status["sets"][set_doc["set_id"]]
+    assert row["state"] == "data_uploaded" and row["secrets_snapshot"] is None
+    assert status["sites"]["acme.tenant.example.com"]["offsite"]["last_success"] is None
+
+    healed = _restic(bench)
+    healed.state["data"] = broken.state["data"]        # the data half is already there
+    outcome = backup.upload_sets(RELEASE, [set_doc], runner=healed, status=status)
+    assert outcome["complete"] == [set_doc["set_id"]]
+    assert status["sites"]["acme.tenant.example.com"]["offsite"]["last_success"]["at"]
+
+
+def test_a_recorded_snapshot_that_the_repository_no_longer_holds_falls_back_to_pending(host):
+    """A set is not complete because the status file says so: every run asks the repository."""
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    status = backup_status.empty()
+    restic = _restic(bench)
+    backup.upload_sets(RELEASE, [set_doc], runner=restic, status=status)
+    assert status["sets"][set_doc["set_id"]]["state"] == "complete"
+    restic.state["secrets"].clear()                     # somebody deleted it over there
+    outcome = backup.upload_sets(RELEASE, [set_doc], runner=restic, status=status)
+    assert outcome["pending"] == [set_doc["set_id"]]
+    assert status["sets"][set_doc["set_id"]]["state"] in ("data_uploaded", "staged")
+
+
+def test_manifests_that_do_not_agree_keep_the_set_pending_however_many_snapshots_exist(host):
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    status = backup_status.empty()
+    outcome = backup.upload_sets(RELEASE, [set_doc], runner=_restic(bench, corrupt=("secrets",)), status=status)
+    assert outcome["pending"] == [set_doc["set_id"]] and "配对" in outcome["failed"][set_doc["set_id"]]
+    assert status["sets"][set_doc["set_id"]]["state"] != "complete"
+
+
+def test_unreachable_storage_is_a_recorded_failure_and_never_a_silent_success(host):
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    status = backup_status.empty()
+    dead = _restic(bench, fail=(("data", "backup"), ("secrets", "backup"), ("data", "snapshots"), ("secrets", "snapshots")))
+    outcome = backup.upload_sets(RELEASE, [set_doc], runner=dead, status=status)
+    assert outcome["complete"] == [] and set_doc["set_id"] in outcome["failed"]
+    assert status["sites"]["acme.tenant.example.com"]["offsite"]["last_attempt"]["ok"] is False
+
+
+def test_restic_never_carries_the_repository_or_a_credential_on_its_argv(host):
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    seen = []
+
+    def recording(command, **kwargs):
+        seen.append(command)
+        return _restic(bench)(command, **kwargs)
+    backup.upload_sets(RELEASE, [set_doc], runner=recording, status=backup_status.empty())
+    restic_calls = [command for command in seen if any(word.startswith("backup-sync-") for word in command)]
+    assert restic_calls
+    joined = " ".join(word for command in restic_calls for word in command)
+    assert "s3:" not in joined and "RESTIC_PASSWORD" not in joined and "AWS_" not in joined
+    assert "--host dsherp" in joined and "run --rm -T" in joined
+    data_call = next(command for command in restic_calls if "backup-sync-data" in command)
+    assert data_call[-1] == f"/backups/tenant/sets/acme.tenant.example.com/{set_doc['set_id']}"
+    secrets_call = next(command for command in restic_calls if "backup-sync-secrets" in command)
+    assert secrets_call[-1] == f"/backups/tenant/acme.tenant.example.com/{set_doc['set_id']}"
+
+
+def test_a_private_certificate_authority_is_handed_to_restic_only_when_one_is_installed(host):
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    seen = []
+
+    def recording(command, **kwargs):
+        seen.append(" ".join(command))
+        return _restic(bench)(command, **kwargs)
+    backup.upload_sets(RELEASE, [set_doc], runner=recording, status=backup_status.empty())
+    assert not any("RESTIC_CACERT" in call for call in seen)
+    ca = admin.secrets_dir(RELEASE) / "backup_storage_ca.pem"
+    ca.write_text("-----BEGIN CERTIFICATE-----\n")
+    ca.chmod(0o600)
+    seen.clear()
+    backup.upload_sets(RELEASE, [set_doc], runner=recording, status=backup_status.empty())
+    assert all(f"-v {ca}:/run/secrets/backup_storage_ca.pem:ro" in call and "RESTIC_CACERT" in call
+               for call in seen if "backup-sync-" in call)
+
+
+def test_backup_init_is_idempotent_and_refuses_without_repositories(host):
+    from tests.test_admin_cli import UNCONFIGURED, _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    with pytest.raises(admin.Fault, match="DSHERP_BACKUP_REPOSITORY"):
+        backup.backup_init(UNCONFIGURED, runner=_restic(bench))
+    restic = _restic(bench)
+    assert backup.backup_init(RELEASE, runner=restic) == {"data": "created", "secrets": "created"}
+    restic.state["data"]["x"] = {"id": "a" * 64, "path": "/backups/tenant/sets/x"}
+    restic.state["secrets"]["x"] = {"id": "b" * 64, "path": "/backups/tenant/x"}
+    assert backup.backup_init(RELEASE, runner=restic) == {"data": "kept", "secrets": "kept"}
+
+
+def test_retiring_a_tenant_drops_it_only_after_its_final_set_is_complete_in_both_repositories(host):
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME])
+    bench.existing = {"acme.tenant.example.com"}
+    restic = _restic(bench)
+    report = admin.retire_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=restic)
+    steps = [name for name, _ in report["steps"]]
+    assert steps.index("set") < steps.index("site"), "the final set is complete before the Site is destroyed"
+    assert report["set_id"] in restic.state["data"] and report["set_id"] in restic.state["secrets"]
+    assert bench.written[f"/home/frappe/backups/sets/acme.tenant.example.com/{report['set_id']}/set.json"]["kind"] == "retire"
+    assert not admin.load_tenants(RELEASE)

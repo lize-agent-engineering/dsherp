@@ -24,7 +24,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from dsherp import admin, backup_sets, backup_status, site_holds
+from dsherp import admin, backup_sets, backup_status, deploy_env, site_holds
 from dsherp.admin import Fault, ROOT, SITES
 
 BACKUPS = '/home/frappe/backups'
@@ -316,5 +316,196 @@ def backup(resolved, *, root=ROOT, runner=subprocess.run, bench_factory=None, sy
     return report
 
 
+def require_repositories(resolved):
+    """Production never performs a destructive step it cannot back out of: a retired tenant's
+    final state, and a release's pre-upgrade set, have to be able to leave this host."""
+    if resolved.get('backup_repository') and resolved.get('backup_secrets_repository'):
+        return True
+    if resolved['env'] != 'prod':
+        return False
+    raise Fault('没有配置异地备份仓库：在 infra/env/prod.env 写 DSHERP_BACKUP_REPOSITORY 与 '
+                'DSHERP_BACKUP_SECRETS_REPOSITORY，放好两侧口令与凭据（doctor 会检查），再执行发布或下线')
+
+
+def site_version(bench, site):
+    return admin._last_line(bench.python(site, VERSION, timeout=120)).strip()
+
+
+def send_set(resolved, set_doc, *, root=ROOT, runner=subprocess.run, fatal=False, clock=time.time):
+    """Put one set into both repositories now (a release's pre-upgrade set, a retire's final
+    set). `fatal` marks the caller that must not proceed without it."""
+    if not require_repositories(resolved):
+        return {'ok': False, 'reason': 'not configured (development)'}
+    try:
+        outcome = upload_sets(resolved, [set_doc], root=root, runner=runner, clock=clock)
+    except Fault as error:
+        if fatal:
+            raise Fault(f'备份集 {set_doc["set_id"]} 没能完整到达异地：{error}；不进行破坏性步骤') from error
+        return {'ok': False, 'reason': str(error)}
+    ok = set_doc['set_id'] in outcome['complete']
+    if fatal and not ok:
+        raise Fault(f'备份集 {set_doc["set_id"]} 没能完整到达异地：'
+                    + (outcome['failed'].get(set_doc['set_id']) or '两侧未配对') + '；不进行破坏性步骤')
+    return {'ok': ok, 'reason': outcome['failed'].get(set_doc['set_id'])}
+
+
+def _compose_run(resolved, root, service, arguments, ca=None):
+    file = Path(root) / admin.COMPOSE[resolved['env']]
+    command = ['docker', 'compose', '-p', resolved['project']]
+    env_file = deploy_env.env_file(resolved['env'], root)
+    if env_file.exists():
+        command += ['--env-file', str(env_file)]
+    command += ['-f', str(file), 'run', '--rm', '-T']
+    if ca is not None:
+        command += ['-v', f'{ca}:/run/secrets/backup_storage_ca.pem:ro',
+                    '-e', 'RESTIC_CACERT=/run/secrets/backup_storage_ca.pem']
+    return command + [service, *arguments]
+
+
+def _redactions(resolved, root):
+    values = []
+    for name in ('backup_repository_password', 'backup_secrets_repository_password',
+                 'backup_storage_credentials', 'backup_secrets_storage_credentials'):
+        path = admin.secrets_dir(resolved, root) / name
+        if path.exists():
+            for line in path.read_text().splitlines():
+                value = line.split('=', 1)[-1].strip()
+                if value:
+                    values.append(value)
+    return values
+
+
+def restic(resolved, side, arguments, *, root=ROOT, runner=subprocess.run, timeout=3600):
+    """One restic call against one repository, through its own one-shot compose service. The
+    repository URL, its password and its storage identity come from compose, never from argv."""
+    if side not in ('data', 'secrets'):
+        raise ValueError('Unknown repository side: ' + repr(side))
+    ca = admin.secrets_dir(resolved, root) / 'backup_storage_ca.pem'
+    command = _compose_run(resolved, root, f'backup-sync-{side}', arguments, ca=ca if ca.exists() else None)
+    result = runner(command, text=True, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+    if result.returncode:
+        tail = '\n'.join((result.stderr or result.stdout or '').strip().splitlines()[-6:])
+        for value in _redactions(resolved, root):
+            tail = tail.replace(value, '[redacted]')
+        raise Fault(f'restic（{side} 仓库）{arguments[0]} 失败：\n{tail}')
+    return result.stdout
+
+
+def backup_init(resolved, *, root=ROOT, runner=subprocess.run):
+    require_repositories(resolved) or _require_configured(resolved)
+    outcome = {}
+    for side in ('data', 'secrets'):
+        try:
+            restic(resolved, side, ['cat', 'config'], root=root, runner=runner, timeout=300)
+            outcome[side] = 'kept'
+        except Fault:
+            restic(resolved, side, ['init'], root=root, runner=runner, timeout=600)
+            outcome[side] = 'created'
+    return outcome
+
+
+def _require_configured(resolved):
+    raise Fault('没有配置异地备份仓库：先在环境文件里写 DSHERP_BACKUP_REPOSITORY 与 DSHERP_BACKUP_SECRETS_REPOSITORY')
+
+
+def bench_kind_of(resolved, site):
+    return 'platform' if site == resolved['platform_site'] else 'tenant'
+
+
+def set_paths(resolved, site, set_id):
+    """Where the two halves of a set live inside the two sync containers."""
+    kind = bench_kind_of(resolved, site)
+    return {'data': f'/backups/{kind}/sets/{site}/{set_id}', 'secrets': f'/backups/{kind}/{site}/{set_id}'}
+
+
+def _snapshot_id(resolved, side, set_id, *, root, runner):
+    """The full id of the snapshot tagged with this set, or None. Full ids only: a short id is
+    a display convenience, and `dump` must address exactly one snapshot."""
+    rows = json.loads(restic(resolved, side, ['snapshots', '--json', '--tag', f'set={set_id}'],
+                             root=root, runner=runner, timeout=300) or '[]')
+    matching = [row for row in rows if f'set={set_id}' in (row.get('tags') or []) and row.get('id')]
+    if not matching:
+        return None
+    return sorted(matching, key=lambda row: row.get('time') or '')[-1]['id']
+
+
+def _read_back(resolved, side, snapshot, path, *, root, runner):
+    text = restic(resolved, side, ['dump', snapshot, path], root=root, runner=runner, timeout=600)
+    try:
+        return json.loads(text)
+    except ValueError as error:
+        raise Fault(f'{side} 仓库快照 {snapshot[:12]} 里的 {path} 不是 JSON（{error}）') from error
+
+
+def verify_pair(resolved, set_id, ids, *, root=ROOT, runner=subprocess.run, site=None, expected=None):
+    """Read both manifests back out of the two repositories and prove they describe the same
+    set. Two snapshot ids are not proof: they only say something was uploaded."""
+    if not ids.get('data') or not ids.get('secrets'):
+        raise Fault(f'备份集 {set_id} 只有一侧在异地')
+    paths = set_paths(resolved, site or (expected or {}).get('site'), set_id)
+    set_doc = _read_back(resolved, 'data', ids['data'], f'{paths["data"]}/set.json', root=root, runner=runner)
+    pair = _read_back(resolved, 'secrets', ids['secrets'], f'{paths["secrets"]}/pair.json', root=root, runner=runner)
+    if set_doc.get('set_id') != set_id:
+        raise Fault(f'数据仓库里 {set_id} 的 set.json 记录的是 {set_doc.get("set_id")}')
+    if not backup_sets.pair_matches(set_doc, pair):
+        raise Fault(f'备份集 {set_id} 的两侧不配对：pair.json 与 set.json 的摘要不一致')
+    if expected is not None and backup_sets.set_sha256(set_doc) != backup_sets.set_sha256(expected):
+        raise Fault(f'异地的 {set_id} 与本机暂存的内容不同')
+    return set_doc
+
+
+def upload_sets(resolved, set_docs, *, root=ROOT, runner=subprocess.run, clock=time.time, status=None):
+    """Send whichever half is missing, then read both manifests back and compare them. A set
+    is complete only after that; a half-sent set stays pending for the next run."""
+    if not require_repositories(resolved):
+        _require_configured(resolved)
+    own = status is None
+    status = load_status(resolved, root) if own else status
+    outcome = {'complete': [], 'pending': [], 'failed': {}}
+    for doc in set_docs:
+        set_id, site, kind = doc['set_id'], doc['site'], doc.get('kind', 'scheduled')
+        paths = set_paths(resolved, site, set_id)
+        known = status['sets'].get(set_id, {})
+        ids = {'data': known.get('data_snapshot'), 'secrets': known.get('secrets_snapshot')}
+        errors = []
+        for side in ('data', 'secrets'):
+            try:
+                if not ids[side]:
+                    restic(resolved, side, ['backup', '--host', resolved['project'], '--tag', f'site={site}',
+                                            '--tag', f'set={set_id}', '--tag', f'kind={kind}', paths[side]],
+                           root=root, runner=runner, timeout=3600)
+                # Always ask the repository, even for an id we recorded: the copy may be gone.
+                ids[side] = _snapshot_id(resolved, side, set_id, root=root, runner=runner)
+                if not ids[side]:
+                    errors.append(f'{side} 仓库里没有 set={set_id} 的快照')
+            except Fault as error:
+                ids[side] = None
+                errors.append(str(error))
+        complete = False
+        if ids['data'] and ids['secrets']:
+            try:
+                verify_pair(resolved, set_id, ids, root=root, runner=runner, site=site,
+                            expected=doc if 'pieces' in doc else None)
+                complete = True
+            except Fault as error:
+                errors.append(str(error))
+        state = ('complete' if complete else
+                 'data_uploaded' if ids['data'] else 'secrets_uploaded' if ids['secrets'] else 'staged')
+        backup_status.record_set(status, {**doc, 'kind': kind}, state,
+                                 data_snapshot=ids['data'], secrets_snapshot=ids['secrets'])
+        at = backup_status.now_iso(clock)
+        if complete:
+            outcome['complete'].append(set_id)
+            backup_status.record_site(status, site, 'offsite', at=at, ok=True, set_id=set_id, stamp=doc['stamp'])
+        else:
+            outcome['pending'].append(set_id)
+            outcome['failed'][set_id] = '；'.join(errors) or '两侧未配对'
+            backup_status.record_site(status, site, 'offsite', at=at, ok=False,
+                                      error=outcome['failed'][set_id][:500])
+    if own:
+        save_status(resolved, status, root)
+    return outcome
+
+
 def backup_sync(resolved, *, root=ROOT, runner=subprocess.run, clock=time.time, locked=False):
-    raise Fault('异地同步尚未接入')
+    raise Fault('异地淘汰与检查尚未接入')
