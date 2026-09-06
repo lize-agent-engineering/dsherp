@@ -166,3 +166,19 @@ def test_being_unverified_for_more_than_eight_days_is_a_warning_with_a_grace_for
     assert _keys(evaluate(fresh, list(SITES), NOW)) == [], "a Site backed up yesterday has not missed a drill yet"
     old = _healthy(verified_at=None, first_at="2026-08-01T00:00:00Z")
     assert _keys(evaluate(old, list(SITES), NOW)) == ["restore_unverified"]
+
+
+def test_the_rpo_answer_is_the_newest_proven_set_not_the_last_upload_to_finish():
+    """A run that catches up on an older set must not make the Site look freshly backed up,
+    and must not make it look stale either."""
+    status = _healthy(sites=("acme.tenant.example.com",), stamp="20260906_140007")
+    site = "acme.tenant.example.com"
+    for stamp, state in (("20260906_140007", "complete"), ("20260301_020000", "complete")):
+        record_set(status, {"set_id": f"{stamp}-acme_tenant_example_com-aaaaaa", "site": site,
+                            "kind": "scheduled", "stamp": stamp, "image_tag": "v0.4.0", "image_id": "sha256:x"}, state)
+    # The record's last_success now names the old set: the catch-up finished last.
+    record_site(status, site, "offsite", at="2026-09-06T23:00:00Z", ok=True,
+                set_id="20260301_020000-acme_tenant_example_com-aaaaaa", stamp="20260301_020000")
+    result = evaluate(status, [site], NOW)
+    assert _keys(result) == [], "the newest proven set is ten hours old"
+    assert result["gauges"]["dsherp_backup_offsite_oldest_hours"] < 24

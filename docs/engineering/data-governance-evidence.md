@@ -147,3 +147,18 @@
 
 ### 真实链路验证（本机，2026-09-06）
 
+演练环境：dev 栈（两个 bench 挂上备份卷与备份密钥卷）+ `infra/drills/minio.yml` 起的 MinIO（按 index digest 固定、自签 CA、两个桶、两个只能读写各自桶的身份）。它证明的是工具链与契约，**不证明**物理异机容灾、真实异地副本与正式 RTO。
+
+| 环节 | 实测 |
+|---|---|
+| 生成 | `backup` 对 `dsherp-platform.localhost` 真实开窗：`dsherp_hold` → 等在途执行者 → 维护标志 → 排空写入者 → `bench backup --with-files` → 快照 → 逆序撤销。集内五个文件与两个密钥侧文件齐全，密钥目录 0700、文件 0600，`private/backups` 里已无 `site_config_backup.json`，逐件 sha256 与 `set.json` 一致（集成测试 `tests/integration/test_backup_sets_real.py`） |
+| 仓库初始化 | `backup-init` 经私有 CA 的 TLS 建两个仓库，重跑报 `kept` |
+| 上传与配对 | 上传后从两个仓库 `dump` 读回 `set.json` 与 `pair.json` 逐项核对才标 `complete`；**伪造的历史集（复制目录未改 set.json）被如实拒绝** |
+| 单边丢失 | 在密钥仓库 `forget` 掉一侧后再同步：如实降级并在同一次运行补齐，`errors` 里点名 |
+| 内容不符 | 远端快照内容与本机暂存不一致时按本机重传一次，再核对通过才算完整 |
+| 保留淘汰 | 造 20 个跨 20 个月的历史集：一次同步后两侧各剩 7 个（7 日槽位吃掉了 7 个不同日期），记录同步收敛，第二次运行无操作 |
+| 完整性 | 每次同步两侧 `check --read-data-subset=<n>/7`，按天轮换 |
+| 隔离恢复 | `restore-drill` 在 `dsherp-restore` 项目里按集记录的构建起栈、核对镜像 id、取回两侧、核对配对与全部摘要、进程内恢复、注入 `encryption_key`、比对与抽样解密：**50 张表 1311 行 0 处未声明差异，6 个加密字段全部解密通过，8.1 秒**；成功后 `down -v` 只删本项目的容器与卷，第二次演练无需 `--discard-failed` 即可开始 |
+| 调度表达式 | `*-*-* 02,14:00:00 Asia/Shanghai` 与 `Sun *-*-* 04:00:00 Asia/Shanghai` 由真实 `systemd-analyze calendar`（容器内）确认可解析并给出下次触发 |
+
+

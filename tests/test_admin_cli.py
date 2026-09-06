@@ -465,11 +465,11 @@ def _snap(values_by_table, singles=None, patches=("frappe.patches.v16_0.old",)):
             "patches": sorted(patches)}
 
 
-def _restic(bench, fail=(), missing=(), corrupt=()):
+def _restic(bench, fail=(), missing=(), corrupt=(), initialised=True):
     """A pair of repositories that hold whatever the bench staged. `fail` names (side, verb)
     pairs that error, `missing` names sides that lose the snapshot, `corrupt` names sides
     whose read-back manifest does not match."""
-    state = {"data": {}, "secrets": {}}
+    state = {"data": {}, "secrets": {}, "initialised": {"data", "secrets"} if initialised else set()}
 
     def answer(command):
         service = next(word for word in command if word.startswith("backup-sync-"))
@@ -500,7 +500,9 @@ def _restic(bench, fail=(), missing=(), corrupt=()):
                 document = {**document, "set_sha256": "0" * 64}
             return 0, json.dumps(document), ""
         if verb in ("cat", "init", "forget", "prune", "check"):
-            if verb == "cat" and not state[side]:
+            if verb == "init":
+                state["initialised"].add(side)
+            if verb == "cat" and side not in state["initialised"]:
                 return 1, "", "repository does not exist"
             return 0, "", ""
         return 0, "", ""

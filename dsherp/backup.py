@@ -385,7 +385,11 @@ def restic(resolved, side, arguments, *, root=ROOT, runner=subprocess.run, timeo
     ca = admin.secrets_dir(resolved, root) / 'backup_storage_ca.pem'
     command = _compose_run(resolved, root, f'backup-sync-{side}', arguments, ca=ca if ca.exists() else None,
                            mounts=mounts)
-    result = runner(command, text=True, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+    try:
+        result = runner(command, text=True, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired as error:
+        raise Fault(f'restic（{side} 仓库）{arguments[0]} 超过 {timeout} 秒没有返回；'
+                    '对象存储可能不可达，本次不改动任何副本') from error
     if result.returncode:
         tail = '\n'.join((result.stderr or result.stdout or '').strip().splitlines()[-6:])
         for value in _redactions(resolved, root):
@@ -419,6 +423,22 @@ def notify_failure(resolved, unit, *, root=ROOT, profile_path=None, client=None)
         print(json.dumps({'event': 'alert_webhook_failed', **outcome}, ensure_ascii=False))
         return outcome
     return {'unit': unit, 'webhook': 'posted'}
+
+
+REACH_TIMEOUT_SECONDS = 120
+
+
+def reachable(resolved, *, root=ROOT, runner=subprocess.run):
+    """Ask both repositories for their config before doing anything slow. restic retries a
+    dead endpoint for a quarter of an hour per call; an operator (and a timer) needs to hear
+    'unreachable' in seconds."""
+    errors = []
+    for side in ('data', 'secrets'):
+        try:
+            restic(resolved, side, ['cat', 'config'], root=root, runner=runner, timeout=REACH_TIMEOUT_SECONDS)
+        except Fault as error:
+            errors.append(f'{side}: {error}')
+    return errors
 
 
 def backup_init(resolved, *, root=ROOT, runner=subprocess.run):
@@ -637,6 +657,15 @@ def backup_sync(resolved, *, root=ROOT, runner=subprocess.run, clock=time.time, 
             row['data_snapshot'], row['secrets_snapshot'] = held.get('data'), held.get('secrets')
             report['ok'] = False
             report['errors'].append(f'备份集 {set_id} 在异地不再完整（{row["state"]}）：已退回待补齐')
+        unreachable = reachable(resolved, root=root, runner=runner)
+        if unreachable:
+            report['ok'] = False
+            report['errors'] += unreachable
+            backup_status.record_run(status, 'sync', at=backup_status.now_iso(clock), ok=False,
+                                     error='；'.join(unreachable)[:500])
+            save_status(resolved, status, root)
+            report['check_ok'] = False
+            return report
         pending = [dict(row, set_id=set_id) for set_id, row in status['sets'].items()
                    if row.get('state') not in ('complete', 'verified')]
         try:

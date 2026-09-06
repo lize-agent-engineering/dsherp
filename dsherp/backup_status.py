@@ -166,7 +166,11 @@ def evaluate(status, expected_sites, now, status_age_seconds=None):
     never = False
     for site in expected_sites:
         row = status['sites'].get(site, {})
-        complete = (row.get('offsite') or {}).get('last_success')
+        # The newest set the repositories were proven to hold - not the last one an upload
+        # happened to finish, which may be an older set catching up.
+        proven = [item for item in sets_of(status, site) if item.get('state') in PROTECTED_STATES]
+        complete = ({'stamp': proven[-1]['stamp']} if proven
+                    else (row.get('offsite') or {}).get('last_success'))
         if not complete:
             unmet.append(site)
             never = True

@@ -355,11 +355,9 @@ def test_backup_init_is_idempotent_and_refuses_without_repositories(host):
     _prepare()
     bench = StagingBench([SAME, SAME])
     with pytest.raises(admin.Fault, match="DSHERP_BACKUP_REPOSITORY"):
-        backup.backup_init(UNCONFIGURED, runner=_restic(bench))
-    restic = _restic(bench)
+        backup.backup_init(UNCONFIGURED, runner=_restic(bench, initialised=False))
+    restic = _restic(bench, initialised=False)
     assert backup.backup_init(RELEASE, runner=restic) == {"data": "created", "secrets": "created"}
-    restic.state["data"]["x"] = {"id": "a" * 64, "path": "/backups/tenant/sets/x"}
-    restic.state["secrets"]["x"] = {"id": "b" * 64, "path": "/backups/tenant/x"}
     assert backup.backup_init(RELEASE, runner=restic) == {"data": "kept", "secrets": "kept"}
 
 
@@ -615,3 +613,30 @@ def test_the_cli_reports_a_failed_notification_with_a_non_zero_exit(monkeypatch)
     assert admin.main(["notify-failure", "dsherp-backup.service"]) == 1
     monkeypatch.setattr(backup, "notify_failure", lambda resolved, unit, **kw: {"unit": unit, "webhook": "posted"})
     assert admin.main(["notify-failure", "dsherp-backup.service"]) == 0
+
+
+def test_unreachable_storage_is_reported_in_seconds_and_changes_nothing(host):
+    """restic retries a dead endpoint for a quarter of an hour per call; the run asks once,
+    up front, and stops."""
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    _staged_set(bench)
+    dead = _restic(bench, fail=(("data", "cat"), ("secrets", "cat")))
+    report = backup.backup_sync(RELEASE, runner=dead, clock=lambda: 1_788_660_100.0)
+    assert report["ok"] is False and report["check_ok"] is False
+    assert any("data" in error for error in report["errors"])
+    assert not [command for command in dead.calls if any(verb in command for verb in ("backup", "forget", "prune", "check"))], \
+        "nothing is uploaded, expired or checked against a repository that did not answer"
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    assert status["runs"]["sync"]["last_attempt"]["ok"] is False
+
+
+def test_a_restic_call_that_never_returns_becomes_a_refusal_not_a_hang(host):
+    _prepare()
+    import subprocess as sp
+
+    def hanging(command, **kwargs):
+        raise sp.TimeoutExpired(command, kwargs.get("timeout", 1))
+    with pytest.raises(admin.Fault, match="没有返回"):
+        backup.restic(RELEASE, "data", ["cat", "config"], runner=hanging, timeout=120)
