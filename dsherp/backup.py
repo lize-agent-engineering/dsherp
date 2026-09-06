@@ -377,6 +377,10 @@ def _redactions(resolved, root):
     return values
 
 
+def _verb(arguments):
+    return next((word for word in arguments if not word.startswith('-')), arguments[0] if arguments else '?')
+
+
 def _remove_run_containers(resolved, side, *, runner=subprocess.run):
     listed = runner(['docker', 'ps', '-q', '--filter', f'label=com.docker.compose.project={resolved["project"]}',
                      '--filter', f'label=com.docker.compose.service=backup-sync-{side}'],
@@ -402,13 +406,13 @@ def restic(resolved, side, arguments, *, root=ROOT, runner=subprocess.run, timeo
         # `compose run` only kills its own client; the container keeps retrying against a
         # storage endpoint that is not answering, so it is removed here by its compose labels.
         _remove_run_containers(resolved, side, runner=runner)
-        raise Fault(f'restic（{side} 仓库）{arguments[0]} 超过 {timeout} 秒没有返回；'
+        raise Fault(f'restic（{side} 仓库）{_verb(arguments)} 超过 {timeout} 秒没有返回；'
                     '对象存储可能不可达，本次不改动任何副本，已清掉该次运行的容器') from error
     if result.returncode:
         tail = '\n'.join((result.stderr or result.stdout or '').strip().splitlines()[-6:])
         for value in _redactions(resolved, root):
             tail = tail.replace(value, '[redacted]')
-        raise Fault(f'restic（{side} 仓库）{arguments[0]} 失败：\n{tail}')
+        raise Fault(f'restic（{side} 仓库）{_verb(arguments)} 失败：\n{tail}')
     return result.stdout
 
 
@@ -449,7 +453,10 @@ def reachable(resolved, *, root=ROOT, runner=subprocess.run):
     errors = []
     for side in ('data', 'secrets'):
         try:
-            restic(resolved, side, ['cat', 'config'], root=root, runner=runner, timeout=REACH_TIMEOUT_SECONDS)
+            # --no-cache on purpose: restic answers `cat config` out of its local cache, so a
+            # cached repository would look reachable while the endpoint is down.
+            restic(resolved, side, ['--no-cache', 'cat', 'config'], root=root, runner=runner,
+                   timeout=REACH_TIMEOUT_SECONDS)
         except Fault as error:
             errors.append(f'{side}: {error}')
     return errors

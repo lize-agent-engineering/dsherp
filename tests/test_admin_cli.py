@@ -474,7 +474,8 @@ def _restic(bench, fail=(), missing=(), corrupt=(), initialised=True):
     def answer(command):
         service = next(word for word in command if word.startswith("backup-sync-"))
         side = service.removeprefix("backup-sync-")
-        verb = command[command.index(service) + 1]
+        after = command[command.index(service) + 1:]
+        verb = next((word for word in after if not word.startswith("-")), after[0] if after else "")
         if (side, verb) in fail:
             return 1, "", f"Fatal: {verb} failed on the {side} repository"
         if verb == "backup":

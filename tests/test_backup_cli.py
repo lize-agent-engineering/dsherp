@@ -624,6 +624,9 @@ def test_unreachable_storage_is_reported_in_seconds_and_changes_nothing(host):
     _staged_set(bench)
     dead = _restic(bench, fail=(("data", "cat"), ("secrets", "cat")))
     report = backup.backup_sync(RELEASE, runner=dead, clock=lambda: 1_788_660_100.0)
+    probes = [command for command in dead.calls if "cat" in command]
+    assert probes and all("--no-cache" in command for command in probes), \
+        "restic answers `cat config` from its local cache, so the probe must bypass it"
     assert report["ok"] is False and report["check_ok"] is False
     assert any("data" in error for error in report["errors"])
     assert not [command for command in dead.calls if any(verb in command for verb in ("backup", "forget", "prune", "check"))], \
