@@ -363,6 +363,7 @@ class SnapshotBench(FakeBench):
         self.backup_pieces = backup_pieces
         self.site_config = {}
         self.archived = []
+        self.site_status = None   # {'Queued': n, 'Running': n, ...}; defaults to active_runs as Running
 
     def run(self, *arguments, stdin=None, timeout=900, secrets=()):
         handled = ((arguments[:2] == ("bench", "--site") and arguments[3] in ("set-config", "backup"))
@@ -396,7 +397,13 @@ class SnapshotBench(FakeBench):
         if "EXPECTED_CHANGES" in body:
             return "DSHERP_EXPECTATIONS " + json.dumps(self.expectations) + "\n"
         if "DS Model Run" in body and "active" in body:
-            return json.dumps({"active": self.active_runs, "maintenance_mode": 0, "pause_scheduler": 0}) + "\n"
+            counts = self.site_status or {"Queued": 0, "Running": self.active_runs, "Cancelling": 0, "NeedsInput": 0}
+            if counts and all(isinstance(value, dict) for value in counts.values()):
+                counts = counts.get(site, {"Queued": 0, "Running": 0, "Cancelling": 0, "NeedsInput": 0})
+            counts = {status: counts.get(status, 0) for status in ("Queued", "Running", "Cancelling", "NeedsInput")}
+            flags = {key: int(self.site_config.get((site, key), 0)) for key in ("maintenance_mode", "pause_scheduler", "dsherp_hold")}
+            return json.dumps({"active": counts["Queued"] + counts["Running"] + counts["Cancelling"],
+                               "running": counts["Running"] + counts["Cancelling"], "counts": counts, **flags}) + "\n"
         return super().python(site, body, timeout=timeout)
 
 
@@ -548,12 +555,14 @@ def test_a_rollback_requires_the_previous_images_running_and_keeps_maintenance_o
     report = admin.rollback(BACK, "v0.4.0", bench_factory=lambda kind: drift, runner=RUNNING_OLD)
     assert report["clean"] is False and drift.site_config[("acme.tenant.example.com", "maintenance_mode")] == "1"
     assert json.loads((admin.runtime_dir(RELEASE) / "releases" / "current.json").read_text())["tag"] == "v0.4.0"
-    drift.snapshots = [SAME] * 4
+    # A fresh bench: the previous scenario deliberately left its Site in maintenance, and the
+    # flags a quiesce restores are the ones it found (resume-site is the way out of that).
+    clean = SnapshotBench([SAME] * 4)
     _fresh_host()
-    admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: drift, runner=RUNNING_NEW, from_tag="v0.3.0")
-    drift.snapshots = [SAME, SAME]
-    report = admin.rollback(BACK, "v0.4.0", bench_factory=lambda kind: drift, runner=RUNNING_OLD)
-    assert report["clean"] is True and drift.site_config[("acme.tenant.example.com", "maintenance_mode")] == "0"
+    admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: clean, runner=RUNNING_NEW, from_tag="v0.3.0")
+    clean.snapshots = [SAME, SAME]
+    report = admin.rollback(BACK, "v0.4.0", bench_factory=lambda kind: clean, runner=RUNNING_OLD)
+    assert report["clean"] is True and clean.site_config[("acme.tenant.example.com", "maintenance_mode")] == "0"
     assert json.loads((admin.runtime_dir(RELEASE) / "releases" / "current.json").read_text())["tag"] == "v0.3.0"
 
 

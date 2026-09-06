@@ -506,7 +506,11 @@ def _listing(bench, path):
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-def retire_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_factory=None, archive=True):
+def retire_tenant(resolved, slug, **keywords):
+    return _with_operations_lock('retire-tenant', _retire_tenant, resolved, slug, **keywords)
+
+
+def _retire_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_factory=None, archive=True):
     """Prove the archive is writable, back up, drop (which moves the whole Site directory
     under ARCHIVE), read the archive back, and only then take the tenant off the list."""
     site = deploy_env.site_name(resolved, slug)
@@ -616,10 +620,17 @@ BACKUP_PIECES = ('database.sql.gz', 'site_config_backup.json', 'files.tar', 'pri
 # The only thing a restore itself writes: it re-applies the scheduler flag it read first
 # (the Single's modified stamps are never compared).
 RESTORE_EXPECTATIONS = [{'patch': 'frappe.restore', 'doctype': 'System Settings', 'fields': ['enable_scheduler']}]
-SITE_FLAGS = ("active=frappe.db.count('DS Model Run',{'status':['in',['Queued','Running','Cancelling']]}) "
-              "if frappe.db.exists('DocType','DS Model Run') else 0\n"
-              "print(json.dumps({'active':active,'maintenance_mode':int(frappe.conf.get('maintenance_mode') or 0),"
-              "'pause_scheduler':int(frappe.conf.get('pause_scheduler') or 0)}))")
+# `active` is what release/rollback refuse to start on (any unfinished run). `running` is the
+# narrower question a backup window asks: is an executor actually in flight? Queued runs are
+# frozen by the hold and must not keep a window waiting forever (review round 2, item 1).
+SITE_FLAGS = ("has=frappe.db.exists('DocType','DS Model Run')\n"
+              "counts={s:(frappe.db.count('DS Model Run',{'status':s}) if has else 0) "
+              "for s in ('Queued','Running','Cancelling','NeedsInput')}\n"
+              "print(json.dumps({'active':counts['Queued']+counts['Running']+counts['Cancelling'],"
+              "'running':counts['Running']+counts['Cancelling'],'counts':counts,"
+              "'maintenance_mode':int(frappe.conf.get('maintenance_mode') or 0),"
+              "'pause_scheduler':int(frappe.conf.get('pause_scheduler') or 0),"
+              "'dsherp_hold':int(frappe.conf.get('dsherp_hold') or 0)}))")
 EXPECTATIONS = ("import importlib,os\n"
                 "found=[]\n"
                 "for app in frappe.get_installed_apps():\n"
@@ -900,7 +911,19 @@ def resume_site(resolved, site, *, root=ROOT, runner=subprocess.run, bench_facto
     return {'site': site, 'maintenance_mode': 0, 'pause_scheduler': 0}
 
 
-def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, from_tag=None, manifest=None):
+def _with_operations_lock(who, function, resolved, *arguments, **keywords):
+    """backup, release, rollback and retire-tenant never overlap on one host: each opens or
+    closes a Site's window, and two of them at once would judge each other's state."""
+    from dsherp import backup as backup_module
+    with backup_module.operations_lock(resolved, keywords.get('root', ROOT), who):
+        return function(resolved, *arguments, **keywords)
+
+
+def release(resolved, tag, **keywords):
+    return _with_operations_lock('release', _release, resolved, tag, **keywords)
+
+
+def _release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, from_tag=None, manifest=None):
     """Quiesce, back up and archive, snapshot, migrate, snapshot, judge; per Site, platform included.
 
     A site reopens only after a completed, clean judgement; anything else leaves it in
@@ -1017,8 +1040,12 @@ def _backup_set(bench, site, database):
     return found
 
 
-def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, backups=None, before=None,
-             manifest=None):
+def rollback(resolved, tag, **keywords):
+    return _with_operations_lock('rollback', _rollback, resolved, tag, **keywords)
+
+
+def _rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, backups=None, before=None,
+              manifest=None):
     """Undo `release <tag>`: on the previous images, restore what it archived (or the named
     files) and prove the data is what it was before the upgrade."""
     if not deploy_env.TAG.fullmatch(tag or ''):
@@ -1130,6 +1157,9 @@ def main(argv=None):
     sub.add_parser('list-tenants', help='列出当前租户')
     sub.add_parser('render-ingress', help='按当前租户清单重新渲染入口配置')
     sub.add_parser('agent-firewall', help='打印把运行容器挡在宿主之外的 INPUT 规则；生产由 dsherp-agent-firewall.service 在开机时应用')
+    backup_parser = sub.add_parser('backup', help='对平台站与全部租户站在稳定窗口内生成四件套与核验快照，暂存为备份集；--sync 随后异地同步')
+    backup_parser.add_argument('--sync', action='store_true', help='生成后立即把未完成的备份集推到异地并核对配对')
+    backup_parser.add_argument('--site', action='append', default=[], help='只备份这些站（缺省是平台站与全部租户站），可重复')
     release_parser = sub.add_parser('release', help='发布到 prod.env 里的 tag：静默站点、备份并归档、快照、migrate、快照、逐字段比对')
     release_parser.add_argument('tag')
     release_parser.add_argument('--from', dest='from_tag', metavar='TAG',
@@ -1181,6 +1211,12 @@ def main(argv=None):
         if arguments.command == 'render-ingress':
             _print({'rendered': str(render_ingress(resolved, load_tenants(resolved)))})
             return 0
+        if arguments.command == 'backup':
+            from dsherp import backup as backup_module
+            report = backup_module.backup(resolved, sync=arguments.sync, sites=arguments.site or None)
+            _print({key: value for key, value in report.items() if key != 'sets'}
+                   | {'sets': {site: doc['set_id'] for site, doc in report['sets'].items()}})
+            return 0 if report['ok'] else 1
         if arguments.command == 'release':
             report = release(resolved, arguments.tag, from_tag=arguments.from_tag, manifest=arguments.manifest)
             _print({key: value for key, value in report.items() if key != 'sites'} | {
