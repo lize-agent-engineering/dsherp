@@ -1234,7 +1234,7 @@ def _rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=
 MONTH = re.compile(r'\d{4}-(0[1-9]|1[0-2])')
 # Read inside each bench: the Site's own finished runs with the numbers it recorded itself.
 USAGE_SCRIPT = ("rows=frappe.get_all('DS Model Run',fields=['creation','status','actual_input_tokens',"
-                "'actual_output_tokens','model_calls','duration_ms'],limit_page_length=0) "
+                "'actual_output_tokens','model_calls','duration_ms','usage_unknown_calls'],limit_page_length=0) "
                 "if frappe.db.exists('DocType','DS Model Run') else []\n"
                 "zone=frappe.db.get_single_value('System Settings','time_zone') or ''\n"
                 "for row in rows:row['creation']=str(row['creation']);row['site']=frappe.local.site;row['time_zone']=zone\n"
@@ -1264,9 +1264,10 @@ def usage_report(resolved, month, *, root=ROOT, runner=subprocess.run, bench_fac
         rows += json.loads(line[len(marker):])
     report = usage_module.monthly(rows, month)
     for site in {site for _, site in _targets(resolved, root, factory)}:
-        report['sites'].setdefault(site, {key: 0 for key in ('runs', 'succeeded', 'failed', 'cancelled',
-                                                            'unfinished', 'input_tokens', 'output_tokens',
-                                                            'model_calls', 'duration_ms')})
+        report['sites'].setdefault(site, {**{key: 0 for key in ('runs', 'succeeded', 'failed', 'cancelled',
+                                                               'unfinished', 'input_tokens', 'output_tokens',
+                                                               'model_calls', 'duration_ms', 'unknown_calls',
+                                                               'runs_with_unknown_usage')}, 'complete': True})
     report['unreachable'] = unreachable
     report['path'] = str(_write_json(runtime_dir(resolved, root) / 'usage' / f'usage-{month}.json', report))
     return report

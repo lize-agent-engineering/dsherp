@@ -190,3 +190,37 @@ def test_an_unknown_duration_is_left_out_of_the_row_rather_than_written_as_null_
         _event("finished", {"status": "Succeeded"}, "2026-09-06 02:00:05", source="server"),
     ])
     assert usage.storable(finished)["duration_ms"] == 5000
+
+
+def test_a_partial_usage_is_counted_as_unknown_while_its_known_half_is_still_added():
+    """A provider that reports input tokens and nothing for output has not accounted for the
+    call. The bill keeps the number it was given and says the call is not fully known (R9)."""
+    events = [
+        _event("model_response", {"usage": {"prompt_tokens": 12}, "model": "deepseek-chat"}),
+        _event("model_response", {"usage": None, "model": "deepseek-chat"}),
+    ]
+    summary = usage.summarise(events)
+    assert summary["actual_input_tokens"] == 12 and summary["actual_output_tokens"] == 0
+    assert summary["usage_unknown_calls"] == 2
+
+
+def test_the_monthly_report_carries_the_unknown_calls_through_to_every_site_and_the_total():
+    rows = [
+        {"site": "a", "creation": "2026-09-06 02:00:00", "time_zone": "UTC", "status": "Succeeded",
+         "actual_input_tokens": 12, "actual_output_tokens": 0, "model_calls": 2, "duration_ms": 5, "usage_unknown_calls": 2},
+        {"site": "b", "creation": "2026-09-06 02:00:00", "time_zone": "UTC", "status": "Succeeded",
+         "actual_input_tokens": 100, "actual_output_tokens": 40, "model_calls": 1, "duration_ms": 5, "usage_unknown_calls": 0},
+    ]
+    report = usage.monthly(rows, "2026-09")
+    assert report["sites"]["a"]["unknown_calls"] == 2 and report["sites"]["a"]["complete"] is False
+    assert report["sites"]["a"]["runs_with_unknown_usage"] == 1
+    assert report["sites"]["b"]["unknown_calls"] == 0 and report["sites"]["b"]["complete"] is True
+    assert report["totals"]["unknown_calls"] == 2 and report["totals"]["complete"] is False
+    assert report["totals"]["input_tokens"] == 112, "known tokens are still added up"
+    assert report["month_boundary"] == "UTC"
+
+
+def test_the_site_script_reads_the_unknown_count_so_the_report_cannot_lose_it():
+    from dsherp import admin
+
+    assert "usage_unknown_calls" in admin.USAGE_SCRIPT

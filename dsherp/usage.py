@@ -75,17 +75,14 @@ def summarise(events):
         if not isinstance(usage, dict):
             unknown += 1
             continue
-        given = False
-        for keys, add in ((INPUT_KEYS, 'input'), (OUTPUT_KEYS, 'output')):
-            value = _number(usage, keys)
-            if value is None:
-                continue
-            given = True
-            if add == 'input':
-                input_tokens += value
-            else:
-                output_tokens += value
-        if not given:
+        # A call is only known when both sides are: a usage with an input count and no
+        # output count is a partial number, and adding it as if it were whole would make the
+        # bill look complete when it is not (R9). The known half is still added.
+        given_input = _number(usage, INPUT_KEYS)
+        given_output = _number(usage, OUTPUT_KEYS)
+        input_tokens += given_input or 0
+        output_tokens += given_output or 0
+        if given_input is None or given_output is None:
             unknown += 1
     duration = None
     if first is not None and last is not None:
@@ -93,6 +90,7 @@ def summarise(events):
     return {'model': ','.join(models), 'provider_request_ids': json.dumps(requests),
             'actual_input_tokens': input_tokens, 'actual_output_tokens': output_tokens,
             'duration_ms': duration, 'skill_versions': json.dumps(skills) if skills is not None else json.dumps(None),
+            # missing or incomplete provider accounting, not a count of free calls
             'usage_unknown_calls': unknown}
 
 
@@ -146,7 +144,8 @@ def monthly(rows, month):
             continue
         site = sites.setdefault(row.get('site') or '', {
             'runs': 0, 'succeeded': 0, 'failed': 0, 'cancelled': 0, 'unfinished': 0,
-            'input_tokens': 0, 'output_tokens': 0, 'model_calls': 0, 'duration_ms': 0})
+            'input_tokens': 0, 'output_tokens': 0, 'model_calls': 0, 'duration_ms': 0,
+            'unknown_calls': 0, 'runs_with_unknown_usage': 0})
         status = row.get('status')
         if status not in FINISHED_STATUSES:
             site['unfinished'] += 1
@@ -157,8 +156,20 @@ def monthly(rows, month):
         site['output_tokens'] += int(row.get('actual_output_tokens') or 0)
         site['model_calls'] += int(row.get('model_calls') or 0)
         site['duration_ms'] += int(row.get('duration_ms') or 0)
+        # Calls the provider did not account for, or accounted for only in part. The token
+        # sums above are what is known; these say how much of the month they do not cover.
+        unknown = int(row.get('usage_unknown_calls') or 0)
+        site['unknown_calls'] += unknown
+        site['runs_with_unknown_usage'] += 1 if unknown else 0
+    for site in sites.values():
+        site['complete'] = site['unknown_calls'] == 0
     totals = {key: sum(site[key] for site in sites.values())
               for key in ('runs', 'succeeded', 'failed', 'cancelled', 'unfinished',
-                          'input_tokens', 'output_tokens', 'model_calls', 'duration_ms')}
+                          'input_tokens', 'output_tokens', 'model_calls', 'duration_ms',
+                          'unknown_calls', 'runs_with_unknown_usage')}
+    totals['complete'] = totals['unknown_calls'] == 0
     return {'month': month, 'sites': sites, 'totals': totals,
-            'assumed_utc': sorted(site for site in assumed if site in sites)}
+            'assumed_utc': sorted(site for site in assumed if site in sites),
+            # Frappe stores a Site's datetimes in that Site's own zone; the month is decided
+            # after converting them to UTC, so one bill spans Sites in different zones.
+            'month_boundary': 'UTC'}
