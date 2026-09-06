@@ -3274,3 +3274,21 @@ worker 按新代码重启后立刻对两站报 `RemoteProtocolError`，5 分钟 
 | 批评 3 | claim 超时幽灵运行 | 服务端成立；用户面**被推翻** | major | `expired {reason:'claim_unacked'}` 在前端渲染为「领取未确认，已退回排队」，而服务端实际落 Failed 且不重排；聊天面同时显示「请重试」——两个界面给出相反指引。标签由 `e063f18` 先于 `d587329` 引入、未回头对齐，已进 dist；测试只喂空 payload。修法是改一处标签并补测试（需重建 dist） |
 
 **判定**：计划 2 **不放行**。阻断项（批评 2）是计划 3 的回归而非计划 2 的关闭不实，已在计划 3 收口修复并入档；其余 5 项 major（1、批评 4、5、批评 1、批评 3）都是终审关闭"字面成立、路径未闭合"的同类问题，修法均可界定（1 项需要设计：事件回写失败时的兜底与诊断透传；其余四项各为一处过滤、一组词表、一个计数器拆分、一个标签）。这些残余不属于计划 3 收口范围，处置方式（作为计划 2 收尾切片先修，还是并入计划 4 首片前）待用户裁决；在裁决前实施顺序表第 2 行保持「未放行」。代理原始结论（含全部 file:line 证据）保存在会话工作流日志，本节为架构方逐条回读后的摘要。
+
+## 2026-09-06 收尾切片：五项残余的修复（分支 `plan2/closeout`）
+
+用户裁决：五项残余单独收尾，完成后再进入计划 4；第一项必须让完成判定依赖可靠持久化的服务端工具拒绝事实，其余四项按功能修复与验证，不扩成新架构。每项先写失败测试再实现。
+
+| # | 修法 | 测试 |
+| --- | --- | --- |
+| 1 完成判定依赖尽力回写的事件 | 新增服务端事件 `tool_refused`：`run_tool` 捕获 `PermissionError`/`ValidationError`/`DoesNotExistError` 时，在 HTTP 请求里先 `rollback` 掉被拒调用的半成品（处理器随后本来也会回滚），再单独记录并 `commit` 该事件，然后让拒绝照常抛出；请求之外（进程内脚本）事件只加入调用方事务。第一版无条件 rollback，把 16 个进程内集成用例未提交的夹具一起抹掉；第二版用独立数据库连接写事件，又在进程内脚本已有未提交事件时因唯一索引锁等待超时——两者都在全量集成门里暴露并撤回。`finish_run` 的"有过尝试"只认 `sources` 或 `tool_refused`，runner 回写的 `tool_error` 不再算数（回写失败就没有，客户端参数错误也能自造一条）。`_capability_guard` 的 `capability_denied` 用同一机制提交——此前它同样随请求回滚丢失（本轮顺带发现：仓库里没有任何测试断言过它的持久化）。worker 侧：`finish_run(Succeeded)` 被服务端明确拒绝（非 200）时改为再写一次 `Failed` 并带真实原因，运行不再悬到租约过期；响应丢失（传输异常）仍不重试；`DSHERP_DIAGNOSTIC` 不再只在退出码非 0 时解析，`EventFlushFailed` 也进宿主日志 | 集成 `test_context_execution.py::test_refused_tool…`：改为走真实 HTTP `run_tool`（reader 读无权客户）→ 403 → `tool_refused` 事件已提交（source=server、error_class=PermissionError）→ `finish_run(Succeeded, 解释)` 通过；只注入 runner `tool_error` 的运行被拒。单元 `test_context_worker.py` 2 条 |
+| 批评 4 候选不过滤过期 | `claim_run` 候选查询加 `or_filters`（`queue_expires_at` 未设或 `> now`），`for_update` 复查再判一次过期 | 集成 `test_claim_concurrency.py::test_claim_never_hands_out_an_expired_queued_run…`：52 条过期 + 1 条新鲜 → 领到新鲜的，50 条判 Failed，没有过期行变 Running |
+| 5 站点计数被心跳清零 | 每站按调用种类（heartbeat / claim）分别计数，一种成功只清自己的计数；跳过阈值按该站两种失败之和计——黑洞站仍在 3 次接触内被跳过，库停摆但 Redis 正常的站 3 次 claim 超时后被跳过 | 单元 `test_a_site_whose_claims_time_out_is_skipped_even_while_its_heartbeats_succeed`；原黑洞用例保持 ≤3 次接触 |
+| 批评 1 熔断词表与 runtime 不符 | 词表改为 `TRANSPORT/TIMEOUT/SERVER/AUTH/INVALID_CREDENTIAL/RATE_LIMIT/QUOTA/QUOTA_EXCEEDED`，另按前缀计 `HTTP_<status>`（未归类 4xx）；`UNKNOWN` 与 guard 兜底的 `ProviderError` 不计（说明不了 provider 是否可用） | 单元 `test_run_events.py::test_provider_failure_vocabulary…`：读已发布 runtime 二进制确认 `QUOTA_EXCEEDED_CODE = "QUOTA"`，并锁定服务端元组；集成 `test_run_events.py` 计数 6 → 10 |
+| 批评 3 前端标签与服务端矛盾 | `claim_unacked` 渲染为「领取未确认，运行未开始，请重试」（服务端落 Failed 且不重排）；新事件 `tool_refused` 渲染为「服务端拒绝 <工具>」（danger）；dist 重建 | 前端 `agent-transcript.test.js` 1 条（14 → 203 全绿） |
+
+凭据附带发现：`--reissue` 只改文件不改平台侧 `DS Membership` 里的副本会让平台对该成员的所有业务读变 403（`test_platform_identity` 4 条、`test_desk_sso[alpha]`），已让 `--reissue` 同时重绑平台成员关系，并加单元测试。
+
+门禁（分支 `plan2/closeout`）：非集成 `394 passed`（含新增 6 条）；Node `10/10`；前端 `203 passed`，dist 重建入库；**全量集成 `199 passed in 1040.89s`**（此前两版持久化方案分别 16 failed 与 5 failed，均已撤回）。
+
+环境注记：跑集成门前发现本机 dev Runtime 卷 `dsherp-v16-agent-runtime` 已不存在（常驻 worker 因此起不来，`docker events` 里没有对应的删除记录，原因未明），按 `infra/prepare_agent_runtime.sh` 重建；集成门以 worker 停止、`scheduler` 暂停排空、backend 重载的方式执行。

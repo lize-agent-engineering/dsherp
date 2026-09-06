@@ -165,3 +165,24 @@ def test_flush_batches_and_never_raises():
         )
     assert out["sent"] == 200 and out["error"] == "ToolFailure"
     assert all(len(body["events"]) <= 100 and body["run_id"] == "r" for body in seen)
+
+
+def test_provider_failure_vocabulary_matches_the_codes_the_shipped_runtime_emits():
+    """Plan-2 re-audit 批评 1: the server counted 'QUOTA_EXCEEDED' but the runtime emits 'QUOTA',
+    so a provider with no balance never opened the circuit. Pin the server tuple to the codes
+    found in the shipped runtime binary, plus the credential/HTTP classes it also emits."""
+    import glob
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    source=(root/'frappe_app/dsherp_bridge/context_execution.py').read_text()
+    tuple_line=[line for line in source.splitlines() if line.startswith('PROVIDER_FAILURE_ERROR_CLASSES=')][0]
+    for code in ('TRANSPORT','TIMEOUT','SERVER','AUTH','INVALID_CREDENTIAL','RATE_LIMIT','QUOTA','QUOTA_EXCEEDED'):
+        assert f"'{code}'" in tuple_line,code
+    for code in ('CONTEXT_WINDOW_EXCEEDED','INVALID_REQUEST','EMPTY_RESPONSE','UNKNOWN','ProviderError'):
+        assert f"'{code}'" not in tuple_line,code
+    assert "'like','HTTP\\\\_%'" in source or "'like','HTTP_%'" in source
+    binaries=[path for path in glob.glob(str(root/'.venv/lib/python3.*/site-packages/deepseek_harness_runtime/runtime/dsh-jsonrpc-agent-pkg-*'))
+              if not path.endswith(('-rg','-spawn-helper'))]
+    if binaries:
+        assert any(b'QUOTA_EXCEEDED_CODE = "QUOTA"' in Path(path).read_bytes() for path in binaries),\
+            'runtime vocabulary changed; re-check the server tuple'

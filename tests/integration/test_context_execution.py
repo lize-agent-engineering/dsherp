@@ -313,12 +313,17 @@ try:
     claim=execution.claim_run('a'*64);frappe.db.commit()
     cap={'run_id':claim['run_id'],'capability':claim['capability']}
     frappe.set_user('Guest')
-    # 本轮第一次工具调用就被服务端拒绝：事务回滚，sources 保持为空，只留下 runner 回写的 tool_error。
-    execution.record_run_event(cap['run_id'],cap['capability'],[
-        {'kind':'runtime_started','source':'runner','payload':{'session_id':'s'}},
-        {'kind':'tool_error','source':'runner','error_class':'ToolError',
-         'payload':{'text':'{"error_class":"permission","message":"无权读取","retryable":false}'}}])
-    frappe.db.commit()
+    # 本轮第一次工具调用就被服务端拒绝，走真实的 HTTP 路径：请求处理器会回滚整个请求，
+    # 但 run_tool 在拒绝时单独提交了 tool_refused 事件，事实必须留下来。
+    import requests
+    response=requests.post('http://127.0.0.1:8000/api/method/dsherp_bridge.context_execution.run_tool',
+        headers={'Host':'dsherp-validation.localhost','X-Frappe-Site-Name':'dsherp-validation.localhost'},
+        json={**cap,'tool':'erp_read_record','arguments':{'doctype':'Customer','name':'DSHERP-TEST-OTHER-CUSTOMER'}},timeout=20)
+    assert response.status_code==403,(response.status_code,response.text[:300])
+    frappe.db.rollback()  # end this process's snapshot so the committed event is visible
+    refusals=frappe.get_all('DS Run Event',filters={'run':cap['run_id'],'kind':'tool_refused'},fields=['source','error_class','payload'])
+    assert len(refusals)==1 and refusals[0].source=='server' and refusals[0].error_class=='PermissionError',refusals
+    assert json.loads(refusals[0].payload)['tool']=='erp_read_record',refusals
     assert json.loads(frappe.db.get_value('DS Model Run',cap['run_id'],'sources') or '[]')==[]
     explained='我无权读取该单据，请联系管理员开通权限。'
     finished=execution.finish_run(**cap,status='Succeeded',answer=explained)
@@ -327,16 +332,21 @@ try:
     saved=frappe.db.get_value('DS Model Run',cap['run_id'],['status','answer'],as_dict=True)
     assert saved.status=='Succeeded' and saved.answer==explained,saved
 
-    # 既无来源也无工具错误：模型凭空作答仍必须被拒。
+    # 只有 runner 回写的 tool_error（客户端可以自造），没有服务端记录的拒绝：模型作答仍必须被拒。
     frappe.set_user(actor)
     silent=api.send_message('什么都不做就回答',payload,uuid.uuid4().hex)
     frappe.db.commit()
     quiet=execution.claim_run('a'*64);frappe.db.commit()
     quiet_cap={'run_id':quiet['run_id'],'capability':quiet['capability']}
     frappe.set_user('Guest')
+    execution.record_run_event(quiet_cap['run_id'],quiet_cap['capability'],[
+        {'kind':'runtime_started','source':'runner','payload':{'session_id':'s'}},
+        {'kind':'tool_error','source':'runner','error_class':'ToolError',
+         'payload':{'text':'{"error_class":"permission","message":"无权读取","retryable":false}'}}])
+    frappe.db.commit()
     try:
         execution.finish_run(**quiet_cap,status='Succeeded',answer='已创建销售订单 SO-0001')
-        raise AssertionError('fabricated answer without any server-recorded attempt was accepted')
+        raise AssertionError('fabricated answer backed only by a runner-written tool_error was accepted')
     except frappe.ValidationError:
         pass
     frappe.db.rollback()

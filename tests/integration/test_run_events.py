@@ -391,14 +391,17 @@ try:
     for attempt,error_class in enumerate((
         'TRANSPORT','TIMEOUT','SERVER','ProviderError',
         'CONTEXT_WINDOW_EXCEEDED','EMPTY_RESPONSE','INVALID_REQUEST','AUTH','RATE_LIMIT','QUOTA_EXCEEDED','PI_AI_ERROR',
+        # 已发布 runtime 实际发出的码（复核 批评 1）：余额不足是 QUOTA，密钥格式错误是
+        # INVALID_CREDENTIAL，未归类的 4xx 是 HTTP_<status>；UNKNOWN 说明不了 provider 是否可用。
+        'QUOTA','INVALID_CREDENTIAL','HTTP_402','HTTP_404','UNKNOWN','HTTPX_ERROR',
     ),start=1):
         events.record(run.name,'model_error',{'attempt':attempt},source='runner',error_class=error_class)
     frappe.set_user('Guest')
     result=finish_run(run.name,capability,'Failed',error='provider unavailable')
-    # provider 不可用的六类都要计数：换错 key(AUTH)、限流(RATE_LIMIT)、配额耗尽
-    # (QUOTA_EXCEEDED) 同样让每条运行必败。只有本轮输入造成的失败不计。
-    assert result=={'run_id':run.name,'status':'Failed','provider_failures':6},result
-    assert frappe.db.get_value('DS Model Run',run.name,'provider_failures')==6
+    # provider 不可用的类都要计数：六个原有类 + QUOTA、INVALID_CREDENTIAL、两个 HTTP_ 前缀 = 10。
+    # 只有本轮输入造成的失败（上下文超长、请求非法、空响应）与说明不了可用性的 UNKNOWN/ProviderError 不计。
+    assert result=={'run_id':run.name,'status':'Failed','provider_failures':10},result
+    assert frappe.db.get_value('DS Model Run',run.name,'provider_failures')==10
     print('PROVIDER_FAILURE_COUNT_OK')
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')

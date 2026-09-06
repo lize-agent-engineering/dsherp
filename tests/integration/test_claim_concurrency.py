@@ -267,3 +267,52 @@ finally:
     result = run_in_site(script)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ACTIVE_PAGINATION_OK" in result.stdout, result.stdout
+
+
+def test_claim_never_hands_out_an_expired_queued_run_the_capped_sweep_did_not_reach():
+    """复核 批评 4：清扫封顶 50 条后，第 51 条起的过期排队行曾会被当作候选领走执行。"""
+    script = r'''
+import os,uuid,frappe
+from frappe.utils import add_to_date,now_datetime
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site='dsherp-validation.localhost');frappe.connect()
+from dsherp_bridge import context_api as api
+from dsherp_bridge.context_execution import claim_run,SWEEP_LIMIT
+actor='dsherp-reader@example.invalid'
+runtime_user=frappe.conf.get('dsherp_runtime_user')
+conversations=[];runs=[]
+def enqueue(question):
+    frappe.set_user(actor)
+    session=api.send_message(question,{'schema_version':1,'page_type':'unknown','route':[]},uuid.uuid4().hex,domain='query')
+    conversations.append(session['id']);runs.append(session['active_run'])
+    frappe.db.commit()
+    return session['active_run']
+try:
+    frappe.set_user('Administrator')
+    active=frappe.get_all('DS Model Run',filters={'status':['in',['Queued','Running','Cancelling']]},pluck='name')
+    assert not active,('validation site has active runs; stop the resident worker and clean the queue first',active)
+    expired=[enqueue('expired %d'%index) for index in range(SWEEP_LIMIT+2)]
+    fresh=enqueue('still fresh')
+    frappe.set_user('Administrator')
+    for name in expired:
+        frappe.db.set_value('DS Model Run',name,'queue_expires_at',add_to_date(now_datetime(),seconds=-5))
+    frappe.db.commit()
+    frappe.set_user(runtime_user)
+    claimed=claim_run('a'*64);frappe.db.commit()
+    assert claimed and claimed['run_id']==fresh,('an expired request was claimed',claimed)
+    statuses=frappe.get_all('DS Model Run',filters={'name':['in',expired]},fields=['name','status'])
+    assert not [row.name for row in statuses if row.status=='Running'],statuses
+    assert sum(1 for row in statuses if row.status=='Failed')==SWEEP_LIMIT,statuses
+    print('EXPIRED_NEVER_CLAIMED_OK')
+finally:
+    frappe.db.rollback();frappe.set_user('Administrator')
+    for name in runs:
+        frappe.db.delete('DS Run Event',{'run':name})
+        if frappe.db.exists('DS Model Run',name):frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
+    for name in conversations:
+        if frappe.db.exists('DS Conversation',name):frappe.delete_doc('DS Conversation',name,ignore_permissions=True)
+    frappe.db.commit();frappe.destroy()
+'''
+    result = run_in_site(script, timeout=300)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "EXPIRED_NEVER_CLAIMED_OK" in result.stdout, result.stdout

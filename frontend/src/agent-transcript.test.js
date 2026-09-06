@@ -167,3 +167,16 @@ it('运行失败事件只显示错误类别与可读原因，不渲染原始 pay
  expect(rows[1].detail).toBe('RuntimeError 超过运行时长预算');
  expect(rows.map(r=>r.detail).join(' ')).not.toContain('{');
 });
+
+it('领取未确认的过期原因不再声称已退回排队，服务端拒绝工具调用有自己的标签', () => {
+ const rows = runEventRows([
+  {seq:1,kind:'expired',source:'server',payload:{reason:'claim_unacked'},recorded_at:'2026-09-06 10:00:00'},
+  {seq:2,kind:'tool_refused',source:'server',error_class:'PermissionError',payload:{tool:'erp_read_record',reason:'无权读取'},recorded_at:'2026-09-06 10:00:01'},
+ ]);
+ expect(rows[0].label).toBe('运行过期');
+ expect(rows[0].detail).toBe('领取未确认，运行未开始，请重试');
+ expect(rows[0].detail).not.toContain('退回');
+ expect(rows[1].label).toBe('服务端拒绝 erp_read_record');
+ expect(rows[1].tone).toBe('danger');
+ expect(rows[1].detail).toContain('无权读取');
+});
