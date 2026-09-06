@@ -3252,3 +3252,25 @@ worker 按新代码重启后立刻对两站报 `RemoteProtocolError`，5 分钟 
 最终状态：worker PID `31565`、单进程、仅监听 `127.0.0.1:9109`、20 项指标；`slots_busy` / `provider_circuit_open` / `orphan_containers` / `queue_depth` / `running_stuck` 均为 0；scheduler 与 scheduler-worker 各 1 个在跑；alpha 与 daily 活动运行均为 0。
 
 `dsherp_backup_age_hours` 为 `49.41`，因此有一条 `backup_stale` critical 告警。这是告警系统对真实状况的正确报告（本机开发环境已 49 小时没有取过备份），不是缺陷；是否补取备份属运维动作，不在本计划范围。
+
+## 2026-09-06 放行前独立复核：13 项终审关闭中 6 项被推翻，计划 2 未放行
+
+方法：架构方（Claude）在计划 3 收口时，对上节 13 项关闭按提交分成 6 组，每组派一名只读核验者（读 HEAD 源码、跑该提交涉及的非集成测试）与一名互不知情的对抗复核者（只负责推翻，读实际调用链与后续提交），共 12 个代理，全部禁止运行集成测试与改动状态。核验者对 13 项的判定为 11 项 closed、2 项 partial；对抗复核推翻 6 项。每条推翻我都按其 file:line 回读了源码，结论如下。
+
+| # | 缺陷 | 复核结论 | 严重度 | 要点（file:line 见代理原文，已随本节入档摘要） |
+| --- | --- | --- | --- | --- |
+| 1 | sources 为空时解释被 finish_run 拒绝 | 主路径关闭；**被推翻** | major | 修法把"尽力而为"的事件回写变成了完成判定的依赖：`run_events.flush` 首次异常即返回不重试，`context_runner` 只打印 `EventFlushFailed`，`tool_error` 事件与运行结束在同一次 5s 调用里发出；这次调用一失败，finish_run(Succeeded) 因缺事实被拒（417），worker 的兜底不落 Failed，运行悬到租约清扫，用户看到「运行已过期」——原症状原样复现；且容器退出码为 0 时 worker 不解析 `DSHERP_DIAGNOSTIC`，诊断丢失。集成测试直接用 `record_run_event` 注入事件，没有走过 run_tool 被拒 → isError → 映射 → 回写 → 判定这条链。判定还宽于原意：客户端自造的参数错误也算「服务端拒绝」 |
+| 4 | NeedsInput 未收回 capability 即移出在飞集合 | 成立 | minor | 在飞按 capability 判定，UI 与 claim 均拦住第二执行者；残余：finish_run(Failed) 无状态前置，喧闹死亡会覆盖 NeedsInput 的问题；清扫只在 claim_run 内发生，满槽或熔断打开期间不清扫 |
+| 批评 4 | 过期清扫无上限 | 上限在；**被推翻** | major | 50 条上限让清扫不再保证候选行已过期：候选查询没有 `queue_expires_at` 过滤，`for_update` 复查只看 `status=='Queued'`；积压超过 50 条过期行时，第 51 条起的**过期请求会被领走执行**而不是判「排队超时」。provider 故障 >600s 且排队 >50 条时必现（熔断打开期间 worker 仍心跳、send_message 仍入队、但不 claim 也不清扫）。修法是给候选加过期过滤或在复查时判过期；无测试覆盖 |
+| 2 | MCP post 不捕获传输异常、5xx 尾行外泄 | 成立 | minor | 残余：`httpx.DecodingError` 不是 `TransportError`，会以原始异常穿过；4xx 的 `exception` 尾行按设计仍进模型上下文 |
+| 3 | 取消 RPC 继承 90s 超时 | 成立 | minor | 探测延迟（轮询 2s + run_status 调用）在 grace 之外；容器回收只在代码层核实 |
+| 批评 7 | runtime_failed 事件带栈帧 | 成立 | minor | `error_class` 原始异常类名仍到业务用户；无 text/error/reason 的事件仍按 JSON 原样渲染 |
+| 5 | 多站心跳与领取同线程 | 并行与短超时成立；跳过逻辑**被推翻** | major | 每站只有一个失败计数器，心跳（只写 Redis）成功会清零领取（走 MariaDB、FOR UPDATE）超时累积的计数：库停摆但 Redis 正常的站永远达不到 3 次阈值，每轮仍被以 10s 超时的 claim_run 打一次，健康站的领取节奏退化到 ~13s 且永不恢复；单元测试用的 MockTransport 心跳与领取同时失败，没覆盖交错路径 |
+| 6 | docker rm 返回码被吞 | 成立 | minor | 残余：待删列表在 tick 线程串行重试、每个 15s；孤儿告警只查运行中容器 |
+| 批评 5 | SIGTERM 就地抛 SystemExit | 成立 | minor | 排空 15s 相对运行时长偏短；handler 安装到 `STOPPING.clear()` 之间收到的信号会被清掉 |
+| 批评 6 | 观测与业务共用 try | 成立 | none | — |
+| 批评 1 | 熔断判据只看 5xx | AUTH/RATE_LIMIT 已计；**被推翻** | major | 已发布的 runtime 0.1.1rc1 对余额不足发出的错误码是 `QUOTA`，服务端词表写的是 `QUOTA_EXCEEDED`，永不命中；`INVALID_CREDENTIAL`、`HTTP_<status>`、`UNKNOWN`、guard 兜底的 `ProviderError` 也不计；集成测试喂的是服务端自己的字面量，检不出词汇不一致 |
+| 批评 2 | 探针成功直接 reset，试探态死代码 | 类本身成立；**在生产热路径上不可达** | **blocking** | 计划 3 的 `3f79ac0` 把探针的 settings 换成了 `agent_settings()`，其 `DEEPSEEK_BASE_URL` 是容器用的 `http://agent-egress:8890`——只在 agent 网络内可解析；宿主上的探针永远失败，熔断一旦打开直到进程重启都不会关闭。该提交的说明、`runtime_host` 的 docstring 与 runbook 都写着「宿主探针仍走直连地址」，代码与之相反。**属计划 3 引入的回归，已在计划 3 收口修复**（`context_worker.host_probe` 读 `.env` 直连地址，单元测试锁定探针地址与容器地址不同） |
+| 批评 3 | claim 超时幽灵运行 | 服务端成立；用户面**被推翻** | major | `expired {reason:'claim_unacked'}` 在前端渲染为「领取未确认，已退回排队」，而服务端实际落 Failed 且不重排；聊天面同时显示「请重试」——两个界面给出相反指引。标签由 `e063f18` 先于 `d587329` 引入、未回头对齐，已进 dist；测试只喂空 payload。修法是改一处标签并补测试（需重建 dist） |
+
+**判定**：计划 2 **不放行**。阻断项（批评 2）是计划 3 的回归而非计划 2 的关闭不实，已在计划 3 收口修复并入档；其余 5 项 major（1、批评 4、5、批评 1、批评 3）都是终审关闭"字面成立、路径未闭合"的同类问题，修法均可界定（1 项需要设计：事件回写失败时的兜底与诊断透传；其余四项各为一处过滤、一组词表、一个计数器拆分、一个标签）。这些残余不属于计划 3 收口范围，处置方式（作为计划 2 收尾切片先修，还是并入计划 4 首片前）待用户裁决；在裁决前实施顺序表第 2 行保持「未放行」。代理原始结论（含全部 file:line 证据）保存在会话工作流日志，本节为架构方逐条回读后的摘要。

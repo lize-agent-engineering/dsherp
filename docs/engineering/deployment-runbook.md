@@ -13,7 +13,7 @@
 | Python | 3.12（见仓库 `.python-version`） | 宿主 worker 用，不进容器 |
 | 宿主 glibc | **≥ 2.28**（RHEL/Rocky 8、Debian 10、Ubuntu 18.10 及以上） | `deepseek-harness-runtime-bin` 只发布 `manylinux_2_28` wheel，`uv pip sync requirements.lock` 在 glibc 2.17（CentOS 7）上无解。宿主 worker 本身不引入 SDK，但同一份锁装不上就起不了 CLI；容器内是 Debian bookworm，不受影响 |
 | Node | 见 `.nvmrc` | 仅构建前端产物时需要；发布镜像已内含 dist |
-| git | 构建机需要；目标主机可以没有——用 `git archive` 传源码树，并把提交号交给 `release_images.py --git-commit` | 没有 git 的主机上 manifest 仍记录真实提交 |
+| git | 构建机需要一个**干净的** checkout，且 `$TAG` 指向 HEAD；目标主机可以没有——`git archive "$TAG"` 导出的源码树里 `infra/RELEASE_SOURCE` 会被替换成「提交 + tag」，`release_images.py` 据此核实来源 | 脏工作树、tag 不在 HEAD、导出树不是从 tag 导出的，构建都会被拒绝；`--git-commit` 只是交叉核对 |
 | 镜像来源 | 私有 registry，或在本机 `docker load` 导入的镜像 tar | `compose.prod.yml` 用 `pull_policy: if_not_present` |
 | 账号 | 一个非 root 系统账号（本文用 `dsherp`），在 `docker` 组内 | worker 与容器都不以 root 运行 |
 | systemd | ≥ 242 才能启用 unit 里的全部沙箱指令（`ProtectSystem=strict` 232+、`ReadWritePaths` 232+、`RestrictSUIDSGID` 242+）；更老的版本会忽略这些行并在 journal 告警，进程照常受 `Restart`/`WatchdogSec` 管，但沙箱**静默退化**——219 上 `ProtectSystem=strict` 被解析成 `no` | CentOS 7 的 systemd 219 实测：保留 notify/看门狗/Restart/PrivateTmp/NoNewPrivileges/ProtectHome，丢掉其余五条 |
@@ -35,11 +35,11 @@ sudo -u dsherp git clone --branch "$TAG" <仓库地址> /opt/dsherp
 cd /opt/dsherp
 ```
 
-主机没有 git 时（真机演练就是这样）：在有 git 的机器上 `git archive --format=tar.gz -o dsherp-src.tgz "$TAG"`，传到主机后 `sudo -u dsherp tar -xzf dsherp-src.tgz -C /opt/dsherp`，并把提交号记在 `/opt/dsherp/.dsherp-commit`，第 2 步用 `--git-commit "$(cat .dsherp-commit)"`。
+主机没有 git 时（真机演练就是这样）：在有 git 的机器上 `git archive --format=tar.gz -o dsherp-src.tgz "$TAG"`，传到主机后 `sudo -u dsherp tar -xzf dsherp-src.tgz -C /opt/dsherp`。导出时 git 会把 `infra/RELEASE_SOURCE` 替换成「提交号 + 该提交的 tag」（`.gitattributes` 的 `export-subst`），第 2 步的 `release_images.py` 直接读它；不需要手工记提交号。从分支或裸提交导出（文件里没有 `tag: $TAG`）会被构建拒绝。
 
 ## 2. 构建并推送镜像（构建机上执行一次）
 
-发布镜像必须指定架构；`release_images.py` 会把 tag、提交、基底 digest 与架构写进 `infra/releases/$TAG.json`。构建机上先完成第 3 步的 `prod.env` 与第 7 步的 `.venv`（脚本要从 `prod.env` 读 tag/registry，并需要 venv 里的依赖），再：
+发布镜像必须指定架构；`release_images.py` 会把 tag、提交、基底 digest 与架构写进 `infra/releases/$TAG.json`。它先核实构建上下文就是声称的来源：有 `.git` 时要求工作树干净（`infra/releases/` 下上一次写出的清单除外）且 `$TAG` 指向 HEAD；没有 `.git` 时读 `infra/RELEASE_SOURCE`。构建后再核对两个镜像的 `org.opencontainers.image.version/revision` 标签与 tag、提交一致，不一致不写清单。`.dockerignore` 把 `.runtime/`、`infra/env/`、`.venv/` 等宿主状态挡在构建上下文之外。构建机上先完成第 3 步的 `prod.env` 与第 7 步的 `.venv`（脚本要从 `prod.env` 读 tag/registry，并需要 venv 里的依赖），再：
 
 ```sh
 DSHERP_ENV=prod .venv/bin/python -m infra.release_images --platform linux/amd64
@@ -155,33 +155,36 @@ profile 形如：`base_url` 是宿主 worker 自己领取运行、发心跳用�
 
 provider 凭据写入 `/opt/dsherp/.env`（`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`，0600）。容器拿到的 base URL 不是这一个：它由 `DSHERP_AGENT_PROVIDER_BASE_URL` 指向 agent 网络内的出口代理，宿主只用自己的地址做熔断探针。
 
-渲染并启用 systemd unit：
+渲染并启用两个 systemd unit——先是宿主防火墙（第 8 节的安全边界，worker 的 unit `Requires` 它），再是 worker：
 
 ```sh
 sudo -u dsherp mkdir -p /opt/dsherp/.runtime /opt/dsherp/work
-sudo -iu dsherp bash -c 'cd /opt/dsherp && .venv/bin/python infra/render_worker_units.py --root /opt/dsherp --user dsherp --group dsherp --target /opt/dsherp/.runtime/dsherp-agent-worker.service'
+sudo -iu dsherp bash -c 'cd /opt/dsherp && .venv/bin/python infra/render_worker_units.py --root /opt/dsherp --user dsherp --group dsherp --target /opt/dsherp/.runtime/dsherp-agent-worker.service'   # 打印 worker 与 firewall 两个 unit 的路径
+sudo install -m 755 /opt/dsherp/infra/systemd/dsherp-agent-firewall.sh /usr/local/sbin/dsherp-agent-firewall
+sudo install -m 644 /opt/dsherp/.runtime/dsherp-agent-firewall.service /etc/systemd/system/dsherp-agent-firewall.service
 sudo install -m 644 /opt/dsherp/.runtime/dsherp-agent-worker.service /etc/systemd/system/dsherp-agent-worker.service
 sudo systemctl daemon-reload
+sudo systemctl enable --now dsherp-agent-firewall
+sudo /usr/local/sbin/dsherp-agent-firewall check "${DSHERP_PROJECT}_agent"   # ok on br-…
 sudo systemctl enable --now dsherp-agent-worker
 systemctl status dsherp-agent-worker      # active (running)，Watchdog 已生效
 sudo journalctl -u dsherp-agent-worker -n 20   # 不应有 "Unknown lvalue"/"Failed to parse"：有就是 systemd 太老，沙箱没生效
 ```
 
-unit 由 dsherp 渲染到自己的目录，再由 root 安装——渲染器写不了 `/etc/systemd/system`。
+unit 由 dsherp 渲染到自己的目录，再由 root 安装——渲染器写不了 `/etc/systemd/system`。防火墙脚本同样由 root 从仓库复制到 `/usr/local/sbin`：它以 root 运行，不能直接执行服务账号可写的文件。
 
 unit 为 `Type=notify` + `WatchdogSec=60s`：worker 每轮 tick 回喂看门狗，卡死会被重启；`ProtectSystem=strict` 下它只能写 `.runtime` 与 `work` 两个目录。
 
 ## 8. 收口安全边界
 
-来源白名单已由 `provision-tenant` 写入（`dsherp_agent_sources` = agent 网段 + worker 网段）。还差宿主自己：Docker 的 `internal: true` 只隔离转发链，**容器仍能连到网桥网关也就是宿主本身**（sshd :22 等一切绑在 0.0.0.0 的监听）。把运行容器挡在宿主之外要在宿主 INPUT 链上加两条规则，`agent-firewall` 会按当前 agent 网桥打印出来：
+来源白名单已由 `provision-tenant` 写入（`dsherp_agent_sources` = agent 网段 + worker 网段）。还差宿主自己：Docker 的 `internal: true` 只隔离转发链，**容器仍能连到网桥网关也就是宿主本身**（sshd :22 等一切绑在 0.0.0.0 的监听）。把运行容器挡在宿主之外要在宿主 INPUT 链上加两条规则；第 7 步启用的 `dsherp-agent-firewall.service` 在每次开机与每次 `start/restart` 时按**当前** agent 网桥应用它们（规则带 `dsherp-agent-firewall` 注释标签，脚本据此替换旧规则、`stop` 时精确删除），并把网桥名记在 `/run/dsherp-agent-firewall/<agent 网络名>`。worker 的 unit `Requires` 它，防火墙没起来 worker 不会起；worker 自己启动时还会比对记录的网桥与实际网络，不一致直接拒绝启动并提示重启防火墙单元。
 
 ```sh
-admin agent-firewall            # 打印 iptables / nft 两种写法与撤销命令
-sudo iptables -I INPUT 1 -i br-<agent 网桥> -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-sudo iptables -I INPUT 2 -i br-<agent 网桥> -j DROP
+sudo /usr/local/sbin/dsherp-agent-firewall check "${DSHERP_PROJECT}_agent"   # ok on br-…；missing or stale 时按提示 restart
+admin agent-firewall            # 只打印同一组规则（含 nft 写法与撤销命令），给没有 systemd 的主机或人工核对用
 ```
 
-容器内的 DNS 由 Docker 内嵌解析器在容器命名空间里应答，不经过宿主 INPUT，规则不影响运行。规则不随重启保留，按发行版的方式持久化（`iptables-save`/nftables 配置）。
+**网络被重建时必须重启防火墙单元**：`compose down`、改网络定义后再 `up`，agent 网桥会换名，旧规则挡不住新网桥。`check` 会报 stale，`sudo systemctl restart dsherp-agent-firewall` 后再启动 worker。容器内的 DNS 由 Docker 内嵌解析器在容器命名空间里应答，不经过宿主 INPUT，规则不影响运行。脚本只用 iptables——Docker 自己就用它在每台主机上编程，nft-only 的发行版也带 iptables-nft 兼容层。
 
 ## 9. 验收（G1 与 G4）
 
@@ -191,13 +194,14 @@ sudo iptables -I INPUT 2 -i br-<agent 网桥> -j DROP
 | 站点可达且走 TLS | `curl -sI https://$SLUG.$DSHERP_BASE_DOMAIN/login` | 200，含 `Content-Security-Policy`，`connect-src 'self'` |
 | 密码登录已关 | `curl -s -X POST https://$SLUG.$DSHERP_BASE_DOMAIN/api/method/login -d 'usr=x&pwd=y'` | 拒绝，登录页不显示密码表单 |
 | 容器不出网、非 root、到不了宿主 | `sudo -iu dsherp bash -c 'cd /opt/dsherp && DSHERP_ENV=prod PYTHONPATH=. .venv/bin/python infra/probe_agent_boundary.py'` | `failures: {}`（用真实运行容器参数在 agent 网络里探测公网、代理、业务站、平台、库、**宿主网关 :22**、控制面文件、能力集） |
+| 宿主防火墙已应用且对应当前网桥 | `systemctl is-active dsherp-agent-firewall && sudo /usr/local/sbin/dsherp-agent-firewall check "${DSHERP_PROJECT}_agent"` | `active`，`ok on br-…`；`probe_agent_boundary.py` 的 `host_gateway_ssh`/`host_gateway_loopback_port` 均为 `False` |
 | worker 存活 | `systemctl is-active dsherp-agent-worker` | `active` |
 | 发布可核验 | `cat infra/releases/$TAG.json` | tag、提交、基底 digest、架构齐全 |
 
 ## 10. 升级与回滚
 
 ```sh
-# 升级：先备份，逐站 migrate，再逐字段比对；有差异退出码为 1
+# 升级：先备份，逐站 migrate，再按 DocType 比对行数与摘要（子表与单值文档尚未覆盖，合法迁移的元数据变化也会判为差异——G2 的可核验校验由计划 4 首片补齐）；有差异退出码为 1
 $EDITOR infra/env/prod.env          # DSHERP_IMAGE_TAG 改为新 tag
 compose pull && compose up -d
 DSHERP_ENV=prod ./bin/dsherp-admin release "$NEW_TAG"
@@ -211,12 +215,28 @@ DSHERP_ENV=prod ./bin/dsherp-admin rollback "$OLD_TAG" \
 
 升级前备份是硬前置：`release` 在 migrate 之前对每个站执行 `bench backup --with-files`，比对报告落在 `.runtime/releases/release-<tag>.json`。
 
-## 11. 下线租户
+## 11. 下线租户与从归档恢复
 
 ```sh
-DSHERP_ENV=prod ./bin/dsherp-admin retire-tenant "$SLUG"     # 先整站归档再删站
+DSHERP_ENV=prod ./bin/dsherp-admin retire-tenant "$SLUG"     # 备份 → drop-site 整站搬进归档 → 回读归档
 DSHERP_ENV=prod ./bin/dsherp-admin render-ingress && compose up -d caddy
 ```
+
+命令先证明归档目录可写，再 `bench backup --with-files`，再 `bench drop-site --archived-sites-path /home/frappe/frappe-bench/archived/sites`——drop-site 会把整个站目录（刚做的备份在它的 `private/backups` 里）搬到那里。输出的 `archive` 是回读到的归档目录，`backups` 是其中的备份文件名；归档目录没有出现或缺 `site_config.json` 时命令报错并**不改租户清单**，此时不要重跑，先去看目录。归档落在 backend 的 `tenant-archive` 卷上（镜像预建了该目录归 frappe 所有），backend 容器重建后仍在；此前它只在容器可写层里，一次升级就会丢。
+
+从归档恢复一个已下线的租户（先重新开站，再用归档里的备份覆盖）：
+
+```sh
+admin provision-tenant "$SLUG"      # 空站 + App + 身份 + 平台记录
+compose exec -T backend bench --site "$SLUG.$DSHERP_BASE_DOMAIN" restore \
+  "<archive>/private/backups/<时间戳>-…-database.sql.gz" \
+  --with-public-files "<archive>/private/backups/<时间戳>-…-files.tar" \
+  --with-private-files "<archive>/private/backups/<时间戳>-…-private-files.tar" \
+  --db-root-username root --db-root-password "$(cat $DSHERP_SECRETS_DIR/db_root_password)" --force
+admin provision-tenant "$SLUG"      # 幂等重跑：核对运行身份、站点配置与 healthcheck
+```
+
+归档目录里还有整站的 `site_config.json`（含库口令与加密密钥），它与库转储同目录同权限——这是计划 4 的异地备份要分开存放的对象，归档不能原样同步出主机。
 
 ## 与其他服务共用的主机
 

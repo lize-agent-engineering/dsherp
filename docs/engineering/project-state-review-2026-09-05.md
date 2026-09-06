@@ -100,3 +100,21 @@
 5. **计划 5/6 保持价值约束**：计划 5 优先自动运行已有有效行为验证；计划 6 聚焦真实失败输入、实际模型行为与成本。替身通过率不能代表实际 Agent 完成率，CI 条数不能代表业务完成。
 
 本次建议属于审查结论，尚未修改原计划、放行门或执行后续实施。
+
+## 复核与处置（Claude，2026-09-05 → 2026-09-06）
+
+审查的四条工程问题逐条在仓库代码与容器内的真实 Frappe 16.31.0 上核对，全部成立；A 与 D 比审查写的更重：
+
+- **A**：下线命令自己做的 `bench backup` 写在站目录内的 `private/backups`，随后 `drop-site` 把整个站目录连同这份备份一起搬进 `archived/`——归档步骤被下线步骤直接抵消；返回值里也没有归档路径。基底镜像 `Config.Volumes` 确为 `sites` 与 `logs` 两处。
+- **B**：远端与本地都没有任何 tag；现有 manifest 记录的提交 `7482304` 在 main 历史里，问题在于流程允许造假。
+- **C**：unit 渲染器没有前置规则单元，worker 的 `prepare_host` 不检查规则。
+- **D**：误报不只 Patch Log——DocType、Custom Field、Property Setter、Module Def 等所有随 migrate 变动的元数据表都会让 `release` 以失败退出；`SNAPSHOT` 脚本没有被任何测试执行过（`SnapshotBench` 替掉了 `python()`），仓库里也没有一次真实 release 报告。G2 目前只是骨架。
+
+补充与更正：
+
+- 第 2 节的「denied/Guest → 403」与我此前的「denied 200」不矛盾：denied 能认证（`get_logged_user` 200），受限 `read_schema(Customer)` 是 403，是「能登录、无业务读权限」的正常行为。reader 两个端点均 401 属实。
+- 凭据漂移的根因已定位：`tests/integration/test_sso_machine_auth.py`（计划 3 提交 `f9bd051`，2026-09-05 13:14）对共享的合成 reader 调用 `generate_keys`，每跑一次就作废 `.runtime/erp-users.json` 里的密钥（站上 api_key 未变、`modified` 为当日 13:10、Version 无字段差异，与 `generate_keys` 只改密码字段一致）。测试改为自建并删除临时探针用户；验证站 provisioner 增加 `--reissue <actor>`，只重签该演员的密钥并原地改写档案（原 provisioner 遇到已有档案会拒绝覆盖，「重跑 provisioner 即可」的说法不准确）。修复后 reader `get_logged_user`/`read_schema(Customer)` 均 200，denied 403。
+- 备份调度事实：Frappe 16 核心 hooks 没有每日站点备份任务，两站 `Scheduled Job Type` 里只有 `delete_downloadable_backups`；本机两站最近的备份是 2026-09-03 的人工/脚本备份。所以「60 小时」不是失败，是尚无调度——计划 4 的备份切片必须覆盖「定时生成 → 异地同步 → 失败可见 → 异机恢复验证」。
+- 第 4 节的 RTO、审计/删除边界、G4 措辞、计划 2/3 状态与计划 4 依赖，已按四项裁决（spec 已裁决 #8/#9/#10 与实施顺序表）改写。
+
+处置：A/B/C 与计划 3 的一处回归（宿主熔断探针地址）在分支 `plan3/closeout` 修复并各以真实路径演练，证据见 [deployment-security-evidence.md](deployment-security-evidence.md)「计划 3 收口」节；D 留作计划 4 首片；计划 2 的放行记录改为「放行前独立复核未通过」，见 [runtime-reliability-evidence.md](runtime-reliability-evidence.md) 末节。
