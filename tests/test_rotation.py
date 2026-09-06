@@ -248,3 +248,69 @@ def test_the_older_flat_worker_profile_is_understood_too(host_runtime):
                           bench_factory=lambda kind: bench)
     assert report['profile_sites'] == ['acme.tenant.example.com']
     assert json.loads(flat.read_text())['api_secret'] == 'new-runtime-secret'
+
+
+def test_a_runtime_rotation_with_nowhere_to_deliver_the_secret_is_refused_before_it_happens(host_runtime):
+    """Issuing without a destination kills the old key and gives the new one to nobody (R3)."""
+    from dsherp import admin
+
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = RotateBench([])
+    with pytest.raises(admin.Fault, match="交付目的地"):
+        admin.rotate(RELEASE, 'runtime', target='acme.tenant.example.com', bench_factory=lambda kind: bench)
+    assert not any('generate_keys' in body for _, body in bench.scripts), 'the key must not have changed'
+
+
+def test_the_operator_may_take_the_secret_themselves_and_it_is_also_kept_privately_on_disk(host_runtime):
+    from dsherp import admin
+
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = RotateBench([])
+    report = admin.rotate(RELEASE, 'runtime', target='acme.tenant.example.com', print_secret=True,
+                          bench_factory=lambda kind: bench)
+    assert report['api_secret'] == 'new-runtime-secret'
+    kept = Path(report['secret_file'])
+    assert json.loads(kept.read_text())['api_secret'] == 'new-runtime-secret'
+    assert stat.S_IMODE(kept.stat().st_mode) == 0o600
+
+
+def test_a_profile_write_that_fails_after_issuance_leaves_the_secret_recoverable(host_runtime, monkeypatch):
+    """The precheck cannot see a disk that fills or a file that changes underneath; if the
+    write fails once the key has changed, the pair is already on disk, privately, and the
+    error says where."""
+    from dsherp import admin
+
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    profile = Path(host_runtime) / 'worker.json'
+    profile.write_text(json.dumps({'sites': [{'site': 'acme.tenant.example.com', 'api_key': 'old',
+                                              'api_secret': 'older'}]}))
+    bench = RotateBench([])
+    real = admin._profile_pair
+
+    def failing(path, site, pair):
+        raise OSError('No space left on device')
+    monkeypatch.setattr(admin, '_profile_pair', failing)
+    with pytest.raises(admin.Fault, match="保存在") as caught:
+        admin.rotate(RELEASE, 'runtime', target='acme.tenant.example.com', profile=[profile],
+                     bench_factory=lambda kind: bench)
+    kept = sorted(Path(admin.runtime_dir(RELEASE)).glob('rotations/runtime-*.json'))
+    assert kept and json.loads(kept[-1].read_text())['api_secret'] == 'new-runtime-secret'
+    assert str(kept[-1]) in str(caught.value)
+    monkeypatch.setattr(admin, '_profile_pair', real)
+
+
+def test_a_clean_profile_rotation_leaves_no_secret_file_behind(host_runtime):
+    from dsherp import admin
+
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    profile = Path(host_runtime) / 'worker.json'
+    profile.write_text(json.dumps({'sites': [{'site': 'acme.tenant.example.com', 'api_key': 'old',
+                                              'api_secret': 'older'}]}))
+    bench = RotateBench([])
+    admin.rotate(RELEASE, 'runtime', target='acme.tenant.example.com', profile=[profile],
+                 bench_factory=lambda kind: bench)
+    assert not list(Path(admin.runtime_dir(RELEASE)).glob('rotations/runtime-*.json'))

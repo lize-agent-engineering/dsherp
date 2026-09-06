@@ -1707,7 +1707,13 @@ def _write_private_json(path, payload):
     return path
 
 
-def rotate(resolved, kind, *, target=None, value=None, file=None, profile=None,
+def _secret_fallback(resolved, root, site, at):
+    directory = runtime_dir(resolved, root) / 'rotations'
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return directory / f"runtime-{site}-{at.strftime('%Y%m%d_%H%M%S')}.json"
+
+
+def rotate(resolved, kind, *, target=None, value=None, file=None, profile=None, print_secret=False,
            root=ROOT, runner=subprocess.run, bench_factory=None):
     """Replace one long-lived credential and write the change into the ledger (S4/S9).
 
@@ -1760,24 +1766,44 @@ def rotate(resolved, kind, *, target=None, value=None, file=None, profile=None,
         # before the key changes: a secret is issued once, and a write that fails afterwards
         # leaves a credential nobody holds.
         paths = [profile] if isinstance(profile, (str, Path)) else list(profile or [])
+        # A secret is issued once. It needs somewhere to go before it exists: a profile the
+        # worker reads, or the operator's own hands (--print-secret). With neither, the old
+        # key would be dead and the new one held by nobody (R3).
+        if not paths and not print_secret:
+            raise Fault('runtime 轮换需要交付目的地：--profile <worker profile>（可多次）或 --print-secret；'
+                        '否则新密钥无人持有，而旧密钥已经作废')
         for path in paths:
             _profile_rows(path, site)
         issued = ensure_runtime_identity(bench, site, user, rotate=True)
         if 'api_secret' not in issued:
             raise Fault(f'{site} 没有返回新的运行身份凭据')
+        # The pair is on disk, privately, before any profile is touched: a write that fails
+        # halfway leaves a credential that can still be recovered from here.
+        keep = _write_private_json(_secret_fallback(resolved, root, site, at),
+                                   {'site': site, 'user': user, 'api_key': issued['api_key'],
+                                    'api_secret': issued['api_secret'], 'issued_at': at.strftime('%Y-%m-%d %H:%M:%S')})
         updated = []
-        for path in paths:
-            updated += _profile_pair(path, site, issued)
+        try:
+            for path in paths:
+                updated += _profile_pair(path, site, issued)
+        except (Fault, OSError, ValueError) as error:
+            raise Fault(f'新密钥已签发但写入 worker profile 失败：{error}\n'
+                        f'它保存在 {keep}（仅本用户可读）；手工写入 profile 后删除该文件') from error
         item = rotation.entry(kind=kind, target=site, value=issued['api_secret'], previous=None,
                               version=rotation.next_version(rows, kind, site), at=at)
         rotation.record(ledger, item)
-        return {'kind': kind, 'target': site, 'user': user, 'version': item['version'],
-                'effective_at': item['effective_at'], 'fingerprint': item['fingerprint'],
-                'api_key': issued['api_key'], 'profile_updated': bool(updated),
-                'profile_sites': updated or [],
-                'next': ('重启 worker 单元' if updated else
-                         '把新的 api_secret 写进 worker profile 后重启 worker 单元；'
-                         '本次未提供 --profile，密钥只在本次输出中出现过')}
+        report = {'kind': kind, 'target': site, 'user': user, 'version': item['version'],
+                  'effective_at': item['effective_at'], 'fingerprint': item['fingerprint'],
+                  'api_key': issued['api_key'], 'profile_updated': bool(updated),
+                  'profile_sites': updated or []}
+        if print_secret:
+            report['api_secret'] = issued['api_secret']
+            report['secret_file'] = str(keep)
+            report['next'] = f'把 api_secret 写进 worker profile 后重启 worker 单元，并删除 {keep}'
+        else:
+            keep.unlink(missing_ok=True)
+            report['next'] = '重启 worker 单元'
+        return report
     slug = target
     if not slug or not any(row['slug'] == slug for row in load_tenants(resolved, root)):
         raise Fault('oauth-client 轮换需要给出当前清单里的租户 slug')
@@ -1849,6 +1875,8 @@ def main(argv=None):
     rotate_parser.add_argument('--file', default=None, help='provider：worker 单元读的那个 .env')
     rotate_parser.add_argument('--profile', action='append', default=None,
                                    help='runtime：把新凭据写回这个 worker profile（可给多次）')
+    rotate_parser.add_argument('--print-secret', action='store_true',
+                                   help='runtime：没有 profile 时把新密钥打印一次（并留一份 0600 的副本文件）')
     credentials_parser = sub.add_parser('credentials',
                                         help='查看某站点借出的短期业务凭据及其有效期；--issue 为某个业务用户重新签发并交给平台')
     credentials_parser.add_argument('site')
@@ -1948,7 +1976,7 @@ def main(argv=None):
             # histories both keep argv, and this one is read from standard input.
             value = sys.stdin.read().strip() if arguments.kind == 'provider' else None
             _print(rotate(resolved, arguments.kind, target=arguments.target, value=value,
-                          file=arguments.file, profile=arguments.profile))
+                          file=arguments.file, profile=arguments.profile, print_secret=arguments.print_secret))
             return 0
         if arguments.command == 'credentials':
             if arguments.issue:
