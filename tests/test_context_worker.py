@@ -874,6 +874,48 @@ def test_site_client_never_reuses_an_idle_backend_socket():
         server.shutdown();server.server_close();thread.join()
 
 
+def test_the_host_circuit_probe_uses_the_direct_provider_address_not_the_container_proxy(tmp_path):
+    """Plan-2 re-audit: 3f79ac0 switched the probe to agent_settings(), whose base URL is the
+    egress proxy's compose name. That name resolves only inside the agent network, so on the
+    host the probe always failed and an opened circuit never closed until a restart."""
+    from dsherp import context_worker,runtime_host
+    env=tmp_path/'provider.env'
+    env.write_text('DEEPSEEK_API_KEY=sk-test-key\nDEEPSEEK_BASE_URL=https://provider.example.test/v1\n')
+    probed=[]
+    def fake_probe(base_url,api_key):
+        probed.append((base_url,api_key));return True
+    assert context_worker.host_probe(env,probe=fake_probe)() is True
+    assert probed==[('https://provider.example.test/v1','sk-test-key')]
+    container=runtime_host.agent_settings(env)
+    assert container['DEEPSEEK_BASE_URL']!=probed[0][0] and 'agent-egress' in container['DEEPSEEK_BASE_URL']
+    # main() must hand the coordinator this probe, not one built from the container settings.
+    source=(context_worker.ROOT/'dsherp/context_worker.py').read_text()
+    assert 'host_probe(args.provider_env)' in source
+    assert "probe_models(current['DEEPSEEK_BASE_URL']" not in source
+
+
+def test_production_refuses_to_start_while_the_host_firewall_is_bound_to_a_stale_bridge(tmp_path):
+    """A recreated agent network gets a new bridge name; rules bound to the old one leave
+    the host reachable. The firewall unit records the bridge it applied; the worker
+    compares it with the live network before it serves anything."""
+    from dsherp import context_worker,deploy_env
+    production=deploy_env.settings({'DSHERP_ENV':'prod','DSHERP_PROJECT':'dsherp',
+        'DSHERP_BASE_DOMAIN':'tenant.example.com','DSHERP_PLATFORM_SLUG':'platform',
+        'DSHERP_IMAGE_TAG':'v0.3.0','DSHERP_IMAGE_REGISTRY':'registry.example.com/dsherp',
+        'DSHERP_AGENT_UID':'1000','DSHERP_AGENT_GID':'1000'})
+    def runner(command,**kwargs):
+        stdout='db512087a978abcdef0123456789\n' if command[1:3]==['network','inspect'] and '--format' in command else ''
+        return subprocess.CompletedProcess(command,0,stdout=stdout,stderr='')
+    state=tmp_path/'dsherp_agent'
+    state.write_text('br-db512087a978\n')
+    context_worker.prepare_host(runner=runner,cleanup=lambda runner:None,resolved=production,firewall_state=tmp_path)
+    state.write_text('br-000000000000\n')
+    with pytest.raises(RuntimeError,match='dsherp-agent-firewall'):
+        context_worker.prepare_host(runner=runner,cleanup=lambda runner:None,resolved=production,firewall_state=tmp_path)
+    state.unlink()  # no unit installed (a foreground drill): allowed, the boundary probe is the gate
+    context_worker.prepare_host(runner=runner,cleanup=lambda runner:None,resolved=production,firewall_state=tmp_path)
+
+
 def test_production_checks_the_release_image_and_the_agent_network_not_a_prepared_volume():
     """生产没有 Runtime 卷：镜像自带运行时，出网只有代理，两者缺一就不该开工。"""
     from dsherp import context_worker,deploy_env

@@ -136,7 +136,11 @@ def normalize_profile(profile):
     return {'slots':slots,'metrics_port':metrics_port,'alert_webhook':webhook,'sites':sites}
 
 
-def prepare_host(runner=subprocess.run,cleanup=None,resolved=None):
+# Where dsherp-agent-firewall.service records the bridge it applied the host rules to.
+FIREWALL_STATE=Path('/run/dsherp-agent-firewall')
+
+
+def prepare_host(runner=subprocess.run,cleanup=None,resolved=None,firewall_state=FIREWALL_STATE):
     """Reclaim crash leftovers before checking dependencies.
 
     A leftover container still holds the run.json mount and therefore the provider
@@ -156,6 +160,27 @@ def prepare_host(runner=subprocess.run,cleanup=None,resolved=None):
     # A run container reaches the provider only through the egress proxy, so its
     # address must resolve inside the agent network before the first user request.
     runner(['docker','network','inspect',resolved['agent_network']],check=True,stdout=subprocess.DEVNULL)
+    if resolved['env']=='prod':
+        check_host_firewall(runner,resolved,Path(firewall_state))
+
+
+def check_host_firewall(runner,resolved,state_dir):
+    """A recreated agent network has a new bridge; rules bound to the old one leave the
+    host reachable from run containers. The firewall unit records the bridge it applied,
+    and the worker refuses to serve while that record does not match the live network.
+    No record means no unit is installed (a foreground drill): the boundary probe is
+    the gate there, and it is logged so it cannot pass unnoticed."""
+    state=state_dir/resolved['agent_network']
+    if not state.is_file():
+        worker_log.log('agent_firewall_state_missing',network=resolved['agent_network'],path=str(state))
+        return
+    inspected=runner(['docker','network','inspect',resolved['agent_network'],'--format','{{.Id}}'],
+                     check=True,capture_output=True,text=True)
+    bridge='br-'+inspected.stdout.strip()[:12]
+    recorded=state.read_text().strip()
+    if recorded!=bridge:
+        raise RuntimeError(f'宿主防火墙规则绑定的网桥 {recorded} 已不是 agent 网络当前的 {bridge}'
+                           '（dsherp-agent-firewall）；先 systemctl restart dsherp-agent-firewall 再启动 worker')
 
 
 def cleanup_stale_runtime_artifacts(runner=subprocess.run,resolved=None):
@@ -515,6 +540,17 @@ def poll_once(client,settings,state_root,*,business=None):
         return False
 
 
+def host_probe(provider_env,probe=probe_models):
+    """The circuit probe runs on the host, so it must use the provider address the host's
+    own .env names. The container's settings (agent_settings) point at the egress proxy's
+    compose name, which only resolves inside the agent network: probing that from the host
+    fails every time, and an opened circuit would never close again (plan-2 re-audit)."""
+    def run():
+        current=load_settings(provider_env)
+        return probe(current['DEEPSEEK_BASE_URL'],current['DEEPSEEK_API_KEY'])
+    return run
+
+
 @contextmanager
 def worker_pid(path):
     pid=str(os.getpid())
@@ -594,10 +630,8 @@ def main():
                 if not args.once:
                     notifier=alerts.Notifier(webhook=profile.get('alert_webhook'),cooldown=600)
                 settings_loader=lambda:agent_settings(args.provider_env)
-                def probe():
-                    current=settings_loader()
-                    return probe_models(current['DEEPSEEK_BASE_URL'],current['DEEPSEEK_API_KEY'])
-                coordinator=Coordinator(sites,settings_loader,profile['slots'],run_container,CircuitBreaker(),probe,state_root,notifier=notifier)
+                coordinator=Coordinator(sites,settings_loader,profile['slots'],run_container,CircuitBreaker(),
+                                        host_probe(args.provider_env),state_root,notifier=notifier)
                 if args.once:
                     run_once(sites[0]['client'],settings,state_root,business=sites[0]['business'])
                     return 0

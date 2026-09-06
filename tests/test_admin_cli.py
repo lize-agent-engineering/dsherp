@@ -57,6 +57,27 @@ class FakeBench:
             self.installed.add(arguments[-1])
         if arguments[:2] == ("bench", "drop-site"):
             self.existing.discard(arguments[2])
+            if "--archived-sites-path" in arguments:
+                archive = arguments[arguments.index("--archived-sites-path") + 1]
+                name = arguments[2] if not self.config.get("archive_collision") else arguments[2] + "1"
+                if not self.config.get("archive_lost"):
+                    self.config.setdefault("archived", {}).setdefault(archive, []).append(name)
+        if arguments[:2] == ("sh", "-c") and "test -w" in arguments[2]:
+            return "" if self.config.get("archive_unwritable") else "writable\n"
+        if arguments[:2] == ("sh", "-c") and arguments[2].startswith("ls -1 "):
+            path = arguments[2].split()[2]
+            archived = self.config.get("archived", {})
+            if path in archived:
+                return "".join(name + "\n" for name in sorted(archived[path]))
+            for archive, names in archived.items():
+                for name in names:
+                    if path == f"{archive}/{name}/private/backups":
+                        return "20260905_120000-acme-database.sql.gz\n20260905_120000-acme-files.tar\n"
+            return ""
+        if arguments[:2] == ("sh", "-c") and "site_config.json && echo present" in arguments[2]:
+            path = arguments[2].split()[2].rsplit("/site_config.json", 1)[0]
+            archive, _, name = path.rpartition("/")
+            return "present\n" if name in self.config.get("archived", {}).get(archive, []) else ""
         return ""
 
     def python(self, site, body, timeout=900):
@@ -231,13 +252,60 @@ def test_retiring_a_tenant_archives_before_it_drops_and_leaves_the_ingress_corre
     bench.calls.clear()
     result = admin.retire_tenant(PROD, "acme", bench_factory=lambda kind: bench)
     verbs = [call for call in bench.calls if call[0] == "run"]
-    assert verbs[0][:3] == ("run", "bench", "--site")
+    assert ("run", "bench", "--site", "acme.tenant.example.com") in verbs
     assert ("run", "bench", "drop-site", "acme.tenant.example.com") in bench.calls
-    assert verbs.index(("run", "bench", "drop-site", "acme.tenant.example.com")) > 0
+    assert verbs.index(("run", "bench", "--site", "acme.tenant.example.com")) < \
+        verbs.index(("run", "bench", "drop-site", "acme.tenant.example.com"))
     assert dict(result["steps"])["site"] == "dropped"
     assert [row["slug"] for row in admin.load_tenants(PROD)] == ["beta"]
     ingress = (admin.runtime_dir(PROD) / "caddy" / "Caddyfile").read_text()
     assert "acme.tenant.example.com" not in ingress and "beta.tenant.example.com" in ingress
+
+
+def test_retiring_moves_the_whole_site_into_the_persistent_archive_and_reports_the_path(host):
+    """drop-site moves the site directory, and the backup just taken inside it, to the
+    bench's archive; that archive must be on a volume, named explicitly, and read back."""
+    admin.ensure_secrets(PROD)
+    bench = FakeBench()
+    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    bench.calls.clear(); bench.verbs.clear()
+    result = admin.retire_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    drop = [verb for verb in bench.verbs if verb.startswith("bench drop-site")][0]
+    assert f"--archived-sites-path {admin.ARCHIVE}" in drop
+    assert result["archive"] == f"{admin.ARCHIVE}/acme.tenant.example.com"
+    assert result["backups"] == ["20260905_120000-acme-database.sql.gz", "20260905_120000-acme-files.tar"]
+    assert dict(result["steps"])["archive"] == result["archive"]
+    # The archive location is proven writable before anything is backed up or dropped.
+    order = [verb.split()[0] + " " + verb.split()[1] for verb in bench.verbs]
+    assert order.index("sh -c") < order.index("bench --site") < order.index("bench drop-site")
+
+
+def test_retiring_refuses_to_drop_anything_when_the_archive_location_is_not_writable(host):
+    admin.ensure_secrets(PROD)
+    bench = FakeBench()
+    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    bench.calls.clear(); bench.verbs.clear()
+    bench.config["archive_unwritable"] = True
+    with pytest.raises(admin.Fault, match="归档"):
+        admin.retire_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    assert not [verb for verb in bench.verbs if verb.startswith("bench")]
+    assert [row["slug"] for row in admin.load_tenants(PROD)] == ["acme"]
+
+
+def test_retiring_reports_a_collision_suffixed_archive_and_fails_loudly_when_none_appears(host):
+    admin.ensure_secrets(PROD)
+    bench = FakeBench()
+    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    bench.config["archive_collision"] = True
+    result = admin.retire_tenant(PROD, "acme", bench_factory=lambda kind: bench)
+    assert result["archive"] == f"{admin.ARCHIVE}/acme.tenant.example.com1"
+
+    admin.provision_tenant(PROD, "beta", bench_factory=lambda kind: bench, runner=fake_networks)
+    bench.config["archive_lost"] = True
+    with pytest.raises(admin.Fault, match="不要重跑"):
+        admin.retire_tenant(PROD, "beta", bench_factory=lambda kind: bench)
+    # The Site is gone but nothing else was touched: the operator must look before the list changes.
+    assert [row["slug"] for row in admin.load_tenants(PROD)] == ["beta"]
 
 
 def test_retiring_a_site_that_does_not_exist_is_refused_rather_than_treated_as_cleanup(host):
@@ -470,3 +538,7 @@ def test_firewall_rules_target_only_the_agent_bridge():
     assert rules["bridge"] == "br-db512087a978"
     assert all("br-db512087a978" in rule for rule in rules["iptables"] + rules["nft"] + rules["undo"])
     assert rules["iptables"][-1].endswith("-j DROP")
+    # The same tag the systemd unit's script uses, so either can remove what the other added.
+    assert all("-m comment --comment dsherp-agent-firewall" in rule for rule in rules["iptables"] + rules["undo"])
+    assert rules["unit"] == "dsherp-agent-firewall.service"
+    assert rules["script"] == "/usr/local/sbin/dsherp-agent-firewall"

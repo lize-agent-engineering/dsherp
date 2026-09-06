@@ -13,11 +13,32 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 LABEL = "com.dsherp.agent-worker-v16"
 UNIT_NAME = "dsherp-agent-worker.service"
+FIREWALL_UNIT_NAME = "dsherp-agent-firewall.service"
+# Installed by root from infra/systemd/dsherp-agent-firewall.sh; root must not execute
+# code from the service account's tree, so the unit names the installed copy.
+FIREWALL_SCRIPT = "/usr/local/sbin/dsherp-agent-firewall"
+FIREWALL_UNIT = """[Unit]
+Description=dsherp host firewall for the agent network
+Documentation=file://{root}/docs/engineering/deployment-runbook.md
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart={script} apply {network}
+ExecStop={script} remove {network}
+
+[Install]
+WantedBy=multi-user.target
+"""
 UNIT = """[Unit]
 Description=dsherp business agent worker
 Documentation=file://{root}/docs/engineering/deployment-runbook.md
-Requires=docker.service
-After=docker.service network-online.target
+# The host rules that keep run containers off this host must be in place first, and
+# the worker goes down with them.
+Requires=docker.service dsherp-agent-firewall.service
+After=docker.service network-online.target dsherp-agent-firewall.service
 
 [Service]
 Type=notify
@@ -53,6 +74,20 @@ ReadWritePaths={root}/.runtime -{root}/work
 WantedBy=multi-user.target
 """
 NAME = re.compile('[A-Za-z_][A-Za-z0-9_-]*')
+NETWORK = re.compile('[A-Za-z0-9][A-Za-z0-9_.-]*')
+
+
+def _write(target, text):
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = target.with_name(f'.{target.name}.{os.getpid()}')
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        with os.fdopen(fd, 'w') as file:
+            file.write(text)
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return target
 
 
 def render_systemd_unit(root=ROOT, *, user, group='dsherp', target=None, python=None,
@@ -71,27 +106,34 @@ def render_systemd_unit(root=ROOT, *, user, group='dsherp', target=None, python=
         profile=profile or f'{root}/.runtime/context-worker-sites.json',
         provider_env=provider_env or f'{root}/.env',
     )
-    target = Path(target) if target else root / '.runtime' / UNIT_NAME
-    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temporary = target.with_name(f'.{target.name}.{os.getpid()}')
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-    try:
-        with os.fdopen(fd, 'w') as file:
-            file.write(text)
-        os.replace(temporary, target)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
-    return target
+    return _write(Path(target) if target else root / '.runtime' / UNIT_NAME, text)
+
+
+def render_firewall_unit(root=ROOT, *, agent_network, target=None):
+    """The oneshot unit that applies the host INPUT rules for the agent network's bridge
+    at boot and whenever it is restarted; the worker unit requires it."""
+    root = Path(root).resolve()
+    if not isinstance(agent_network, str) or not NETWORK.fullmatch(agent_network):
+        raise ValueError('Invalid agent network name: ' + repr(agent_network))
+    text = FIREWALL_UNIT.format(root=root, script=FIREWALL_SCRIPT, network=agent_network)
+    return _write(Path(target) if target else root / '.runtime' / FIREWALL_UNIT_NAME, text)
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Render the dsherp worker systemd unit')
+    parser = argparse.ArgumentParser(description='Render the dsherp worker and firewall systemd units')
     parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--user', required=True)
     parser.add_argument('--group', default='dsherp')
-    parser.add_argument('--target', type=Path)
+    parser.add_argument('--target', type=Path, help='worker unit path; the firewall unit lands beside it')
+    parser.add_argument('--agent-network', help='defaults to the agent network of infra/env/prod.env under --root')
     arguments = parser.parse_args()
-    print(render_systemd_unit(arguments.root, user=arguments.user, group=arguments.group, target=arguments.target))
+    network = arguments.agent_network
+    if not network:
+        from dsherp import deploy_env
+        network = deploy_env.settings(dict(os.environ, DSHERP_ENV='prod'), root=arguments.root)['agent_network']
+    worker = render_systemd_unit(arguments.root, user=arguments.user, group=arguments.group, target=arguments.target)
+    print(worker)
+    print(render_firewall_unit(arguments.root, agent_network=network, target=worker.with_name(FIREWALL_UNIT_NAME)))
 
 
 if __name__ == '__main__':

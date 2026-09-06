@@ -82,6 +82,9 @@ services:
     volumes:
       - tenant-sites:/home/frappe/frappe-bench/sites
       - tenant-logs:/home/frappe/frappe-bench/logs
+      # `bench drop-site` moves a retired Site (its final backup included) here; the
+      # directory exists in the image owned by the bench user so the volume starts writable.
+      - tenant-archive:/home/frappe/frappe-bench/archived
     depends_on:
       db: {condition: service_healthy}
       redis-cache: {condition: service_healthy}
@@ -322,6 +325,7 @@ volumes:
   redis-queue-data:
   tenant-sites:
   tenant-logs:
+  tenant-archive:
   platform-sites:
   platform-logs:
   tenant-backups:
