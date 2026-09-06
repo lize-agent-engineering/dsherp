@@ -58,7 +58,9 @@ services:
     logging: *logging
 
   backend:
-    image: ${DSHERP_IMAGE_REGISTRY:?set DSHERP_IMAGE_REGISTRY}/dsherp-frappe:${DSHERP_IMAGE_TAG:?set DSHERP_IMAGE_TAG}
+    # The exact image the backup set records; dsherp-admin restore-drill resolves it and
+    # then checks the running container's image id against the set.
+    image: ${DSHERP_RESTORE_IMAGE:?set DSHERP_RESTORE_IMAGE}
     pull_policy: if_not_present
     restart: "no"
     command: ["bench", "--help"]
@@ -88,9 +90,17 @@ services:
     image: restic/restic:0.18.0@sha256:4cf4a61ef9786f4de53e9de8c8f5c040f33830eb0a10bf3d614410ee2fcb6120
     restart: "no"
     entrypoint: ["restic"]
-    user: "${DSHERP_AGENT_UID:-1000}:${DSHERP_AGENT_GID:-1000}"
+    # Unlike the sync containers - which read the bench's own 0700 staging directories and so
+    # must be the bench user - a fetch container writes into a volume of its own that starts
+    # empty and root-owned. It runs as root there so restic can restore the files with the
+    # ownership they had, which is what lets the bench read them afterwards; every capability
+    # is still dropped and the root filesystem is still read-only.
     read_only: true
     cap_drop: [ALL]
+    # restic restores each file's original ownership and timestamps so the bench reads exactly
+    # what was backed up; those two calls are the only privileges these containers get back
+    # (no DAC_OVERRIDE, so ordinary permissions still apply to them).
+    cap_add: [CHOWN, FOWNER]
     security_opt: [no-new-privileges:true]
     environment:
       RESTIC_REPOSITORY: ${DSHERP_BACKUP_REPOSITORY}
@@ -110,9 +120,17 @@ services:
     image: restic/restic:0.18.0@sha256:4cf4a61ef9786f4de53e9de8c8f5c040f33830eb0a10bf3d614410ee2fcb6120
     restart: "no"
     entrypoint: ["restic"]
-    user: "${DSHERP_AGENT_UID:-1000}:${DSHERP_AGENT_GID:-1000}"
+    # Unlike the sync containers - which read the bench's own 0700 staging directories and so
+    # must be the bench user - a fetch container writes into a volume of its own that starts
+    # empty and root-owned. It runs as root there so restic can restore the files with the
+    # ownership they had, which is what lets the bench read them afterwards; every capability
+    # is still dropped and the root filesystem is still read-only.
     read_only: true
     cap_drop: [ALL]
+    # restic restores each file's original ownership and timestamps so the bench reads exactly
+    # what was backed up; those two calls are the only privileges these containers get back
+    # (no DAC_OVERRIDE, so ordinary permissions still apply to them).
+    cap_add: [CHOWN, FOWNER]
     security_opt: [no-new-privileges:true]
     environment:
       RESTIC_REPOSITORY: ${DSHERP_BACKUP_SECRETS_REPOSITORY}

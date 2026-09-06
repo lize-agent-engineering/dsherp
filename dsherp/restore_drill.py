@@ -28,29 +28,25 @@ HEALTH_POLL_SECONDS = 5
 # Only this: the database password and the deployment keys belong to the host being restored
 # onto, but the encryption key is what makes the restored rows readable at all.
 CARRIED_KEYS = ('encryption_key',)
-NEW_SITE = (
-    "payload=json.loads(sys.stdin.read()) if False else PAYLOAD\n"
-    "os.chdir('/home/frappe/frappe-bench/sites')\n"
-    "import frappe\n"
-    "from frappe.installer import _new_site\n"
-    "_new_site(payload['db_name'],payload['site'],db_root_username='root',"
-    "db_root_password=payload['root_password'],admin_password=payload['admin_password'],"
-    "verbose=False,install_apps=payload['apps'],db_host='db',mariadb_user_host_login_scope='%')\n"
-    "print('DSHERP_NEWSITE '+json.dumps({'site':payload['site']}))\n")
+# One call does both on a stack where the Site does not exist yet: Frappe creates the site and
+# loads the dump into it. `bench restore` is the same call with an existing site_config; here
+# the credentials come in on stdin instead of on a command line.
 RESTORE = (
     "payload=PAYLOAD\n"
     "os.chdir('/home/frappe/frappe-bench/sites')\n"
     "import frappe\n"
-    "from frappe.installer import _new_site,extract_files,extract_sql_from_archive\n"
-    "frappe.init(site=payload['site'],sites_path='/home/frappe/frappe-bench/sites')\n"
-    "frappe.connect()\n"
-    "db_name=frappe.conf.db_name\n"
-    "frappe.destroy()\n"
-    "_new_site(db_name,payload['site'],db_root_username='root',db_root_password=payload['root_password'],"
-    "admin_password=payload['admin_password'],verbose=False,source_sql=payload['database'],force=True,"
-    "db_host='db',mariadb_user_host_login_scope='%')\n"
-    "for archive,kind in ((payload['files'],'public'),(payload['private_files'],'private')):\n"
+    "from frappe.installer import _new_site,extract_files\n"
+    "existing=None\n"
+    "if os.path.exists('/home/frappe/frappe-bench/sites/'+payload['site']+'/site_config.json'):\n"
+    "    frappe.init(site=payload['site'],sites_path='/home/frappe/frappe-bench/sites')\n"
+    "    existing=frappe.conf.db_name\n"
+    "    frappe.destroy()\n"
+    "_new_site(existing or payload['db_name'],payload['site'],db_root_username='root',"
+    "db_root_password=payload['root_password'],admin_password=payload['admin_password'],verbose=False,"
+    "source_sql=payload['database'],force=True,db_host='db',mariadb_user_host_login_scope='%')\n"
+    "for archive in (payload['files'],payload['private_files']):\n"
     "    extract_files(payload['site'],archive)\n"
+    "    frappe.destroy()\n"
     "print('DSHERP_RESTORED '+json.dumps({'site':payload['site']}))\n")
 SITE_CONFIG = (
     "payload=PAYLOAD\n"
@@ -88,7 +84,13 @@ class DrillStack:
     def __init__(self, resolved, root, runner, *, image_tag, secrets_dir, project=DRILL_PROJECT):
         self.resolved, self.root, self.runner = resolved, Path(root), runner
         self.image_tag, self.secrets_dir, self.project = image_tag, Path(secrets_dir), project
+        # A development set records the base image the dev bench runs; a release set records
+        # this project's image for its tag.
+        image = (resolved['base_image'] if image_tag == 'dev'
+                 else deploy_env.image_name(resolved['registry'], 'frappe', image_tag))
+        self.image = image
         self.environment = {
+            'DSHERP_RESTORE_IMAGE': image,
             'DSHERP_IMAGE_TAG': image_tag,
             'DSHERP_IMAGE_REGISTRY': resolved['registry'] or 'local',
             'DSHERP_SECRETS_DIR': str(secrets_dir),
@@ -140,8 +142,14 @@ class DrillStack:
         return parts[1]
 
     def fetch(self, side, snapshot):
-        self._run(self._compose('run', '--rm', '-T', f'restore-fetch-{side}', 'restore', snapshot,
-                                '--target', f'/fetched/{side}'), timeout=3600)
+        # The same private certificate authority the sync containers use, when one is installed.
+        ca = self.secrets_dir / 'backup_storage_ca.pem'
+        extra = (['-v', f'{ca}:/run/secrets/backup_storage_ca.pem:ro',
+                  '-e', 'RESTIC_CACERT=/run/secrets/backup_storage_ca.pem'] if ca.exists() else [])
+        # Each fetch container has its own volume mounted at /fetched, so the target is that
+        # root; the bench sees the two of them side by side under /home/frappe/fetched/.
+        self._run(self._compose('run', '--rm', '-T', *extra, f'restore-fetch-{side}', 'restore', snapshot,
+                                '--target', '/fetched'), timeout=3600)
 
     def bench(self):
         return admin.Bench(self.resolved, 'tenant', root=self.root, runner=self.runner, project=self.project,
@@ -158,20 +166,20 @@ def newest_complete(status, site):
     return rows[-1]
 
 
-def _fetched_root(bench, side, site, set_id):
+def _fetched_root(bench, side, site, set_id, base=FETCHED):
     """restic restores the absolute path it saved, under --target."""
-    pattern = (f'{FETCHED}/{side}/backups/*/sets/{site}/{set_id}' if side == 'data'
-               else f'{FETCHED}/{side}/backups/*/{site}/{set_id}')
+    pattern = (f'{base}/{side}/backups/*/sets/{site}/{set_id}' if side == 'data'
+               else f'{base}/{side}/backups/*/{site}/{set_id}')
     listed = bench.run('sh', '-c', f'ls -d {pattern}', timeout=120).strip().splitlines()
     if not listed:
         raise Fault(f'取回的 {side} 侧里没有 {set_id}')
     return listed[-1]
 
 
-def verify_fetched(bench, site, set_id):
+def verify_fetched(bench, site, set_id, base=FETCHED):
     """Prove the two fetched halves describe one set before anything is restored from them."""
-    data = _fetched_root(bench, 'data', site, set_id)
-    secrets_root = _fetched_root(bench, 'secrets', site, set_id)
+    data = _fetched_root(bench, 'data', site, set_id, base=base)
+    secrets_root = _fetched_root(bench, 'secrets', site, set_id, base=base)
     set_doc = json.loads(bench.run('sh', '-c', f'cat {data}/set.json', timeout=120))
     pair = json.loads(bench.run('sh', '-c', f'cat {secrets_root}/pair.json', timeout=120))
     if set_doc.get('set_id') != set_id or not backup_sets.pair_matches(set_doc, pair):
@@ -192,13 +200,9 @@ def verify_fetched(bench, site, set_id):
     return set_doc, data, snapshot, config
 
 
-def restore_into(bench, site, data_root, config, *, root_password, admin_password, apps=('erpnext',)):
-    payload = {'site': site, 'db_name': None, 'root_password': root_password, 'admin_password': admin_password,
-               'apps': list(apps)}
-    if not bench.site_exists(site):
-        payload['db_name'] = 'restore_' + tokens.token_hex(6)
-        bench.script(_script(NEW_SITE, payload), timeout=1800, secrets=(root_password, admin_password))
+def restore_into(bench, site, data_root, config, *, root_password, admin_password):
     bench.script(_script(RESTORE, {'site': site, 'root_password': root_password, 'admin_password': admin_password,
+                                   'db_name': 'restore_' + tokens.token_hex(6),
                                    'database': f'{data_root}/database.sql.gz', 'files': f'{data_root}/files.tar',
                                    'private_files': f'{data_root}/private-files.tar'}),
                  timeout=3600, secrets=(root_password, admin_password))
@@ -310,4 +314,83 @@ def restore_drill(resolved, sites=None, *, root=ROOT, runner=subprocess.run, sta
         admin._write_json(bundle / 'report.json', report)
         if report['ok']:
             shutil.rmtree(secrets_dir, ignore_errors=True)
+    return report
+
+
+def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.run, bench_factory=None,
+                 clock=time.time, provision=None):
+    """Cold-start recovery on a freshly built host (gate G3, runbook §12).
+
+    The contract, in order: the Site must not already exist here; the set's metadata and
+    artefacts are read back and checked before anything is created; this stack must be running
+    the build the set records; the Site is provisioned by the normal path, restored, given back
+    its encryption key, compared with the snapshot taken inside the backup's window, and
+    provisioned once more so host-specific configuration is derived for THIS host; only a clean
+    comparison reopens it."""
+    backup.require_repositories(resolved)
+    status, state = backup.read_status(resolved, root)
+    factory = bench_factory or (lambda kind: admin.Bench(resolved, kind, root=root, runner=runner))
+    kind = backup.bench_kind_of(resolved, site)
+    bench = factory(kind)
+    if bench.site_exists(site):
+        raise Fault(f'站点 {site} 在这台主机上已经存在；恢复不会覆盖它，先确认这是不是要恢复的那台机器')
+    if set_id:
+        row = dict(status['sets'].get(set_id) or {}, set_id=set_id)
+        if not row.get('site'):
+            raise Fault(f'本机记录里没有备份集 {set_id}；先 backup-sync 让它认识异地已有的集，或换一个 --set')
+    else:
+        if state == 'corrupt':
+            raise Fault('备份状态文件损坏：无法判断哪一份副本最新；先修复 backups/status.json 或用 --set 指名')
+        row = newest_complete(status, site)
+    started = time.monotonic()
+    with backup.operations_lock(resolved, root, 'restore-site'):
+        # 1. the artefacts, before anything is created
+        for side in ('data', 'secrets'):
+            snapshot = row.get(f'{side}_snapshot')
+            if not snapshot:
+                raise Fault(f'备份集 {row["set_id"]} 的 {side} 侧没有快照 id；它不是一个完整配对，不恢复')
+        images = admin._running_images(resolved, runner, root)
+        service = admin.bench_service_of(resolved, site)
+        running = (images.get(service) or {}).get('image_id')
+        if row.get('image_id') and running != row['image_id']:
+            raise Fault(f'本机 {service} 运行的镜像 id 是 {running}，备份集记录的是 {row["image_id"]}；'
+                        f'先把 prod.env 的 tag 改成 {row.get("image_tag")} 并 compose up -d，再恢复')
+        target = f'{backup.BACKUPS}/incoming/{row["set_id"]}'
+        volume = f'{resolved["project"]}_{"platform" if kind == "platform" else "tenant"}-backups'
+        for side in ('data', 'secrets'):
+            arguments = ['restore', row[f'{side}_snapshot'], '--target', f'/incoming/{side}']
+            backup.restic(resolved, side, arguments, root=root, runner=runner, timeout=3600,
+                          mounts=[f'{volume}:/incoming'])
+        data_root = _fetched_root(bench, 'data', site, row['set_id'], base=f'{backup.BACKUPS}/incoming')
+        set_doc, data_root, expected, config = verify_fetched(bench, site, row['set_id'],
+                                                              base=f'{backup.BACKUPS}/incoming')
+        # 2. the Site, by the normal path, so this host's own configuration is derived here
+        provision = provision or (lambda: admin.provision_tenant(resolved, site.split('.')[0], root=root, runner=runner)
+                                  if kind == 'tenant' else admin.provision_platform(resolved, root=root, runner=runner))
+        provision()
+        root_password = admin.read_secret(resolved, 'db_root_password', root)
+        admin_password = admin.read_secret(resolved, 'tenant_admin_password' if kind == 'tenant'
+                                           else 'platform_admin_password', root)
+        restore_into(bench, site, data_root, config, root_password=root_password, admin_password=admin_password)
+        restored = admin.take_snapshot(resolved, site, bench=bench, hash_columns=admin._hash_columns_of(expected))
+        comparison = admin.compare_snapshots(expected, restored, admin.RESTORE_EXPECTATIONS)
+        report = {'site': site, 'set_id': row['set_id'], 'image_tag': set_doc['image_tag'],
+                  'comparison': comparison['summary'], 'clean': comparison['clean'],
+                  'seconds': round(time.monotonic() - started, 1)}
+        if not comparison['clean']:
+            admin._set_flag(bench, site, 'maintenance_mode', 1)
+            report['maintenance'] = 'kept'
+            admin._write_json(admin.runtime_dir(resolved, root) / 'backups' / f'restore-{site}.json', report)
+            raise Fault(f'{site} 恢复后与备份窗口内的快照有 {comparison["summary"]["undeclared"]} 处未声明差异；'
+                        '站点保持维护模式，先看报告再决定')
+        decrypted = decrypt_check(bench, site)
+        report['decrypt_checked'] = decrypted['checked']
+        # 3. host-specific configuration again, now that the data is in place
+        provision()
+        admin._set_flag(bench, site, 'maintenance_mode', 0)
+        report['maintenance'] = 'released'
+        backup_status.record_site(status, site, 'verified', at=backup_status.now_iso(clock), ok=True,
+                                  set_id=row['set_id'], image_tag=set_doc['image_tag'])
+        backup.save_status(resolved, status, root)
+        admin._write_json(admin.runtime_dir(resolved, root) / 'backups' / f'restore-{site}.json', report)
     return report

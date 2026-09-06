@@ -349,7 +349,7 @@ def send_set(resolved, set_doc, *, root=ROOT, runner=subprocess.run, fatal=False
     return {'ok': ok, 'reason': outcome['failed'].get(set_doc['set_id'])}
 
 
-def _compose_run(resolved, root, service, arguments, ca=None):
+def _compose_run(resolved, root, service, arguments, ca=None, mounts=()):
     file = Path(root) / admin.COMPOSE[resolved['env']]
     command = ['docker', 'compose', '-p', resolved['project']]
     env_file = deploy_env.env_file(resolved['env'], root)
@@ -359,6 +359,8 @@ def _compose_run(resolved, root, service, arguments, ca=None):
     if ca is not None:
         command += ['-v', f'{ca}:/run/secrets/backup_storage_ca.pem:ro',
                     '-e', 'RESTIC_CACERT=/run/secrets/backup_storage_ca.pem']
+    for mount in mounts:
+        command += ['-v', mount]
     return command + [service, *arguments]
 
 
@@ -375,13 +377,14 @@ def _redactions(resolved, root):
     return values
 
 
-def restic(resolved, side, arguments, *, root=ROOT, runner=subprocess.run, timeout=3600):
+def restic(resolved, side, arguments, *, root=ROOT, runner=subprocess.run, timeout=3600, mounts=()):
     """One restic call against one repository, through its own one-shot compose service. The
     repository URL, its password and its storage identity come from compose, never from argv."""
     if side not in ('data', 'secrets'):
         raise ValueError('Unknown repository side: ' + repr(side))
     ca = admin.secrets_dir(resolved, root) / 'backup_storage_ca.pem'
-    command = _compose_run(resolved, root, f'backup-sync-{side}', arguments, ca=ca if ca.exists() else None)
+    command = _compose_run(resolved, root, f'backup-sync-{side}', arguments, ca=ca if ca.exists() else None,
+                           mounts=mounts)
     result = runner(command, text=True, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
     if result.returncode:
         tail = '\n'.join((result.stderr or result.stdout or '').strip().splitlines()[-6:])
@@ -389,6 +392,33 @@ def restic(resolved, side, arguments, *, root=ROOT, runner=subprocess.run, timeo
             tail = tail.replace(value, '[redacted]')
         raise Fault(f'restic（{side} 仓库）{arguments[0]} 失败：\n{tail}')
     return result.stdout
+
+
+def notify_failure(resolved, unit, *, root=ROOT, profile_path=None, client=None):
+    """What systemd runs when a backup unit fails. The worker is the only other thing on this
+    host that can raise an alert, and it may be the thing that is down, so this writes the
+    journal line itself and posts the webhook itself - and only reports `posted` when the
+    delivery actually succeeded."""
+    import httpx
+    profile = Path(profile_path) if profile_path else Path(root) / '.runtime' / 'context-worker-sites.json'
+    webhook = None
+    try:
+        webhook = json.loads(profile.read_text()).get('alert_webhook')
+    except (OSError, ValueError):
+        webhook = None
+    alert = {'key': 'backup_unit_failed', 'severity': 'critical',
+             'message': f'systemd 单元 {unit} 失败；看 journalctl -u {unit} 与 backups/status.json'}
+    print(json.dumps({'event': 'alert', 'unit': unit, **alert}, ensure_ascii=False))
+    if not webhook:
+        return {'unit': unit, 'webhook': 'not configured'}
+    try:
+        response = (client or httpx).post(webhook, json=alert, timeout=10)
+        response.raise_for_status()
+    except Exception as error:
+        outcome = {'unit': unit, 'webhook': 'failed', 'error_class': type(error).__name__}
+        print(json.dumps({'event': 'alert_webhook_failed', **outcome}, ensure_ascii=False))
+        return outcome
+    return {'unit': unit, 'webhook': 'posted'}
 
 
 def backup_init(resolved, *, root=ROOT, runner=subprocess.run):

@@ -570,3 +570,48 @@ def test_a_remote_copy_that_no_longer_describes_the_set_is_replaced_from_the_sta
     assert outcome["complete"] == [set_doc["set_id"]]
     assert uploads, "the set was sent again rather than accepted as it was"
     assert status["sets"][set_doc["set_id"]]["state"] == "complete"
+
+
+def test_a_failure_notification_reports_posted_only_when_the_delivery_succeeded(host, capsys):
+    """The worker's notifier swallows a failed webhook; this path must not, because it is the
+    one that speaks when the worker is down."""
+    profile = admin.runtime_dir(RELEASE) / "context-worker-sites.json"
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    profile.write_text(json.dumps({"alert_webhook": "https://hooks.example.com/x", "sites": []}))
+    posted = []
+
+    class Client:
+        def post(self, url, json=None, timeout=None):
+            posted.append((url, json))
+            return type("R", (), {"raise_for_status": lambda self: None})()
+    outcome = backup.notify_failure(RELEASE, "dsherp-backup.service", profile_path=profile, client=Client())
+    assert outcome == {"unit": "dsherp-backup.service", "webhook": "posted"}
+    assert posted[0][0] == "https://hooks.example.com/x" and posted[0][1]["key"] == "backup_unit_failed"
+    assert "dsherp-backup.service" in posted[0][1]["message"]
+    assert "backup_unit_failed" in capsys.readouterr().out, "the journal line is written whatever happens"
+
+    class Dead:
+        def post(self, url, json=None, timeout=None):
+            raise ConnectionError("no route to host")
+    outcome = backup.notify_failure(RELEASE, "dsherp-backup.service", profile_path=profile, client=Dead())
+    assert outcome["webhook"] == "failed" and outcome["error_class"] == "ConnectionError"
+
+    class Rejecting:
+        def post(self, url, json=None, timeout=None):
+            def raise_for_status():
+                raise RuntimeError("500")
+            return type("R", (), {"raise_for_status": staticmethod(raise_for_status)})()
+    assert backup.notify_failure(RELEASE, "u", profile_path=profile, client=Rejecting())["webhook"] == "failed"
+
+    profile.write_text(json.dumps({"sites": []}))
+    assert backup.notify_failure(RELEASE, "u", profile_path=profile, client=Client())["webhook"] == "not configured"
+    assert backup.notify_failure(RELEASE, "u", profile_path=admin.runtime_dir(RELEASE) / "gone.json")["webhook"] == "not configured"
+
+
+def test_the_cli_reports_a_failed_notification_with_a_non_zero_exit(monkeypatch):
+    monkeypatch.setattr(backup, "notify_failure", lambda resolved, unit, **kw: {"unit": unit, "webhook": "failed"})
+    from dsherp import deploy_env
+    monkeypatch.setattr(deploy_env, "settings", lambda *a, **k: RELEASE)
+    assert admin.main(["notify-failure", "dsherp-backup.service"]) == 1
+    monkeypatch.setattr(backup, "notify_failure", lambda resolved, unit, **kw: {"unit": unit, "webhook": "posted"})
+    assert admin.main(["notify-failure", "dsherp-backup.service"]) == 0

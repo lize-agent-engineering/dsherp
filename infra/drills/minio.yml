@@ -20,7 +20,7 @@ services:
       - ${DRILL_CERTS_DIR}:/certs:ro
     networks:
       validation:
-        aliases: [minio.drill.localhost]
+        aliases: [minio.drill.internal, minio.drill.localhost]
     restart: "no"
 
 volumes:
@@ -32,5 +32,5 @@ secrets:
 
 networks:
   validation:
-    name: dsherp-validation_validation
+    name: ${DRILL_NETWORK:-dsherp-validation_validation}
     external: true

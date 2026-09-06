@@ -72,3 +72,45 @@ def test_the_coordinator_rejects_a_holds_source_that_is_not_callable(tmp_path):
     with pytest.raises(ValueError):
         Coordinator([{"site": "a", "client": object(), "business": {}}], lambda: SETTINGS, 1, lambda *a: None, None,
                     lambda: False, tmp_path, holds="acme")
+
+
+def test_the_worker_reports_the_backup_record_for_every_expected_site(tmp_path):
+    """The record is written by dsherp-admin; the worker only reads it, so a backup that never
+    ran is as visible as one that failed."""
+    from dsherp import backup_status, context_worker
+
+    emitted = []
+    notifier = type("N", (), {"emit": lambda self, alerts, now: emitted.extend(alerts)})()
+    context_worker.monitor_backups(tmp_path, ["acme.tenant.example.com"], notifier, {}, now=1_788_739_200.0)
+    assert [alert.key for alert in emitted] == ["backup_status_missing"]
+    rendered = context_worker.REGISTRY.render()
+    assert "dsherp_backup_sites_expected 1" in rendered and "dsherp_backup_offsite_oldest_hours -1" in rendered
+
+    status = backup_status.empty()
+    backup_status.record_site(status, "acme.tenant.example.com", "backup", at="2026-09-06T22:55:00Z", ok=True,
+                              set_id="20260906_225500-acme_tenant_example_com-aaaaaa", stamp="20260906_225500")
+    backup_status.record_site(status, "acme.tenant.example.com", "offsite", at="2026-09-06T23:00:00Z", ok=True,
+                              set_id="20260906_225500-acme_tenant_example_com-aaaaaa", stamp="20260906_225500")
+    backup_status.record_run(status, "backup", at="2026-09-06T22:55:00Z", ok=True)
+    backup_status.save(tmp_path / "backups" / "status.json", status)
+    emitted.clear()
+    context_worker.monitor_backups(tmp_path, ["acme.tenant.example.com"], notifier, {}, now=1_788_739_200.0)
+    assert [alert.key for alert in emitted] == []
+    assert "dsherp_backup_sites_rpo_ok 1" in context_worker.REGISTRY.render()
+
+    emitted.clear()
+    context_worker.monitor_backups(tmp_path, None, notifier, {}, now=1_788_739_200.0)
+    assert [alert.key for alert in emitted] == ["backup_scope_unknown"], "the scope is never quietly narrowed"
+
+
+def test_a_backup_reporting_failure_never_costs_the_business_tick(tmp_path, monkeypatch):
+    from dsherp import context_worker
+
+    ticked = []
+    coordinator = type("C", (), {"tick": lambda self, now: ticked.append(now)})()
+    monkeypatch.setattr(context_worker, "monitor_ops", lambda *a, **k: None)
+    monkeypatch.setattr(context_worker, "monitor_backups", lambda *a, **k: (_ for _ in ()).throw(OSError("disk gone")))
+    context_worker.STOPPING.clear()
+    assert context_worker.serve_once(coordinator, [{"site": "a", "client": object()}], None, {},
+                                     now=0, backups={"runtime_dir": tmp_path, "sites": lambda: ["a"]})
+    assert ticked == [0], "the heartbeat still ran"

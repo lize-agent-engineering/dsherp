@@ -85,6 +85,13 @@ sudo -iu dsherp bash -c 'cd /opt/dsherp && DSHERP_ENV=prod ./bin/dsherp-admin se
 
 后文 shell 步骤里用到的 `$DSHERP_PROJECT`、`$DSHERP_BASE_DOMAIN` 等变量来自同一份文件：`set -a; . infra/env/prod.env; set +a`。这与「目录变量不要单独 export」不冲突——source 整个文件得到的值和 compose 读到的完全一致，单独 export 一个不同的值才是问题。
 
+
+备份相关的密钥与凭据（配置了异地仓库后必需，`doctor` 会检查）：`secrets init` 生成两个仓库口令
+`backup_repository_password` 与 `backup_secrets_repository_password`；运维另行放入两份**不同**的对象存储身份
+`backup_storage_credentials`、`backup_secrets_storage_credentials`（各两行 `AWS_ACCESS_KEY_ID=`/`AWS_SECRET_ACCESS_KEY=`，
+桶策略上分别只能读写数据桶与密钥桶）；私有 CA 放 `backup_storage_ca.pem`（可选，restic 会真正校验）。
+**这五份材料必须另存在对象存储之外**（密码库或离线介质）：丢了它们等于丢了全部异地备份，恢复主机靠人带入。
+
 ## 4. 起数据面
 
 compose 在解析时就要求每个 `configs:`/`secrets:` 文件存在，所以入口配置要先渲染一次（此时只有 platform 一个站块）：
@@ -221,7 +228,7 @@ sudo systemctl start dsherp-agent-worker
 
 退出码：0 = 各站数据与升级前一致（或差异都被本次执行的 patch 声明），站点已重新开放；1 = 有未声明差异，**有差异的站保持维护模式**，人核对报告后要么 `rollback`，要么确认接受再 `resume-site <站>`；2 = 中途失败，失败的站保持维护模式并有带 `failed` 的部分报告。
 
-`release` 先做预检：`prod.env` 的 tag 就是要发布的 tag、两个 bench 服务各恰好一个运行容器（多于一个拒绝，不会只查第一个）且**运行容器**镜像全名就是该 tag 的发布镜像（读容器而不是读环境文件）、该 tag 的发布清单可用且两个容器的镜像 id 与清单记录一致（清单缺失、读不出、tag 不符、没有该镜像的记录或 id 不是 `sha256:` 开头的非空串，都在改动任何站点之前拒绝——不会退化成"没有预期 id 就不核对"；清单查找顺序见第 2 步，`--manifest FILE` 可直接指定）、`--from` 与 `current.json` 的记录一致（有记录时给出不同的 `--from` 会被拒绝：记录对就不要给，记录错就先改对或删掉）、`current.json` 里的镜像记录完整（否则将来的回滚用不了，现在就拒绝）或——没有 `current.json` 时——旧 tag 的清单可用、每站没有在飞运行、这个 tag 还没有升级前基线（基线只写一次，重来要换 tag 或先 `forget-release`，后者只删发布记录目录下的合法子目录）。然后写发布记录（新旧 tag、两个容器的镜像与镜像 id），再对每个站（租户站与平台站）按序：静默 → `bench backup --with-files` → 把四件套备份集复制到 `/home/frappe/frappe-bench/archived/releases/<tag>/<站>/`（`tenant-archive`/`platform-archive` 卷；Frappe 自己会在 23 小时后清掉 `private/backups`）→ 升级前快照 → `bench migrate` → 升级后快照（按升级前的列集求哈希）→ 从 Patch Log 算出本次实际执行的 patch，只采纳它们声明的预期变化 → 比对 → 只有干净才恢复站点标志。全部干净后把 `current.json` 记为新 tag。报告在 `.runtime/releases/release-<tag>-<时间戳>.json`（`release-<tag>.json` 是最新一份），快照与备份记录在 `.runtime/releases/<tag>/{release.json,<站>/before.json,after.json,backup.json}`。
+`release` 先做预检：两个异地仓库已配置（生产未配置即拒绝，见第 12 节）、`prod.env` 的 tag 就是要发布的 tag、两个 bench 服务各恰好一个运行容器（多于一个拒绝，不会只查第一个）且**运行容器**镜像全名就是该 tag 的发布镜像（读容器而不是读环境文件）、该 tag 的发布清单可用且两个容器的镜像 id 与清单记录一致（清单缺失、读不出、tag 不符、没有该镜像的记录或 id 不是 `sha256:` 开头的非空串，都在改动任何站点之前拒绝——不会退化成"没有预期 id 就不核对"；清单查找顺序见第 2 步，`--manifest FILE` 可直接指定）、`--from` 与 `current.json` 的记录一致（有记录时给出不同的 `--from` 会被拒绝：记录对就不要给，记录错就先改对或删掉）、`current.json` 里的镜像记录完整（否则将来的回滚用不了，现在就拒绝）或——没有 `current.json` 时——旧 tag 的清单可用、每站没有在飞运行、这个 tag 还没有升级前基线（基线只写一次，重来要换 tag 或先 `forget-release`，后者只删发布记录目录下的合法子目录）。然后写发布记录（新旧 tag、两个容器的镜像与镜像 id），再对每个站（租户站与平台站）按序：静默 → `bench backup --with-files` → 把四件套备份集复制到 `/home/frappe/frappe-bench/archived/releases/<tag>/<站>/`（`tenant-archive`/`platform-archive` 卷；Frappe 自己会在 23 小时后清掉 `private/backups`）→ 升级前快照 → `bench migrate` → 升级后快照（按升级前的列集求哈希）→ 从 Patch Log 算出本次实际执行的 patch，只采纳它们声明的预期变化 → 比对 → 只有干净才恢复站点标志。全部干净后把 `current.json` 记为新 tag。报告在 `.runtime/releases/release-<tag>-<时间戳>.json`（`release-<tag>.json` 是最新一份），快照与备份记录在 `.runtime/releases/<tag>/{release.json,<站>/before.json,after.json,backup.json}`。
 
 比对口径：站上每个 DocType 按元数据归入且只归入一桶——**严格**（erpnext 与两个 dsherp App 的全部 DocType、自定义 DocType、联系人与身份表、租户写的权限与流程：Role、Custom DocPerm、Workflow 族、非标准的 Notification/Report/Print Format/Web Form、Client/Server Script 等：逐行逐字段）、**日志**（Comment/Version/Deleted Document/Communication/Activity Log：只比哈希，允许新增）、**排除**（Frappe 自己的元数据、缓存与技术日志，每次 migrate 都会改写）；租户写过的元数据按行分区（`custom=1` 的 DocType 及其字段、`is_system_generated=0` 的 Custom Field/Property Setter、`is_standard` 为否的报表/通知/打印格式、User 与 Role Profile 下的 Has Role）。新出现的表和列是 schema 变化，报告为信息不算差异；消失的表和列、行的增删改、单值文档任何设置值的变化（含首次落库）都是差异，除非本次执行的某个 patch 在自己的模块里用 `EXPECTED_CHANGES = [{'doctype': ..., 'fields': [...] 或 ['*'], 'rows': 'existing'|'inserted'|'deleted'|'any'}]` 声明过——只留哈希的大表只能被 `['*']` 整行声明放行。任何一张表读不出来就中止，不会带着"部分快照"下结论。原生 SQL 分页读取，密码列与密钥类单值只存摘要；快照行数超过上限（默认 100 万）也中止。
 
@@ -258,6 +265,47 @@ admin provision-tenant "$SLUG"      # 幂等重跑：核对运行身份、站点
 ```
 
 归档目录里还有整站的 `site_config.json`（含库口令与加密密钥），它与库转储同目录同权限——这是计划 4 的异地备份要分开存放的对象，归档不能原样同步出主机。
+
+## 12. 备份与容灾
+
+**判据**：任一站点（平台站与全部租户站）在任一时刻都有一份 24 小时内的异地备份可恢复；RTO 8 小时。年龄按备份**数据本身的时点**算，不是上传完成时刻。
+
+**周期**：`dsherp-backup.timer` 每天 02:00 与 14:00（Asia/Shanghai）跑 `dsherp-admin backup --sync`；`dsherp-backup-drill.timer` 每周日 04:00 跑 `dsherp-admin restore-drill`。两者失败时 systemd 触发 `dsherp-backup-failure@.service`，它直接写 journal 并投递 profile 里的 `alert_webhook`——worker 停止时这条路仍在。装单元：
+
+```sh
+DSHERP_ENV=prod .venv/bin/python -m infra.render_worker_units --root /opt/dsherp --user dsherp
+sudo install -m 644 /opt/dsherp/.runtime/dsherp-backup*.service /opt/dsherp/.runtime/dsherp-backup*.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now dsherp-backup.timer dsherp-backup-drill.timer
+```
+
+**一次性初始化**：`DSHERP_ENV=prod ./bin/dsherp-admin backup-init`（幂等，两个仓库都建好后报 `kept`）。
+
+**备份集**：一次备份产出一个集，`<UTC 时间戳>-<站名下划线形式>-<6 位随机>`。数据侧在 `tenant-backups`/`platform-backups` 卷的 `sets/<站>/<集>/`：三件数据（`database.sql.gz`、`files.tar`、`private-files.tar`）、`snapshot.json`（G2 口径的核验快照）、`set.json`（各件 sha256、快照摘要、窗口起止、**当时运行的镜像 tag 与镜像 id**、Frappe 版本）。密钥侧在 `tenant-backup-secrets`/`platform-backup-secrets` 卷的 `<站>/<集>/`：`site_config_backup.json`（0600，目录 0700）与 `pair.json`（把数据侧各摘要抄一份 + `config_sha256` + `set.json` 的摘要）。两侧互证同一个集。
+
+**稳定窗口**：逐站先写保持文件（worker 不再领取，心跳照旧）→ `set-config dsherp_hold 1`（服务端 `claim_run` 直接拒绝，关掉"worker 已过检查、claim 未落地"的缝）→ 等在途执行者（Running/Cancelling）归零，最多 10 分钟（排队的运行被冻结，不计入，也不会让备份永远推迟）→ 维护模式 + 暂停调度 → 排空已在里面的写入者（本站 RQ 作业与非空闲数据库连接连续两轮为 0，最多 2 分钟）→ `bench backup --with-files` 与快照 → **逆序撤销**每一步。失败或超时都按已完成的动作逆序清理，该站记失败或推迟，其他站照常。
+
+**异地**：两个仓库、两个口令、两个存储身份。`backup-sync` 先向两个仓库列快照核对记录（远端少一侧立即降级并在同一次运行补齐），再补传未完成的集，读回 `set.json` 与 `pair.json` 逐项核对后才算 `complete`——**两个快照 id 不算数**。远端有而记录没有的集会被收养并核对；远端内容与本机暂存不符时按本机重传一次。保留按站点从集的时间戳选 7 日 + 4 周 + 3 月，另外永远保留每站最新的完整集与最新的已验证集、`kind=retire` 的下线集与尚未配对的集；两侧都判淘汰才 `forget`（该集的**全部**快照）再 `prune`。每次运行按天轮换 `check --read-data-subset=<n>/7`，一周读完全部数据。**保留语义**：没有备份的周期不占名额；不运行 `backup-sync` 就不会有任何淘汰；`keep 3 monthly` 不等于"三个月后一定消失"。
+
+**发布与下线**：`release` 的升级前备份与 `retire-tenant` 的最终备份用同一套协议产出 `kind=release`/`kind=retire` 的集并立即上传。生产环境两个命令都以"两个仓库已配置"为前置，未配置即在任何破坏性动作前拒绝；下线的最终集必须两侧配对完成才 `drop-site`。归档目录下 `site_config` 现在放在 `secrets/` 子目录（0700/0600），与转储不同目录不同权限。
+
+**可见性**：`backup` 与 `backup-sync` 把每站每阶段的最后一次尝试与最后一次成功写进 `<runtime>/backups/status.json`（失败不抹掉成功）。worker 每 tick 读它，产出 `dsherp_backup_sites_expected`、`dsherp_backup_sites_rpo_ok`、`dsherp_backup_offsite_oldest_hours`（有站从未完整则为 -1）、`dsherp_backup_local_oldest_hours`、`dsherp_backup_status_age_seconds`、`dsherp_backup_last_run_ok`、`dsherp_backup_unverified_days_max`，并按规则告警：
+
+| 告警键 | 级别 | 条件 |
+|---|---|---|
+| `backup_rpo_warning` | warning | 某站最新完整异地集的数据时点已满 20 小时 |
+| `backup_rpo_unmet` | critical | 满 24 小时，或该站从未有过完整集（消息里列站名） |
+| `backup_run_failed` | warning | 任一阶段最近一次尝试失败且晚于最近一次成功（推迟不算失败） |
+| `backup_status_missing` | critical | 状态文件缺失或损坏，或备份任务超过 13 小时没运行（定时器失联） |
+| `restore_unverified` | warning | 某站超过 8 天没有验证过恢复（新站以首次备份成功起算宽限） |
+| `backup_scope_unknown` | critical | 读不到租户清单：不缩小范围计算，直接报 |
+
+监控范围来自**租户清单 + 平台站**，不是状态文件里出现过的站，也不是 worker profile。
+
+**每周恢复验证**：`restore-drill [站…]` 在独立 compose 项目 `dsherp-restore` 里进行——`internal` 网络、无端口、无 worker/调度/队列/入口，只有两个取回容器能出网，且各自只挂自己那一半。流程：按各站最新完整集记录的 `(image_tag, image_id)` 分组 → 用该 tag 起栈并核对运行镜像 id 与集记录一致 → 取回两侧 → 核对配对与全部摘要（三件数据、`snapshot.json`、`site_config`）→ 进程内建站与恢复（root 与 admin 口令、`encryption_key` 只走解释器 stdin，不上命令行，`bench.log` 不再新增明文口令）→ 注入 `encryption_key`（只这一项；`db_password`、`host_name`、`dsherp_agent_sources` 等属于原主机，不带）→ **不 migrate**（升级是随后显式的 `release`）→ 与集内快照比对 → 对 `__Auth` 抽样解密。成功 `down -v` 只删本次演练自己的容器与卷；失败保留栈与 `<runtime>/backups/drills/<id>/` 诊断包（上限 14 天，但失败当时就告警、就处理），下一次演练拒绝启动直到 `--discard-failed`。
+
+**异机恢复（G3）**：在新主机按第 1–9 步拉起，带入上面五份密钥材料，`backup-init` 应报 `kept`，然后逐站 `restore-site <站>`（见下）。升级到更新的 tag 是随后显式的 `release`。
+
+**保留与用户数据删除（裁决 #10）**：备份是个人数据的副本。删除只作用于在线数据；已生成的集不改写，按上面的保留规则随运行淘汰；`kind=retire` 的集是否最终清除，与审计保留切片一起裁决。将来的 `delete-user-data` 只影响其后产生的集。
 
 ## 与其他服务共用的主机
 

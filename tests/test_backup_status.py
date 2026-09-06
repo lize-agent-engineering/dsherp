@@ -85,3 +85,84 @@ def test_sets_of_a_site_can_be_listed_with_their_protections():
     assert [row["set_id"][:8] for row in rows] == ["20260901", "20260905", "20260906"]
     assert backup_status.protected_sets(status, "acme.tenant.example.com") == {
         "20260901_020000-acme_tenant_example_com-aaaaaa", "20260905_020000-acme_tenant_example_com-bbbbbb"}
+
+
+from dsherp.backup_status import empty, evaluate, record_run, record_set, record_site   # noqa: E402
+
+NOW = 1_788_739_200.0   # 2026-09-07T00:00:00Z
+SITES = ("acme.tenant.example.com", "platform.tenant.example.com")
+
+
+def _healthy(sites=SITES, stamp="20260906_140007", verified_at="2026-09-06T04:30:00Z", first_at=None):
+    status = empty()
+    for site in sites:
+        set_id = f"{stamp}-{site.replace('.', '_')}-aaaaaa"
+        record_site(status, site, "backup", at=first_at or "2026-08-01T14:01:00Z", ok=True, set_id=set_id, stamp=stamp)
+        record_site(status, site, "backup", at="2026-09-06T14:01:00Z", ok=True, set_id=set_id, stamp=stamp)
+        record_site(status, site, "offsite", at="2026-09-06T14:03:00Z", ok=True, set_id=set_id, stamp=stamp)
+        if verified_at:
+            record_site(status, site, "verified", at=verified_at, ok=True, set_id=set_id, image_tag="v0.4.0")
+    for phase, at in (("backup", "2026-09-06T14:01:00Z"), ("sync", "2026-09-06T14:03:00Z"),
+                      ("check", "2026-09-06T14:05:00Z"), ("drill", verified_at or "2026-09-06T04:30:00Z")):
+        record_run(status, phase, at=at, ok=True)
+    return status
+
+
+def _keys(result):
+    return sorted(alert.key for alert in result["alerts"])
+
+
+def test_a_healthy_status_raises_nothing_and_reports_the_ages_it_judged():
+    result = evaluate(_healthy(), list(SITES), NOW, status_age_seconds=120)
+    assert _keys(result) == []
+    gauges = result["gauges"]
+    assert gauges["dsherp_backup_sites_expected"] == 2 and gauges["dsherp_backup_sites_rpo_ok"] == 2
+    assert gauges["dsherp_backup_last_run_ok"] == 1 and gauges["dsherp_backup_status_age_seconds"] == 120
+    assert abs(gauges["dsherp_backup_offsite_oldest_hours"] - 9.999) < 0.01
+
+
+def test_the_rpo_is_judged_from_the_data_the_set_holds_not_from_when_it_was_uploaded():
+    assert _keys(evaluate(_healthy(stamp="20260906_040001"), list(SITES), NOW)) == []               # 19h59m59s
+    assert _keys(evaluate(_healthy(stamp="20260906_035959"), list(SITES), NOW)) == ["backup_rpo_warning"]
+    assert _keys(evaluate(_healthy(stamp="20260905_235959"), list(SITES), NOW)) == ["backup_rpo_unmet"]
+    unmet = [alert for alert in evaluate(_healthy(stamp="20260905_235959"), list(SITES), NOW)["alerts"]][0]
+    assert unmet.severity == "critical" and "acme.tenant.example.com" in unmet.message
+
+
+def test_the_expected_sites_come_from_the_caller_and_an_unbacked_site_is_unmet():
+    status = _healthy(sites=("acme.tenant.example.com",))
+    result = evaluate(status, ["acme.tenant.example.com", "new.tenant.example.com"], NOW)
+    assert "backup_rpo_unmet" in _keys(result)
+    assert result["gauges"]["dsherp_backup_offsite_oldest_hours"] == -1
+    assert result["gauges"]["dsherp_backup_sites_rpo_ok"] == 1
+    assert "new.tenant.example.com" in [alert for alert in result["alerts"] if alert.key == "backup_rpo_unmet"][0].message
+
+
+def test_a_scope_that_cannot_be_read_is_reported_rather_than_narrowed():
+    """The alternative - falling back to whatever the record happens to mention - would hide
+    exactly the Site nobody is backing up."""
+    result = evaluate(_healthy(), None, NOW)
+    assert _keys(result) == ["backup_scope_unknown"]
+    assert result["gauges"]["dsherp_backup_sites_expected"] == -1
+
+
+def test_a_failed_attempt_after_a_success_is_a_warning_and_a_missing_or_stale_record_is_critical():
+    status = _healthy()
+    record_site(status, "acme.tenant.example.com", "offsite", at="2026-09-06T23:00:00Z", ok=False, error="restic: timeout")
+    assert _keys(evaluate(status, list(SITES), NOW)) == ["backup_run_failed"]
+    assert _keys(evaluate(None, list(SITES), NOW)) == ["backup_status_missing"]
+    late = _healthy()
+    record_run(late, "backup", at="2026-09-06T10:59:00Z", ok=True)      # 13h01m ago: the timer did not fire
+    assert "backup_status_missing" in _keys(evaluate(late, list(SITES), NOW))
+    deferred = _healthy()
+    record_site(deferred, "acme.tenant.example.com", "backup", at="2026-09-06T23:00:00Z", ok=False, error=None, deferred="busy")
+    assert "backup_run_failed" not in _keys(evaluate(deferred, list(SITES), NOW)), "a deferred Site is not a failure"
+
+
+def test_being_unverified_for_more_than_eight_days_is_a_warning_with_a_grace_for_new_sites():
+    assert _keys(evaluate(_healthy(verified_at="2026-08-29T23:59:00Z"), list(SITES), NOW)) == ["restore_unverified"]
+    assert _keys(evaluate(_healthy(verified_at="2026-08-30T00:01:00Z"), list(SITES), NOW)) == []
+    fresh = _healthy(verified_at=None, first_at="2026-09-06T14:01:00Z")
+    assert _keys(evaluate(fresh, list(SITES), NOW)) == [], "a Site backed up yesterday has not missed a drill yet"
+    old = _healthy(verified_at=None, first_at="2026-08-01T00:00:00Z")
+    assert _keys(evaluate(old, list(SITES), NOW)) == ["restore_unverified"]

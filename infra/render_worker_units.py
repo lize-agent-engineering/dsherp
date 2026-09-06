@@ -119,6 +119,117 @@ def render_firewall_unit(root=ROOT, *, agent_network, target=None):
     return _write(Path(target) if target else root / '.runtime' / FIREWALL_UNIT_NAME, text)
 
 
+SANDBOX = """ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths={root}/.runtime"""
+BACKUP_SERVICE = """[Unit]
+Description=dsherp backup: a stable window per Site, then the off-site copy
+Documentation=file://{root}/docs/engineering/deployment-runbook.md
+Requires=docker.service
+After=docker.service network-online.target
+OnFailure=dsherp-backup-failure@%n.service
+
+[Service]
+Type=oneshot
+User={user}
+Group={group}
+SupplementaryGroups=docker
+Environment=DSHERP_ENV=prod
+WorkingDirectory={root}
+ExecStart={root}/bin/dsherp-admin backup --sync
+TimeoutStartSec=3h
+StandardError=journal
+SyslogIdentifier=dsherp-backup
+{sandbox}
+"""
+DRILL_SERVICE = """[Unit]
+Description=dsherp restore drill: restore every Site's newest off-site set in an isolated stack
+Documentation=file://{root}/docs/engineering/deployment-runbook.md
+Requires=docker.service
+After=docker.service network-online.target
+OnFailure=dsherp-backup-failure@%n.service
+
+[Service]
+Type=oneshot
+User={user}
+Group={group}
+SupplementaryGroups=docker
+Environment=DSHERP_ENV=prod
+WorkingDirectory={root}
+ExecStart={root}/bin/dsherp-admin restore-drill
+TimeoutStartSec=6h
+StandardError=journal
+SyslogIdentifier=dsherp-backup-drill
+{sandbox}
+"""
+# Hour lists and an explicit zone are systemd's own syntax; the stamps inside a backup set
+# stay UTC, so a zone change moves when a backup runs, never how its age is judged.
+BACKUP_TIMER = """[Unit]
+Description=dsherp backup every twelve hours
+
+[Timer]
+OnCalendar=*-*-* 02,14:00:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=5min
+Unit=dsherp-backup.service
+
+[Install]
+WantedBy=timers.target
+"""
+DRILL_TIMER = """[Unit]
+Description=dsherp restore drill, weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=30min
+Unit=dsherp-backup-drill.service
+
+[Install]
+WantedBy=timers.target
+"""
+# systemd runs this when either unit fails, so a failure is reported even when the worker
+# (the only other thing on the host that can raise an alert) is down.
+FAILURE_SERVICE = """[Unit]
+Description=dsherp: report a failed backup unit (%i)
+
+[Service]
+Type=oneshot
+User={user}
+Group={group}
+Environment=DSHERP_ENV=prod
+WorkingDirectory={root}
+ExecStart={root}/bin/dsherp-admin notify-failure %i
+StandardError=journal
+SyslogIdentifier=dsherp-backup-failure
+"""
+BACKUP_UNITS = {
+    'backup.service': ('dsherp-backup.service', BACKUP_SERVICE),
+    'backup.timer': ('dsherp-backup.timer', BACKUP_TIMER),
+    'drill.service': ('dsherp-backup-drill.service', DRILL_SERVICE),
+    'drill.timer': ('dsherp-backup-drill.timer', DRILL_TIMER),
+    'failure.service': ('dsherp-backup-failure@.service', FAILURE_SERVICE),
+}
+
+
+def render_backup_units(root=ROOT, *, user, group='dsherp', target_dir=None):
+    """The two timers that keep the off-site copy fresh and proven, and the unit systemd runs
+    when either of them fails."""
+    root = Path(root).resolve()
+    for value in (user, group):
+        if not isinstance(value, str) or not NAME.fullmatch(value):
+            raise ValueError('Invalid service account: ' + repr(value))
+    directory = Path(target_dir) if target_dir else root / '.runtime'
+    sandbox = SANDBOX.format(root=root)
+    return {key: _write(directory / name, text.format(root=root, user=user, group=group, sandbox=sandbox))
+            for key, (name, text) in BACKUP_UNITS.items()}
+
+
 def main():
     parser = argparse.ArgumentParser(description='Render the dsherp worker and firewall systemd units')
     parser.add_argument('--root', type=Path, default=ROOT)
@@ -134,6 +245,9 @@ def main():
     worker = render_systemd_unit(arguments.root, user=arguments.user, group=arguments.group, target=arguments.target)
     print(worker)
     print(render_firewall_unit(arguments.root, agent_network=network, target=worker.with_name(FIREWALL_UNIT_NAME)))
+    for path in render_backup_units(arguments.root, user=arguments.user, group=arguments.group,
+                                    target_dir=worker.parent).values():
+        print(path)
 
 
 if __name__ == '__main__':

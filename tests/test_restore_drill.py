@@ -148,6 +148,9 @@ def _drill(bench, restic, drill_runner, drill_bench, **kwargs):
 
 def test_the_drill_restores_the_newest_complete_pair_in_an_isolated_stack_and_removes_it(host):
     bench, restic, sets = _complete_set(host)
+    ca = admin.secrets_dir(RELEASE) / "backup_storage_ca.pem"
+    ca.write_text("-----BEGIN CERTIFICATE-----\n")
+    ca.chmod(0o600)
     drill_runner = DrillRunner(bench)
     drill_bench = DrillBench(bench, SAME)
     report = _drill(bench, restic, drill_runner, drill_bench, sites=[SITE])
@@ -158,7 +161,10 @@ def test_the_drill_restores_the_newest_complete_pair_in_an_isolated_stack_and_re
     assert "-p dsherp-restore" in up and "compose.restore.yml" in up
     assert calls.index(up) < min(index for index, call in enumerate(calls) if "restore-fetch-" in call), \
         "the stack that runs the recorded build is up before anything is fetched"
-    assert drill_runner.fetched["data"].endswith("/data") and drill_runner.fetched["secrets"].endswith("/secrets")
+    assert drill_runner.fetched["data"] == "/fetched" and drill_runner.fetched["secrets"] == "/fetched", \
+        "each fetch container owns its whole volume; the bench sees the two halves side by side"
+    fetches = [" ".join(command) for command in drill_runner.calls if "restore-fetch-" in " ".join(command)]
+    assert all("RESTIC_CACERT" in call for call in fetches), "a private certificate authority reaches the fetch too"
     assert any("inspect" in call for call in calls), "the running image is checked against the set"
     scripts = "\n".join(drill_bench.scripts)
     assert "_new_site" in scripts and "restore" in scripts
@@ -234,3 +240,43 @@ def test_the_cli_wires_the_drill_and_reports_a_failed_verification_as_a_failure(
     assert seen["sites"] is None and seen["kwargs"]["discard_failed"] is False
     assert admin.main(["restore-drill", SITE, "--discard-failed"]) == 1
     assert seen["sites"] == [SITE] and seen["kwargs"]["discard_failed"] is True
+
+
+def test_restore_site_refuses_an_existing_site_a_wrong_build_or_an_unpaired_set(host):
+    """The cold-start contract: never overwrite, never restore onto another build, never
+    restore from a set whose two halves were not both proven."""
+    bench, restic, sets = _complete_set(host)
+    set_id = sets[SITE]["set_id"]
+    existing = StagingBench([SAME])
+    existing.existing = {SITE}
+    with pytest.raises(admin.Fault, match="已经存在"):
+        restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: existing, runner=restic)
+
+    fresh = StagingBench([SAME])
+    fresh.existing = set()
+
+    def other_build(command, **kwargs):
+        if command[:2] == ["docker", "inspect"]:
+            result = restic(command, **kwargs)
+            result.stdout = "registry.example.com/dsherp/dsherp-frappe:v0.4.0 sha256:another-build\n"
+            return result
+        return restic(command, **kwargs)
+    with pytest.raises(admin.Fault, match="sha256:another-build"):
+        restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: fresh, runner=other_build)
+    assert not any("restore" in verb for verb in fresh.verbs)
+
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    status["sets"][set_id]["secrets_snapshot"] = None
+    backup_status.save(backup.status_path(RELEASE, admin.ROOT), status)
+    with pytest.raises(admin.Fault, match="完整配对"):
+        restore_drill.restore_site(RELEASE, SITE, set_id=set_id, bench_factory=lambda kind: fresh, runner=restic)
+
+
+def test_the_cli_wires_restore_site(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(restore_drill, "restore_site",
+                        lambda resolved, site, **kwargs: seen.update({"site": site, **kwargs}) or {"clean": True})
+    from dsherp import deploy_env
+    monkeypatch.setattr(deploy_env, "settings", lambda *a, **k: RELEASE)
+    assert admin.main(["restore-site", SITE, "--set", "20260906_020007-acme_tenant_example_com-aaaaaa"]) == 0
+    assert seen["site"] == SITE and seen["set_id"].endswith("-aaaaaa")

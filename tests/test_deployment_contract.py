@@ -23,6 +23,8 @@ ERP_V15 = "cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341"
 ERP_V16 = "493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd"
 DB_V15 = "92e50059ea0a5965a33ef751970eab37d421b91ebbd01ac909039cffe159e574"
 DB_V16 = "2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3"
+# Only used to ask a real systemd whether our calendar expressions parse.
+DEBIAN_DIGEST = "abc9cb88a5587630d7f915f47b23b0668fe250fbfc6457aa4d52b534c1bbf73f"
 # Every file that can name a base image. A new one must be added here on purpose.
 IMAGE_SOURCES = (
     "infra/compose.validation.yml",
@@ -540,12 +542,77 @@ def test_the_restore_stack_is_isolated_from_users_from_production_and_from_the_n
     assert "restore-fetched-secrets:/fetched" in secrets_block and "restore-fetched-data" not in secrets_block
     for block in (data, secrets_block):
         assert "profiles: [fetch]" in block and "cap_drop: [ALL]" in block and "read_only: true" in block
+        assert "no-new-privileges:true" in block
+        # Everything is dropped; restoring file ownership is the only privilege handed back.
+        granted = re.search(r"cap_add: \[([^\]]*)\]", block)
+        assert granted and set(granted.group(1).replace(" ", "").split(",")) <= {"CHOWN", "FOWNER"}, \
+            "only what restoring a file's own metadata needs; never DAC_OVERRIDE"
     bench = _block(body, "backend")
     assert "restore-fetched-data:/home/frappe/fetched/data:ro" in bench
     assert "restore-fetched-secrets:/home/frappe/fetched/secrets:ro" in bench
-    assert "${DSHERP_IMAGE_REGISTRY:?set DSHERP_IMAGE_REGISTRY}/dsherp-frappe:${DSHERP_IMAGE_TAG:?set DSHERP_IMAGE_TAG}" in bench
+    assert re.search(r"image: \$\{DSHERP_RESTORE_IMAGE:\?[^}]+\}", bench), \
+        "the image is whatever the backup set recorded, supplied by the drill"
     volumes = text.split("\nvolumes:\n", 1)[1].split("\nsecrets:\n", 1)[0]
     declared = set(re.findall(r"^  ([a-z0-9-]+):$", volumes, re.MULTILINE))
     assert all(name.startswith("restore-") for name in declared), declared
     assert not re.search(r"^      - [$./]", body, re.MULTILINE), "named volumes only; no host paths"
     assert f"@sha256:{DB_V16}" in _block(body, "db"), "the same database build production runs"
+
+
+def test_the_backup_timers_run_the_cli_twice_a_day_and_weekly_in_the_deployment_time_zone(tmp_path):
+    from infra.render_worker_units import render_backup_units
+
+    units = render_backup_units(ROOT, user="dsherp", group="dsherp", target_dir=tmp_path)
+    service = units["backup.service"].read_text()
+    assert "Type=oneshot" in service
+    assert f"ExecStart={ROOT}/bin/dsherp-admin backup --sync" in service
+    assert "User=dsherp" in service and "SupplementaryGroups=docker" in service
+    assert "Environment=DSHERP_ENV=prod" in service
+    assert re.search(r"^OnFailure=dsherp-backup-failure@%n\.service$", service, re.MULTILINE)
+    assert "ProtectSystem=strict" in service and f"ReadWritePaths={ROOT}/.runtime" in service
+    assert re.search(r"^TimeoutStartSec=3h$", service, re.MULTILINE)
+
+    timer = units["backup.timer"].read_text()
+    # systemd's hour-list syntax with an explicit zone; the stamps stay UTC.
+    assert re.search(r"^OnCalendar=\*-\*-\* 02,14:00:00 Asia/Shanghai$", timer, re.MULTILINE)
+    assert "Persistent=true" in timer and re.search(r"^RandomizedDelaySec=", timer, re.MULTILINE)
+    assert "WantedBy=timers.target" in timer
+
+    drill = units["drill.service"].read_text()
+    assert f"ExecStart={ROOT}/bin/dsherp-admin restore-drill" in drill
+    assert re.search(r"^TimeoutStartSec=6h$", drill, re.MULTILINE)
+    assert re.search(r"^OnCalendar=Sun \*-\*-\* 04:00:00 Asia/Shanghai$", units["drill.timer"].read_text(), re.MULTILINE)
+
+    failure = units["failure.service"].read_text()
+    assert units["failure.service"].name == "dsherp-backup-failure@.service"
+    assert f"ExecStart={ROOT}/bin/dsherp-admin notify-failure %i" in failure and "User=dsherp" in failure
+    for bad in ("bad user", "", "root;rm"):
+        with pytest.raises(ValueError):
+            render_backup_units(ROOT, user=bad, target_dir=tmp_path)
+
+
+def test_every_calendar_expression_the_units_carry_is_one_systemd_accepts():
+    """Checked against the parser, not against a regular expression of our own."""
+    import shlex
+    import shutil
+    import subprocess
+    from infra.render_worker_units import BACKUP_TIMER, DRILL_TIMER
+
+    expressions = re.findall(r"^OnCalendar=(.+)$", BACKUP_TIMER + DRILL_TIMER, re.MULTILINE)
+    assert len(expressions) == 2
+    def analyse(expression):
+        analyzer = shutil.which("systemd-analyze")
+        if analyzer is not None:
+            return subprocess.run([analyzer, "calendar", expression], capture_output=True, text=True, timeout=60)
+        image = "debian@sha256:" + DEBIAN_DIGEST
+        return subprocess.run(["docker", "run", "--rm", image, "sh", "-c",
+                               "apt-get -qq update >/dev/null 2>&1 && apt-get -qq install -y systemd >/dev/null 2>&1; "
+                               "systemd-analyze calendar " + shlex.quote(expression)],
+                              capture_output=True, text=True, timeout=900)
+
+    for expression in expressions:
+        result = analyse(expression)
+        if result.returncode != 0 and "not found" in (result.stderr or "") + (result.stdout or ""):
+            pytest.skip("no systemd-analyze available to check the calendar expressions")
+        assert result.returncode == 0, (expression, (result.stderr or result.stdout)[-300:])
+        assert "Next elapse" in result.stdout, result.stdout

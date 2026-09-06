@@ -16,7 +16,7 @@ import time
 import uuid
 from urllib.parse import urlsplit
 import httpx
-from dsherp import alerts,deploy_env,metrics,sd_notify,worker_log
+from dsherp import alerts,backup_status,deploy_env,metrics,sd_notify,site_holds,worker_log
 from dsherp.runtime_host import ROOT,IMAGE,agent_settings,container_base,load_settings
 from dsherp.context_container import docker_command
 from dsherp.context_mcp import BusinessRuntimeError,ToolFailure,post
@@ -38,6 +38,9 @@ PROVIDER_FAILURES=REGISTRY.counter('dsherp_provider_call_failures_total','Provid
 SLOTS_BUSY=REGISTRY.gauge('dsherp_slots_busy','Busy business runtime slots')
 PROVIDER_CIRCUIT_OPEN=REGISTRY.gauge('dsherp_provider_circuit_open','Provider circuit open state')
 HOST_ISOLATION_OK=REGISTRY.gauge('dsherp_host_isolation_ok','Run containers cannot reach the host (1); claims stop at 0')
+# Written by dsherp-admin backup; the worker only reads and reports it, so a backup that
+# never ran is as visible as one that failed.
+BACKUP_GAUGES={name:REGISTRY.gauge(name,'dsherp backup chain') for name in backup_status.GAUGES}
 _isolation_ok=None
 _consecutive=0
 
@@ -90,6 +93,36 @@ def monitor_ops(client,notifier,state,now=None):
     notifier.emit(alerts.evaluate(status,{
         'consecutive_run_failures':_consecutive,'orphan_containers':orphan,
         'host_isolation_ok':_isolation_ok},now),now)
+
+
+def monitor_backups(runtime_dir,expected_sites,notifier,state,now=None):
+    """Read the backup record and report it. `expected_sites` is the authoritative list; None
+    means it could not be read, which is an alert of its own - never a narrower question."""
+    if now is None:now=time.time()
+    last=state.get('last_backups')
+    if last is not None and now-last<60:return
+    state['last_backups']=now
+    path=Path(runtime_dir)/'backups'/'status.json'
+    status=backup_status.load(path)
+    age=None
+    try:age=now-path.stat().st_mtime
+    except OSError:age=None
+    result=backup_status.evaluate(status,expected_sites,now,status_age_seconds=age)
+    for name,value in result['gauges'].items():
+        BACKUP_GAUGES[name].set(value)
+    if notifier is not None:notifier.emit(result['alerts'],now)
+    return result
+
+
+def expected_sites(resolved,root=None):
+    """Platform plus every tenant on the list. None when the list cannot be read."""
+    from dsherp import admin
+    try:
+        tenants=admin.load_tenants(resolved) if root is None else admin.load_tenants(resolved,root)
+    except (OSError,ValueError) as error:
+        worker_log.log('tenants_unreadable',error_class=type(error).__name__)
+        return None
+    return [row['site'] for row in tenants]+[resolved['platform_site']]
 
 
 def _note_run(status,duration_ms):
@@ -738,7 +771,7 @@ def exit_on_signal(_signum, _frame):
     STOPPING.set()
 
 
-def serve_once(coordinator,sites,notifier,ops_state,now=None):
+def serve_once(coordinator,sites,notifier,ops_state,now=None,backups=None):
     """One supervision step. An observability failure must never skip the business tick:
     the heartbeat lives inside it, and losing it makes every site answer 503."""
     if now is None:now=time.monotonic()
@@ -747,6 +780,12 @@ def serve_once(coordinator,sites,notifier,ops_state,now=None):
     except Exception as error:
         WORKER_ERRORS.inc(error_class=type(error).__name__)
         worker_log.log('worker_error',stage='monitor_ops',error_class=type(error).__name__)
+    if backups is not None:
+        try:
+            monitor_backups(backups['runtime_dir'],backups['sites'](),notifier,ops_state)
+        except Exception as error:
+            WORKER_ERRORS.inc(error_class=type(error).__name__)
+            worker_log.log('worker_error',stage='monitor_backups',error_class=type(error).__name__)
     try:
         coordinator.tick(now)
     except Exception as error:
@@ -782,15 +821,19 @@ def main():
                 if not args.once:
                     notifier=alerts.Notifier(webhook=profile.get('alert_webhook'),cooldown=600)
                 settings_loader=lambda:agent_settings(args.provider_env)
+                resolved=deploy_env.settings()
+                runtime_dir=Path(os.environ.get('DSHERP_RUNTIME_DIR') or resolved.get('runtime_dir') or ROOT/'.runtime')
                 coordinator=Coordinator(sites,settings_loader,profile['slots'],run_container,CircuitBreaker(),
                                         host_probe(args.provider_env),state_root,notifier=notifier,
-                                        isolation=isolation.allows if isolation else None)
+                                        isolation=isolation.allows if isolation else None,
+                                        holds=lambda:site_holds.held(runtime_dir))
+                backups={'runtime_dir':runtime_dir,'sites':lambda:expected_sites(resolved)}
                 if args.once:
                     run_once(sites[0]['client'],settings,state_root,business=sites[0]['business'])
                     return 0
                 STOPPING.clear()
                 sd_notify.ready()
-                while serve_once(coordinator,sites,notifier,ops_state):
+                while serve_once(coordinator,sites,notifier,ops_state,backups=backups):
                     # A hung tick must become a restart, not a silently growing queue.
                     sd_notify.watchdog()
                     if STOPPING.wait(3):break
