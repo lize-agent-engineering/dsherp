@@ -41,9 +41,9 @@ finally:
     confirmation_id=confirmation.name if confirmation else None
     bundle_id=bundle['id'] if bundle else None
     conversation_id=conversation.name if conversation else None
-    if execution_id and frappe.db.exists('DS Configuration Execution',execution_id):frappe.delete_doc('DS Configuration Execution',execution_id,force=True)
-    if confirmation_id and frappe.db.exists('DS Configuration Confirmation',confirmation_id):frappe.delete_doc('DS Configuration Confirmation',confirmation_id,force=True)
-    if bundle_id and frappe.db.exists('DS Configuration Bundle',bundle_id):frappe.delete_doc('DS Configuration Bundle',bundle_id,force=True)
+    if execution_id and frappe.db.exists('DS Configuration Execution',execution_id):frappe.db.delete('DS Configuration Execution',{'name':execution_id})
+    if confirmation_id and frappe.db.exists('DS Configuration Confirmation',confirmation_id):frappe.db.delete('DS Configuration Confirmation',{'name':confirmation_id})
+    if bundle_id and frappe.db.exists('DS Configuration Bundle',bundle_id):frappe.db.delete('DS Configuration Bundle',{'name':bundle_id})
     if conversation_id and frappe.db.exists('DS Conversation',conversation_id):frappe.delete_doc('DS Conversation',conversation_id,force=True)
     if frappe.db.exists('Custom Field','Item-ds_verification_only'):frappe.delete_doc('Custom Field','Item-ds_verification_only',force=True)
     frappe.db.commit()

@@ -101,12 +101,12 @@ finally:
     confirmation_ids=[row['id'] for row in (expired,fresh) if row]
     if confirmation_ids:
         for row in frappe.get_all('DS Configuration Execution',filters={'confirmation':['in',confirmation_ids]},pluck='name'):
-            frappe.delete_doc('DS Configuration Execution',row,force=True)
+            frappe.db.delete('DS Configuration Execution',{'name':row})
     for row in confirmation_ids:
-        if frappe.db.exists('DS Configuration Confirmation',row):frappe.delete_doc('DS Configuration Confirmation',row,force=True)
+        if frappe.db.exists('DS Configuration Confirmation',row):frappe.db.delete('DS Configuration Confirmation',{'name':row})
     bundle_id=bundle['id'] if bundle else None
     conversation_id=conversation.name if conversation else None
-    if bundle_id and frappe.db.exists('DS Configuration Bundle',bundle_id):frappe.delete_doc('DS Configuration Bundle',bundle_id,force=True)
+    if bundle_id and frappe.db.exists('DS Configuration Bundle',bundle_id):frappe.db.delete('DS Configuration Bundle',{'name':bundle_id})
     if conversation_id and frappe.db.exists('DS Conversation',conversation_id):frappe.delete_doc('DS Conversation',conversation_id,force=True)
     frappe.db.commit()
     residual={

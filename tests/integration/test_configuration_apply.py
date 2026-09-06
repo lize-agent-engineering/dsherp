@@ -84,9 +84,9 @@ finally:
     if revoke:
         user=frappe.get_doc('User','dsherp-preview@example.invalid');user.enabled=1;user.save()
     if proposal:
-        for row in frappe.get_all('DS Configuration Execution',filters={'confirmation':proposal['id']},pluck='name'):frappe.delete_doc('DS Configuration Execution',row,force=True)
-        frappe.delete_doc('DS Configuration Confirmation',proposal['id'],force=True)
-    if bundle:frappe.delete_doc('DS Configuration Bundle',bundle['id'],force=True)
+        for row in frappe.get_all('DS Configuration Execution',filters={'confirmation':proposal['id']},pluck='name'):frappe.db.delete('DS Configuration Execution',{'name':row})
+        frappe.db.delete('DS Configuration Confirmation',{'name':proposal['id']})
+    if bundle:frappe.db.delete('DS Configuration Bundle',{'name':bundle['id']})
     if conversation:frappe.delete_doc('DS Conversation',conversation.name,force=True)
     if frappe.db.exists('DocType',name):
         for row in frappe.get_all(name,pluck='name'):frappe.delete_doc(name,row,force=True)
@@ -147,9 +147,9 @@ finally:
     frappe.set_user('Administrator')
     if proposal_id:
         for row in frappe.get_all('DS Configuration Execution',filters={'confirmation':proposal_id},pluck='name'):
-            frappe.delete_doc('DS Configuration Execution',row,force=True)
-        if frappe.db.exists('DS Configuration Confirmation',proposal_id):frappe.delete_doc('DS Configuration Confirmation',proposal_id,force=True)
-    if bundle_id and frappe.db.exists('DS Configuration Bundle',bundle_id):frappe.delete_doc('DS Configuration Bundle',bundle_id,force=True)
+            frappe.db.delete('DS Configuration Execution',{'name':row})
+        if frappe.db.exists('DS Configuration Confirmation',proposal_id):frappe.db.delete('DS Configuration Confirmation',{'name':proposal_id})
+    if bundle_id and frappe.db.exists('DS Configuration Bundle',bundle_id):frappe.db.delete('DS Configuration Bundle',{'name':bundle_id})
     if conversation_id and frappe.db.exists('DS Conversation',conversation_id):frappe.delete_doc('DS Conversation',conversation_id,force=True)
     if frappe.db.exists('DocType',name):frappe.delete_doc('DocType',name,force=True)
     if frappe.db.exists('User',actor):frappe.delete_doc('User',actor,force=True)

@@ -95,7 +95,7 @@ finally:
     if frappe.db.exists('Role',role):frappe.delete_doc('Role',role)
     for run in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):
         frappe.db.delete('DS Run Event',{'run':run})
-        frappe.delete_doc('DS Model Run',run,ignore_permissions=True)
+        frappe.db.delete('DS Model Run',{'name':run})
     frappe.delete_doc('DS Conversation',doc['id'],ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
 '''

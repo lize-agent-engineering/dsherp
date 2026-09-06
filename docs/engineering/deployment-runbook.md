@@ -340,11 +340,15 @@ DSHERP_ENV=prod ./bin/dsherp-admin delete-user-data acme.tenant.example.com some
 ```
 
 导出只读，不改站点，写成 `<runtime>/user-data/export-<站点>-<用户>-<时间>.json`（0600），含本人的会话、
-运行、提案与执行；**里面是个人内容，按交付流程转交，不要留在共享目录**。删除先导出再清除，清除范围
-逐 DocType 声明在 `dsherp/user_data.py`：本人内容（提问、页面快照、回答、错误正文、`platform_grant`、
-会话标题）清除，追责事实（谁、何时、读了哪些记录、提案与执行结果）保留，并删除 `track_changes` 为
-这些列留下的 Version 行、按会话删除该用户的原生会话目录。报告里的 `residue` 逐条列出**知道留下了什么
-以及唯一的移除方式**：运行事件不改写（只能走登记的受控脱敏迁移）、已生成的异地备份按保留策略到期淘汰。
+运行、提案与执行；**里面是个人内容，按交付流程转交，不要留在共享目录**。删除先导出，再让该用户的在途
+运行停下来：排队中的直接取消，运行中的标为 Cancelling，命令等执行者放手（`--wait`，默认 120 秒）；到时
+仍有在途就拒绝，不清任何内容，报告写成 `delete-blocked` 并列出那些运行（先停 worker 或等它们结束再重跑）。
+清除范围逐 DocType 声明在 `dsherp/user_data.py`：本人内容（提问、页面快照、回答、错误正文、会话标题）
+清除，追责事实（谁、何时、读了哪些记录、提案与执行结果）保留，并删除 `track_changes` 为这些列留下的
+Version 行、按会话删除该用户的原生会话目录；清除脚本在与 `send_message` 相同的 User 行锁下再查一次
+在途，有就回滚拒绝。报告里的 `residue` 逐条列出**知道留下了什么以及唯一的移除方式**：运行事件不改写
+（只能走登记的受控脱敏迁移）、已生成的异地备份按保留策略到期淘汰。平台授权令牌不在运行行里（它只在
+运行期间存于站点缓存，运行结束即删），删除时无需处理。
 
 原生会话目录另有 `sessions` 命令查看与按 90 天清理（`--sweep`）；旧布局留下的扁平哈希目录报为
 "未归属"，由人判断，不做猜测删除。
@@ -352,8 +356,12 @@ DSHERP_ENV=prod ./bin/dsherp-admin delete-user-data acme.tenant.example.com some
 ## 14. 凭据：短期业务凭据与轮换
 
 平台不长期持有成员的业务站凭据：业务站在 SSO 回调时把当前凭据交给平台，并记一个 12 小时的窗口，
-窗口过后业务站自己拒绝这把 key，成员**重新登录即续签**（剩余 ≤4 小时才换新，所以同一成员的两个
-会话不会互相踢掉）。
+窗口过后业务站自己拒绝这把 key（在 `disable_user_pass_login` 生效的站点上；仍允许密码登录的开发站只记录
+与报告，不拒绝），成员**重新登录即续签**（剩余 ≤4 小时才换新，所以同一成员的两个
+会话不会互相踢掉）。续签会替换旧 secret：浏览器会话不受影响，但用旧凭据在途的一次 API 调用会失败，
+下一次登录带来新凭据。一个业务用户只能有一个启用中的平台绑定，由 `DS Membership.active_binding`
+的唯一索引保证（不是应用层先查后写）；绑定版本 `binding_version` 是递增整数，停用/重新启用/改绑都
++1，凭据续签不动它，所以旧授权不会因为绑定改回原样而重新有效。
 
 ```sh
 DSHERP_ENV=prod ./bin/dsherp-admin credentials acme.tenant.example.com                  # 借出了什么、还能用多久
@@ -377,8 +385,10 @@ DSHERP_ENV=prod ./bin/dsherp-admin rotate oauth-client acme
 ```
 
 - `provider`：新 key 只从标准输入读，只改 worker 单元读的那个 `.env` 里的那一行；**改完重启 worker 单元**。
-- `runtime`：按站点 `site_config` 声明的运行身份轮换；`--profile` 可给多次，所有文件先校验后签发；
-  改完重启 worker 单元。
+- `runtime`：按站点 `site_config` 声明的运行身份轮换；必须给交付目的地——`--profile`（可多次，所有
+  文件先校验后签发）或 `--print-secret`（打印一次并留一份 0600 副本文件，用后删除）；签发后的密钥先写
+  到 `<runtime>/rotations/runtime-<站点>-<时间>.json` 再写 profile，写入失败时错误信息指明该文件，
+  全部写成功后自动删除。改完重启 worker 单元。
 - `oauth-client`：平台与业务站两侧一起换；进行中的登录会失败一次，重新登录即可，已建立的会话不受影响。
 
 `doctor` 会把从未登记轮换和超过窗口的目标列出来（provider/runtime 90 天、oauth-client 180 天）。轮换

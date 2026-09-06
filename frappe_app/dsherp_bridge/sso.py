@@ -223,7 +223,11 @@ def validate_session():
     # A browser session without a platform grant is exactly what SSO enforcement forbids.
     if _machine_authenticated():
         # An API key is only as good as the window it was issued in; past that, the holder
-        # goes back through the platform for a new one (S2).
-        credentials.require(user)
+        # goes back through the platform for a new one (S2). The window is a rule about
+        # credentials the platform borrows, which exist only where every session comes from
+        # the platform: a Site that still allows password login (development) records the
+        # windows but does not refuse on them, the same line _actor draws for grants.
+        if _password_login_disabled():
+            credentials.require(user)
         return
     raise frappe.PermissionError('需要通过企业平台登录后再访问')

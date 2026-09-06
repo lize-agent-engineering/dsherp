@@ -21,8 +21,8 @@ finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     if conversation:
         for proposal in frappe.get_all('DS Operation Proposal',filters={'conversation':conversation},pluck='name'):
-            for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal},pluck='name'):frappe.delete_doc('DS Execution Record',execution,ignore_permissions=True)
-            frappe.delete_doc('DS Operation Proposal',proposal,ignore_permissions=True)
+            for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal},pluck='name'):frappe.db.delete('DS Execution Record',{'name':execution})
+            frappe.db.delete('DS Operation Proposal',{'name':proposal})
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
 '''
@@ -55,11 +55,11 @@ finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     if conversation:
         for proposal in frappe.get_all('DS Operation Proposal',filters={'conversation':conversation},pluck='name'):
-            for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal},pluck='name'):frappe.delete_doc('DS Execution Record',execution,ignore_permissions=True)
-            frappe.delete_doc('DS Operation Proposal',proposal,ignore_permissions=True)
+            for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal},pluck='name'):frappe.db.delete('DS Execution Record',{'name':execution})
+            frappe.db.delete('DS Operation Proposal',{'name':proposal})
         for run in frappe.get_all('DS Model Run',filters={'conversation':conversation},pluck='name'):
             frappe.db.delete('DS Run Event',{'run':run})
-            frappe.delete_doc('DS Model Run',run,ignore_permissions=True)
+            frappe.db.delete('DS Model Run',{'name':run})
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
 '''
@@ -104,8 +104,8 @@ finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     if conversation:
         for proposal in frappe.get_all('DS Operation Proposal',filters={'conversation':conversation},pluck='name'):
-            for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal},pluck='name'):frappe.delete_doc('DS Execution Record',execution,ignore_permissions=True)
-            frappe.delete_doc('DS Operation Proposal',proposal,ignore_permissions=True)
+            for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal},pluck='name'):frappe.db.delete('DS Execution Record',{'name':execution})
+            frappe.db.delete('DS Operation Proposal',{'name':proposal})
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
 '''

@@ -129,10 +129,12 @@ def test_member_revocation_applies_to_existing_session_and_binding_changes_fail_
         finally:
             assert operator.put(path,json={'enabled':original['enabled'],'erp_user':original['erp_user']}).status_code==200
             # Disabling the membership revoked the credential it had lent out (S2). Restoring
-            # the binding does not bring that credential back: the member logs in again, which
-            # is the product's own way of getting a new one.
-            from sso_login import establish, ENTERPRISES
-            establish(ENTERPRISES['alpha'])
+            # the binding does not bring that credential back. The provisioner's reissue is the
+            # one path that leaves the Site, the fixture files and the platform binding on the
+            # same new secret; a plain login would renew the Site and the platform but leave
+            # every file-based test after this one holding a dead key.
+            from infra.run_validation_provision import reissue
+            reissue('reader')
 
 
 def test_real_field_and_record_permissions_are_preserved_through_platform():

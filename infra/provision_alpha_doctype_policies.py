@@ -262,6 +262,11 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def seed_reason():
+    import time
+    return f'策略种子 {POLICY_SET} {time.strftime("%Y-%m-%d %H:%M:%S")} {os.getpid()}'
+
+
 def policy_values(doc):
     return {field: doc.get(field) for field in SCALAR_FIELDS}
 
@@ -294,6 +299,8 @@ def ensure_policy(expected):
             and actual == BASE_POLICIES[2]
         ):
             doc.set('routes', [dict(route) for route in expected['routes']])
+            # A policy change must say why, and may not repeat the last reason (ruling #3).
+            doc.change_reason = seed_reason()
             doc.save()
             actual = {**policy_values(doc), 'routes': policy_routes(doc)}
         require(
@@ -301,7 +308,7 @@ def ensure_policy(expected):
             'DS DocType policy conflict for ' + expected['target_doctype'],
         )
         return actual
-    doc = frappe.get_doc({'doctype': 'DS Doctype Policy', **expected})
+    doc = frappe.get_doc({'doctype': 'DS Doctype Policy', **expected, 'change_reason': seed_reason()})
     doc.insert()
     return {**policy_values(doc), 'routes': policy_routes(doc)}
 
@@ -332,6 +339,8 @@ try:
         conflict_target = 'Work Order' if POLICY_SET == 'manufacturing' else 'Item'
         policy = frappe.get_doc('DS Doctype Policy', conflict_target)
         policy.allow_update = 0
+        # The injected conflict is a policy change like any other: it has to say why.
+        policy.change_reason = seed_reason() + ' 冲突自检'
         policy.save()
         try:
             provision()

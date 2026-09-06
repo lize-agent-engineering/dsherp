@@ -522,14 +522,14 @@ finally:
     execution_names=list(dict.fromkeys(filter(None,execution_names)))
     for execution_id in execution_names:
         if frappe.db.exists('DS Execution Record',execution_id):
-            frappe.delete_doc('DS Execution Record',execution_id,ignore_permissions=True)
+            frappe.db.delete('DS Execution Record',{'name':execution_id})
     for proposal_id in proposal_names:
         if frappe.db.exists('DS Operation Proposal',proposal_id):
-            frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
+            frappe.db.delete('DS Operation Proposal',{'name':proposal_id})
     for run_name in run_names:
         if frappe.db.exists('DS Model Run',run_name):
             frappe.db.delete('DS Run Event',{'run':run_name})
-            frappe.delete_doc('DS Model Run',run_name,ignore_permissions=True)
+            frappe.db.delete('DS Model Run',{'name':run_name})
     if conversation and frappe.db.exists('DS Conversation',conversation):
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     if frappe.db.exists('User',actor):

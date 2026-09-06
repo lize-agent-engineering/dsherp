@@ -61,7 +61,7 @@ finally:
     else:cache.set_value('dsherp_worker_heartbeat',previous,expires_in_sec=3600)
     for name in runs:
         frappe.db.delete('DS Run Event',{'run':name})
-        if frappe.db.exists('DS Model Run',name):frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
+        if frappe.db.exists('DS Model Run',name):frappe.db.delete('DS Model Run',{'name':name})
     for name in conversations:
         if frappe.db.exists('DS Conversation',name):frappe.delete_doc('DS Conversation',name,ignore_permissions=True)
     frappe.db.commit();frappe.destroy()

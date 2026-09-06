@@ -107,7 +107,8 @@ doc=api.send_message('Background SSO revocation',{'schema_version':1,'page_type'
 frappe.db.commit()
 try:
     run=frappe.get_doc('DS Model Run',doc['active_run'])
-    assert run.get('platform_grant')==grant
+    from dsherp_bridge import grants
+    assert grants.of(run.name)==grant and not run.get('platform_grant')
     assert grant not in json.dumps(doc)
     frappe.session.data.pop('dsherp_platform_grant',None)
     frappe.conf.dsherp_runtime_user=actor

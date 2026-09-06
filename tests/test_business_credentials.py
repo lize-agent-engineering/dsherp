@@ -122,11 +122,15 @@ def test_the_binding_version_is_a_counter_not_a_hash_of_the_row():
     assert "+ 1" in counting and "BINDING_FIELDS" in counting
 
 
-def test_the_business_site_refuses_a_key_whose_window_has_passed():
+def test_the_business_site_refuses_a_key_whose_window_has_passed_where_sso_is_enforced():
+    """The window governs credentials the platform borrows, which only exist where every
+    session comes through the platform. A Site that still takes passwords (development)
+    records windows and reports them, but does not turn keys away on them."""
     source = (BRIDGE / "sso.py").read_text()
-    assert "credentials.require" in source or "credentials.enforce" in source
     body = source.split("def validate_session", 1)[1]
     assert "_machine_authenticated()" in body
+    gate = body.split("_machine_authenticated():", 1)[1].split("return", 1)[0]
+    assert "_password_login_disabled()" in gate and "credentials.require(user)" in gate
 
 
 def test_the_login_hands_the_platform_a_current_credential_instead_of_a_stored_forever_one():

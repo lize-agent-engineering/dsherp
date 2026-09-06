@@ -81,7 +81,7 @@ try:
     frappe.set_user('Administrator')
     policy=frappe.get_doc('DS Doctype Policy','Sales Order')
     policy.set('routes',json.loads(__ROUTES__))
-    policy.save()
+    policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save()
     frappe.db.commit()
 finally:
     frappe.destroy()
@@ -340,7 +340,7 @@ frappe.connect()
 try:
     assert not frappe.db.exists('DS Doctype Policy', 'BOM')
     frappe.get_doc({
-        'doctype': 'DS Doctype Policy',
+        'doctype': 'DS Doctype Policy','change_reason':'集成测试 '+frappe.generate_hash(length=8),
         'target_doctype': 'BOM',
         'enabled': 1,
         'allow_read': 1,

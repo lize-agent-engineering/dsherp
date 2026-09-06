@@ -41,8 +41,8 @@ try:
     except frappe.ValidationError:pass
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
-    if 'transfer' in locals():frappe.delete_doc('DS Configuration Transfer',transfer['id'],force=True)
-    if 'bundle' in locals():frappe.delete_doc('DS Configuration Bundle',bundle['id'],force=True)
+    if 'transfer' in locals():frappe.db.delete('DS Configuration Transfer',{'name':transfer['id']})
+    if 'bundle' in locals():frappe.db.delete('DS Configuration Bundle',{'name':bundle['id']})
     if 'conversation' in locals():frappe.delete_doc('DS Conversation',conversation.name,force=True)
     frappe.db.commit();frappe.destroy()
 '''
@@ -82,7 +82,7 @@ try:
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     if 'first' in locals():
-        if frappe.db.exists('DS Configuration Bundle',first['bundle']['id']):frappe.delete_doc('DS Configuration Bundle',first['bundle']['id'],force=True)
+        if frappe.db.exists('DS Configuration Bundle',first['bundle']['id']):frappe.db.delete('DS Configuration Bundle',{'name':first['bundle']['id']})
         if frappe.db.exists('DS Conversation',first['session_id']):frappe.delete_doc('DS Conversation',first['session_id'],force=True)
         frappe.db.commit()
     frappe.destroy()
@@ -121,7 +121,10 @@ try:
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     for doctype,name in [('DS Configuration Execution',locals().get('execution') and execution.name),('DS Configuration Confirmation',locals().get('confirmation') and confirmation.name),('DS Configuration Bundle',locals().get('bundle') and bundle['id']),('DS Conversation',locals().get('conversation') and conversation.name)]:
-        if name and frappe.db.exists(doctype,name):frappe.delete_doc(doctype,name,force=True)
+        # audit records (ruling #3) go through the database path; the conversation through the API
+        if name and frappe.db.exists(doctype,name):
+            if doctype=='DS Conversation':frappe.delete_doc(doctype,name,force=True)
+            else:frappe.db.delete(doctype,{'name':name})
     frappe.db.commit();frappe.destroy()
 '''
     result=subprocess.run(['docker','exec','-i','dsherp-validation-beta-backend-1','/home/frappe/frappe-bench/env/bin/python','-'],input=script,text=True,capture_output=True,timeout=50)

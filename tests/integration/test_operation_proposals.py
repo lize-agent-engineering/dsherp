@@ -234,11 +234,11 @@ finally:
     if conversation:
         for proposal_id in frappe.get_all('DS Operation Proposal',filters={'conversation':conversation},pluck='name'):
             for execution_id in frappe.get_all('DS Execution Record',filters={'proposal':proposal_id},pluck='name'):
-                frappe.delete_doc('DS Execution Record',execution_id,ignore_permissions=True)
-            frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
+                frappe.db.delete('DS Execution Record',{'name':execution_id})
+            frappe.db.delete('DS Operation Proposal',{'name':proposal_id})
         for run_id in frappe.get_all('DS Model Run',filters={'conversation':conversation},pluck='name'):
             frappe.db.delete('DS Run Event',{'run':run_id})
-            frappe.delete_doc('DS Model Run',run_id,ignore_permissions=True)
+            frappe.db.delete('DS Model Run',{'name':run_id})
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     if frappe.db.exists('Item',item_name):frappe.delete_doc('Item',item_name,ignore_permissions=True)
     if frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)
@@ -461,10 +461,10 @@ finally:
     execution_names=list(dict.fromkeys(filter(None,execution_names)))
     for execution_id in execution_names:
         if frappe.db.exists('DS Execution Record',execution_id):
-            frappe.delete_doc('DS Execution Record',execution_id,ignore_permissions=True)
+            frappe.db.delete('DS Execution Record',{'name':execution_id})
     for proposal_id in proposal_names:
         if frappe.db.exists('DS Operation Proposal',proposal_id):
-            frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
+            frappe.db.delete('DS Operation Proposal',{'name':proposal_id})
     if stock_entry and frappe.db.exists('Stock Entry',stock_entry.name):
         doc=frappe.get_doc('Stock Entry',stock_entry.name)
         if doc.docstatus==1:doc.cancel()
