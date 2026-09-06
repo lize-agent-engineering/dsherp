@@ -12,6 +12,7 @@ import re
 import secrets
 import subprocess
 import sys
+import time
 
 from dsherp import deploy_env
 
@@ -602,91 +603,256 @@ def doctor(resolved, root=ROOT, runner=subprocess.run):
 
 
 # --- release and rollback -------------------------------------------------------
-# An upgrade is only reversible if the state before it was captured and backed up.
-# Both are hard preconditions here, and the field-level comparison is the evidence.
-SNAPSHOT = """
-digests={}
-for doctype in sorted(frappe.get_all('DocType',filters={'issingle':0,'istable':0},pluck='name')):
-    try:rows=frappe.get_all(doctype,fields=['*'],order_by='name asc',limit_page_length=0,ignore_permissions=True)
-    except Exception:continue
-    if not rows:continue
-    import hashlib
-    material=json.dumps(rows,ensure_ascii=False,sort_keys=True,default=str,separators=(',',':'))
-    digests[doctype]={'count':len(rows),'digest':hashlib.sha256(material.encode()).hexdigest()}
-print(json.dumps(digests))
-"""
+# Gate G2: an upgrade is only trusted when the data before and after it can be compared
+# field by field, and a rollback only when the restored data equals the pre-upgrade
+# snapshot. The reader (dsherp/release_snapshot.py) runs inside the bench container; the
+# judgement (dsherp/release_compare.py) runs here.
+from dsherp import release_compare, release_snapshot
+
+# On the archive volume of each bench (compose mounts it; the image prepares the directory),
+# so the pre-upgrade backup set outlives Frappe's own purge of private/backups (23 hours).
+ARCHIVED_RELEASES = '/home/frappe/frappe-bench/archived/releases'
+BACKUP_PIECES = ('database.sql.gz', 'site_config_backup.json', 'files.tar', 'private-files.tar')
+# The only thing a restore itself writes: it re-applies the scheduler flag it read first
+# (the Single's modified stamps are never compared).
+RESTORE_EXPECTATIONS = [{'patch': 'frappe.restore', 'doctype': 'System Settings', 'fields': ['enable_scheduler']}]
+SITE_FLAGS = ("active=frappe.db.count('DS Model Run',{'status':['in',['Queued','Running','Cancelling']]}) "
+              "if frappe.db.exists('DocType','DS Model Run') else 0\n"
+              "print(json.dumps({'active':active,'maintenance_mode':int(frappe.conf.get('maintenance_mode') or 0),"
+              "'pause_scheduler':int(frappe.conf.get('pause_scheduler') or 0)}))")
+EXPECTATIONS = ("import importlib,os\n"
+                "found=[]\n"
+                "for app in frappe.get_installed_apps():\n"
+                "    if app in ('frappe','erpnext'):continue\n"
+                "    path=os.path.join(frappe.get_app_path(app),'patches.txt')\n"
+                "    if not os.path.exists(path):continue\n"
+                "    for line in open(path):\n"
+                "        line=line.split('#')[0].strip()\n"
+                "        if not line or line.startswith('['):continue\n"
+                "        module=importlib.import_module(line.split()[0])\n"
+                "        for entry in getattr(module,'EXPECTED_CHANGES',None) or []:\n"
+                "            found.append({'patch':line.split()[0],**entry})\n"
+                "print('DSHERP_EXPECTATIONS '+json.dumps(found))")
 
 
-def snapshot(bench, site):
-    return json.loads(bench.python(site, SNAPSHOT.strip(), timeout=1800).strip().splitlines()[-1])
+def _write_json(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = path.with_name('.' + path.name + f'.{os.getpid()}')
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, 'w') as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=1, sort_keys=True, default=str)
+            handle.write('\n')
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return path
 
 
-def compare_snapshots(before, after):
-    """Field-level differences, named by DocType so a report points at the cause."""
-    differences = []
-    for doctype in sorted(set(before) | set(after)):
-        first, second = before.get(doctype), after.get(doctype)
-        if first == second:
-            continue
-        differences.append({'doctype': doctype,
-                            'before': first or {'count': 0, 'digest': None},
-                            'after': second or {'count': 0, 'digest': None}})
-    return differences
+def _release_dir(resolved, tag, root=ROOT):
+    return runtime_dir(resolved, root) / 'releases' / tag
 
 
 def _release_report(resolved, name, payload, root=ROOT):
-    target = runtime_dir(resolved, root) / 'releases' / f'{name}.json'
-    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n')
-    return target
+    """Timestamped, never overwritten; the tag-named copy is the latest one."""
+    directory = runtime_dir(resolved, root) / 'releases'
+    stamped = _write_json(directory / f"{name}-{time.strftime('%Y%m%d_%H%M%S')}.json", payload)
+    _write_json(directory / f'{name}.json', payload)
+    return stamped
 
 
-def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, sites=None):
-    """Back up, migrate every Site to the new tag, then prove the data is unchanged."""
+def _targets(resolved, root, factory):
+    """Every Site this deployment runs, with the bench that serves it: tenants and the platform."""
+    targets = [('tenant', row['site']) for row in load_tenants(resolved, root)]
+    targets.append(('platform', resolved['platform_site']))
+    benches = {}
+    return [(benches.setdefault(kind, factory(kind)), site) for kind, site in targets]
+
+
+def _last_line(text):
+    lines = [line for line in text.strip().splitlines() if line.strip()]
+    return lines[-1] if lines else ''
+
+
+def _site_flags(bench, site):
+    return json.loads(_last_line(bench.python(site, SITE_FLAGS, timeout=120)))
+
+
+def _set_flag(bench, site, key, value):
+    bench.run('bench', '--site', site, 'set-config', '--parse', key, str(int(value)), timeout=120)
+
+
+def _quiesce(bench, site):
+    """No run may be in flight and no cron may fire while the data is being judged."""
+    flags = _site_flags(bench, site)
+    if flags['active']:
+        raise Fault(f"站点 {site} 仍有 {flags['active']} 个运行未结束（Queued/Running/Cancelling）；"
+                    '先停 worker（systemctl stop dsherp-agent-worker）并等它们结束，再发布或回滚')
+    _set_flag(bench, site, 'maintenance_mode', 1)
+    _set_flag(bench, site, 'pause_scheduler', 1)
+    return flags
+
+
+def _release_site(bench, site, flags):
+    _set_flag(bench, site, 'maintenance_mode', flags.get('maintenance_mode', 0))
+    _set_flag(bench, site, 'pause_scheduler', flags.get('pause_scheduler', 0))
+
+
+def take_snapshot(resolved, site, *, root=ROOT, runner=subprocess.run, bench_factory=None, bench=None):
+    """Read the Site's data inside its bench; any table it cannot read aborts the snapshot."""
+    if bench is None:
+        factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
+        bench = factory('platform' if site == resolved['platform_site'] else 'tenant')
+    return release_snapshot.parse_output(bench.python(site, release_snapshot.container_script(), timeout=3600))
+
+
+def compare_snapshots(before, after, expectations=None):
+    return release_compare.compare(before, after, expectations, allow_inserts_in=release_snapshot.LOG_DOCTYPES)
+
+
+def _expected_changes(bench, site):
+    line = _last_line(bench.python(site, EXPECTATIONS, timeout=300))
+    marker = 'DSHERP_EXPECTATIONS '
+    if not line.startswith(marker):
+        raise Fault(f'读不到 {site} 上 patch 声明的预期变化')
+    return json.loads(line[len(marker):])
+
+
+def _archive_backup(bench, site, tag):
+    """Find the set `bench backup --with-files` just wrote and copy it where the purge cannot reach."""
+    listing = bench.run('sh', '-c', f'ls -1 {SITES}/{site}/private/backups', timeout=60).split()
+    slug = site.replace('.', '_')
+    databases = sorted(name for name in listing if name.endswith(f'-{slug}-database.sql.gz'))
+    if not databases:
+        raise Fault(f'站点 {site} 备份后在 private/backups 下没有数据库转储；备份集不完整，不迁移')
+    prefix = databases[-1][:-len('-database.sql.gz')]
+    pieces = {piece: f'{prefix}-{piece}' for piece in BACKUP_PIECES}
+    missing = [name for name in pieces.values() if name not in listing]
+    if missing:
+        raise Fault(f'站点 {site} 的备份集不完整，缺 {"、".join(missing)}；不迁移')
+    target = f'{ARCHIVED_RELEASES}/{tag}/{site}'
+    sources = ' '.join(f'{SITES}/{site}/private/backups/{name}' for name in pieces.values())
+    bench.run('sh', '-c', f'mkdir -p {target} && cp {sources} {target}/', timeout=600)
+    return {'database': f"{target}/{pieces['database.sql.gz']}",
+            'site_config': f"{target}/{pieces['site_config_backup.json']}",
+            'files': f"{target}/{pieces['files.tar']}",
+            'private_files': f"{target}/{pieces['private-files.tar']}"}
+
+
+def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None):
+    """Quiesce, back up and archive, snapshot, migrate, snapshot, judge; per Site, platform included."""
     if not deploy_env.TAG.fullmatch(tag or ''):
         raise Fault('发布必须给出明确的镜像 tag')
+    if resolved['image_tag'] != tag:
+        raise Fault(f"infra/env/prod.env 的 DSHERP_IMAGE_TAG 是 {resolved['image_tag']!r}，不是要发布的 {tag!r}；"
+                    '先改环境文件并 compose up -d，再发布')
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
-    tenant = factory('tenant')
-    targets = sites or [row['site'] for row in load_tenants(resolved, root)]
-    if not targets:
-        raise Fault('没有可发布的站点；先运行 provision-tenant')
-    before, steps = {}, []
-    for site in targets:
-        tenant.run('bench', '--site', site, 'backup', '--with-files', timeout=3600)
-        before[site] = snapshot(tenant, site)
-        steps.append((site, 'backed-up'))
-    for site in targets:
-        tenant.run('bench', '--site', site, 'migrate', timeout=3600)
-        steps.append((site, 'migrated'))
-    report = {'tag': tag, 'sites': {}, 'steps': steps}
-    for site in targets:
-        differences = compare_snapshots(before[site], snapshot(tenant, site))
-        report['sites'][site] = {'differences': differences, 'doctypes': len(before[site])}
-    report['clean'] = not any(row['differences'] for row in report['sites'].values())
+    targets = _targets(resolved, root, factory)
+    if len(targets) < 2:
+        raise Fault('没有可发布的租户站；先运行 provision-tenant')
+    report = {'tag': tag, 'sites': {}, 'steps': [], 'clean': False}
+    for bench, site in targets:
+        record = _release_dir(resolved, tag, root) / site
+        started = time.monotonic()
+        flags = _quiesce(bench, site)
+        report['steps'].append((site, 'quiesced'))
+        try:
+            bench.run('bench', '--site', site, 'backup', '--with-files', timeout=3600)
+            backup = _archive_backup(bench, site, tag)
+            _write_json(record / 'backup.json', backup)
+            report['steps'].append((site, 'backed-up'))
+            before = take_snapshot(resolved, site, bench=bench)
+            _write_json(record / 'before.json', before)
+            report['steps'].append((site, 'snapshot-before'))
+            try:
+                migrated = bench.run('bench', '--site', site, 'migrate', timeout=3600)
+            except Fault as error:
+                report['failed'] = {'site': site, 'step': 'migrate', 'error': str(error)}
+                report['path'] = str(_release_report(resolved, f'release-{tag}', report, root))
+                raise Fault(f'站点 {site} 的 migrate 失败，站点保持维护模式；用 rollback {tag} 回到升级前的备份。'
+                            f'\n{error}') from error
+            report['steps'].append((site, 'migrated'))
+            after = take_snapshot(resolved, site, bench=bench)
+            _write_json(record / 'after.json', after)
+            report['steps'].append((site, 'snapshot-after'))
+            expectations = _expected_changes(bench, site)
+            comparison = compare_snapshots(before, after, expectations)
+            report['sites'][site] = {'backup': backup, 'comparison': comparison,
+                                     'migrate_tail': migrated.strip().splitlines()[-20:],
+                                     'seconds': round(time.monotonic() - started, 1)}
+        finally:
+            if 'failed' not in report:
+                _release_site(bench, site, flags)
+    report['clean'] = all(row['comparison']['clean'] for row in report['sites'].values())
     report['path'] = str(_release_report(resolved, f'release-{tag}', report, root))
     return report
 
 
-def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, sites=None, backups=None):
-    """Restore the pre-upgrade backup on the previous tag; the caller names the files."""
+def _backup_set(bench, site, database):
+    """The four pieces next to a database dump; the tars are used when present."""
+    if not database.endswith('-database.sql.gz'):
+        raise Fault(f'{site} 的备份文件必须是 *-database.sql.gz：{database}')
+    present = bench.run('sh', '-c', f'test -s {database} && echo present', timeout=60).strip()
+    if present.splitlines()[-1:] != ['present']:
+        raise Fault(f'{site} 的备份文件不存在或为空：{database}')
+    stem = database[:-len('database.sql.gz')]
+    found = {'database': database}
+    for key, piece in (('files', 'files.tar'), ('private_files', 'private-files.tar')):
+        path = stem + piece
+        listed = bench.run('sh', '-c', f'test -s {path} && echo present', timeout=60).strip()
+        if listed.splitlines()[-1:] == ['present']:
+            found[key] = path
+    return found
+
+
+def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, backups=None, before=None):
+    """Restore what `release <tag>` archived (or the named files) and prove the data is what it was."""
     if not deploy_env.TAG.fullmatch(tag or ''):
-        raise Fault('回滚必须给出要回到的镜像 tag')
-    if not backups:
-        raise Fault('回滚必须给出每站升级前的备份文件；不要让命令自己猜')
+        raise Fault('回滚必须给出要撤销的发布 tag')
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
-    tenant = factory('tenant')
-    targets = sites or sorted(backups)
-    missing = [site for site in targets if site not in backups]
-    if missing:
-        raise Fault('这些站点没有指定备份文件：' + '、'.join(missing))
-    steps, report = [], {'tag': tag, 'sites': {}}
-    for site in targets:
-        tenant.run('bench', '--site', site, 'restore', backups[site],
-                   '--db-root-username', 'root',
-                   '--db-root-password', read_secret(resolved, 'db_root_password', root), timeout=3600)
-        steps.append((site, 'restored'))
-        report['sites'][site] = snapshot(tenant, site)
-    report['steps'] = steps
+    record_root = _release_dir(resolved, tag, root)
+    targets = [(bench, site) for bench, site in _targets(resolved, root, factory)
+               if (record_root / site / 'before.json').exists() or site in (backups or {})]
+    if not targets:
+        raise Fault(f'没有 release {tag} 的记录（{record_root}），也没有给出备份文件；不知道该恢复什么')
+    report = {'tag': tag, 'running_tag': resolved['image_tag'], 'sites': {}, 'steps': [], 'clean': False}
+    plans = []
+    for bench, site in targets:
+        record = record_root / site
+        if backups and site in backups:
+            database = backups[site]
+        elif (record / 'backup.json').exists():
+            database = json.loads((record / 'backup.json').read_text())['database']
+        else:
+            raise Fault(f'{site} 没有 release {tag} 归档的备份记录，也没有 --backup 指定文件')
+        if before and site in before:
+            expected = json.loads(Path(before[site]).read_text())
+        elif (record / 'before.json').exists():
+            expected = json.loads((record / 'before.json').read_text())
+        else:
+            raise Fault(f'{site} 没有 release {tag} 的升级前快照，无法核验回滚结果')
+        plans.append((bench, site, _backup_set(bench, site, database), expected))
+    db_root = read_secret(resolved, 'db_root_password', root)
+    for bench, site, pieces, expected in plans:
+        started = time.monotonic()
+        flags = _quiesce(bench, site)
+        try:
+            arguments = ['bench', '--site', site, 'restore', pieces['database']]
+            if 'files' in pieces:
+                arguments += ['--with-public-files', pieces['files']]
+            if 'private_files' in pieces:
+                arguments += ['--with-private-files', pieces['private_files']]
+            arguments += ['--db-root-username', 'root', '--db-root-password', db_root, '--force']
+            bench.run(*arguments, timeout=3600, secrets=(db_root,))
+            report['steps'].append((site, 'restored'))
+            restored = take_snapshot(resolved, site, bench=bench)
+            _write_json(record_root / site / 'restored.json', restored)
+            comparison = compare_snapshots(expected, restored, RESTORE_EXPECTATIONS)
+            report['sites'][site] = {'backup': pieces, 'comparison': comparison,
+                                     'seconds': round(time.monotonic() - started, 1)}
+        finally:
+            _release_site(bench, site, flags)
+    report['clean'] = all(row['comparison']['clean'] for row in report['sites'].values())
     report['path'] = str(_release_report(resolved, f'rollback-{tag}', report, root))
     return report
 
@@ -712,12 +878,18 @@ def main(argv=None):
     sub.add_parser('list-tenants', help='列出当前租户')
     sub.add_parser('render-ingress', help='按当前租户清单重新渲染入口配置')
     sub.add_parser('agent-firewall', help='打印把运行容器挡在宿主之外的 INPUT 规则；生产由 dsherp-agent-firewall.service 在开机时应用')
-    release_parser = sub.add_parser('release', help='升级到新 tag：先备份，逐站 migrate，再逐字段比对')
+    release_parser = sub.add_parser('release', help='发布到 prod.env 里的 tag：静默站点、备份并归档、快照、migrate、快照、逐字段比对')
     release_parser.add_argument('tag')
-    rollback_parser = sub.add_parser('rollback', help='回到旧 tag 并从升级前备份恢复')
-    rollback_parser.add_argument('tag')
+    rollback_parser = sub.add_parser('rollback', help='撤销一次发布：恢复它归档的升级前备份并与升级前快照比对')
+    rollback_parser.add_argument('tag', help='要撤销的发布 tag（release 时用的那个）')
     rollback_parser.add_argument('--backup', action='append', default=[], metavar='SITE=FILE',
-                                 help='每站升级前的备份文件，可重复')
+                                 help='改用指定的数据库转储（*-database.sql.gz，同名 files tar 一并恢复），可重复')
+    snapshot_parser = sub.add_parser('snapshot', help='读取一个站的数据快照到文件（演练与排查用）')
+    snapshot_parser.add_argument('site')
+    snapshot_parser.add_argument('--out', required=True)
+    compare_parser = sub.add_parser('compare', help='比对两个快照文件；有未声明差异退出码 1')
+    compare_parser.add_argument('before')
+    compare_parser.add_argument('after')
     arguments = parser.parse_args(argv)
     resolved = deploy_env.settings()
     try:
@@ -748,7 +920,10 @@ def main(argv=None):
             return 0
         if arguments.command == 'release':
             report = release(resolved, arguments.tag)
-            _print(report)
+            _print({key: value for key, value in report.items() if key != 'sites'} | {
+                'sites': {site: {'clean': row['comparison']['clean'], 'summary': row['comparison']['summary'],
+                                 'backup': row['backup'], 'seconds': row['seconds']}
+                          for site, row in report['sites'].items()}})
             return 0 if report['clean'] else 1
         if arguments.command == 'rollback':
             pairs = {}
@@ -757,8 +932,20 @@ def main(argv=None):
                 if not separator:
                     raise Fault('备份参数格式为 SITE=FILE')
                 pairs[site] = file
-            _print(rollback(resolved, arguments.tag, backups=pairs))
+            report = rollback(resolved, arguments.tag, backups=pairs or None)
+            _print({key: value for key, value in report.items() if key != 'sites'} | {
+                'sites': {site: {'clean': row['comparison']['clean'], 'summary': row['comparison']['summary'],
+                                 'seconds': row['seconds']} for site, row in report['sites'].items()}})
+            return 0 if report['clean'] else 1
+        if arguments.command == 'snapshot':
+            target = _write_json(Path(arguments.out), take_snapshot(resolved, arguments.site))
+            _print({'site': arguments.site, 'path': str(target)})
             return 0
+        if arguments.command == 'compare':
+            report = compare_snapshots(json.loads(Path(arguments.before).read_text()),
+                                       json.loads(Path(arguments.after).read_text()))
+            _print(report)
+            return 0 if report['clean'] else 1
     except Fault as fault:
         print(str(fault), file=sys.stderr)
         return 2

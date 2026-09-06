@@ -117,4 +117,4 @@
 - 备份调度事实：Frappe 16 核心 hooks 没有每日站点备份任务，两站 `Scheduled Job Type` 里只有 `delete_downloadable_backups`；本机两站最近的备份是 2026-09-03 的人工/脚本备份。所以「60 小时」不是失败，是尚无调度——计划 4 的备份切片必须覆盖「定时生成 → 异地同步 → 失败可见 → 异机恢复验证」。
 - 第 4 节的 RTO、审计/删除边界、G4 措辞、计划 2/3 状态与计划 4 依赖，已按四项裁决（spec 已裁决 #8/#9/#10 与实施顺序表）改写。
 
-处置：A/B/C 与计划 3 的一处回归（宿主熔断探针地址）在分支 `plan3/closeout` 修复并各以真实路径演练，证据见 [deployment-security-evidence.md](deployment-security-evidence.md)「计划 3 收口」节；D 留作计划 4 首片；计划 2 的放行记录改为「放行前独立复核未通过」，见 [runtime-reliability-evidence.md](runtime-reliability-evidence.md) 末节。
+处置：A/B/C 与计划 3 的一处回归（宿主熔断探针地址）在分支 `plan3/closeout` 修复并各以真实路径演练（PR #5，已合入），证据见 [deployment-security-evidence.md](deployment-security-evidence.md)「计划 3 收口」节；D 作为计划 4 首片实施，见 [data-governance-evidence.md](data-governance-evidence.md)；计划 2 的放行记录改为「放行前独立复核未通过」，见 [runtime-reliability-evidence.md](runtime-reliability-evidence.md) 末节。

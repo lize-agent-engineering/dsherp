@@ -201,22 +201,31 @@ admin agent-firewall            # 只打印同一组规则（含 nft 写法与�
 | worker 存活 | `systemctl is-active dsherp-agent-worker` | `active` |
 | 发布可核验 | `cat infra/releases/$TAG.json` | tag、提交、基底 digest、架构齐全 |
 
-## 10. 升级与回滚
+## 10. 升级与回滚（G2）
+
+发布前提：没有运行在飞（`release` 会检查每站的 Queued/Running/Cancelling 计数，非零即拒绝），所以先停 worker：`sudo systemctl stop dsherp-agent-worker`。发布期间每个站被置为维护模式并暂停调度（`maintenance_mode`/`pause_scheduler` 写进 site_config，结束时恢复原值），用户在此期间看到 503。
 
 ```sh
-# 升级：先备份，逐站 migrate，再按 DocType 比对行数与摘要（子表与单值文档尚未覆盖，合法迁移的元数据变化也会判为差异——G2 的可核验校验由计划 4 首片补齐）；有差异退出码为 1
 $EDITOR infra/env/prod.env          # DSHERP_IMAGE_TAG 改为新 tag
-compose pull && compose up -d
-DSHERP_ENV=prod ./bin/dsherp-admin release "$NEW_TAG"
-
-# 回滚：改回旧 tag，起旧镜像，从升级前备份恢复（备份文件必须显式指明）
-$EDITOR infra/env/prod.env
-compose up -d
-DSHERP_ENV=prod ./bin/dsherp-admin rollback "$OLD_TAG" \
-  --backup "$SLUG.$DSHERP_BASE_DOMAIN=/home/frappe/frappe-bench/sites/$SLUG.$DSHERP_BASE_DOMAIN/private/backups/<升级前备份>.sql.gz"
+compose pull && compose up -d       # 两个 bench 都换到新镜像
+DSHERP_ENV=prod ./bin/dsherp-admin release "$NEW_TAG"     # 退出码 0=各站数据一致，1=有未声明差异，2=中途失败
+sudo systemctl start dsherp-agent-worker
 ```
 
-升级前备份是硬前置：`release` 在 migrate 之前对每个站执行 `bench backup --with-files`，比对报告落在 `.runtime/releases/release-<tag>.json`。
+`release` 对每个站（租户站与平台站）按序执行：核对 `prod.env` 的 tag 就是要发布的 tag → 静默 → `bench backup --with-files` → 把四件套备份集复制到 `/home/frappe/frappe-bench/archived/releases/<tag>/<站>/`（`tenant-archive`/`platform-archive` 卷；Frappe 自己会在 23 小时后清掉 `private/backups`）→ 升级前快照 → `bench migrate` → 升级后快照 → 读取两个 App 的 patches.txt 里各 patch 声明的预期变化 → 比对 → 恢复站点标志。报告在 `.runtime/releases/release-<tag>-<时间戳>.json`（`release-<tag>.json` 是最新一份），快照与备份记录在 `.runtime/releases/<tag>/<站>/{before,after,backup}.json`。
+
+比对口径：站上每个 DocType 按元数据归入且只归入一桶——**严格**（erpnext 与两个 dsherp App 的全部 DocType、自定义 DocType、联系人与身份表：逐行逐字段）、**日志**（Comment/Version/Deleted Document/Communication/Activity Log：只比哈希，允许新增）、**排除**（Frappe 自己的元数据、缓存与技术日志，每次 migrate 都会改写）；租户写过的元数据按行分区（`custom=1` 的 DocType 及其字段、`is_system_generated=0` 的 Custom Field/Property Setter）。新出现的表和列是 schema 变化，报告为信息不算差异；消失的表和列、行的增删改都是差异，除非某个 patch 在自己的模块里用 `EXPECTED_CHANGES = [{'doctype': ..., 'fields': [...], 'rows': 'existing'|'inserted'|'deleted'|'any'}]` 声明过。任何一张表读不出来就中止，不会带着"部分快照"下结论。原生 SQL 分页读取，密码列只存摘要。
+
+`migrate` 失败时站点保持维护模式，报告带 `failed`，命令退出码 2；此时按下面回滚。
+
+```sh
+# 回滚：改回旧 tag、起旧镜像，再撤销那次发布——它会恢复 release 归档的升级前备份并与升级前快照比对
+$EDITOR infra/env/prod.env
+compose up -d
+DSHERP_ENV=prod ./bin/dsherp-admin rollback "$NEW_TAG"    # 参数是要撤销的发布 tag；退出码 0=数据与升级前一致
+```
+
+`rollback` 从 `.runtime/releases/<tag>/<站>/backup.json` 找到归档的备份集，`bench restore <db> --with-public-files … --with-private-files … --force`，再快照并与 `before.json` 比对；唯一容忍的差异是 restore 自己回写的 System Settings 调度开关及其 modified。`--backup SITE=FILE` 可改用别的数据库转储（同前缀的 files tar 一并恢复）。演练与排查用 `snapshot <站> --out FILE` 与 `compare BEFORE AFTER`。
 
 ## 11. 下线租户与从归档恢复
 

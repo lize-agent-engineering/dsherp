@@ -326,17 +326,53 @@ def test_doctor_names_what_is_missing_instead_of_failing_at_compose_time(host):
 
 
 class SnapshotBench(FakeBench):
-    """A bench whose Site content can be made to change between two snapshots."""
+    """A bench whose Site content can be made to change between snapshots.
 
-    def __init__(self, snapshots):
-        super().__init__(existing_sites=("acme.tenant.example.com",), installed=("dsherp_bridge",))
+    Snapshots are recognised by the reader's marker, backups by the set the fake writes
+    into the site's private/backups, migrate/restore by their verbs."""
+
+    def __init__(self, snapshots, active_runs=0, expectations=None, backup_pieces=4):
+        super().__init__(existing_sites=("acme.tenant.example.com", "platform.tenant.example.com"),
+                         installed=("dsherp_bridge",))
         self.snapshots = list(snapshots)
+        self.active_runs = active_runs
+        self.expectations = expectations or []
+        self.backup_pieces = backup_pieces
+        self.site_config = {}
+        self.archived = []
+
+    def run(self, *arguments, stdin=None, timeout=900, secrets=()):
+        handled = ((arguments[:2] == ("bench", "--site") and arguments[3] in ("set-config", "backup"))
+                   or (arguments[:2] == ("sh", "-c") and any(mark in arguments[2] for mark in ("private/backups", "archived/releases", "test -s "))))
+        if handled:
+            self.calls.append(("run",) + arguments[:3])
+            self.verbs.append(" ".join(arguments))
+        if arguments[:2] == ("bench", "--site") and arguments[3] == "set-config":
+            self.site_config[(arguments[2], arguments[5])] = arguments[6]
+            return ""
+        if arguments[:2] == ("bench", "--site") and arguments[3] == "backup":
+            return "Backup Summary for " + arguments[2] + "\n"
+        if arguments[:2] == ("sh", "-c") and "ls -1 " in arguments[2] and "private/backups" in arguments[2]:
+            slug = "acme_tenant_example_com" if "acme" in arguments[2] else "platform_tenant_example_com"
+            pieces = [f"20260906_120000-{slug}-database.sql.gz", f"20260906_120000-{slug}-site_config_backup.json",
+                      f"20260906_120000-{slug}-files.tar", f"20260906_120000-{slug}-private-files.tar"]
+            return "".join(piece + "\n" for piece in pieces[:self.backup_pieces])
+        if arguments[:2] == ("sh", "-c") and "cp " in arguments[2] and "archived/releases" in arguments[2]:
+            self.archived.append(arguments[2])
+            return ""
+        if arguments[:2] == ("sh", "-c") and "test -s " in arguments[2]:
+            return "present\n" if "missing" not in arguments[2] else ""
+        return super().run(*arguments, stdin=stdin, timeout=timeout, secrets=secrets)
 
     def python(self, site, body, timeout=900):
-        if "digests" in body:
+        if "DSHERP_SNAPSHOT" in body:
             self.calls.append(("snapshot", site))
             self.verbs.append("snapshot " + site)
-            return json.dumps(self.snapshots.pop(0)) + "\n"
+            return "DSHERP_SNAPSHOT " + json.dumps(self.snapshots.pop(0)) + "\n"
+        if "EXPECTED_CHANGES" in body:
+            return "DSHERP_EXPECTATIONS " + json.dumps(self.expectations) + "\n"
+        if "DS Model Run" in body and "active" in body:
+            return json.dumps({"active": self.active_runs, "maintenance_mode": 0, "pause_scheduler": 0}) + "\n"
         return super().python(site, body, timeout=timeout)
 
 
@@ -345,59 +381,158 @@ def _tenant_row():
                                "origin": "https://acme.tenant.example.com"}])
 
 
-def test_a_release_backs_up_before_it_migrates_and_reports_the_data_unchanged():
-    admin.ensure_secrets(PROD)
-    _tenant_row()
-    same = {"Item": {"count": 3, "digest": "aa"}, "DS Model Run": {"count": 9, "digest": "bb"}}
-    bench = SnapshotBench([same, dict(same)])
-    report = admin.release(PROD, "v0.4.0", bench_factory=lambda kind: bench)
-    phases = [verb.split()[0] if verb.startswith("snapshot") else verb.split()[3] for verb in bench.verbs]
-    assert phases == ["backup", "snapshot", "migrate", "snapshot"]
-    assert report["clean"] is True
-    assert report["sites"]["acme.tenant.example.com"]["differences"] == []
-    assert json.loads(Path(report["path"]).read_text())["tag"] == "v0.4.0"
+def _snap(values_by_table, singles=None):
+    from dsherp import release_compare
+    tables = {}
+    for table, rows in values_by_table.items():
+        tables[table] = {"columns": sorted({key for row in rows.values() for key in row}),
+                         "rows": {name: {"hash": release_compare.row_hash(row), "values": row} for name, row in rows.items()}}
+    return {"tables": tables, "singles": singles or {}, "auth": {}, "scope": {}, "row_counts": {}}
 
 
-def test_a_release_that_changes_stored_data_is_reported_as_not_clean():
-    admin.ensure_secrets(PROD)
+SAME = _snap({"tabItem": {"A": {"name": "A", "item_name": "a"}}, "tabDS Model Run": {"r": {"name": "r", "status": "Succeeded"}}})
+DRIFTED = _snap({"tabItem": {"A": {"name": "A", "item_name": "edited"}}, "tabDS Model Run": {"r": {"name": "r", "status": "Succeeded"}}})
+RELEASE = deploy_env.settings({**{k: v for k, v in [
+    ("DSHERP_ENV", "prod"), ("DSHERP_PROJECT", "dsherp"), ("DSHERP_BASE_DOMAIN", "tenant.example.com"),
+    ("DSHERP_PLATFORM_SLUG", "platform"), ("DSHERP_IMAGE_TAG", "v0.4.0"),
+    ("DSHERP_IMAGE_REGISTRY", "registry.example.com/dsherp"), ("DSHERP_AGENT_UID", "1000"), ("DSHERP_AGENT_GID", "1000")]}})
+
+
+def test_a_release_quiesces_backs_up_archives_snapshots_migrates_compares_and_restores_the_site_flags():
+    """The upgrade half of G2: every step in order, per site, tenants and the platform alike."""
+    admin.ensure_secrets(RELEASE)
     _tenant_row()
-    before = {"Item": {"count": 3, "digest": "aa"}}
-    after = {"Item": {"count": 3, "digest": "cc"}}
-    bench = SnapshotBench([before, after])
-    report = admin.release(PROD, "v0.4.0", bench_factory=lambda kind: bench)
+    bench = SnapshotBench([SAME, SAME, SAME, SAME])
+    report = admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench)
+    verbs = [verb for verb in bench.verbs]
+    acme = [verb for verb in verbs if "acme.tenant.example.com" in verb or verb == "snapshot acme.tenant.example.com"]
+    order = ["set-config" if "set-config" in v else "backup" if " backup " in v else "archive" if "archived/releases" in v
+             else "migrate" if v.endswith("migrate") else "snapshot" if v.startswith("snapshot") else None for v in acme]
+    order = [step for step in order if step]
+    assert order == ["set-config", "set-config", "backup", "archive", "snapshot", "migrate", "snapshot", "set-config", "set-config"], order
+    assert bench.site_config[("acme.tenant.example.com", "maintenance_mode")] == "0"  # restored at the end
+    assert report["clean"] is True and report["tag"] == "v0.4.0"
+    assert set(report["sites"]) == {"acme.tenant.example.com", "platform.tenant.example.com"}
+    site = report["sites"]["acme.tenant.example.com"]
+    assert site["backup"]["database"].endswith("acme_tenant_example_com-database.sql.gz")
+    assert site["backup"]["database"].startswith(admin.ARCHIVED_RELEASES + "/v0.4.0/acme.tenant.example.com/")
+    assert site["comparison"]["clean"] is True and site["comparison"]["summary"]["rows"] == 2
+    releases = admin.runtime_dir(RELEASE) / "releases" / "v0.4.0" / "acme.tenant.example.com"
+    assert json.loads((releases / "before.json").read_text())["tables"] == SAME["tables"]
+    assert (releases / "after.json").exists() and json.loads((releases / "backup.json").read_text())["database"] == site["backup"]["database"]
+    assert Path(report["path"]).name.startswith("release-v0.4.0-") and (Path(report["path"]).parent / "release-v0.4.0.json").exists()
+
+
+def test_a_release_reports_undeclared_drift_and_honours_a_patch_declaration():
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = SnapshotBench([SAME, DRIFTED, SAME, SAME])
+    report = admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench)
     assert report["clean"] is False
-    assert report["sites"]["acme.tenant.example.com"]["differences"][0]["doctype"] == "Item"
+    difference = report["sites"]["acme.tenant.example.com"]["comparison"]["differences"][0]
+    assert difference == {"table": "tabItem", "name": "A", "change": "changed", "field": "item_name",
+                          "before": "a", "after": "edited", "declared": False}
+    declared = SnapshotBench([SAME, DRIFTED, SAME, SAME],
+                             expectations=[{"patch": "dsherp_bridge.patches.rename_items", "doctype": "Item", "fields": ["item_name"]}])
+    report = admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: declared)
+    assert report["clean"] is True
+    assert report["sites"]["acme.tenant.example.com"]["comparison"]["differences"][0]["declared"] == "dsherp_bridge.patches.rename_items"
 
 
-def test_a_release_without_a_tag_or_without_sites_is_refused():
-    admin.ensure_secrets(PROD)
-    bench = SnapshotBench([])
-    with pytest.raises(admin.Fault):
-        admin.release(PROD, "", bench_factory=lambda kind: bench)
-    with pytest.raises(admin.Fault):
-        admin.release(PROD, "v0.4.0", bench_factory=lambda kind: bench)
-
-
-def test_a_rollback_will_not_guess_which_backup_to_restore():
-    admin.ensure_secrets(PROD)
+def test_a_release_refuses_a_tag_the_environment_does_not_run_active_runs_or_an_incomplete_backup_set():
+    admin.ensure_secrets(RELEASE)
     _tenant_row()
-    bench = SnapshotBench([{"Item": {"count": 3, "digest": "aa"}}])
+    with pytest.raises(admin.Fault, match="DSHERP_IMAGE_TAG"):
+        admin.release(RELEASE, "v0.5.0", bench_factory=lambda kind: SnapshotBench([SAME] * 4))
+    busy = SnapshotBench([SAME] * 4, active_runs=1)
+    with pytest.raises(admin.Fault, match="运行"):
+        admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: busy)
+    assert not [verb for verb in busy.verbs if " backup " in verb or verb.endswith("migrate")]
+    short = SnapshotBench([SAME] * 4, backup_pieces=2)
+    with pytest.raises(admin.Fault, match="备份集"):
+        admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: short)
+    assert not [verb for verb in short.verbs if verb.endswith("migrate")]
     with pytest.raises(admin.Fault):
-        admin.rollback(PROD, "v0.3.0", bench_factory=lambda kind: bench)
-    report = admin.rollback(PROD, "v0.3.0", bench_factory=lambda kind: bench,
-                            backups={"acme.tenant.example.com": "/backups/pre-upgrade.sql.gz"})
-    assert any("restore" in verb for verb in bench.verbs)
-    assert report["sites"]["acme.tenant.example.com"]["Item"]["count"] == 3
+        admin.release(RELEASE, "", bench_factory=lambda kind: SnapshotBench([SAME] * 4))
 
 
-def test_snapshot_comparison_names_added_removed_and_changed_doctypes():
-    before = {"Item": {"count": 1, "digest": "a"}, "Gone": {"count": 2, "digest": "b"}}
-    after = {"Item": {"count": 1, "digest": "z"}, "New": {"count": 4, "digest": "c"}}
-    differences = admin.compare_snapshots(before, after)
-    assert [row["doctype"] for row in differences] == ["Gone", "Item", "New"]
-    assert differences[0]["after"] == {"count": 0, "digest": None}
-    assert differences[2]["before"] == {"count": 0, "digest": None}
-    assert admin.compare_snapshots(before, dict(before)) == []
+def test_a_failed_migrate_leaves_the_site_in_maintenance_and_writes_a_partial_report():
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+
+    class Broken(SnapshotBench):
+        def run(self, *arguments, **kwargs):
+            if arguments[:2] == ("bench", "--site") and arguments[3] == "migrate":
+                self.verbs.append(" ".join(arguments))
+                raise admin.Fault("容器命令失败（backend）：bench --site migrate\npatch boom")
+            return super().run(*arguments, **kwargs)
+
+    bench = Broken([SAME, SAME, SAME, SAME])
+    with pytest.raises(admin.Fault, match="migrate"):
+        admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench)
+    assert bench.site_config[("acme.tenant.example.com", "maintenance_mode")] == "1"
+    partial = json.loads((admin.runtime_dir(RELEASE) / "releases" / "release-v0.4.0.json").read_text())
+    assert partial["clean"] is False and partial["failed"]["site"] == "acme.tenant.example.com"
+
+
+def test_a_rollback_restores_the_archived_set_with_files_and_compares_with_the_pre_upgrade_snapshot():
+    """The recovery half of G2: rollback finds what release archived, restores it and proves the
+    data is what it was before the upgrade; the only tolerated delta is what restore itself writes."""
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = SnapshotBench([SAME, SAME, SAME, SAME])
+    admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench)
+    after_restore = _snap({**{t: {n: dict(r["values"]) for n, r in v["rows"].items()} for t, v in SAME["tables"].items()}},
+                          singles={"System Settings": {"enable_scheduler": "1", "modified": "later", "modified_by": "Administrator"}})
+    bench.snapshots = [after_restore, after_restore]
+    report = admin.rollback(RELEASE, "v0.4.0", bench_factory=lambda kind: bench)
+    restore = [verb for verb in bench.verbs if " restore " in verb and "acme" in verb][0]
+    assert "--with-public-files" in restore and "--with-private-files" in restore and "--force" in restore
+    assert admin.ARCHIVED_RELEASES + "/v0.4.0/acme.tenant.example.com/20260906_120000-acme_tenant_example_com-database.sql.gz" in restore
+    assert report["clean"] is True and report["sites"]["acme.tenant.example.com"]["comparison"]["clean"] is True
+    assert report["sites"]["acme.tenant.example.com"]["comparison"]["summary"]["differences"] == 0
+    assert bench.site_config[("acme.tenant.example.com", "maintenance_mode")] == "0"
+    assert Path(report["path"]).name.startswith("rollback-v0.4.0-")
+
+
+def test_a_rollback_that_does_not_reproduce_the_pre_upgrade_data_is_not_clean_and_an_explicit_backup_overrides_discovery():
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = SnapshotBench([SAME, SAME, SAME, SAME])
+    admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench)
+    bench.snapshots = [DRIFTED, SAME]
+    report = admin.rollback(RELEASE, "v0.4.0", bench_factory=lambda kind: bench,
+                            backups={"acme.tenant.example.com": "/home/frappe/frappe-bench/sites/acme.tenant.example.com/private/backups/x-database.sql.gz"})
+    assert report["clean"] is False
+    assert report["sites"]["acme.tenant.example.com"]["comparison"]["differences"][0]["field"] == "item_name"
+    restore = [verb for verb in bench.verbs if " restore " in verb and "acme" in verb][-1]
+    assert "/private/backups/x-database.sql.gz" in restore
+
+
+def test_a_rollback_without_a_release_record_or_with_a_missing_backup_file_is_refused_before_touching_data():
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = SnapshotBench([SAME] * 4)
+    with pytest.raises(admin.Fault, match="release"):
+        admin.rollback(RELEASE, "v0.4.0", bench_factory=lambda kind: bench)
+    assert not [verb for verb in bench.verbs if " restore " in verb]
+    admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench)
+    bench.snapshots = [SAME, SAME]
+    with pytest.raises(admin.Fault, match="备份"):
+        admin.rollback(RELEASE, "v0.4.0", bench_factory=lambda kind: bench,
+                       backups={"acme.tenant.example.com": "/nowhere/missing-database.sql.gz"})
+    assert not [verb for verb in bench.verbs if " restore " in verb]
+
+
+def test_snapshot_and_compare_are_available_as_commands_for_drills():
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = SnapshotBench([SAME, DRIFTED])
+    before = admin.take_snapshot(RELEASE, "acme.tenant.example.com", bench_factory=lambda kind: bench)
+    after = admin.take_snapshot(RELEASE, "acme.tenant.example.com", bench_factory=lambda kind: bench)
+    assert before["tables"] == SAME["tables"]
+    report = admin.compare_snapshots(before, after)
+    assert report["clean"] is False and report["differences"][0]["after"] == "edited"
 
 
 def test_the_platform_site_is_created_without_erpnext_and_with_its_own_app():

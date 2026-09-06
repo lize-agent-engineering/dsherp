@@ -187,6 +187,9 @@ def test_a_retired_site_lands_on_a_volume_the_image_prepared_for_the_bench_user(
     backend = _block(PROD_COMPOSE, "backend")
     assert "tenant-archive:/home/frappe/frappe-bench/archived" in backend
     assert "tenant-archive:" in PROD_COMPOSE.split("\nvolumes:\n", 1)[1]
+    # release archives each bench's pre-upgrade backup set on the same volume, the platform's too.
+    assert "platform-archive:/home/frappe/frappe-bench/archived" in _block(PROD_COMPOSE, "platform-backend")
+    assert "platform-archive:" in PROD_COMPOSE.split("\nvolumes:\n", 1)[1]
     dockerfile = (ROOT / "infra/docker/frappe/Dockerfile").read_text()
     assert re.search(r"install -d .*-o frappe -g frappe .*/home/frappe/frappe-bench/archived", dockerfile), dockerfile
     from dsherp import admin
