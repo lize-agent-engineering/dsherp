@@ -1287,6 +1287,175 @@ def sessions_report(resolved, *, root=ROOT, days=None, sweep=False):
     return report
 
 
+USER_ID = re.compile(r"[^\s'\"\\]{3,140}")
+RESERVED_USERS = ('Administrator', 'Guest')
+
+
+def _user_checked(user):
+    if not USER_ID.fullmatch(user or ''):
+        raise Fault('用户标识必须是站点里的登录名（通常是邮箱），且不含空白与引号')
+    if user in RESERVED_USERS:
+        raise Fault(f'{user} 是系统账号，不接受导出或删除请求')
+    return user
+
+
+def _user_site_bench(resolved, root, factory, site):
+    """The bench serving this Site. A Site this deployment does not run is refused, not guessed."""
+    for bench, name in _targets(resolved, root, factory):
+        if name == site:
+            return bench
+    raise Fault(f'{site} 不是本部署运行的站点；用 list-tenants 看当前清单')
+
+
+def _user_read_script(user):
+    """Read one person's rows: exactly the columns the boundary declares, nothing wider."""
+    from dsherp import user_data as user_data_module
+    columns = {doctype: sorted(set(rules['keep']) | set(rules['clear']))
+               for doctype, rules in user_data_module.BOUNDARY.items()}
+    return ("user=" + repr(user) + "\n"
+            "columns=json.loads(" + repr(json.dumps(columns)) + ")\n"
+            "def rows(doctype,filters=None,or_filters=None):\n"
+            "    if not frappe.db.exists('DocType',doctype):return []\n"
+            "    found=frappe.get_all(doctype,filters=filters,or_filters=or_filters,\n"
+            "                         fields=columns[doctype],limit_page_length=0,order_by='creation asc')\n"
+            "    return [{k:(str(v) if hasattr(v,'isoformat') else v) for k,v in row.items()} for row in found]\n"
+            "def merge(*groups):\n"
+            "    seen={}\n"
+            "    for group in groups:\n"
+            "        for row in group:seen.setdefault(row['name'],row)\n"
+            "    return [seen[name] for name in sorted(seen)]\n"
+            "conversations=rows('DS Conversation',{'owner':user})\n"
+            "conversation_names=[row['name'] for row in conversations]\n"
+            "run_or=[['owner','=',user]]+([['conversation','in',conversation_names]] if conversation_names else [])\n"
+            "runs=merge(rows('DS Model Run',or_filters=run_or))\n"
+            "run_names=[row['name'] for row in runs]\n"
+            "proposal_or=[['owner','=',user]]+([['model_run','in',run_names]] if run_names else [])\n"
+            "proposals=merge(rows('DS Operation Proposal',or_filters=proposal_or))\n"
+            "proposal_names=[row['name'] for row in proposals]\n"
+            "execution_or=[['owner','=',user]]+([['proposal','in',proposal_names]] if proposal_names else [])\n"
+            "executions=merge(rows('DS Execution Record',or_filters=execution_or))\n"
+            "print('DSHERP_USER_DATA '+json.dumps({'user':user,'known_user':bool(frappe.db.exists('User',user)),\n"
+            "      'conversations':conversations,'runs':runs,'proposals':proposals,'executions':executions},\n"
+            "      default=str))")
+
+
+def _user_clear_script(instructions):
+    """Clear exactly the rows the plan named, and drop the Version rows that copied them.
+
+    The columns are written at the database level on purpose: a Site's own controllers refuse
+    to touch an audit record (ruling #3), and this is the one registered exception - it removes
+    a person's content from rows that otherwise stay whole."""
+    return ("plan=json.loads(" + repr(json.dumps(instructions)) + ")\n"
+            "cleared={};versions=0;missing=0\n"
+            "for doctype,spec in plan.items():\n"
+            "    changed=0\n"
+            "    for name in spec['names']:\n"
+            "        if not frappe.db.exists(doctype,name):\n"
+            "            missing+=1;continue\n"
+            "        frappe.db.set_value(doctype,name,{column:'' for column in spec['columns']})\n"
+            "        changed+=1\n"
+            "        for row in frappe.get_all('Version',filters={'ref_doctype':doctype,'docname':name},\n"
+            "                                  fields=['name','data'],limit_page_length=0):\n"
+            "            body=row.get('data') or ''\n"
+            "            if any(('\"'+column+'\"') in body for column in spec['columns']):\n"
+            "                frappe.db.delete('Version',{'name':row['name']});versions+=1\n"
+            "    cleared[doctype]=changed\n"
+            "frappe.db.commit()\n"
+            "print('DSHERP_USER_DELETE '+json.dumps({'runs':cleared.get('DS Model Run',0),\n"
+            "      'conversations':cleared.get('DS Conversation',0),'versions':versions,'missing':missing}))")
+
+
+def _user_rows(bench, site, user):
+    line = _last_line(bench.python(site, _user_read_script(user), timeout=600))
+    marker = 'DSHERP_USER_DATA '
+    if not line.startswith(marker):
+        raise Fault(f'{site} 没有返回该用户的数据')
+    return json.loads(line[len(marker):])
+
+
+def _user_file(resolved, root, kind, site, user):
+    slug = re.sub(r'[^A-Za-z0-9._-]', '_', f'{site}-{user}')
+    return runtime_dir(resolved, root) / 'user-data' / f"{kind}-{slug}-{time.strftime('%Y%m%d_%H%M%S')}.json"
+
+
+def export_user_data(resolved, site, user, *, root=ROOT, runner=subprocess.run, bench_factory=None):
+    """Everything one Site holds about one person, as one file (T4).
+
+    Reading only: an export never writes to the Site, so a person asking what is held about
+    them cannot, by asking, change it."""
+    from dsherp import sessions as sessions_module
+    from dsherp import user_data as user_data_module
+    _user_checked(user)
+    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
+    bench = _user_site_bench(resolved, root, factory, site)
+    found = _user_rows(bench, site, user)
+    return _user_export(resolved, root, site, user, found)
+
+
+def _user_export(resolved, root, site, user, found):
+    """Write the export document for rows already read, so an export and the deletion that
+    follows it describe the same moment rather than two reads with a gap between them."""
+    from dsherp import sessions as sessions_module
+    from dsherp import user_data as user_data_module
+    document = user_data_module.export_document(
+        user=user, site=site, conversations=found['conversations'], runs=found['runs'],
+        proposals=found['proposals'], executions=found['executions'])
+    document['known_user'] = found['known_user']
+    state_root = runtime_dir(resolved, root) / SESSION_ROOT
+    document['sessions'] = [str(path) for path in sessions_module.of_conversations(
+        state_root, site, [row['name'] for row in found['conversations']])]
+    path = _write_json(_user_file(resolved, root, 'export', site, user), document)
+    return {'site': site, 'user': user, 'known_user': found['known_user'], 'path': str(path),
+            'counts': {key: len(document[key]) for key in ('conversations', 'runs', 'proposals', 'executions')},
+            'sessions': len(document['sessions']),
+            'note': '导出文件含本人的提问、页面快照与回答，权限 0600；请按交付流程转交，不要留在共享目录。'
+                    '运行事件（DS Run Event）不在其中，需要时按运行单独调取。'}
+
+
+def delete_user_data(resolved, site, user, *, root=ROOT, runner=subprocess.run, bench_factory=None, confirm=False):
+    """Remove one person's own content from one Site, keeping the accountability facts (T4).
+
+    Without `--confirm` it states the plan and stops. With it, the person's data is exported
+    first - a deletion that leaves nothing to answer with is not a deletion anyone can check -
+    then the declared columns are cleared, their version history dropped, and their session
+    directories removed. What survives, and the only way to remove it, is named in `residue`."""
+    from dsherp import sessions as sessions_module
+    from dsherp import user_data as user_data_module
+    _user_checked(user)
+    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
+    bench = _user_site_bench(resolved, root, factory, site)
+    found = _user_rows(bench, site, user)
+    names = {'DS Conversation': [row['name'] for row in found['conversations']],
+             'DS Model Run': [row['name'] for row in found['runs']]}
+    state_root = runtime_dir(resolved, root) / SESSION_ROOT
+    sessions = sessions_module.of_conversations(state_root, site, names['DS Conversation'])
+    plan = user_data_module.plan(user=user, conversations=found['conversations'], runs=found['runs'],
+                                 proposals=found['proposals'], executions=found['executions'],
+                                 sessions=len(sessions))
+    plan['site'] = site
+    report = {'site': site, 'user': user, 'known_user': found['known_user'], 'applied': False, 'plan': plan,
+              'export': _user_export(resolved, root, site, user, found),
+              'cleared': {'runs': 0, 'conversations': 0, 'versions': 0, 'missing': 0},
+              'sessions_removed': []}
+    if not confirm:
+        report['next'] = f'确认后重跑：dsherp-admin delete-user-data {site} {user} --confirm'
+        report['path'] = str(_write_json(_user_file(resolved, root, 'delete-plan', site, user), report))
+        return report
+    instructions = {doctype: {'columns': list(user_data_module.BOUNDARY[doctype]['clear']),
+                              'names': names[doctype]}
+                    for doctype in names if names[doctype]}
+    if instructions:
+        line = _last_line(bench.python(site, _user_clear_script(instructions), timeout=900))
+        marker = 'DSHERP_USER_DELETE '
+        if not line.startswith(marker):
+            raise Fault(f'{site} 没有确认清除结果；请核对该站现状后再重跑')
+        report['cleared'] = json.loads(line[len(marker):])
+    report['sessions_removed'] = sessions_module.remove(state_root, site, names['DS Conversation'])
+    report['applied'] = True
+    report['path'] = str(_write_json(_user_file(resolved, root, 'delete', site, user), report))
+    return report
+
+
 def _print(payload):
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -1317,6 +1486,15 @@ def main(argv=None):
     sessions_parser = sub.add_parser('sessions', help='查看宿主上的原生会话目录；--sweep 清掉超过保留期的（默认 90 天）')
     sessions_parser.add_argument('--sweep', action='store_true')
     sessions_parser.add_argument('--days', type=int, default=None)
+    export_user = sub.add_parser('export-user-data', help='导出某个站点里属于某个人的全部数据（只读，不改站点）')
+    export_user.add_argument('site')
+    export_user.add_argument('user', help='站点里的登录名，通常是邮箱')
+    delete_user = sub.add_parser('delete-user-data',
+                                 help='清除某人在某站点的个人内容：先导出，--confirm 才执行；'
+                                      '运行、提案、执行与事件等追责事实按裁决 #10 保留')
+    delete_user.add_argument('site')
+    delete_user.add_argument('user', help='站点里的登录名，通常是邮箱')
+    delete_user.add_argument('--confirm', action='store_true', help='真正执行清除')
     usage_parser = sub.add_parser('usage', help='按月汇总每个站点的真实用量（模型调用、token、时长）')
     usage_parser.add_argument('month', help='YYYY-MM')
     migrate_drill_parser = sub.add_parser('migrate-drill', help='把旧构建的备份集恢复进运行新构建的隔离栈并 migrate，按 G2 口径判定（发布前跑）')
@@ -1395,6 +1573,15 @@ def main(argv=None):
             report = sessions_report(resolved, days=arguments.days, sweep=arguments.sweep)
             _print(report)
             return 0
+        if arguments.command == 'export-user-data':
+            _print(export_user_data(resolved, arguments.site, arguments.user))
+            return 0
+        if arguments.command == 'delete-user-data':
+            report = delete_user_data(resolved, arguments.site, arguments.user,
+                                      confirm=arguments.confirm)
+            _print(report)
+            # A command named delete that deleted nothing must not exit 0.
+            return 0 if report['applied'] else 1
         if arguments.command == 'usage':
             report = usage_report(resolved, arguments.month)
             _print(report)
