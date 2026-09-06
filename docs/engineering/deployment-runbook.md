@@ -173,7 +173,7 @@ sudo journalctl -u dsherp-agent-worker -n 20   # 不应有 "Unknown lvalue"/"Fai
 
 unit 由 dsherp 渲染到自己的目录，再由 root 安装——渲染器写不了 `/etc/systemd/system`。防火墙脚本同样由 root 从仓库复制到 `/usr/local/sbin`：它以 root 运行，不能直接执行服务账号可写的文件。
 
-worker 在生产启动时**先核验宿主隔离再服务**：`/run/dsherp-agent-firewall/<agent 网络名>` 必须存在且记录的网桥等于当前网络的网桥，然后用发布镜像在 agent 网络里起一个探针容器去连网关——被拒绝（RST）或连通都说明宿主没挡，只有超时才算隔离；三者任一不成立 worker 直接退出并把原因写进 journal（`Restart=always` 会每 10 秒重试，直到防火墙单元就位）。运行中每个 tick 重查记录与网桥，网络 id 变了就重新探针；隔离失效期间心跳照发（用户看到的是排队而不是 503）但**不领取新运行**，`/metrics` 的 `dsherp_host_isolation_ok` 为 0，告警 `host_isolation_failed`（critical）。没有 systemd 的本机演练因此起不了生产形态的 worker，这是有意为之：隔离只在真实 Linux 主机上成立。
+worker 在生产启动时**先核验宿主隔离再服务**：`/run/dsherp-agent-firewall/<agent 网络名>` 必须存在且记录的网桥等于当前网络的网桥，然后用发布镜像在 agent 网络里起一个探针容器同时连网关的 :22 与 :9——连通、被拒绝（RST）、被重置都说明宿主没挡，路由错误等其它异常算"无法证明"，只有超时才算隔离；三者任一不成立 worker 直接退出并把原因写进 journal（`Restart=always` 会每 10 秒重试，直到防火墙单元就位）。运行中每个 tick 重查记录与网桥，网络 id 变了就重新探针，健康时也每 30 秒重探一次（同一网桥上规则被清掉在 30 秒内被发现），失败期间每个 tick 都探；隔离失效期间心跳照发（用户看到的是排队而不是 503）但**不领取新运行**，`/metrics` 的 `dsherp_host_isolation_ok` 为 0，告警 `host_isolation_failed`（critical）。没有 systemd 的本机演练因此起不了生产形态的 worker，这是有意为之：隔离只在真实 Linux 主机上成立。
 
 unit 为 `Type=notify` + `WatchdogSec=60s`：worker 每轮 tick 回喂看门狗，卡死会被重启；`ProtectSystem=strict` 下它只能写 `.runtime` 与 `work` 两个目录。
 

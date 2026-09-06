@@ -141,21 +141,39 @@ def normalize_profile(profile):
 
 # Where dsherp-agent-firewall.service records the bridge it applied the host rules to.
 FIREWALL_STATE=Path('/run/dsherp-agent-firewall')
-# Runs inside a throwaway container on the agent network. A refused connection is the
-# host's kernel answering with RST, i.e. nothing dropped the packet; only a timeout (or
-# an unreachable route) means the INPUT rules are in the way. Ports are irrelevant.
+# Runs inside a throwaway container on the agent network. Only a timeout proves the SYN
+# was dropped by the host's INPUT rules. A refusal or a reset is the host's kernel
+# answering (nothing dropped the packet); a route error or anything else cannot prove
+# isolation either, so it is reported as an error verdict and the worker refuses. Two
+# ports are tried at once: a real service (sshd) and one nobody listens on, so a host
+# with a default-drop policy but an allow for sshd is still caught.
 ISOLATION_PROBE=r"""
-import json,os,socket
-gateway=os.environ['DSHERP_PROBE_GATEWAY'];verdict='blocked'
-for port in (22,9):
+import json,os,socket,threading
+gateway=os.environ['DSHERP_PROBE_GATEWAY'];verdicts={}
+def attempt(port):
     try:
-        socket.create_connection((gateway,port),3).close();verdict='connected';break
+        socket.create_connection((gateway,port),3).close();verdicts[port]='connected'
+    except TimeoutError:
+        verdicts[port]='blocked'
     except ConnectionRefusedError:
-        verdict='refused';break
-    except OSError:
-        continue
-print('DSHERP_ISOLATION '+json.dumps({'gateway':gateway,'verdict':verdict}))
+        verdicts[port]='refused'
+    except ConnectionResetError:
+        verdicts[port]='reset'
+    except OSError as error:
+        verdicts[port]='error:'+type(error).__name__
+    except Exception as error:
+        verdicts[port]='error:'+type(error).__name__
+threads=[threading.Thread(target=attempt,args=(port,)) for port in (22,9)]
+for thread in threads:thread.start()
+for thread in threads:thread.join()
+values=set(verdicts.values())
+if values=={'blocked'}:verdict='blocked'
+else:verdict=next((v for v in ('connected','refused','reset') if v in values),None) or sorted(values-{'blocked'})[0]
+print('DSHERP_ISOLATION '+json.dumps({'gateway':gateway,'verdict':verdict,'ports':{str(k):v for k,v in verdicts.items()}}))
 """
+# While healthy the probe repeats this often (rules flushed from the kernel on the same
+# bridge are noticed within it); while failing it repeats on every check.
+ISOLATION_PROBE_INTERVAL=30
 
 
 def prepare_host(runner=subprocess.run,cleanup=None,resolved=None,firewall_state=FIREWALL_STATE):
@@ -193,14 +211,20 @@ class HostIsolation:
     Two facts are required: dsherp-agent-firewall.service recorded the bridge of the
     agent network as it is now (so the unit ran, for this network), and a container on
     that network cannot reach the host gateway (so the rules actually work). Verified
-    before the worker serves; rechecked every tick; the probe is repeated whenever the
-    network's id changes. While it fails the coordinator claims nothing and says so.
+    before the worker serves; the record is rechecked every tick; the probe is repeated
+    whenever the network's id changes, every ISOLATION_PROBE_INTERVAL seconds while
+    healthy (rules flushed from the kernel on the same bridge are caught within it) and on
+    every check while failing. While it fails the coordinator claims nothing and says so.
     """
-    def __init__(self,resolved,runner=subprocess.run,state_dir=FIREWALL_STATE):
+    def __init__(self,resolved,runner=subprocess.run,state_dir=FIREWALL_STATE,clock=time.monotonic,
+                 probe_interval=ISOLATION_PROBE_INTERVAL):
         self.resolved=resolved
         self.runner=runner
         self.state_dir=Path(state_dir)
+        self.clock=clock
+        self.probe_interval=probe_interval
         self.verified=None
+        self._probed_at=None
         self._failure=None
 
     def _inspect(self,template):
@@ -241,13 +265,16 @@ class HostIsolation:
         self._record(network_id)
         self._probe()
         self.verified=network_id
+        self._probed_at=self.clock()
         return network_id
 
     def allows(self):
         global _isolation_ok
         try:
             network_id=self._inspect('{{.Id}}')
-            if network_id!=self.verified:
+            due=(network_id!=self.verified or self._failure is not None or self._probed_at is None
+                 or self.clock()-self._probed_at>=self.probe_interval)
+            if due:
                 self.verify()
             else:
                 self._record(network_id)

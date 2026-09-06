@@ -304,6 +304,8 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 
 演练后全部清除（残留规则 0）。worker 的完整启动/领取门只在单元测试里用假 docker 验证（真实 worker 需要宿主 venv，该机 glibc 2.17 装不上运行时锁），端到端仍待合规主机。
 
+第二轮复审又指出两处（2026-09-06）：同一网桥上规则被清掉不会被发现（网络 id 不变时只重读记录文件，探针只跑一次）；探针把 `ConnectionResetError` 等一切 `OSError` 都当成隔离成功。修法：健康时每 `ISOLATION_PROBE_INTERVAL`（30s）重探一次、失败期间每次检查都探（假时钟单元测试：规则清除后在一个间隔内被发现并停止领取，恢复后回到间隔节奏）；探针改为同时连 :22 与 :9，只有超时算 `blocked`，`connected/refused/reset` 判宿主可达，其它异常记 `error:<类名>` 判无法证明，worker 一律拒绝（在进程内执行探针脚本、注入各类异常的单元测试逐一锁定）。
+
 **B：本机。** 工作树有未提交改动时 `release_images.py` 拒绝并列出脏文件，不调用 docker；提交 `1cd8927` 打本地 tag `v0.3.1-rc1` 后构建成功，manifest 记 `git_commit=1cd8927dac49…`，两个镜像标签 `version=v0.3.1-rc1 / revision=1cd8927dac49…`（arm64）；镜像内 `/home/frappe/frappe-bench/archived` 为 `frappe:frappe` 所有。当时还验证了 `git archive` 导出树的标记替换与校验，但审查者随后证明导出树改文件后仍放行，该路径已撤销（见修复表）。清单文件 `infra/releases/v0.3.1-rc1.json` 的来源提交是 `1cd8927`，文件本身在 `3beb5cf` 入库；tag 未推送，B/C 补修后应另打 `v0.3.1-rc2` 重建。
 
 **A：本机 Docker Desktop 上以生产形态演练「下线 → 重建容器 → 从归档恢复」（2026-09-06，项目名 `dsherp`，镜像 `local/dsherp-frappe:v0.3.1-rc1`，独立 `.runtime/prod-local/`）。** 只起 db、两个 redis、platform-backend 与 backend；platform-backend 的探针在平台站开通前必然是 404，本演练脚本在这里多等了 5 分钟才继续（runbook 本来就不在此等待，非缺陷）。

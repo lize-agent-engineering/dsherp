@@ -942,7 +942,7 @@ def test_production_probes_the_real_isolation_from_a_container_and_refuses_when_
     from dsherp import context_worker
     production=_production()
     (tmp_path/'dsherp_agent').write_text('br-db512087a978\n')
-    for verdict in ('refused','connected'):
+    for verdict in ('refused','connected','reset','error:OSError'):
         with pytest.raises(RuntimeError,match='网关'):
             context_worker.HostIsolation(production,runner=_host_runner(verdict=verdict),state_dir=tmp_path).verify()
     with pytest.raises(RuntimeError):  # the probe itself could not run: refuse rather than assume
@@ -975,6 +975,58 @@ def test_isolation_is_rechecked_every_tick_and_reprobed_when_the_network_changes
     (tmp_path/'dsherp_agent').write_text('br-6e15112f7d1c\n')  # unit restarted by the operator
     assert isolation.allows() is True and probes()==1  # re-probed exactly once for the new network
     assert isolation.allows() is True and probes()==1
+
+
+def test_the_isolation_probe_calls_only_a_timeout_isolation(capsys,monkeypatch):
+    """Reviewer finding: every OSError, a connection reset included, fell through as 'blocked'.
+    Only a timeout proves the SYN was dropped; a refusal or reset is the host answering, and
+    anything else cannot prove isolation."""
+    import errno,socket
+    from dsherp import context_worker
+    monkeypatch.setenv('DSHERP_PROBE_GATEWAY','172.20.0.1')
+    def run(outcomes):
+        def fake(address,timeout):
+            outcome=outcomes[address[1]]
+            if isinstance(outcome,BaseException):raise outcome
+            class Sock:
+                def close(self):pass
+            return Sock()
+        monkeypatch.setattr(socket,'create_connection',fake)
+        exec(context_worker.ISOLATION_PROBE,{'__name__':'probe'})
+        line=[l for l in capsys.readouterr().out.splitlines() if l.startswith('DSHERP_ISOLATION ')][-1]
+        return json.loads(line.split(' ',1)[1])['verdict']
+    assert run({22:TimeoutError(),9:TimeoutError()})=='blocked'
+    assert run({22:ConnectionRefusedError(),9:TimeoutError()})=='refused'
+    assert run({22:ConnectionResetError(),9:TimeoutError()})=='reset'
+    assert run({22:None,9:TimeoutError()})=='connected'
+    assert run({22:OSError(errno.EHOSTUNREACH,'no route'),9:TimeoutError()})=='error:OSError'
+    assert run({22:TimeoutError(),9:socket.timeout()})=='blocked'
+
+
+def test_rules_lost_on_the_same_bridge_are_caught_within_the_probe_interval(tmp_path,capsys):
+    """Reviewer finding: with an unchanged network id only the record was re-read, so rules
+    flushed from the kernel were never noticed. The probe repeats on a fixed interval while
+    healthy and on every check while failing."""
+    from dsherp import context_worker
+    production=_production()
+    (tmp_path/'dsherp_agent').write_text('br-db512087a978\n')
+    clock=[0.0];state={'verdict':'blocked'};calls=[]
+    def runner(command,**kwargs):
+        return _host_runner(verdict=state['verdict'],calls=calls)(command,**kwargs)
+    isolation=context_worker.HostIsolation(production,runner=runner,state_dir=tmp_path,clock=lambda:clock[0])
+    probes=lambda:sum(1 for command in calls if command[:2]==['docker','run'])
+    isolation.verify();assert probes()==1
+    state['verdict']='refused'  # rules flushed from the kernel; bridge and record unchanged
+    clock[0]=1.0;assert isolation.allows() is True and probes()==1   # inside the interval: not yet noticed
+    clock[0]=context_worker.ISOLATION_PROBE_INTERVAL+0.5
+    assert isolation.allows() is False and probes()==2               # interval elapsed: probed and refused
+    clock[0]+=1;assert isolation.allows() is False and probes()==3    # failing: probed on every check
+    state['verdict']='blocked'                                       # operator restarted the unit
+    clock[0]+=1;assert isolation.allows() is True and probes()==4
+    clock[0]+=1;assert isolation.allows() is True and probes()==4    # healthy again: back to the interval
+    err=capsys.readouterr().err
+    assert 'host_isolation_failed' in err and 'host_isolation_restored' in err
+    assert context_worker.ISOLATION_PROBE_INTERVAL<=60
 
 
 def test_the_coordinator_claims_nothing_while_host_isolation_fails(tmp_path):
