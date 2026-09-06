@@ -32,9 +32,21 @@ DOCTYPES = [
     ('Navbar Settings', 'Core', 0, 1, 0, 0),
     ('OAuth Client', 'Integrations', 0, 0, 0, 0),
     ('Virtual Thing', 'Core', 0, 0, 0, 1),
+    ('Role', 'Core', 0, 0, 0, 0),
+    ('Custom DocPerm', 'Core', 0, 0, 0, 0),
+    ('Workflow', 'Workflow', 0, 0, 0, 0),
+    ('Workflow Document State', 'Workflow', 1, 0, 0, 0),
+    ('Workflow Transition', 'Workflow', 1, 0, 0, 0),
+    ('Workflow State', 'Workflow', 0, 0, 0, 0),
+    ('Workflow Action Master', 'Workflow', 0, 0, 0, 0),
+    ('Notification', 'Email', 0, 0, 0, 0),
+    ('Report', 'Core', 0, 0, 0, 0),
+    ('Print Format', 'Printing', 0, 0, 0, 0),
+    ('Server Script', 'Core', 0, 0, 0, 0),
 ]
 MODULES = {'Stock': 'erpnext', 'Selling': 'erpnext', 'DSHERP Bridge': 'dsherp_bridge', 'Core': 'frappe',
-           'Custom': 'frappe', 'Contacts': 'frappe', 'Integrations': 'frappe'}
+           'Custom': 'frappe', 'Contacts': 'frappe', 'Integrations': 'frappe', 'Workflow': 'frappe',
+           'Email': 'frappe', 'Printing': 'frappe'}
 
 
 class FakeDB:
@@ -63,6 +75,8 @@ class FakeDB:
             return [(doctype, field, value) for doctype, fields in self.singles.items() for field, value in fields.items()]
         if 'from `__Auth`' in flat:
             return [tuple(row) for row in self.auth]
+        if 'from `tabPatch Log`' in flat:
+            return [(name,) for name in getattr(self, 'patches', [])]
         match = re.search(r'select count\(\*\) from `([^`]+)`', flat)
         if match:
             return [(len(self.tables.get(match.group(1), [])),)]
@@ -75,12 +89,20 @@ class FakeDB:
             if 'name > %s' in where:
                 after = values[-1] if isinstance(values, (list, tuple)) else values
                 rows = [row for row in rows if row['name'] > after]
-            if "parenttype in ('User', 'Role Profile')" in where:
-                rows = [row for row in rows if row.get('parenttype') in ('User', 'Role Profile')]
-            if 'is_system_generated = 0' in where:
-                rows = [row for row in rows if not row.get('is_system_generated')]
-            if 'custom = 1' in where:
-                rows = [row for row in rows if row.get('custom')]
+            for clause in where.split(' and '):
+                clause = clause.strip()
+                if clause in ('', 'name > %s') or clause.startswith('parent in ('):
+                    continue
+                match_in = re.fullmatch(r"(\w+) in \(([^)]*)\)", clause)
+                match_eq = re.fullmatch(r"(\w+) = '?([^']*)'?", clause)
+                if match_in:
+                    wanted = {v.strip().strip("'") for v in match_in.group(2).split(',')}
+                    rows = [row for row in rows if str(row.get(match_in.group(1))) in wanted]
+                elif match_eq:
+                    column, value = match_eq.groups()
+                    rows = [row for row in rows if str(row.get(column, 0)) == value]
+                else:
+                    raise AssertionError('unexpected where clause: ' + clause)
             return [dict(row) for row in rows[:limit]]
         raise AssertionError('unexpected query: ' + flat)
 
@@ -169,3 +191,51 @@ def test_the_container_script_is_the_module_source_plus_a_call_and_prints_one_ma
     assert rs.parse_output('noise\nDSHERP_SNAPSHOT {"tables": {}}\n') == {'tables': {}}
     with pytest.raises(ValueError):
         rs.parse_output('no marker here\n')
+
+
+def test_tenant_permissions_and_workflows_are_strict_and_standard_definitions_are_partitioned_out():
+    """Review R4: Role, Custom DocPerm and the Workflow family are Frappe-defined but tenant-
+    written (the configuration executor creates workflows; permissions decide access)."""
+    db = FakeDB({'tabRole': [{'name': 'Tenant Role', 'modified': 't'}],
+                 'tabCustom DocPerm': [{'name': 'p1', 'modified': 't', 'parent': 'Item', 'role': 'Tenant Role'}],
+                 'tabWorkflow': [{'name': 'Approval', 'modified': 't'}],
+                 'tabWorkflow Transition': [{'name': 'wt1', 'modified': 't', 'parent': 'Approval'}],
+                 'tabNotification': [{'name': 'n-std', 'modified': 't', 'is_standard': 1}, {'name': 'n-tenant', 'modified': 't', 'is_standard': 0}],
+                 'tabReport': [{'name': 'r-std', 'modified': 't', 'is_standard': 'Yes'}, {'name': 'r-tenant', 'modified': 't', 'is_standard': 'No'}],
+                 'tabPrint Format': [{'name': 'pf-std', 'modified': 't', 'standard': 'Yes'}, {'name': 'pf-tenant', 'modified': 't', 'standard': 'No'}]})
+    snapshot = rs.snapshot(FakeFrappe(db))
+    strict = set(snapshot['scope']['strict'])
+    assert {'tabRole', 'tabCustom DocPerm', 'tabWorkflow', 'tabWorkflow Document State', 'tabWorkflow Transition',
+            'tabWorkflow State', 'tabWorkflow Action Master', 'tabNotification', 'tabReport', 'tabPrint Format', 'tabServer Script'} <= strict
+    assert list(snapshot['tables']['tabNotification']['rows']) == ['n-tenant']
+    assert list(snapshot['tables']['tabReport']['rows']) == ['r-tenant']
+    assert list(snapshot['tables']['tabPrint Format']['rows']) == ['pf-tenant']
+    assert list(snapshot['tables']['tabRole']['rows']) == ['Tenant Role']
+
+
+def test_the_after_snapshot_hashes_over_the_columns_the_before_snapshot_had_so_added_columns_do_not_change_hashes():
+    """Review R3: a DDL that adds a column changes every whole-row hash of a hash-only table."""
+    before_db = FakeDB({'tabDS Run Event': rows('E', 3, payload='{}')})
+    before = rs.snapshot(FakeFrappe(before_db), detail_rows=1)
+    after_db = FakeDB({'tabDS Run Event': rows('E', 3, payload='{}', new_column=None)})
+    naive = rs.snapshot(FakeFrappe(after_db), detail_rows=1)
+    assert naive['tables']['tabDS Run Event']['rows']['E00001']['hash'] != before['tables']['tabDS Run Event']['rows']['E00001']['hash']
+    aligned = rs.snapshot(FakeFrappe(after_db), detail_rows=1, hash_columns={t: v['columns'] for t, v in before['tables'].items()})
+    assert aligned['tables']['tabDS Run Event']['rows']['E00001']['hash'] == before['tables']['tabDS Run Event']['rows']['E00001']['hash']
+    assert aligned['tables']['tabDS Run Event']['columns'] == ['name', 'modified', 'payload', 'new_column']
+    assert 'hash_columns' in rs.container_script(hash_columns={'tabDS Run Event': ['name']})
+
+
+def test_single_secrets_are_digested_patches_are_listed_and_the_format_is_versioned():
+    db = FakeDB({}, singles={'Stock Settings': {'api_token': 'plain-token', 'valuation_method': 'FIFO'}})
+    db.patches = ['frappe.patches.v16.one', 'dsherp_bridge.patches.two']
+    snapshot = rs.snapshot(FakeFrappe(db))
+    assert snapshot['singles']['Stock Settings']['api_token'].startswith('sha256:') and 'plain-token' not in json.dumps(snapshot)
+    assert snapshot['patches'] == ['dsherp_bridge.patches.two', 'frappe.patches.v16.one']
+    assert snapshot['format'] == rs.FORMAT
+
+
+def test_a_site_beyond_the_row_ceiling_aborts_instead_of_growing_without_bound():
+    db = FakeDB({'tabItem': rows('I', 30)})
+    with pytest.raises(RuntimeError, match='max_rows'):
+        rs.snapshot(FakeFrappe(db), max_rows=20)

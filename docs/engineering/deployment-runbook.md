@@ -208,24 +208,26 @@ admin agent-firewall            # 只打印同一组规则（含 nft 写法与�
 ```sh
 $EDITOR infra/env/prod.env          # DSHERP_IMAGE_TAG 改为新 tag
 compose pull && compose up -d       # 两个 bench 都换到新镜像
-DSHERP_ENV=prod ./bin/dsherp-admin release "$NEW_TAG"     # 退出码 0=各站数据一致，1=有未声明差异，2=中途失败
+DSHERP_ENV=prod ./bin/dsherp-admin release "$NEW_TAG" --from "$OLD_TAG"   # 第一次发布必须给 --from；之后从 current.json 取
 sudo systemctl start dsherp-agent-worker
 ```
 
-`release` 对每个站（租户站与平台站）按序执行：核对 `prod.env` 的 tag 就是要发布的 tag → 静默 → `bench backup --with-files` → 把四件套备份集复制到 `/home/frappe/frappe-bench/archived/releases/<tag>/<站>/`（`tenant-archive`/`platform-archive` 卷；Frappe 自己会在 23 小时后清掉 `private/backups`）→ 升级前快照 → `bench migrate` → 升级后快照 → 读取两个 App 的 patches.txt 里各 patch 声明的预期变化 → 比对 → 恢复站点标志。报告在 `.runtime/releases/release-<tag>-<时间戳>.json`（`release-<tag>.json` 是最新一份），快照与备份记录在 `.runtime/releases/<tag>/<站>/{before,after,backup}.json`。
+退出码：0 = 各站数据与升级前一致（或差异都被本次执行的 patch 声明），站点已重新开放；1 = 有未声明差异，**有差异的站保持维护模式**，人核对报告后要么 `rollback`，要么确认接受再 `resume-site <站>`；2 = 中途失败，失败的站保持维护模式并有带 `failed` 的部分报告。
 
-比对口径：站上每个 DocType 按元数据归入且只归入一桶——**严格**（erpnext 与两个 dsherp App 的全部 DocType、自定义 DocType、联系人与身份表：逐行逐字段）、**日志**（Comment/Version/Deleted Document/Communication/Activity Log：只比哈希，允许新增）、**排除**（Frappe 自己的元数据、缓存与技术日志，每次 migrate 都会改写）；租户写过的元数据按行分区（`custom=1` 的 DocType 及其字段、`is_system_generated=0` 的 Custom Field/Property Setter）。新出现的表和列是 schema 变化，报告为信息不算差异；消失的表和列、行的增删改都是差异，除非某个 patch 在自己的模块里用 `EXPECTED_CHANGES = [{'doctype': ..., 'fields': [...], 'rows': 'existing'|'inserted'|'deleted'|'any'}]` 声明过。任何一张表读不出来就中止，不会带着"部分快照"下结论。原生 SQL 分页读取，密码列只存摘要。
+`release` 先做预检：`prod.env` 的 tag 就是要发布的 tag、两个 bench 的**运行容器**镜像 tag 也是它（读容器而不是读环境文件）、每站没有在飞运行、这个 tag 还没有升级前基线（基线只写一次，重来要换 tag 或先 `forget-release`）。然后写发布记录（新旧 tag、两个容器的镜像与镜像 id），再对每个站（租户站与平台站）按序：静默 → `bench backup --with-files` → 把四件套备份集复制到 `/home/frappe/frappe-bench/archived/releases/<tag>/<站>/`（`tenant-archive`/`platform-archive` 卷；Frappe 自己会在 23 小时后清掉 `private/backups`）→ 升级前快照 → `bench migrate` → 升级后快照（按升级前的列集求哈希）→ 从 Patch Log 算出本次实际执行的 patch，只采纳它们声明的预期变化 → 比对 → 只有干净才恢复站点标志。全部干净后把 `current.json` 记为新 tag。报告在 `.runtime/releases/release-<tag>-<时间戳>.json`（`release-<tag>.json` 是最新一份），快照与备份记录在 `.runtime/releases/<tag>/{release.json,<站>/before.json,after.json,backup.json}`。
 
-`migrate` 失败时站点保持维护模式，报告带 `failed`，命令退出码 2；此时按下面回滚。
+比对口径：站上每个 DocType 按元数据归入且只归入一桶——**严格**（erpnext 与两个 dsherp App 的全部 DocType、自定义 DocType、联系人与身份表、租户写的权限与流程：Role、Custom DocPerm、Workflow 族、非标准的 Notification/Report/Print Format/Web Form、Client/Server Script 等：逐行逐字段）、**日志**（Comment/Version/Deleted Document/Communication/Activity Log：只比哈希，允许新增）、**排除**（Frappe 自己的元数据、缓存与技术日志，每次 migrate 都会改写）；租户写过的元数据按行分区（`custom=1` 的 DocType 及其字段、`is_system_generated=0` 的 Custom Field/Property Setter、`is_standard` 为否的报表/通知/打印格式、User 与 Role Profile 下的 Has Role）。新出现的表和列是 schema 变化，报告为信息不算差异；消失的表和列、行的增删改、单值文档任何设置值的变化（含首次落库）都是差异，除非本次执行的某个 patch 在自己的模块里用 `EXPECTED_CHANGES = [{'doctype': ..., 'fields': [...] 或 ['*'], 'rows': 'existing'|'inserted'|'deleted'|'any'}]` 声明过——只留哈希的大表只能被 `['*']` 整行声明放行。任何一张表读不出来就中止，不会带着"部分快照"下结论。原生 SQL 分页读取，密码列与密钥类单值只存摘要；快照行数超过上限（默认 100 万）也中止。
+
+任何阶段失败（备份、快照、migrate、声明读取、比对）都让该站保持维护模式，报告带 `failed`，命令退出码 2；此时按下面回滚。
 
 ```sh
 # 回滚：改回旧 tag、起旧镜像，再撤销那次发布——它会恢复 release 归档的升级前备份并与升级前快照比对
-$EDITOR infra/env/prod.env
+$EDITOR infra/env/prod.env          # DSHERP_IMAGE_TAG 改回发布记录里的 previous_tag
 compose up -d
 DSHERP_ENV=prod ./bin/dsherp-admin rollback "$NEW_TAG"    # 参数是要撤销的发布 tag；退出码 0=数据与升级前一致
 ```
 
-`rollback` 从 `.runtime/releases/<tag>/<站>/backup.json` 找到归档的备份集，`bench restore <db> --with-public-files … --with-private-files … --force`，再快照并与 `before.json` 比对；唯一容忍的差异是 restore 自己回写的 System Settings 调度开关及其 modified。`--backup SITE=FILE` 可改用别的数据库转储（同前缀的 files tar 一并恢复）。演练与排查用 `snapshot <站> --out FILE` 与 `compare BEFORE AFTER`。
+`rollback` 先核对：`prod.env` 的 tag 与两个 bench 运行容器的镜像都是发布记录里的 `previous_tag`（在新镜像或别的旧版本上恢复会被拒绝，数据不动）。然后从 `.runtime/releases/<tag>/<站>/backup.json` 找到归档的备份集，`bench restore <db> --with-public-files … --with-private-files … --force`，再快照并与 `before.json` 比对；唯一容忍的差异是 restore 自己回写的 `System Settings.enable_scheduler`。干净的站才重新开放，全部干净后 `current.json` 记回旧 tag；恢复失败或有差异的站保持维护模式（退出码 2 / 1）。`--backup SITE=FILE` 可改用别的数据库转储（同前缀的 files tar 一并恢复）。`resume-site <站>` 是人确认后解除维护的唯一途径；`forget-release <tag>` 删除宿主侧记录（容器内归档不动）。演练与排查用 `snapshot <站> --out FILE` 与 `compare BEFORE AFTER`。
 
 ## 11. 下线租户与从归档恢复
 

@@ -698,12 +698,13 @@ def _release_site(bench, site, flags):
     _set_flag(bench, site, 'pause_scheduler', flags.get('pause_scheduler', 0))
 
 
-def take_snapshot(resolved, site, *, root=ROOT, runner=subprocess.run, bench_factory=None, bench=None):
+def take_snapshot(resolved, site, *, root=ROOT, runner=subprocess.run, bench_factory=None, bench=None, hash_columns=None):
     """Read the Site's data inside its bench; any table it cannot read aborts the snapshot."""
     if bench is None:
         factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
         bench = factory('platform' if site == resolved['platform_site'] else 'tenant')
-    return release_snapshot.parse_output(bench.python(site, release_snapshot.container_script(), timeout=3600))
+    script = release_snapshot.container_script(hash_columns=hash_columns)
+    return release_snapshot.parse_output(bench.python(site, script, timeout=3600))
 
 
 def compare_snapshots(before, after, expectations=None):
@@ -739,51 +740,148 @@ def _archive_backup(bench, site, tag):
             'private_files': f"{target}/{pieces['private-files.tar']}"}
 
 
-def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None):
-    """Quiesce, back up and archive, snapshot, migrate, snapshot, judge; per Site, platform included."""
+def _running_images(resolved, runner, root):
+    """What the two bench services actually run, from the containers, not from prod.env."""
+    file = Path(root) / COMPOSE[resolved['env']]
+    env_file = deploy_env.env_file(resolved['env'], root)
+    images = {}
+    for service in ('backend', 'platform-backend'):
+        command = ['docker', 'compose', '-p', resolved['project']]
+        if env_file.exists():
+            command += ['--env-file', str(env_file)]
+        command += ['-f', str(file), 'ps', '-q', service]
+        listed = runner(command, text=True, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+        container = (listed.stdout or '').strip().splitlines()[:1] if not listed.returncode else []
+        if not container:
+            raise Fault(f'服务 {service} 没有在运行的容器；先 compose up -d 再发布或回滚')
+        inspected = runner(['docker', 'inspect', '-f', '{{.Config.Image}} {{.Image}}', container[0]],
+                           text=True, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+        parts = (inspected.stdout or '').split()
+        if inspected.returncode or len(parts) < 2:
+            raise Fault(f'读不到服务 {service} 的镜像身份')
+        images[service] = {'image': parts[0], 'image_id': parts[1]}
+    return images
+
+
+def _image_tag(image):
+    name = image.rsplit('/', 1)[-1]
+    return name.rsplit(':', 1)[1] if ':' in name else ''
+
+
+def _require_running(images, tag):
+    wrong = {service: row['image'] for service, row in images.items() if _image_tag(row['image']) != tag}
+    if wrong:
+        raise Fault(f'运行中的镜像不是 {tag}：' + '、'.join(f'{service}={image}' for service, image in wrong.items())
+                    + '；先把 prod.env 改到该 tag 并 compose up -d')
+
+
+def _current_path(resolved, root=ROOT):
+    return runtime_dir(resolved, root) / 'releases' / 'current.json'
+
+
+def _current_tag(resolved, root=ROOT):
+    path = _current_path(resolved, root)
+    return json.loads(path.read_text())['tag'] if path.exists() else None
+
+
+def forget_release(resolved, tag, *, root=ROOT):
+    """Drop the host-side record of a release (baseline snapshots and backup pointers); the
+    archived backup set inside the benches stays. For drills and for a deliberate redo."""
+    import shutil
+    record = _release_dir(resolved, tag, root)
+    if record.exists():
+        shutil.rmtree(record)
+    return {'tag': tag, 'forgotten': str(record)}
+
+
+def resume_site(resolved, site, *, root=ROOT, runner=subprocess.run, bench_factory=None):
+    """Lift maintenance deliberately after a release or rollback that did not reopen the site."""
+    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
+    bench = factory('platform' if site == resolved['platform_site'] else 'tenant')
+    _release_site(bench, site, {})
+    return {'site': site, 'maintenance_mode': 0, 'pause_scheduler': 0}
+
+
+def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, from_tag=None):
+    """Quiesce, back up and archive, snapshot, migrate, snapshot, judge; per Site, platform included.
+
+    A site reopens only after a completed, clean judgement; anything else leaves it in
+    maintenance with a partial report, and `rollback <tag>` is the way out.
+    """
     if not deploy_env.TAG.fullmatch(tag or ''):
         raise Fault('发布必须给出明确的镜像 tag')
     if resolved['image_tag'] != tag:
         raise Fault(f"infra/env/prod.env 的 DSHERP_IMAGE_TAG 是 {resolved['image_tag']!r}，不是要发布的 {tag!r}；"
                     '先改环境文件并 compose up -d，再发布')
+    if from_tag is not None and not deploy_env.TAG.fullmatch(from_tag):
+        raise Fault('--from 必须是一个 tag')
+    images = _running_images(resolved, runner, root)
+    _require_running(images, tag)
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     targets = _targets(resolved, root, factory)
     if len(targets) < 2:
         raise Fault('没有可发布的租户站；先运行 provision-tenant')
-    report = {'tag': tag, 'sites': {}, 'steps': [], 'clean': False}
+    record_root = _release_dir(resolved, tag, root)
+    if any((record_root / site / 'before.json').exists() for _, site in targets):
+        raise Fault(f'release {tag} 已有升级前基线（{record_root}）：基线只写一次，否则回滚会回到错误的状态。'
+                    f'要重来，换一个 tag，或确认不再需要那份基线后执行 forget-release {tag}')
+    previous = from_tag or _current_tag(resolved, root)
+    if not previous:
+        raise Fault('没有当前版本的记录：第一次发布必须用 --from <升级前运行的 tag> 说明从哪个版本升上来')
+    # Pre-flight before anything is recorded or quiesced: a Site with runs in flight stops
+    # the whole release while nothing has changed yet.
     for bench, site in targets:
-        record = _release_dir(resolved, tag, root) / site
+        flags = _site_flags(bench, site)
+        if flags['active']:
+            raise Fault(f"站点 {site} 仍有 {flags['active']} 个运行未结束（Queued/Running/Cancelling）；"
+                        '先停 worker（systemctl stop dsherp-agent-worker）并等它们结束，再发布')
+    started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+    _write_json(record_root / 'release.json', {'tag': tag, 'previous_tag': previous, 'images': images, 'started': started_at})
+    report = {'tag': tag, 'previous_tag': previous, 'images': images, 'sites': {}, 'steps': [], 'clean': False}
+    for bench, site in targets:
+        record = record_root / site
         started = time.monotonic()
         flags = _quiesce(bench, site)
         report['steps'].append((site, 'quiesced'))
+        step = 'backup'
         try:
             bench.run('bench', '--site', site, 'backup', '--with-files', timeout=3600)
             backup = _archive_backup(bench, site, tag)
             _write_json(record / 'backup.json', backup)
             report['steps'].append((site, 'backed-up'))
+            step = 'snapshot-before'
             before = take_snapshot(resolved, site, bench=bench)
             _write_json(record / 'before.json', before)
             report['steps'].append((site, 'snapshot-before'))
-            try:
-                migrated = bench.run('bench', '--site', site, 'migrate', timeout=3600)
-            except Fault as error:
-                report['failed'] = {'site': site, 'step': 'migrate', 'error': str(error)}
-                report['path'] = str(_release_report(resolved, f'release-{tag}', report, root))
-                raise Fault(f'站点 {site} 的 migrate 失败，站点保持维护模式；用 rollback {tag} 回到升级前的备份。'
-                            f'\n{error}') from error
+            step = 'migrate'
+            migrated = bench.run('bench', '--site', site, 'migrate', timeout=3600)
             report['steps'].append((site, 'migrated'))
-            after = take_snapshot(resolved, site, bench=bench)
+            step = 'snapshot-after'
+            columns = {table: row['columns'] for table, row in before['tables'].items()}
+            after = take_snapshot(resolved, site, bench=bench, hash_columns=columns)
             _write_json(record / 'after.json', after)
             report['steps'].append((site, 'snapshot-after'))
-            expectations = _expected_changes(bench, site)
-            comparison = compare_snapshots(before, after, expectations)
-            report['sites'][site] = {'backup': backup, 'comparison': comparison,
-                                     'migrate_tail': migrated.strip().splitlines()[-20:],
-                                     'seconds': round(time.monotonic() - started, 1)}
-        finally:
-            if 'failed' not in report:
-                _release_site(bench, site, flags)
+            step = 'expectations'
+            declared = _expected_changes(bench, site)
+            executed = sorted(set(after.get('patches', [])) - set(before.get('patches', [])))
+            applicable = [entry for entry in declared if entry['patch'] in executed]
+            step = 'compare'
+            comparison = compare_snapshots(before, after, applicable)
+        except Exception as error:
+            report['failed'] = {'site': site, 'step': step, 'error': str(error)}
+            report['path'] = str(_release_report(resolved, f'release-{tag}', report, root))
+            raise Fault(f'站点 {site} 在 {step} 阶段失败，站点保持维护模式；用 rollback {tag} 回到升级前的备份。'
+                        f'\n{error}') from error
+        report['sites'][site] = {'backup': backup, 'comparison': comparison, 'patches_executed': executed,
+                                 'expectations_ignored': [entry for entry in declared if entry['patch'] not in executed],
+                                 'migrate_tail': migrated.strip().splitlines()[-20:],
+                                 'seconds': round(time.monotonic() - started, 1),
+                                 'maintenance': 'released' if comparison['clean'] else 'kept'}
+        if comparison['clean']:
+            _release_site(bench, site, flags)
     report['clean'] = all(row['comparison']['clean'] for row in report['sites'].values())
+    if report['clean']:
+        _write_json(_current_path(resolved, root), {'tag': tag, 'images': images, 'at': time.strftime('%Y-%m-%d %H:%M:%S')})
     report['path'] = str(_release_report(resolved, f'release-{tag}', report, root))
     return report
 
@@ -806,29 +904,39 @@ def _backup_set(bench, site, database):
 
 
 def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, backups=None, before=None):
-    """Restore what `release <tag>` archived (or the named files) and prove the data is what it was."""
+    """Undo `release <tag>`: on the previous images, restore what it archived (or the named
+    files) and prove the data is what it was before the upgrade."""
     if not deploy_env.TAG.fullmatch(tag or ''):
         raise Fault('回滚必须给出要撤销的发布 tag')
-    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     record_root = _release_dir(resolved, tag, root)
+    if not (record_root / 'release.json').exists():
+        raise Fault(f'没有 release {tag} 的记录（{record_root}）；不知道升级前是哪个版本，也不知道该恢复什么')
+    record = json.loads((record_root / 'release.json').read_text())
+    previous = record['previous_tag']
+    if resolved['image_tag'] != previous:
+        raise Fault(f"回滚 {tag} 要在升级前的版本 {previous} 上进行：infra/env/prod.env 的 DSHERP_IMAGE_TAG 现在是 "
+                    f"{resolved['image_tag']!r}，先改回 {previous} 并 compose up -d")
+    images = _running_images(resolved, runner, root)
+    _require_running(images, previous)
+    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     targets = [(bench, site) for bench, site in _targets(resolved, root, factory)
                if (record_root / site / 'before.json').exists() or site in (backups or {})]
     if not targets:
-        raise Fault(f'没有 release {tag} 的记录（{record_root}），也没有给出备份文件；不知道该恢复什么')
-    report = {'tag': tag, 'running_tag': resolved['image_tag'], 'sites': {}, 'steps': [], 'clean': False}
+        raise Fault(f'release {tag} 的记录里没有任何站的升级前快照，也没有给出备份文件')
+    report = {'tag': tag, 'previous_tag': previous, 'images': images, 'sites': {}, 'steps': [], 'clean': False}
     plans = []
     for bench, site in targets:
-        record = record_root / site
+        site_record = record_root / site
         if backups and site in backups:
             database = backups[site]
-        elif (record / 'backup.json').exists():
-            database = json.loads((record / 'backup.json').read_text())['database']
+        elif (site_record / 'backup.json').exists():
+            database = json.loads((site_record / 'backup.json').read_text())['database']
         else:
             raise Fault(f'{site} 没有 release {tag} 归档的备份记录，也没有 --backup 指定文件')
         if before and site in before:
             expected = json.loads(Path(before[site]).read_text())
-        elif (record / 'before.json').exists():
-            expected = json.loads((record / 'before.json').read_text())
+        elif (site_record / 'before.json').exists():
+            expected = json.loads((site_record / 'before.json').read_text())
         else:
             raise Fault(f'{site} 没有 release {tag} 的升级前快照，无法核验回滚结果')
         plans.append((bench, site, _backup_set(bench, site, database), expected))
@@ -836,6 +944,7 @@ def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=N
     for bench, site, pieces, expected in plans:
         started = time.monotonic()
         flags = _quiesce(bench, site)
+        step = 'restore'
         try:
             arguments = ['bench', '--site', site, 'restore', pieces['database']]
             if 'files' in pieces:
@@ -845,14 +954,24 @@ def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=N
             arguments += ['--db-root-username', 'root', '--db-root-password', db_root, '--force']
             bench.run(*arguments, timeout=3600, secrets=(db_root,))
             report['steps'].append((site, 'restored'))
-            restored = take_snapshot(resolved, site, bench=bench)
+            step = 'snapshot'
+            columns = {table: row['columns'] for table, row in expected['tables'].items()}
+            restored = take_snapshot(resolved, site, bench=bench, hash_columns=columns)
             _write_json(record_root / site / 'restored.json', restored)
+            step = 'compare'
             comparison = compare_snapshots(expected, restored, RESTORE_EXPECTATIONS)
-            report['sites'][site] = {'backup': pieces, 'comparison': comparison,
-                                     'seconds': round(time.monotonic() - started, 1)}
-        finally:
+        except Exception as error:
+            report['failed'] = {'site': site, 'step': step, 'error': str(error)}
+            report['path'] = str(_release_report(resolved, f'rollback-{tag}', report, root))
+            raise Fault(f'站点 {site} 在 {step} 阶段失败，站点保持维护模式；先检查再决定重试或 resume-site。\n{error}') from error
+        report['sites'][site] = {'backup': pieces, 'comparison': comparison,
+                                 'seconds': round(time.monotonic() - started, 1),
+                                 'maintenance': 'released' if comparison['clean'] else 'kept'}
+        if comparison['clean']:
             _release_site(bench, site, flags)
     report['clean'] = all(row['comparison']['clean'] for row in report['sites'].values())
+    if report['clean']:
+        _write_json(_current_path(resolved, root), {'tag': previous, 'images': images, 'at': time.strftime('%Y-%m-%d %H:%M:%S')})
     report['path'] = str(_release_report(resolved, f'rollback-{tag}', report, root))
     return report
 
@@ -880,6 +999,12 @@ def main(argv=None):
     sub.add_parser('agent-firewall', help='打印把运行容器挡在宿主之外的 INPUT 规则；生产由 dsherp-agent-firewall.service 在开机时应用')
     release_parser = sub.add_parser('release', help='发布到 prod.env 里的 tag：静默站点、备份并归档、快照、migrate、快照、逐字段比对')
     release_parser.add_argument('tag')
+    release_parser.add_argument('--from', dest='from_tag', metavar='TAG',
+                                help='升级前运行的 tag；有 current.json 记录时可省略，第一次发布必填')
+    resume_parser = sub.add_parser('resume-site', help='解除某站的维护模式与调度暂停（发布或回滚未自动解除时，由人确认后执行）')
+    resume_parser.add_argument('site')
+    forget_parser = sub.add_parser('forget-release', help='删除某个 tag 的宿主侧发布记录（升级前基线与备份指针）；容器内归档不动')
+    forget_parser.add_argument('tag')
     rollback_parser = sub.add_parser('rollback', help='撤销一次发布：恢复它归档的升级前备份并与升级前快照比对')
     rollback_parser.add_argument('tag', help='要撤销的发布 tag（release 时用的那个）')
     rollback_parser.add_argument('--backup', action='append', default=[], metavar='SITE=FILE',
@@ -919,7 +1044,7 @@ def main(argv=None):
             _print({'rendered': str(render_ingress(resolved, load_tenants(resolved)))})
             return 0
         if arguments.command == 'release':
-            report = release(resolved, arguments.tag)
+            report = release(resolved, arguments.tag, from_tag=arguments.from_tag)
             _print({key: value for key, value in report.items() if key != 'sites'} | {
                 'sites': {site: {'clean': row['comparison']['clean'], 'summary': row['comparison']['summary'],
                                  'backup': row['backup'], 'seconds': row['seconds']}
@@ -937,6 +1062,12 @@ def main(argv=None):
                 'sites': {site: {'clean': row['comparison']['clean'], 'summary': row['comparison']['summary'],
                                  'seconds': row['seconds']} for site, row in report['sites'].items()}})
             return 0 if report['clean'] else 1
+        if arguments.command == 'resume-site':
+            _print(resume_site(resolved, arguments.site))
+            return 0
+        if arguments.command == 'forget-release':
+            _print(forget_release(resolved, arguments.tag))
+            return 0
         if arguments.command == 'snapshot':
             target = _write_json(Path(arguments.out), take_snapshot(resolved, arguments.site))
             _print({'site': arguments.site, 'path': str(target)})

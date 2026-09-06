@@ -21,12 +21,21 @@ import json
 import re
 import time
 
+FORMAT = 1
 BUSINESS_APPS = ('erpnext', 'dsherp_bridge', 'dsherp_platform')
+# Frappe-defined DocTypes whose records the tenant writes: identities, contacts, custom
+# metadata, and the permissions, workflows, scripts and templates that decide what the
+# tenant's users may do and see (the configuration executor creates workflows; role and
+# permission rows decide access). Standard definitions shipped by apps are partitioned
+# out below where the DocType mixes both.
 STRICT_FRAPPE_DOCTYPES = (
-    'User', 'Has Role', 'User Permission', 'Role Profile', 'File',
+    'User', 'Has Role', 'User Permission', 'Role', 'Role Profile', 'Custom DocPerm', 'File',
     'Contact', 'Address', 'Contact Email', 'Contact Phone', 'Dynamic Link',
     'OAuth Client', 'Social Login Key', 'Custom Field', 'Property Setter',
     'DocType', 'DocField', 'DocPerm', 'DocType Link', 'DocType Action', 'DocType State',
+    'Workflow', 'Workflow State', 'Workflow Action Master', 'Workflow Document State', 'Workflow Transition',
+    'Workflow Action', 'Notification', 'Report', 'Print Format', 'Web Form', 'Client Script', 'Server Script',
+    'Letter Head', 'Assignment Rule', 'Auto Repeat', 'Email Account', 'Webhook',
 )
 STRICT_SINGLES = ('System Settings',)
 LOG_DOCTYPES = ('Comment', 'Version', 'Deleted Document', 'Communication', 'Activity Log')
@@ -42,6 +51,10 @@ ROW_PARTITION = {
     'tabDocType Link': 'parent in (select name from `tabDocType` where custom = 1)',
     'tabDocType Action': 'parent in (select name from `tabDocType` where custom = 1)',
     'tabDocType State': 'parent in (select name from `tabDocType` where custom = 1)',
+    'tabNotification': 'is_standard = 0',
+    'tabReport': "is_standard = 'No'",
+    'tabPrint Format': "standard = 'No'",
+    'tabWeb Form': 'is_standard = 0',
 }
 VOLATILE_COLUMNS = ('_comments', '_assign', '_liked_by', '_user_tags', '_seen')
 SECRET_COLUMN = re.compile('(secret|password|token)$')
@@ -56,8 +69,12 @@ def _jsonable(value):
     return str(value)
 
 
-def _row_hash(values):
-    material = {key: value for key, value in values.items() if key not in VOLATILE_COLUMNS}
+def row_hash(values, columns=None):
+    # Stable digest of one row: sorted keys, JSON with default=str, volatile columns dropped.
+    # `columns` restricts the digest to the columns the other snapshot has, so a column the
+    # upgrade added does not change the digest of rows whose data did not change.
+    material = {key: value for key, value in values.items()
+                if key not in VOLATILE_COLUMNS and (columns is None or key in columns)}
     return hashlib.sha256(json.dumps(material, sort_keys=True, default=str, ensure_ascii=False,
                                      separators=(',', ':')).encode()).hexdigest()
 
@@ -101,7 +118,7 @@ def _columns(frappe, table):
     return [row[0] for row in rows]
 
 
-def _read_table(frappe, table, keep_values, page):
+def _read_table(frappe, table, keep_values, page, columns=None):
     partition = ROW_PARTITION.get(table)
     rows, last = {}, None
     while True:
@@ -122,16 +139,21 @@ def _read_table(frappe, table, keep_values, page):
                 if value is not None and value != '' and SECRET_COLUMN.search(column):
                     value = _digest(value)
                 row[column] = value
-            rows[row['name']] = {'hash': _row_hash(row), 'values': row if keep_values else None}
+            rows[row['name']] = {'hash': row_hash(row, columns), 'values': row if keep_values else None}
         if len(chunk) < page:
             return rows
         last = chunk[-1]['name']
 
 
-def snapshot(frappe, page=2000, detail_rows=5000):
+def snapshot(frappe, page=2000, detail_rows=5000, hash_columns=None, max_rows=1000000):
     # Any exception propagates: a snapshot that skipped a table would certify nothing.
+    # `hash_columns` (table -> columns of the snapshot this one will be compared with) keeps
+    # digests comparable across a schema that gained columns. `max_rows` is a ceiling on
+    # what is held in memory, not a promise: rows are paged from the database but the
+    # snapshot itself is one document.
     scope = classify(frappe)
     tables, counts, timings = {}, {}, {}
+    total = 0
     for bucket in ('strict', 'log'):
         for table in scope[bucket]:
             started = time.monotonic()
@@ -139,31 +161,42 @@ def snapshot(frappe, page=2000, detail_rows=5000):
                 partition = ROW_PARTITION.get(table)
                 count = frappe.db.sql('select count(*) from `' + table + '`' + (' where ' + partition if partition else ''))[0][0]
                 keep = bucket == 'strict' and count <= detail_rows
-                tables[table] = {'columns': _columns(frappe, table), 'rows': _read_table(frappe, table, keep, page)}
+                columns = _columns(frappe, table)
+                restrict = set(hash_columns[table]) if hash_columns and table in hash_columns else None
+                tables[table] = {'columns': columns, 'rows': _read_table(frappe, table, keep, page, restrict)}
                 counts[table] = len(tables[table]['rows'])
             except Exception as error:
                 raise RuntimeError('snapshot failed on ' + table + ': ' + type(error).__name__ + ': ' + str(error)[:200]) from error
             timings[table] = round(time.monotonic() - started, 3)
+            total += counts[table]
+            if total > max_rows:
+                raise RuntimeError('snapshot exceeds max_rows=' + str(max_rows) + ' at ' + table + '; raise the ceiling deliberately or narrow the scope')
     wanted = set(scope['singles'])
     singles = {}
     for doctype, field, value in frappe.db.sql('select doctype, field, value from `tabSingles`'):
         if doctype in wanted:
-            singles.setdefault(doctype, {})[field] = _jsonable(value)
+            value = _jsonable(value)
+            if value is not None and value != '' and SECRET_COLUMN.search(field):
+                value = _digest(value)
+            singles.setdefault(doctype, {})[field] = value
+    patches = sorted(row[0] for row in frappe.db.sql('select patch from `tabPatch Log`'))
     auth = {}
     for doctype, name, fieldname, encrypted, password in frappe.db.sql(
             'select doctype, name, fieldname, encrypted, password from `__Auth`'):
         auth[doctype + '|' + name + '|' + fieldname] = hashlib.sha256((str(encrypted) + ':' + str(password)).encode()).hexdigest()
-    return {'site': getattr(frappe.local, 'site', None), 'tables': tables, 'singles': singles, 'auth': auth,
-            'scope': scope, 'row_counts': counts, 'timings': timings,
-            'settings': {'page': page, 'detail_rows': detail_rows}}
+    return {'format': FORMAT, 'site': getattr(frappe.local, 'site', None), 'tables': tables, 'singles': singles,
+            'auth': auth, 'patches': patches, 'scope': scope, 'row_counts': counts, 'timings': timings,
+            'settings': {'page': page, 'detail_rows': detail_rows, 'max_rows': max_rows,
+                         'hash_columns': bool(hash_columns)}}
 
 
-def container_script(page=2000, detail_rows=5000):
+def container_script(page=2000, detail_rows=5000, hash_columns=None):
     # The module source itself plus the call; Bench.python supplies frappe and json.
     import inspect
     source = inspect.getsource(inspect.getmodule(snapshot))
-    return source + '\nprint(' + repr(MARKER) + ' + json.dumps(snapshot(frappe, page=' + str(int(page)) \
-        + ', detail_rows=' + str(int(detail_rows)) + '), ensure_ascii=False, default=str))\n'
+    return (source + '\nhash_columns=json.loads(' + repr(json.dumps(hash_columns)) + ')\n'
+            + 'print(' + repr(MARKER) + ' + json.dumps(snapshot(frappe, page=' + str(int(page))
+            + ', detail_rows=' + str(int(detail_rows)) + ', hash_columns=hash_columns), ensure_ascii=False, default=str))\n')
 
 
 def parse_output(text):

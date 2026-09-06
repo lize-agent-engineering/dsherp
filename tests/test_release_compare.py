@@ -133,3 +133,36 @@ def test_row_hash_is_stable_across_key_order_and_independent_of_volatile_columns
     assert rc.row_hash({'a': 1, 'b': 'x'}) == rc.row_hash({'b': 'x', 'a': 1})
     assert rc.row_hash({'a': 1, '_comments': '[]'}) == rc.row_hash({'a': 1, '_comments': '[{"x":1}]'})
     assert rc.row_hash({'a': 1}) != rc.row_hash({'a': 2})
+
+
+def test_a_hash_only_change_is_declared_only_by_a_whole_row_declaration_never_by_a_field_list():
+    """Review R3: with values not stored, nothing proves the change is confined to the declared
+    field, so a field declaration must not cover it; only '*' (the patch rewrites whole rows) may."""
+    before = {'tables': {'tabSales Order Item': {'columns': ['name', 'item_name', 'qty'], 'rows': {'r': {'hash': 'h1', 'values': None}}}},
+              'singles': {}, 'auth': {}}
+    after = {'tables': {'tabSales Order Item': {'columns': ['name', 'item_name', 'qty'], 'rows': {'r': {'hash': 'h2', 'values': None}}}},
+             'singles': {}, 'auth': {}}
+    by_field = [{'patch': 'p', 'doctype': 'Sales Order Item', 'fields': ['item_name']}]
+    assert rc.compare(before, after, expectations=by_field)['clean'] is False
+    whole_row = [{'patch': 'p', 'doctype': 'Sales Order Item', 'fields': ['*']}]
+    report = rc.compare(before, after, expectations=whole_row)
+    assert report['clean'] is True and report['differences'][0]['declared'] == 'p'
+
+
+def test_a_single_value_persisted_for_the_first_time_is_a_change_not_a_schema_addition():
+    """Review: tabSingles has no row for a setting until it is saved; a first stored value is
+    a real write (e.g. disable_user_pass_login None -> 1), not a new field."""
+    before = snap(singles={'System Settings': {'enable_scheduler': '1'}})
+    after = snap(singles={'System Settings': {'enable_scheduler': '1', 'disable_user_pass_login': '1'}})
+    report = rc.compare(before, after)
+    assert report['clean'] is False
+    assert report['differences'] == [{'table': 'single:System Settings', 'name': 'disable_user_pass_login', 'change': 'changed',
+                                      'field': 'disable_user_pass_login', 'before': None, 'after': '1', 'declared': False}]
+
+
+def test_snapshots_of_different_formats_are_refused_and_row_hash_is_shared_with_the_reader():
+    from dsherp import release_snapshot
+    assert rc.row_hash is release_snapshot.row_hash
+    with pytest.raises(ValueError, match='format'):
+        rc.compare({**snap(), 'format': 1}, {**snap(), 'format': 2})
+    assert rc.compare({**snap(), 'format': 1}, {**snap(), 'format': 1})['clean'] is True

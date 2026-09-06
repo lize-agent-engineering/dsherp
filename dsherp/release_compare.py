@@ -19,23 +19,12 @@ unless declared.
 Pure Python on purpose: importable by the unit tests without Frappe and by the CLI on
 the host; the same module text never runs inside the container.
 """
-import hashlib
-import json
+from dsherp.release_snapshot import FORMAT, VOLATILE_COLUMNS, row_hash  # one digest convention
 
-# Written by Frappe without touching `modified` (comments, assignments, likes, tags,
-# seen-by): presentation state, never business data, and churned by ordinary reads.
-VOLATILE_COLUMNS = frozenset({'_comments', '_assign', '_liked_by', '_user_tags', '_seen'})
 # A Single is re-saved by migrate and by restore with identical values; only these move.
 SINGLE_STAMPS = frozenset({'modified', 'modified_by'})
 ROW_KINDS = ('existing', 'inserted', 'deleted', 'any')
 DETAIL_LIMIT = 500
-
-
-def row_hash(values):
-    """Stable digest of one row, blind to key order and to the volatile columns."""
-    material = {key: value for key, value in values.items() if key not in VOLATILE_COLUMNS}
-    return hashlib.sha256(json.dumps(material, sort_keys=True, default=str, ensure_ascii=False,
-                                     separators=(',', ':')).encode()).hexdigest()
 
 
 def _validate(expectations):
@@ -65,8 +54,10 @@ def _declared(expectations, table, change, field=None):
     for entry in expectations:
         if _table_name(entry['doctype']) != table and 'single:' + entry['doctype'] != table:
             continue
-        if change == 'changed' and (field in entry['fields'] or field is None and entry['fields']):
-            if entry['rows'] in ('existing', 'any'):
+        # A row whose values were not stored proves nothing about which field moved, so only
+        # a whole-row declaration ('*': the patch rewrites the rows) may cover it.
+        if change == 'changed' and entry['rows'] in ('existing', 'any'):
+            if '*' in entry['fields'] or (field is not None and field in entry['fields']):
                 return entry['patch']
         if change == 'inserted' and entry['rows'] in ('inserted', 'any'):
             return entry['patch']
@@ -83,6 +74,9 @@ def compare(before, after, expectations=None, *, detail_limit=DETAIL_LIMIT, allo
     `allow_inserts_in` names tables (or 'tab'-less DocTypes) whose new rows are not
     drift: append-only logs the upgrade itself writes to.
     """
+    formats = {before.get('format', FORMAT), after.get('format', FORMAT)}
+    if len(formats) != 1:
+        raise ValueError('snapshot format mismatch: ' + repr(sorted(formats)))
     expectations = _validate(expectations)
     inserts_ok = {_table_name(name) for name in allow_inserts_in}
     differences = []
@@ -140,9 +134,13 @@ def compare(before, after, expectations=None, *, detail_limit=DETAIL_LIMIT, allo
         table = 'single:' + doctype
         old, new = singles_before.get(doctype, {}), singles_after.get(doctype, {})
         for field in sorted(set(old) | set(new)):
-            if field not in old or field in SINGLE_STAMPS:
-                continue  # a new setting field is a schema addition; a re-save stamp carries no setting
-            if field not in new:
+            if field in SINGLE_STAMPS:
+                continue  # a re-save stamp carries no setting
+            if field not in old:
+                # tabSingles holds a row only once a setting was saved: a first stored value
+                # is a write, not a schema addition.
+                note(table, field, 'changed', field, None, new[field])
+            elif field not in new:
                 note(table, field, 'deleted', None, old[field], None)
             elif old[field] != new[field]:
                 note(table, field, 'changed', field, old[field], new[field])
