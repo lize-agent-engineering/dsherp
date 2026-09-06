@@ -111,11 +111,28 @@ class UserBench(SnapshotBench):
                             "target_name": "MAT-STE-1"}],
         }
 
+    # in-flight runs of the person: [name, status]; the fake worker finishes a run each time
+    # the command polls, `stuck` ones never finish
+    inflight = ()
+    stuck = ()
+    refuse_at_clear = ()
+
     def python(self, site, body, timeout=900):
         self.scripts.append(body)
         if "DSHERP_USER_DATA" in body:
             return "DSHERP_USER_DATA " + json.dumps(self.payload) + "\n"
+        if "DSHERP_USER_SETTLE" in body:
+            cancelled = [name for name, status in self.inflight if status == "Queued"]
+            self.inflight = [[name, "Cancelling"] for name, status in self.inflight if status != "Queued"]
+            return "DSHERP_USER_SETTLE " + json.dumps({"cancelled": cancelled,
+                                                       "waiting": [name for name, _ in self.inflight]}) + "\n"
+        if "DSHERP_USER_INFLIGHT" in body:
+            answer = list(self.inflight)
+            self.inflight = [row for row in self.inflight if row[0] in self.stuck]
+            return "DSHERP_USER_INFLIGHT " + json.dumps(answer) + "\n"
         if "DSHERP_USER_DELETE" in body:
+            if self.refuse_at_clear:
+                return "DSHERP_USER_DELETE " + json.dumps({"refused": list(self.refuse_at_clear)}) + "\n"
             return "DSHERP_USER_DELETE " + json.dumps({"runs": 1, "conversations": 1, "versions": 4}) + "\n"
         return super().python(site, body, timeout=timeout)
 
@@ -190,3 +207,65 @@ def test_every_cleared_value_is_declared_per_column_rather_than_assumed_empty():
         assert isinstance(rules["clear"], dict), doctype
         for column, value in rules["clear"].items():
             assert isinstance(value, str), (doctype, column)
+
+
+def _ticking():
+    """A clock the command can wait on without the test waiting."""
+    state = {"now": 0.0}
+
+    def clock():
+        return state["now"]
+
+    def sleep(seconds):
+        state["now"] += seconds
+    return clock, sleep
+
+
+def test_a_queued_run_is_cancelled_and_a_running_one_is_waited_for_before_anything_is_cleared(host_runtime):
+    from dsherp import admin
+
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = UserBench([])
+    bench.inflight = [["q1", "Queued"], ["r1", "Running"]]
+    clock, sleep = _ticking()
+    report = admin.delete_user_data(RELEASE, "acme.tenant.example.com", "alice@example.invalid",
+                                    bench_factory=lambda kind: bench, confirm=True, clock=clock, sleep=sleep)
+    assert report["settled"] == {"cancelled": ["q1"], "waiting": ["r1"]}
+    assert report["applied"] is True
+    order = [next(m for m in ("DSHERP_USER_SETTLE", "DSHERP_USER_INFLIGHT", "DSHERP_USER_DELETE") if m in s)
+             for s in bench.scripts if any(m in s for m in ("DSHERP_USER_SETTLE", "DSHERP_USER_INFLIGHT", "DSHERP_USER_DELETE"))]
+    assert order.index("DSHERP_USER_DELETE") > order.index("DSHERP_USER_SETTLE"), "settle first, clear last"
+
+
+def test_a_run_whose_executor_never_lets_go_blocks_the_deletion_and_nothing_is_cleared(host_runtime):
+    """Clearing the content of a run still being executed is not a deletion: the executor
+    writes it straight back. The command refuses, keeps the export, and says which runs."""
+    from dsherp import admin
+
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = UserBench([])
+    bench.inflight = [["r9", "Running"]]
+    bench.stuck = ("r9",)
+    clock, sleep = _ticking()
+    with pytest.raises(admin.Fault, match="仍有 1 个运行未结束"):
+        admin.delete_user_data(RELEASE, "acme.tenant.example.com", "alice@example.invalid",
+                               bench_factory=lambda kind: bench, confirm=True, wait=30, clock=clock, sleep=sleep)
+    assert not any("DSHERP_USER_DELETE" in s for s in bench.scripts), "nothing may be cleared"
+    assert clock() >= 30, "it waited the whole window before giving up"
+    blocked = sorted(Path(admin.runtime_dir(RELEASE)).glob("user-data/delete-blocked-*.json"))
+    assert blocked and json.loads(blocked[-1].read_text())["inflight"] == [["r9", "Cancelling"]]
+
+
+def test_a_run_that_slips_in_between_settling_and_clearing_is_caught_under_the_lock(host_runtime):
+    from dsherp import admin
+
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = UserBench([])
+    bench.refuse_at_clear = ("late1",)
+    clock, sleep = _ticking()
+    with pytest.raises(admin.Fault, match="清除前一刻"):
+        admin.delete_user_data(RELEASE, "acme.tenant.example.com", "alice@example.invalid",
+                               bench_factory=lambda kind: bench, confirm=True, clock=clock, sleep=sleep)

@@ -1357,13 +1357,62 @@ def _user_read_script(user):
             "      default=str))")
 
 
-def _user_clear_script(instructions):
+# Runs still being worked on, or waiting to be. A NeedsInput run that still holds its
+# capability has a live executor waiting for the person; one that does not is parked.
+INFLIGHT = ("def inflight(user):\n"
+            "    rows=frappe.get_all('DS Model Run',filters={'owner':user,'status':['in',['Queued','Running','Cancelling']]},\n"
+            "                        fields=['name','status'],limit_page_length=0)\n"
+            "    rows+=frappe.get_all('DS Model Run',filters={'owner':user,'status':'NeedsInput','capability_hash':['!=','']},\n"
+            "                         fields=['name','status'],limit_page_length=0)\n"
+            "    return rows\n")
+
+
+def _user_settle_script(user):
+    """Stop the person's in-flight runs the way the person would: queued ones are cancelled
+    outright, running ones are asked to stop. Under the same User row lock send_message
+    takes, so no new run of theirs slips in between the look and the write."""
+    return ("user=" + repr(user) + "\n" + INFLIGHT +
+            "from dsherp_bridge import context_events as events, grants\n"
+            "frappe.db.sql('SELECT name FROM `tabUser` WHERE name=%s FOR UPDATE',(user,))\n"
+            "rows=inflight(user)\n"
+            "cancelled=[];waiting=[]\n"
+            "for row in rows:\n"
+            "    if row['status']=='Queued':\n"
+            "        frappe.db.set_value('DS Model Run',row['name'],{'status':'Cancelled','error':'用户数据删除：排队中的运行已取消'})\n"
+            "        events.record_safely(row['name'],'cancel_requested',{'to_status':'Cancelled','reason':'user_data_deletion'})\n"
+            "        events.record_safely(row['name'],'finished',{'status':'Cancelled'})\n"
+            "        grants.drop(row['name']);cancelled.append(row['name'])\n"
+            "    else:\n"
+            "        if row['status']!='Cancelling':\n"
+            "            frappe.db.set_value('DS Model Run',row['name'],{'status':'Cancelling'})\n"
+            "            events.record_safely(row['name'],'cancel_requested',{'to_status':'Cancelling','reason':'user_data_deletion'})\n"
+            "        waiting.append(row['name'])\n"
+            "frappe.db.commit()\n"
+            "print('DSHERP_USER_SETTLE '+json.dumps({'cancelled':cancelled,'waiting':waiting}))")
+
+
+def _user_inflight_script(user):
+    return ("user=" + repr(user) + "\n" + INFLIGHT +
+            "rows=inflight(user)\n"
+            "print('DSHERP_USER_INFLIGHT '+json.dumps([[row['name'],row['status']] for row in rows]))")
+
+
+def _user_clear_script(instructions, user):
     """Clear exactly the rows the plan named, and drop the Version rows that copied them.
 
     The columns are written at the database level on purpose: a Site's own controllers refuse
     to touch an audit record (ruling #3), and this is the one registered exception - it removes
-    a person's content from rows that otherwise stay whole."""
+    a person's content from rows that otherwise stay whole. It runs under the User row lock and
+    looks again for in-flight runs first: an executor that started between the settling and
+    now would write the person's content straight back (R6)."""
     return ("plan=json.loads(" + repr(json.dumps(instructions)) + ")\n"
+            "user=" + repr(user) + "\n" + INFLIGHT +
+            "frappe.db.sql('SELECT name FROM `tabUser` WHERE name=%s FOR UPDATE',(user,))\n"
+            "inflight=[row['name'] for row in inflight(user)]\n"
+            "if inflight:\n"
+            "    frappe.db.rollback()\n"
+            "    print('DSHERP_USER_DELETE '+json.dumps({'refused':inflight}))\n"
+            "    raise SystemExit(0)\n"
             "cleared={};versions=0;missing=0\n"
             "for doctype,spec in plan.items():\n"
             "    changed=0\n"
@@ -1430,12 +1479,32 @@ def _user_export(resolved, root, site, user, found):
                     '运行事件（DS Run Event）不在其中，需要时按运行单独调取。'}
 
 
-def delete_user_data(resolved, site, user, *, root=ROOT, runner=subprocess.run, bench_factory=None, confirm=False):
+SETTLE_WAIT_SECONDS = 120
+SETTLE_POLL_SECONDS = 3
+
+
+def _settle_user(bench, site, user, *, wait, clock, sleep):
+    """No executor may still be acting for this person when their content is cleared: it
+    would write the content straight back, and a run stripped of its content mid-flight is
+    not a deletion anyone can stand behind (R6). Queued runs are cancelled, running ones are
+    asked to stop, and the command waits for the executor to let go - or refuses."""
+    settled = _marked(bench, site, _user_settle_script(user), 'DSHERP_USER_SETTLE', timeout=300)
+    deadline = clock() + wait
+    remaining = _marked(bench, site, _user_inflight_script(user), 'DSHERP_USER_INFLIGHT', timeout=120)
+    while remaining and clock() < deadline:
+        sleep(SETTLE_POLL_SECONDS)
+        remaining = _marked(bench, site, _user_inflight_script(user), 'DSHERP_USER_INFLIGHT', timeout=120)
+    return settled, remaining
+
+
+def delete_user_data(resolved, site, user, *, root=ROOT, runner=subprocess.run, bench_factory=None, confirm=False,
+                     wait=SETTLE_WAIT_SECONDS, clock=time.monotonic, sleep=time.sleep):
     """Remove one person's own content from one Site, keeping the accountability facts (T4).
 
     Without `--confirm` it states the plan and stops. With it, the person's data is exported
     first - a deletion that leaves nothing to answer with is not a deletion anyone can check -
-    then the declared columns are cleared, their version history dropped, and their session
+    then their in-flight runs are stopped and waited for, the declared columns are cleared
+    under the same lock a new run would need, their version history dropped, and their session
     directories removed. What survives, and the only way to remove it, is named in `residue`."""
     from dsherp import sessions as sessions_module
     from dsherp import user_data as user_data_module
@@ -1459,14 +1528,25 @@ def delete_user_data(resolved, site, user, *, root=ROOT, runner=subprocess.run, 
         report['next'] = f'确认后重跑：dsherp-admin delete-user-data {site} {user} --confirm'
         report['path'] = str(_write_json(_user_file(resolved, root, 'delete-plan', site, user), report))
         return report
+    settled, remaining = _settle_user(bench, site, user, wait=wait, clock=clock, sleep=sleep)
+    report['settled'] = settled
+    if remaining:
+        report['inflight'] = remaining
+        report['path'] = str(_write_json(_user_file(resolved, root, 'delete-blocked', site, user), report))
+        raise Fault(f'{user} 在 {site} 仍有 {len(remaining)} 个运行未结束（已请求取消，等了 {wait} 秒）；'
+                    '执行者放手后再重跑，或先停 worker。本次未清除任何内容，导出文件已在 ' + report['export']['path'])
     instructions = {doctype: {'columns': user_data_module.cleared(doctype), 'names': names[doctype]}
                     for doctype in names if names[doctype]}
     if instructions:
-        line = _last_line(bench.python(site, _user_clear_script(instructions), timeout=900))
+        line = _last_line(bench.python(site, _user_clear_script(instructions, user), timeout=900))
         marker = 'DSHERP_USER_DELETE '
         if not line.startswith(marker):
             raise Fault(f'{site} 没有确认清除结果；请核对该站现状后再重跑')
         report['cleared'] = json.loads(line[len(marker):])
+        if report['cleared'].get('refused'):
+            report['inflight'] = report['cleared']['refused']
+            report['path'] = str(_write_json(_user_file(resolved, root, 'delete-blocked', site, user), report))
+            raise Fault(f'{user} 在清除前一刻又有运行进入在途（{len(report["inflight"])} 个）；本次未清除任何内容，请重跑')
     report['sessions_removed'] = sessions_module.remove(state_root, site, names['DS Conversation'])
     report['applied'] = True
     report['path'] = str(_write_json(_user_file(resolved, root, 'delete', site, user), report))
@@ -1783,6 +1863,8 @@ def main(argv=None):
     delete_user.add_argument('site')
     delete_user.add_argument('user', help='站点里的登录名，通常是邮箱')
     delete_user.add_argument('--confirm', action='store_true', help='真正执行清除')
+    delete_user.add_argument('--wait', type=int, default=SETTLE_WAIT_SECONDS,
+                             help='等待该用户在途运行结束的秒数（先取消/请求停止，再等执行者放手）')
     usage_parser = sub.add_parser('usage', help='按月汇总每个站点的真实用量（模型调用、token、时长）')
     usage_parser.add_argument('month', help='YYYY-MM')
     migrate_drill_parser = sub.add_parser('migrate-drill', help='把旧构建的备份集恢复进运行新构建的隔离栈并 migrate，按 G2 口径判定（发布前跑）')
@@ -1881,7 +1963,7 @@ def main(argv=None):
             return 0
         if arguments.command == 'delete-user-data':
             report = delete_user_data(resolved, arguments.site, arguments.user,
-                                      confirm=arguments.confirm)
+                                      confirm=arguments.confirm, wait=arguments.wait)
             _print(report)
             # A command named delete that deleted nothing must not exit 0.
             return 0 if report['applied'] else 1
