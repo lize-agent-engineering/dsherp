@@ -497,6 +497,15 @@ def record_run_event(run_id,capability,events):
     return context_events.record_many(run.name,items)
 
 
+def _usage_of(run):
+    """结算这次运行的真实用量：provider 的数字来自它自己在 model_response 里报的 usage，
+    时长来自服务端记的 claimed 与 finished。runner 汇总的数字一概不采信。"""
+    from dsherp_bridge.usage import storable, summarise
+    rows=frappe.get_all('DS Run Event',filters={'run':run},fields=['kind','payload','recorded_at','source'],
+        order_by='seq asc',limit_page_length=0)
+    return storable(summarise(rows))
+
+
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def finish_run(run_id,capability,status,answer='',error=''):
     source=_capability_guard(run_id,'finish_run')

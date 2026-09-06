@@ -158,16 +158,25 @@ def _summary(doc):
 
 
 def _summaries(*, archived, query='', limit=None, offset=0):
+    """一页会话摘要。每条仍然完整重新授权后才暴露标题与时间（`_summary` 走 `_public`），
+    但只对这一页做：以前是把该用户的全部会话都读一遍再切片（T8 的读放大）。"""
+    from dsherp_bridge import paging
     filters={'owner':_user(),'archived':1 if archived else 0}
     if query:
         filters['title']=['like',f'%{query}%']
-    names=frappe.get_all('DS Conversation',filters=filters,pluck='name',order_by='modified desc')
-    visible=[]
-    for name in names:
-        try:visible.append(_summary(_conversation(name)))
-        except frappe.PermissionError:continue
-    page=visible[offset:offset+limit] if limit is not None else visible[offset:]
-    return page,len(visible)>offset+len(page)
+    def fetch(size,cursor):
+        return frappe.get_all('DS Conversation',filters=filters,pluck='name',
+            order_by='modified desc, name desc',limit_page_length=size,limit_start=cursor)
+    def authorize(name):
+        return _summary(_conversation(name))
+    if limit is None:
+        names=fetch(0,0)
+        rows=[]
+        for name in names[offset:]:
+            try:rows.append(authorize(name))
+            except frappe.PermissionError:continue
+        return rows,False
+    return paging.page(fetch,authorize,limit=limit,offset=offset)
 
 
 @frappe.whitelist(methods=['GET'])

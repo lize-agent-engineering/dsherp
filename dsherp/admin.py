@@ -1214,6 +1214,47 @@ def _rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=
     return report
 
 
+MONTH = re.compile(r'\d{4}-(0[1-9]|1[0-2])')
+# Read inside each bench: the Site's own finished runs with the numbers it recorded itself.
+USAGE_SCRIPT = ("rows=frappe.get_all('DS Model Run',fields=['creation','status','actual_input_tokens',"
+                "'actual_output_tokens','model_calls','duration_ms'],limit_page_length=0) "
+                "if frappe.db.exists('DocType','DS Model Run') else []\n"
+                "zone=frappe.db.get_single_value('System Settings','time_zone') or ''\n"
+                "for row in rows:row['creation']=str(row['creation']);row['site']=frappe.local.site;row['time_zone']=zone\n"
+                "print('DSHERP_USAGE '+json.dumps(rows,default=str))")
+
+
+def usage_report(resolved, month, *, root=ROOT, runner=subprocess.run, bench_factory=None):
+    """Usage per Site for one calendar month (T5).
+
+    Every Site answers with its own finished runs; the host only adds them up, so a Site that
+    is unreachable is a gap the report shows rather than a tenant that looks free."""
+    from dsherp import usage as usage_module
+    if not MONTH.fullmatch(month or ''):
+        raise Fault('用量月份的格式是 YYYY-MM，例如 2026-09')
+    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
+    rows, unreachable = [], {}
+    for bench, site in _targets(resolved, root, factory):
+        try:
+            line = _last_line(bench.python(site, USAGE_SCRIPT, timeout=600))
+        except Fault as error:
+            unreachable[site] = str(error)[:300]
+            continue
+        marker = 'DSHERP_USAGE '
+        if not line.startswith(marker):
+            unreachable[site] = '站点没有返回用量数据'
+            continue
+        rows += json.loads(line[len(marker):])
+    report = usage_module.monthly(rows, month)
+    for site in {site for _, site in _targets(resolved, root, factory)}:
+        report['sites'].setdefault(site, {key: 0 for key in ('runs', 'succeeded', 'failed', 'cancelled',
+                                                            'unfinished', 'input_tokens', 'output_tokens',
+                                                            'model_calls', 'duration_ms')})
+    report['unreachable'] = unreachable
+    report['path'] = str(_write_json(runtime_dir(resolved, root) / 'usage' / f'usage-{month}.json', report))
+    return report
+
+
 def _print(payload):
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -1241,6 +1282,8 @@ def main(argv=None):
     restore_parser = sub.add_parser('restore-site', help='在新主机上从异地备份集恢复一个站（G3 冷启动；见 runbook 第 12 节）')
     restore_parser.add_argument('site')
     restore_parser.add_argument('--set', dest='set_id', metavar='SET_ID', help='指定备份集；缺省用该站最新的完整配对')
+    usage_parser = sub.add_parser('usage', help='按月汇总每个站点的真实用量（模型调用、token、时长）')
+    usage_parser.add_argument('month', help='YYYY-MM')
     migrate_drill_parser = sub.add_parser('migrate-drill', help='把旧构建的备份集恢复进运行新构建的隔离栈并 migrate，按 G2 口径判定（发布前跑）')
     migrate_drill_parser.add_argument('tag', help='要验证的目标 tag')
     migrate_drill_parser.add_argument('site', nargs='*', help='缺省是平台站与全部租户站')
@@ -1313,6 +1356,10 @@ def main(argv=None):
             from dsherp import restore_drill as drill_module
             _print(drill_module.restore_site(resolved, arguments.site, set_id=arguments.set_id))
             return 0
+        if arguments.command == 'usage':
+            report = usage_report(resolved, arguments.month)
+            _print(report)
+            return 1 if report['unreachable'] else 0
         if arguments.command == 'migrate-drill':
             from dsherp import restore_drill as drill_module
             report = drill_module.migrate_drill(resolved, arguments.tag, arguments.site or None,
