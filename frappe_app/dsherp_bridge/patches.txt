@@ -6,3 +6,4 @@
 [post_model_sync]
 dsherp_bridge.patches.v1.audit_immutability
 dsherp_bridge.patches.v1.backfill_run_usage
+dsherp_bridge.patches.v1.backfill_execution_targets

@@ -301,6 +301,13 @@ def confirm(proposal_id, digest, request_id):
     execution = frappe.get_doc('DS Execution Record', execution.name, for_update=True)
     execution.status = result['status']
     execution.result = _json(result)
+    # 指向它产生的那张单据，单据侧用原生 Connections 反查（T3）。
+    from dsherp_bridge.document_links import target_of
+    target_doctype, target_name = target_of(result, payload)
+    if target_doctype:
+        execution.target_doctype = target_doctype
+        execution.target_name = target_name
+        execution.target_state = 'Present'
     execution.save(ignore_permissions=True)
     proposal = frappe.get_doc('DS Operation Proposal', proposal_id)
     proposal.status = result['status']
@@ -632,7 +639,20 @@ def get_proposal(proposal_id):
     elif payload['action']=='create' and not (outcome and outcome['status']=='Succeeded'):
         doc=frappe.get_doc({'doctype':payload['doctype'],**json.loads(_json({change['field']:change['after'] for change in payload['changes']}))})
     else:
-        doc = frappe.get_doc(payload['doctype'], outcome['name'] if payload['action'] in ('create','make') else payload['name'])
+        name = outcome['name'] if payload['action'] in ('create','make') else payload['name']
+        # 用户可以删掉自己的单据（执行记录会被标注为 Deleted）；读提案不能因此报错，
+        # 否则那次操作的历史就打不开了。
+        if not frappe.db.exists(payload['doctype'], name):
+            # 用户删掉了自己的单据（执行记录已被标注为 Deleted）。历史仍然要打得开：
+            # 返回提案本身与执行结果，不再声称能读出那张单据的字段。
+            gone = {**payload, 'id': proposal.name, 'digest': proposal.digest, 'model_run': proposal.model_run,
+                    'expires_at': proposal.expires_at.replace(tzinfo=ZoneInfo(get_system_timezone())).isoformat(),
+                    'status': proposal.status, 'document_state': 'Deleted', 'changes': []}
+            gone.pop('confirmation_target', None)
+            if outcome:
+                gone['execution'] = outcome
+            return gone
+        doc = frappe.get_doc(payload['doctype'], name)
     doc.check_permission('read')
     if payload['action'] in ('submit','cancel'):
         from dsherp_bridge.stock_impact import validate_frozen_impact,validate_impact_read_access

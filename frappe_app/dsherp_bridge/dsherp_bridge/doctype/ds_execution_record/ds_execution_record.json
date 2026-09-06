@@ -12,7 +12,10 @@
     "proposal",
     "request_id",
     "status",
-    "result"
+    "result",
+    "target_doctype",
+    "target_name",
+    "target_state"
   ],
   "fields": [
     {
@@ -41,6 +44,27 @@
       "label": "result",
       "fieldtype": "Long Text",
       "reqd": 0
+    },
+    {
+      "fieldname": "target_doctype",
+      "label": "Document type produced",
+      "fieldtype": "Link",
+      "options": "DocType",
+      "read_only": 1
+    },
+    {
+      "fieldname": "target_name",
+      "label": "Document produced",
+      "fieldtype": "Dynamic Link",
+      "options": "target_doctype",
+      "read_only": 1
+    },
+    {
+      "fieldname": "target_state",
+      "label": "State of that document",
+      "fieldtype": "Select",
+      "options": "\nPresent\nCancelled\nDeleted",
+      "read_only": 1
     }
   ],
   "permissions": []
