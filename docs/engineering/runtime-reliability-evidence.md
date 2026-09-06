@@ -3289,6 +3289,6 @@ worker 按新代码重启后立刻对两站报 `RemoteProtocolError`，5 分钟 
 
 凭据附带发现：`--reissue` 只改文件不改平台侧 `DS Membership` 里的副本会让平台对该成员的所有业务读变 403（`test_platform_identity` 4 条、`test_desk_sso[alpha]`），已让 `--reissue` 同时重绑平台成员关系，并加单元测试。
 
-门禁（分支 `plan2/closeout`）：非集成 `394 passed`（含新增 6 条）；Node `10/10`；前端 `203 passed`，dist 重建入库；**全量集成 `199 passed in 1040.89s`**（此前两版持久化方案分别 16 failed 与 5 failed，均已撤回）。
+门禁（分支 `plan2/closeout`）：非集成 `394 passed`（含新增 6 条）；Node `10/10`；前端 `203 passed`，dist 重建入库；**全量集成 `199 passed in 1040.89s`**（此前两版持久化方案分别 16 failed 与 5 failed，均已撤回）；复审三处补修后重跑 **`200 passed in 1000.17s`**（新增一条落库失败用例）。
 
 环境注记：跑集成门前发现本机 dev Runtime 卷 `dsherp-v16-agent-runtime` 已不存在（常驻 worker 因此起不来，`docker events` 里没有对应的删除记录，原因未明），按 `infra/prepare_agent_runtime.sh` 重建；集成门以 worker 停止、`scheduler` 暂停排空、backend 重载的方式执行。
