@@ -163,6 +163,12 @@ def claim_run(runtime_revision):
     if not isinstance(runtime_revision,str) or not re.fullmatch('[a-f0-9]{64}',runtime_revision):
         frappe.throw('运行配置摘要无效')
     from dsherp_bridge.run_budget import budget as run_budget
+    # A stable backup window is opened by the host CLI; the worker's own hold file closes the
+    # door a tick later, so the site itself must refuse in between. Queued runs are frozen,
+    # not failed: the window ends in minutes and the user's question is still valid.
+    if frappe.conf.get('dsherp_hold'):
+        _set_worker_heartbeat(now_datetime())
+        return None
     frappe.db.rollback()
     frappe.db.sql('SELECT name FROM `tabUser` WHERE name=%s FOR UPDATE',(user,))
     now=now_datetime()

@@ -403,13 +403,15 @@ def run_container(task,settings,directory,timeout=170):
 
 class Coordinator:
     def __init__(self,sites,settings_loader,slots,execute,breaker,probe,state_root,clock=time.monotonic,notifier=None,
-                 isolation=None):
+                 isolation=None,holds=None):
         if not isinstance(sites,list) or not sites:raise ValueError('Missing coordinator sites')
         if type(slots) is not int or slots<1:raise ValueError('Invalid coordinator slots')
         if not callable(settings_loader) or not callable(execute) or not callable(probe) or not callable(clock):
             raise ValueError('Invalid coordinator dependency')
         if isolation is not None and not callable(isolation):raise ValueError('Invalid coordinator dependency')
+        if holds is not None and not callable(holds):raise ValueError('Invalid coordinator dependency')
         self.isolation=isolation
+        self.holds=holds
         self.sites=sites
         self.settings_loader=settings_loader
         self.slots=slots
@@ -458,7 +460,19 @@ class Coordinator:
         if opened and self.notifier is not None:
             self.notifier.emit([alerts.Alert('provider_circuit_open','critical','模型服务熔断已打开')],now)
 
-    def _site_available(self,site,now):
+    def _held_sites(self,now):
+        """Sites the host CLI froze for a stable window. Unreadable holds are fail-closed:
+        claiming into a window that may be open would corrupt the backup it protects."""
+        if self.holds is None:return frozenset()
+        try:
+            return frozenset(self.holds())
+        except Exception as error:
+            WORKER_ERRORS.inc(error_class=type(error).__name__)
+            worker_log.log('holds_unreadable',error_class=type(error).__name__)
+            return None
+
+    def _site_available(self,site,now,held=frozenset()):
+        if held is None or site['site'] in held:return False
         return self._site_skip_until.get(site['site'],0)<=now
 
     def _note_site(self,site,ok,now,kind='claim'):
@@ -631,7 +645,8 @@ class Coordinator:
             settings=self.settings_loader()
             start=self._next_site
             rotated=[self.sites[(start+offset)%len(self.sites)] for offset in range(len(self.sites))]
-            chosen=[site for site in rotated if self._site_available(site,now)][:capacity]
+            held=self._held_sites(now)
+            chosen=[site for site in rotated if self._site_available(site,now,held)][:capacity]
             for site,(task,ok) in zip(chosen,self._fan_out(lambda site:self._claim_site(site,settings,now),chosen)):
                 self._note_site(site,ok,now,kind='claim')
                 if not task:continue
