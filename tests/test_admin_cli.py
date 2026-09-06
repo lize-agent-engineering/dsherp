@@ -1340,3 +1340,25 @@ def test_production_refuses_to_retire_or_release_before_the_off_site_repositorie
     # Development may drill without object storage, but only when it says so.
     dev = deploy_env.settings({"DSHERP_ENV": "dev"})
     assert dev["backup_repository"] == ""
+
+
+def test_doctor_asks_for_the_backup_key_material_only_once_repositories_are_configured(host):
+    """Two generated passwords and two supplied storage identities: the pair that reads dumps
+    must not be the pair that can decrypt site_config copies."""
+    admin.ensure_secrets(UNCONFIGURED)
+    assert not [finding for finding in admin.doctor(UNCONFIGURED) if "backup" in finding]
+    admin.ensure_secrets(RELEASE)
+    directory = admin.secrets_dir(RELEASE)
+    for name in ("backup_repository_password", "backup_secrets_repository_password"):
+        assert (directory / name).exists(), "secrets init generates the repository passwords"
+        assert (directory / name).read_text().strip()
+    assert (directory / "backup_repository_password").read_text() != (directory / "backup_secrets_repository_password").read_text()
+    findings = admin.doctor(RELEASE)
+    assert any("backup_storage_credentials" in finding for finding in findings)
+    assert any("backup_secrets_storage_credentials" in finding for finding in findings)
+    for name in ("backup_storage_credentials", "backup_secrets_storage_credentials"):
+        (directory / name).write_text("AWS_ACCESS_KEY_ID=x\nAWS_SECRET_ACCESS_KEY=y\n")
+        (directory / name).chmod(0o600)
+    assert not [finding for finding in admin.doctor(RELEASE) if "backup" in finding]
+    (directory / "backup_storage_credentials").chmod(0o644)
+    assert any("backup_storage_credentials" in finding and "权限" in finding for finding in admin.doctor(RELEASE))

@@ -313,6 +313,57 @@ services:
     networks: [edge, provider]
     logging: *logging
 
+  # Off-site backup, one repository per container. `dsherp-admin backup-sync` runs these with
+  # `compose run --rm`, so they are one-shots: no healthcheck, no restart, nothing to keep
+  # alive. Each sees one half of every backup set (read-only) and holds one repository
+  # password and one storage identity, so the credential that reads the dumps can never
+  # decrypt the site_config copies.
+  backup-sync-data:
+    profiles: [ops]
+    image: restic/restic:0.18.0@sha256:4cf4a61ef9786f4de53e9de8c8f5c040f33830eb0a10bf3d614410ee2fcb6120
+    restart: "no"
+    entrypoint: ["restic"]
+    user: "${DSHERP_AGENT_UID}:${DSHERP_AGENT_GID}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      RESTIC_REPOSITORY: ${DSHERP_BACKUP_REPOSITORY}
+      RESTIC_PASSWORD_FILE: /run/secrets/backup_repository_password
+      RESTIC_CACHE_DIR: /cache
+      TMPDIR: /cache
+    env_file: ${DSHERP_SECRETS_DIR:-../.runtime/control}/backup_storage_credentials
+    secrets: [backup_repository_password]
+    volumes:
+      - tenant-backups:/backups/tenant:ro
+      - platform-backups:/backups/platform:ro
+      - backup-cache:/cache
+    networks: [provider]
+    logging: *logging
+
+  backup-sync-secrets:
+    profiles: [ops]
+    image: restic/restic:0.18.0@sha256:4cf4a61ef9786f4de53e9de8c8f5c040f33830eb0a10bf3d614410ee2fcb6120
+    restart: "no"
+    entrypoint: ["restic"]
+    user: "${DSHERP_AGENT_UID}:${DSHERP_AGENT_GID}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      RESTIC_REPOSITORY: ${DSHERP_BACKUP_SECRETS_REPOSITORY}
+      RESTIC_PASSWORD_FILE: /run/secrets/backup_secrets_repository_password
+      RESTIC_CACHE_DIR: /cache
+      TMPDIR: /cache
+    env_file: ${DSHERP_SECRETS_DIR:-../.runtime/control}/backup_secrets_storage_credentials
+    secrets: [backup_secrets_repository_password]
+    volumes:
+      - tenant-backup-secrets:/backups/tenant:ro
+      - platform-backup-secrets:/backups/platform:ro
+      - backup-cache:/cache
+    networks: [provider]
+    logging: *logging
+
 networks:
   # Databases and queues; no route out of the host.
   backplane: {internal: true}
@@ -338,6 +389,7 @@ volumes:
   platform-sites:
   platform-logs:
   platform-archive:
+  backup-cache:
   tenant-backups:
   tenant-backup-secrets:
   platform-backups:
@@ -356,3 +408,7 @@ configs:
 secrets:
   db_root_password:
     file: ${DSHERP_SECRETS_DIR:-../.runtime/control}/db_root_password
+  backup_repository_password:
+    file: ${DSHERP_SECRETS_DIR:-../.runtime/control}/backup_repository_password
+  backup_secrets_repository_password:
+    file: ${DSHERP_SECRETS_DIR:-../.runtime/control}/backup_secrets_repository_password

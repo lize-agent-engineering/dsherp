@@ -117,16 +117,51 @@ def test_production_front_ends_serve_a_read_only_sites_volume_without_the_image_
         assert "entrypoint: []" in block and 'command: ["nginx-entrypoint.sh"]' in block, service
 
 
+def test_the_two_sync_services_are_one_shot_pinned_capability_free_and_see_only_their_own_half():
+    """Each repository has its own container, its own password and its own storage identity:
+    whoever can read the dumps still cannot decrypt the site_config copies."""
+    body = PROD_COMPOSE.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+    for name, mounts, password, credentials in (
+            ("backup-sync-data", ("tenant-backups:/backups/tenant:ro", "platform-backups:/backups/platform:ro"),
+             "backup_repository_password", "backup_storage_credentials"),
+            ("backup-sync-secrets", ("tenant-backup-secrets:/backups/tenant:ro", "platform-backup-secrets:/backups/platform:ro"),
+             "backup_secrets_repository_password", "backup_secrets_storage_credentials")):
+        block = _block(body, name)
+        assert re.search(r"image: restic/restic:[\w.-]+@sha256:[0-9a-f]{64}", block), name
+        assert "profiles: [ops]" in block, name
+        assert "cap_drop: [ALL]" in block and "no-new-privileges:true" in block and "read_only: true" in block, name
+        for mount in mounts:
+            assert mount in block, (name, mount)
+        assert "backup-cache:/cache" in block and "networks: [provider]" in block, name
+        assert "ports:" not in block, name
+        assert f"/run/secrets/{password}" in block, name
+        assert re.search(rf"secrets:.*\b{password}\b", block), name
+        assert credentials in block, name
+    data, secrets_block = _block(body, "backup-sync-data"), _block(body, "backup-sync-secrets")
+    assert "backup-secrets:" not in data and "backup_secrets_repository_password" not in data
+    assert "tenant-backups:" not in secrets_block and "backup_storage_credentials" not in secrets_block
+    volumes = PROD_COMPOSE.split("\nvolumes:\n", 1)[1].split("\n\n", 1)[0]
+    assert "  backup-cache:" in volumes
+    secrets_section = PROD_COMPOSE.split("\nsecrets:\n", 1)[1]
+    for name in ("backup_repository_password", "backup_secrets_repository_password"):
+        assert f"  {name}:" in secrets_section and "${DSHERP_SECRETS_DIR" in secrets_section
+    baseline = (ROOT / "docs/engineering/runtime-baseline.md").read_text()
+    assert re.search(r"restic/restic:[\w.-]+@sha256:[0-9a-f]{64}", baseline), "the pinned digest is recorded"
+
+
 def test_production_keeps_every_long_lived_service_supervised_and_probed():
     body = PROD_COMPOSE.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
     services = re.findall(r"^  ([a-z0-9-]+):$", body, re.MULTILINE)
     assert {"db", "redis-cache", "redis-queue", "backend", "frontend",
             "platform-backend", "platform-frontend", "agent-egress", "caddy"} <= set(services)
-    assert body.count("restart: unless-stopped") + body.count("<<: *frappe") >= len(services)
-    # Every service, including the four bench supervisors the spec topology names explicitly.
-    for service in services:
+    # A service with `profiles:` is a one-shot an operator command runs (`compose run --rm`),
+    # not something the stack keeps alive; it is supervised by the command, not by compose.
+    resident = [service for service in services if "profiles:" not in _block(body, service)]
+    assert body.count("restart: unless-stopped") + body.count("<<: *frappe") >= len(resident)
+    for service in resident:
         assert "healthcheck:" in _block(body, service), service
-    assert len(services) == 13
+    for service in set(services) - set(resident):
+        assert 'restart: "no"' in _block(body, service), service
 
 
 def test_the_agent_network_has_no_route_out_in_either_environment():

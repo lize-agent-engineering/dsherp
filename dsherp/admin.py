@@ -21,9 +21,16 @@ ROOT = deploy_env.ROOT
 # Control-plane material. Generated once, never printed, never regenerated silently.
 # Development keeps the names its compose file already references.
 CONTROL_SECRETS_BY_ENV = {
-    'prod': ('db_root_password', 'platform_admin_password', 'tenant_admin_password'),
-    'dev': ('db_root_password', 'admin_password', 'daily_admin_password'),
+    'prod': ('db_root_password', 'platform_admin_password', 'tenant_admin_password',
+             'backup_repository_password', 'backup_secrets_repository_password'),
+    'dev': ('db_root_password', 'admin_password', 'daily_admin_password',
+            'backup_repository_password', 'backup_secrets_repository_password'),
 }
+# Identities the operator obtains from the object storage provider; `secrets init` cannot
+# invent them, so doctor only checks that they are present and private once repositories are
+# configured. The two are separate on purpose: the identity that reads the dumps must not be
+# able to read the site_config copies.
+PROVIDED_SECRETS = ('backup_storage_credentials', 'backup_secrets_storage_credentials')
 CONTROL_SECRETS = CONTROL_SECRETS_BY_ENV['prod']
 
 
@@ -604,6 +611,13 @@ def doctor(resolved, root=ROOT, runner=subprocess.run):
             findings.append(f'缺少控制面密钥：{name}')
         elif path.stat().st_mode & 0o077:
             findings.append(f'控制面密钥权限过宽：{name}')
+    if resolved.get('backup_repository'):
+        for name in PROVIDED_SECRETS:
+            path = directory / name
+            if not path.exists():
+                findings.append(f'缺少对象存储凭据文件：{name}（配置了异地仓库就必须提供，格式为 AWS_ACCESS_KEY_ID=… 两行）')
+            elif path.stat().st_mode & 0o077:
+                findings.append(f'对象存储凭据文件权限过宽：{name}')
     if resolved['env'] == 'prod':
         for key in ('DSHERP_PROJECT', 'DSHERP_IMAGE_TAG', 'DSHERP_IMAGE_REGISTRY', 'DSHERP_BASE_DOMAIN'):
             if not os.environ.get(key) and not (deploy_env.env_file('prod', root).exists()):
