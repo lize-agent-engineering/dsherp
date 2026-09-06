@@ -4,6 +4,7 @@
   "module": "DSHERP Bridge",
   "custom": 0,
   "engine": "InnoDB",
+  "track_changes": 1,
   "autoname": "hash",
   "sort_field": "creation",
   "sort_order": "DESC",

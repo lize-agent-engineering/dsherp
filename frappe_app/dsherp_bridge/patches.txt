@@ -4,3 +4,4 @@
 [pre_model_sync]
 
 [post_model_sync]
+dsherp_bridge.patches.v1.audit_immutability

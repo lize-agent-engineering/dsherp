@@ -1,6 +1,6 @@
 {
  "doctype":"DocType","name":"DS Configuration Transfer","module":"DSHERP Bridge",
- "custom":0,"engine":"InnoDB","autoname":"hash","sort_field":"creation","sort_order":"DESC",
+ "custom":0,"engine":"InnoDB","autoname":"hash","sort_field":"creation","sort_order":"DESC","track_changes":1,
  "field_order":["request_id","bundle","payload","platform_grant"],
  "fields":[
   {"fieldname":"request_id","label":"Request identity digest","fieldtype":"Data","reqd":1,"unique":1,"hidden":1},
