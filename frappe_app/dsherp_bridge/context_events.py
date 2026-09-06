@@ -20,6 +20,7 @@ SERVER_KINDS = (
     "unverified_completion_claim",
     "model_call_reserved",
     "tool_call",
+    "tool_refused",
     "finished",
 )
 RUNNER_KINDS = (

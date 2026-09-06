@@ -147,12 +147,14 @@ def test_reissuing_one_actor_rotates_its_secret_on_the_site_and_rewrites_only_it
 
         class Result:
             returncode = 0
-            stdout = json.dumps({"api_key": "reader-key", "api_secret": "fresh-secret"}) + "\n"
             stderr = ""
+            stdout = (json.dumps({"rebound": 1}) if "platform-backend" in command
+                      else json.dumps({"api_key": "reader-key", "api_secret": "fresh-secret"})) + "\n"
         return Result()
 
     result = run_validation_provision.reissue("reader", tmp_path, run=run)
-    assert result == {"actor": "reader", "user": "dsherp-reader@example.invalid", "api_key": "reader-key"}
+    assert result == {"actor": "reader", "user": "dsherp-reader@example.invalid", "api_key": "reader-key",
+                      "platform_memberships_rebound": 1}
     command, script = calls[0]
     assert command[:4] == ["docker", "compose", "-f", "infra/compose.validation.yml"]
     assert "exec" in command and "backend" in command
@@ -185,3 +187,29 @@ def test_reissuing_refuses_an_unknown_actor_a_missing_profile_and_a_mismatched_k
     with pytest.raises(RuntimeError, match="api_key"):
         run_validation_provision.reissue("reader", tmp_path, run=run)
     assert json.loads((tmp_path / "erp-users.json").read_text()) == profiles
+
+
+def test_reissuing_also_rebinds_the_platform_membership_that_carries_the_same_secret(tmp_path):
+    """The platform site stores the member's business api_secret in DS Membership; a
+    rotation that only rewrites the files leaves every platform read answering 403."""
+    from infra import run_validation_provision
+
+    _existing_profiles(tmp_path)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs.get("input")))
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = (json.dumps({"api_key": "reader-key", "api_secret": "fresh-secret"}) + "\n"
+                      if "backend" in command and "platform-backend" not in command else json.dumps({"rebound": 1}) + "\n")
+        return Result()
+
+    result = run_validation_provision.reissue("reader", tmp_path, run=run)
+    assert result["platform_memberships_rebound"] == 1
+    assert [command[command.index("exec") + 2] for command, _ in calls] == ["backend", "platform-backend"]
+    platform_script = calls[1][1]
+    assert "DS Membership" in platform_script and "fresh-secret" in platform_script and "dsherp-reader@example.invalid" in platform_script
+    assert "dsherp-platform.localhost" in platform_script

@@ -1072,3 +1072,95 @@ def test_production_checks_the_release_image_and_the_agent_network_not_a_prepare
     assert ('volume','inspect','dsherp-v16-agent-runtime') in checked
     assert ('image','inspect',deploy_env.BASE_IMAGE) in checked
     assert ('network','inspect','dsherp-validation_agent') in checked
+
+
+def test_a_rejected_success_write_back_is_followed_by_a_failed_one_so_the_run_cannot_hang(tmp_path,capsys):
+    """Plan-2 re-audit item 1: when finish_run(Succeeded) is refused the worker logged and
+    walked away, leaving the run Running until the lease sweep labelled it '运行已过期'."""
+    calls=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];body=json.loads(request.content);calls.append((method,body))
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'a'*64,'capability':'cap',
+            'domain':'query','budget':{'run_total_seconds':300}}})
+        if method=='finish_run' and body['status']=='Succeeded':
+            return httpx.Response(417,json={'exception':'frappe.exceptions.ValidationError: 成功结果必须包含实际读取或服务端记录的工具失败'})
+        return httpx.Response(200,json={'message':{'status':'Failed'} if method=='finish_run' else {'recorded':1,'last_seq':1}})
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'我无权读取该单据'})
+    finishes=[body for method,body in calls if method=='finish_run']
+    assert [body['status'] for body in finishes]==['Succeeded','Failed'],finishes
+    assert '回写' in finishes[1]['error'] and finishes[1]['answer']==''
+    err=capsys.readouterr().err
+    assert 'finish_rejected' in err
+
+
+def test_runtime_diagnostics_are_forwarded_even_when_the_container_exits_cleanly(tmp_path,capsys):
+    """An EventFlushFailed diagnostic from a run that still exited 0 was silently dropped."""
+    from dsherp import context_worker
+    def fake_run(args,**kwargs):
+        if list(args)[:3]==['docker','rm','-f']:return subprocess.CompletedProcess(args,0,'','')
+        return subprocess.CompletedProcess(args,0,json.dumps({'status':'Succeeded','answer':'ok'}),
+            'DSHERP_DIAGNOSTIC {"type":"EventFlushFailed","error":"ReadTimeout"}\nother noise\n')
+    original=context_worker.subprocess.run
+    context_worker.subprocess.run=fake_run
+    try:
+        result=context_worker.run_container({'run_id':'r','capability':'c','question':'q','context':{},'domain':'query',
+            'resume':False,'runtime_revision':'x','budget':{'run_total_seconds':300}},SETTINGS,tmp_path/'s')
+    finally:
+        context_worker.subprocess.run=original
+    assert result=={'status':'Succeeded','answer':'ok'}
+    err=capsys.readouterr().err
+    assert 'runtime_diagnostic' in err and 'EventFlushFailed' in err and 'other noise' not in err
+
+
+def test_a_site_whose_claims_time_out_is_skipped_even_while_its_heartbeats_succeed(tmp_path,capsys):
+    """Plan-2 re-audit item 5: one counter fed by both calls meant a heartbeat success (Redis
+    only) erased every claim timeout (MariaDB), so a DB-stalled site was never skipped."""
+    from dsherp.context_worker import Coordinator
+    contacted=[]
+    def stalled(request):
+        method=request.url.path.rsplit('.',1)[-1];contacted.append(method)
+        if method=='claim_run':raise httpx.ReadTimeout('database stalled')
+        return httpx.Response(200,json={'message':{'heartbeat':'now'}})
+    with _site_client('stalled',stalled) as client:
+        sites=[{'site':'stalled','client':client,'business':{}}]
+        coordinator=Coordinator(sites,lambda:SETTINGS,1,lambda *a,**k:None,None,lambda:False,tmp_path)
+        for round_index in range(6):
+            coordinator.tick(now=round_index)
+    assert contacted.count('claim_run')<=3,contacted
+    assert 'site_skipped' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('first_response',('503','504','transport'))
+def test_an_unknown_outcome_of_the_success_write_back_is_never_followed_by_a_failed_one(tmp_path,first_response):
+    """Reviewer finding: ToolFailure also wraps 5xx (transient); after a 503/504 the server
+    may well have accepted Succeeded, so a second terminal write must not be sent."""
+    calls=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];body=json.loads(request.content);calls.append((method,body))
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'a'*64,'capability':'cap',
+            'domain':'query','budget':{'run_total_seconds':300}}})
+        if method=='finish_run':
+            if first_response=='transport':raise httpx.ConnectError('gateway down',request=request)
+            return httpx.Response(int(first_response),json={'exception':'upstream timeout'})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'ok'})
+    finishes=[body for method,body in calls if method=='finish_run']
+    assert [body['status'] for body in finishes]==['Succeeded'],finishes
+
+
+@pytest.mark.parametrize('status_code',(403,417))
+def test_only_a_definite_refusal_of_the_success_write_back_gets_the_failed_fallback(tmp_path,status_code):
+    calls=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];body=json.loads(request.content);calls.append((method,body))
+        if method=='claim_run':return httpx.Response(200,json={'message':{'run_id':'r','scope_id':'a'*64,'capability':'cap',
+            'domain':'query','budget':{'run_total_seconds':300}}})
+        if method=='finish_run' and body['status']=='Succeeded':
+            return httpx.Response(status_code,json={'exc_type':'PermissionError' if status_code==403 else 'ValidationError','exception':'refused'})
+        return httpx.Response(200,json={'message':{'status':'Failed'} if method=='finish_run' else {'recorded':1,'last_seq':1}})
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'ok'})
+    finishes=[body for method,body in calls if method=='finish_run']
+    assert [body['status'] for body in finishes]==['Succeeded','Failed'],finishes

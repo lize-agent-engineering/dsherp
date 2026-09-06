@@ -18,6 +18,19 @@ ACTORS = ("reader", "denied")
 BASE_URL = "http://127.0.0.1:18081"
 SITE = "dsherp-validation.localhost"
 BENCH_PYTHON = "/home/frappe/frappe-bench/env/bin/python"
+PLATFORM_SITE = "dsherp-platform.localhost"
+# The platform keeps a copy of the member's business secret in DS Membership; a rotation
+# that does not reach it turns every platform read for that member into a 403.
+REBIND_SCRIPT = """import os, json, frappe
+os.chdir('/home/frappe/frappe-bench/sites')
+frappe.init(site={site!r}); frappe.connect(); frappe.set_user('Administrator')
+rebound = 0
+for name in frappe.get_all('DS Membership', filters={{'erp_user': {user!r}, 'api_key': {api_key!r}}}, pluck='name'):
+    doc = frappe.get_doc('DS Membership', name); doc.api_secret = {api_secret!r}; doc.save(); rebound += 1
+frappe.db.commit()
+print(json.dumps({{'rebound': rebound}}))
+frappe.destroy()
+"""
 REISSUE_SCRIPT = """import os, json, frappe
 os.chdir('/home/frappe/frappe-bench/sites')
 frappe.init(site={site!r}); frappe.connect(); frappe.set_user('Administrator')
@@ -68,7 +81,16 @@ def reissue(actor, runtime_dir=ROOT / ".runtime", run=subprocess.run):
     profiles[actor] = {**entry, "api_secret": keys["api_secret"]}
     _replace_private(users_path, profiles)
     _replace_private(runtime_dir / f"erp-{actor}.json", profiles[actor])
-    return {"actor": actor, "user": entry["user"], "api_key": entry["api_key"]}
+    rebind = run(
+        ["docker", "compose", "-f", "infra/compose.validation.yml", "exec", "-T", "platform-backend", BENCH_PYTHON, "-"],
+        cwd=ROOT, input=REBIND_SCRIPT.format(site=PLATFORM_SITE, user=entry["user"], api_key=entry["api_key"],
+                                            api_secret=keys["api_secret"]),
+        text=True, capture_output=True, timeout=120,
+    )
+    if rebind.returncode:
+        raise RuntimeError("Files were rewritten but the platform membership could not be rebound; fix DS Membership by hand")
+    rebound = json.loads(rebind.stdout.strip().splitlines()[-1])["rebound"]
+    return {"actor": actor, "user": entry["user"], "api_key": entry["api_key"], "platform_memberships_rebound": rebound}
 
 
 def provision(runtime_dir=ROOT / ".runtime"):

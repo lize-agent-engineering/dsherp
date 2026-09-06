@@ -79,7 +79,7 @@ export const pendingCount = (session) =>
   (session?.proposals ?? []).filter((item) => item.status === 'Pending').length +
     (session?.configuration_confirmations ?? []).filter((item) => item.status === 'Pending').length;
 
-const eventTones = new Set(['model_error', 'tool_error', 'runtime_failed', 'worker_error', 'unverified_completion_claim']);
+const eventTones = new Set(['model_error', 'tool_error', 'tool_refused', 'runtime_failed', 'worker_error', 'unverified_completion_claim']);
 
 // Server-side reason codes are rendered as business text; the raw payload is never
 // dumped at a business user, who reads this stream through list_run_events.
@@ -89,7 +89,7 @@ const reasonLabels = {
   cancelled: '用户取消',
   lease_expired: '运行租约过期',
   queue_expired: '排队超时',
-  claim_unacked: '领取未确认，已退回排队',
+  claim_unacked: '领取未确认，运行未开始，请重试',
 };
 
 const reasonText = (reason) => reasonLabels[reason] ?? reason;
@@ -131,6 +131,8 @@ function eventLabel(event, payload, reserved) {
       return '工具返回';
     case 'tool_error':
       return '工具错误';
+    case 'tool_refused':
+      return `服务端拒绝 ${payload.tool}`;
     case 'compaction':
       return '上下文压缩';
     case 'turn_end':

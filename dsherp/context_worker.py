@@ -19,7 +19,7 @@ import httpx
 from dsherp import alerts,deploy_env,metrics,sd_notify,worker_log
 from dsherp.runtime_host import ROOT,IMAGE,agent_settings,container_base,load_settings
 from dsherp.context_container import docker_command
-from dsherp.context_mcp import BusinessRuntimeError,post
+from dsherp.context_mcp import BusinessRuntimeError,ToolFailure,post
 from dsherp.provider_circuit import CircuitBreaker,probe_models
 from dsherp.runtime_revision import configuration_revision
 
@@ -380,13 +380,15 @@ def run_container(task,settings,directory,timeout=170):
         name='dsherp-context-'+uuid.uuid4().hex
         try:
             result=subprocess.run(docker_command(ROOT,secret,directory,name),capture_output=True,text=True,timeout=timeout)
+            # Only the runner's value-free stack diagnostic, never raw SDK stderr, provider
+            # exceptions, request bodies or credentials. A run that exits 0 can still carry
+            # one (an event flush that failed), so this does not depend on the exit code.
+            for line in (result.stderr or '').splitlines():
+                if line.startswith('DSHERP_DIAGNOSTIC '):
+                    try:diagnostic=json.loads(line.removeprefix('DSHERP_DIAGNOSTIC '))
+                    except ValueError:continue
+                    worker_log.log('runtime_diagnostic',**diagnostic)
             if result.returncode:
-                # Only the runner's value-free stack diagnostic, never raw SDK
-                # stderr, provider exceptions, request bodies or credentials.
-                for line in result.stderr.splitlines():
-                    if line.startswith('DSHERP_DIAGNOSTIC '):
-                        diagnostic=json.loads(line.removeprefix('DSHERP_DIAGNOSTIC '))
-                        worker_log.log('runtime_diagnostic',**diagnostic)
                 raise RuntimeError('Isolated business runtime failed')
             output=json.loads(result.stdout)
             if set(output)!={'status','answer'} or output['status'] not in ('Succeeded','Cancelled','NeedsInput'):
@@ -459,16 +461,21 @@ class Coordinator:
     def _site_available(self,site,now):
         return self._site_skip_until.get(site['site'],0)<=now
 
-    def _note_site(self,site,ok,now):
+    def _note_site(self,site,ok,now,kind='claim'):
+        """One counter per (site, call kind). A heartbeat only touches Redis while a claim
+        locks MariaDB rows: a site whose database stalls answers every heartbeat and times
+        out every claim, and a shared counter would never reach the threshold."""
         name=site['site']
         if ok:
-            self._site_failures.pop(name,None);self._site_skip_until.pop(name,None);return
-        failures=self._site_failures.get(name,0)+1
-        self._site_failures[name]=failures
+            self._site_failures.pop((name,kind),None);self._site_skip_until.pop(name,None);return
+        self._site_failures[(name,kind)]=self._site_failures.get((name,kind),0)+1
+        # The threshold counts the site's failures across kinds, so a black hole (both fail)
+        # is skipped as fast as before, while a success of one kind only clears its own count.
+        failures=sum(count for (site_name,_),count in self._site_failures.items() if site_name==name)
         if failures>=SITE_SKIP_THRESHOLD:
             self._site_skip_until[name]=now+SITE_SKIP_SECONDS
-            self._site_failures[name]=0
-            worker_log.log('site_skipped',site=name,seconds=SITE_SKIP_SECONDS)
+            for key in [key for key in self._site_failures if key[0]==name]:self._site_failures.pop(key)
+            worker_log.log('site_skipped',site=name,call=kind,seconds=SITE_SKIP_SECONDS)
 
     def _fan_out(self,work,items):
         if len(items)<=1:return [work(item) for item in items]
@@ -485,7 +492,7 @@ class Coordinator:
                 worker_log.log('worker_error',site=site['site'],error_class=type(error).__name__)
                 return False
         live=[site for site in self.sites if self._site_available(site,now)]
-        for site,ok in zip(live,self._fan_out(beat,live)):self._note_site(site,ok,now)
+        for site,ok in zip(live,self._fan_out(beat,live)):self._note_site(site,ok,now,kind='heartbeat')
 
     def _claim_site(self,site,settings,now):
         try:
@@ -573,7 +580,21 @@ class Coordinator:
                                duration_ms=duration)
                 writeback([{'kind':'container_finished','source':'worker',
                             'payload':{'duration_ms':duration,'status':result['status']}}])
-                finish=post(site['client'],'finish_run',**cap,**result)
+                try:
+                    finish=post(site['client'],'finish_run',**cap,**result)
+                except ToolFailure as error:
+                    # Only a definite refusal (the server answered 4xx: permission/validation)
+                    # gets a second, Failed write-back with the real reason; it used to leave
+                    # the run Running until the lease sweep called it '运行已过期'. A 5xx or a
+                    # lost response is an unknown outcome: the server may have accepted the
+                    # Succeeded write, so no second terminal write is ever sent.
+                    definite=error.classification.get('error_class') in ('permission','validation')
+                    worker_log.log('finish_rejected' if definite else 'finish_outcome_unknown',
+                                   run_id=cap.get('run_id'),status=result['status'],
+                                   http_status=error.classification.get('http_status'))
+                    if result['status']!='Succeeded' or not definite:raise
+                    finish=post(site['client'],'finish_run',**cap,status='Failed',answer='',
+                                error='结果回写被服务端拒绝，运行按失败结束；请重试或联系管理员')
                 completed=finish.get('status',result['status'])
             failures=finish.get('provider_failures')
             if failures is not None and (type(failures) is not int or failures<0):
@@ -612,7 +633,7 @@ class Coordinator:
             rotated=[self.sites[(start+offset)%len(self.sites)] for offset in range(len(self.sites))]
             chosen=[site for site in rotated if self._site_available(site,now)][:capacity]
             for site,(task,ok) in zip(chosen,self._fan_out(lambda site:self._claim_site(site,settings,now),chosen)):
-                self._note_site(site,ok,now)
+                self._note_site(site,ok,now,kind='claim')
                 if not task:continue
                 CLAIMS_TOTAL.inc(site=site['site']);self.last_claim[site['site']]=now
                 worker_log.log('claimed',site=site['site'],run_id=task['run_id'])

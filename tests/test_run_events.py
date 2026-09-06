@@ -165,3 +165,40 @@ def test_flush_batches_and_never_raises():
         )
     assert out["sent"] == 200 and out["error"] == "ToolFailure"
     assert all(len(body["events"]) <= 100 and body["run_id"] == "r" for body in seen)
+
+
+def _provider_failures_module():
+    import importlib.util
+    from pathlib import Path
+    path=Path(__file__).resolve().parents[1]/'frappe_app/dsherp_bridge/provider_failures.py'
+    spec=importlib.util.spec_from_file_location('provider_failures',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
+
+
+def test_provider_failures_are_counted_by_what_makes_every_run_fail_regardless_of_input():
+    """Plan-2 re-audit 批评 1, as behaviour: the count that opens the circuit must include the
+    codes the shipped runtime really emits (a provider with no balance says 'QUOTA', a
+    malformed key 'INVALID_CREDENTIAL', an unclassified 4xx 'HTTP_<status>') and must leave
+    out failures caused by this turn's input or by nothing identifiable."""
+    failures=_provider_failures_module()
+    counted=['TRANSPORT','TIMEOUT','SERVER','AUTH','INVALID_CREDENTIAL','RATE_LIMIT','QUOTA','QUOTA_EXCEEDED','HTTP_402','HTTP_404']
+    ignored=['CONTEXT_WINDOW_EXCEEDED','INVALID_REQUEST','EMPTY_RESPONSE','PI_AI_ERROR','UNKNOWN','ProviderError','HTTPX_ERROR','',None]
+    assert all(failures.is_provider_failure(code) for code in counted),counted
+    assert not any(failures.is_provider_failure(code) for code in ignored),ignored
+    assert failures.count_provider_failures(counted+ignored)==len(counted)
+    assert failures.count_provider_failures([])==0
+
+
+def test_the_vocabulary_is_the_one_the_shipped_runtime_emits():
+    """Not a source-string check of our code: the runtime binary is the contract."""
+    import glob
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    binaries=[path for path in glob.glob(str(root/'.venv/lib/python3.*/site-packages/deepseek_harness_runtime/runtime/dsh-jsonrpc-agent-pkg-*'))
+              if not path.endswith(('-rg','-spawn-helper'))]
+    if not binaries:
+        pytest.skip('shipped runtime binary not installed here')
+    blob=b''.join(Path(path).read_bytes() for path in binaries)
+    assert b'QUOTA_EXCEEDED_CODE = "QUOTA"' in blob
+    assert _provider_failures_module().is_provider_failure('QUOTA')
