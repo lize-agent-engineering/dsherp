@@ -4,12 +4,12 @@
   "images": {
     "local/dsherp-frappe:v0.3.1-rc1": {
       "architecture": "arm64",
-      "id": "sha256:2de0a39fa74b2407934c2a3ad05fc1d1e17c3d20e8c615c74ce0194e73b23b98",
+      "id": "sha256:9f7ec33e41cb272376ad05bb77eceee7623f6d195dc50f35f0161f4ff650e073",
       "os": "linux"
     },
     "local/dsherp-worker:v0.3.1-rc1": {
       "architecture": "arm64",
-      "id": "sha256:02859b19d49c458721cc51de697f3af27adb90f3105355a61dabc0b85cc693ab",
+      "id": "sha256:4ff6186471d287c42968d139062dec3a2debe15143c0e9b137b08e671e9b0324",
       "os": "linux"
     }
   },

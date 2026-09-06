@@ -838,3 +838,90 @@ def test_firewall_rules_target_only_the_agent_bridge():
     assert all("-m comment --comment dsherp-agent-firewall" in rule for rule in rules["iptables"] + rules["undo"])
     assert rules["unit"] == "dsherp-agent-firewall.service"
     assert rules["script"] == "/usr/local/sbin/dsherp-agent-firewall"
+
+
+def test_forget_release_validates_the_tag_and_never_leaves_the_release_records_root(host):
+    """Review P1: an unvalidated tag joined the path and reached shutil.rmtree."""
+    admin.ensure_secrets(RELEASE)
+    outside = admin.runtime_dir(RELEASE) / "unrelated-user-files"
+    outside.mkdir(parents=True)
+    (outside / "keep.txt").write_text("keep")
+    for bad in ("../unrelated-user-files", "", "a/b", "..", ".hidden"):
+        with pytest.raises(admin.Fault):
+            admin.forget_release(RELEASE, bad)
+    assert (outside / "keep.txt").exists()
+    records = admin.runtime_dir(RELEASE) / "releases"
+    (records / "v0.4.0").mkdir(parents=True)
+    link = records / "v0.4.1"
+    link.symlink_to(outside)
+    with pytest.raises(admin.Fault):
+        admin.forget_release(RELEASE, "v0.4.1")  # a symlink pointing outside the records root
+    assert (outside / "keep.txt").exists()
+    assert admin.forget_release(RELEASE, "v0.4.0")["forgotten"].endswith("/releases/v0.4.0")
+    assert not (records / "v0.4.0").exists()
+
+
+def test_image_identity_is_checked_by_full_name_and_by_manifest_id_not_by_tag_suffix(tmp_path, host):
+    """Review P1: `unrelated/product:v0.4.0` passed, and the recorded image id was never used."""
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    lookalike = _docker({"backend": "unrelated/product:v0.4.0", "platform-backend": "unrelated/product:v0.4.0"})
+    untouched = SnapshotBench([SAME] * 4)
+    with pytest.raises(admin.Fault, match="registry.example.com/dsherp/dsherp-frappe:v0.4.0"):
+        admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: untouched, runner=lookalike, from_tag="v0.3.0")
+    assert not untouched.verbs
+    # With a release manifest on record, the running image id must be the built one.
+    manifest = tmp_path / "infra" / "releases" / "v0.4.0.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"tag": "v0.4.0", "images": {
+        "registry.example.com/dsherp/dsherp-frappe:v0.4.0": {"id": "sha256:built-frappe"},
+        "registry.example.com/dsherp/dsherp-worker:v0.4.0": {"id": "sha256:built-worker"}}}))
+    with pytest.raises(admin.Fault, match="sha256:built-frappe"):
+        admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: SnapshotBench([SAME] * 4), runner=RUNNING_NEW,
+                      from_tag="v0.3.0", root=tmp_path)
+    built = _docker({"backend": "registry.example.com/dsherp/dsherp-frappe:v0.4.0",
+                     "platform-backend": "registry.example.com/dsherp/dsherp-frappe:v0.4.0"})
+    original = built
+
+    def with_ids(command, **kwargs):
+        result = original(command, **kwargs)
+        if command[:2] == ["docker", "inspect"]:
+            result.stdout = "registry.example.com/dsherp/dsherp-frappe:v0.4.0 sha256:built-frappe\n"
+        return result
+    bench = SnapshotBench([SAME] * 4)
+    report = admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench, runner=with_ids, from_tag="v0.3.0", root=tmp_path)
+    assert report["images"]["backend"]["image_id"] == "sha256:built-frappe"
+    # rollback: the previous images are those current.json recorded, name and id alike
+    record = admin.runtime_dir(RELEASE) / "releases" / "v0.4.0" / "release.json"
+    assert json.loads(record.read_text())["previous_images"] is None  # first release: nothing on record yet
+    admin.forget_release(RELEASE, "v0.4.0")
+    (admin.runtime_dir(RELEASE) / "releases" / "current.json").write_text(json.dumps({"tag": "v0.3.0", "images": {
+        "backend": {"image": "registry.example.com/dsherp/dsherp-frappe:v0.3.0", "image_id": "sha256:old-frappe"},
+        "platform-backend": {"image": "registry.example.com/dsherp/dsherp-frappe:v0.3.0", "image_id": "sha256:old-frappe"}}}))
+    bench = SnapshotBench([SAME] * 4)
+    report = admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench, runner=with_ids, root=tmp_path)
+    assert json.loads(record.read_text())["previous_images"]["backend"]["image_id"] == "sha256:old-frappe"
+    bench.snapshots = [SAME, SAME]
+    with pytest.raises(admin.Fault, match="sha256:old-frappe"):
+        admin.rollback(BACK, "v0.4.0", bench_factory=lambda kind: bench, runner=RUNNING_OLD, root=tmp_path)  # right name, wrong id
+    assert not [verb for verb in bench.verbs if " restore " in verb]
+
+    def old_ids(command, **kwargs):
+        result = RUNNING_OLD(command, **kwargs)
+        if command[:2] == ["docker", "inspect"]:
+            result.stdout = "registry.example.com/dsherp/dsherp-frappe:v0.3.0 sha256:old-frappe\n"
+        return result
+    assert admin.rollback(BACK, "v0.4.0", bench_factory=lambda kind: bench, runner=old_ids, root=tmp_path)["clean"] is True
+
+
+def test_snapshot_command_can_align_its_hash_columns_with_an_existing_snapshot(host):
+    """Review P2: a plain snapshot hashes over all columns while release's after-snapshot hashes
+    over the before-columns; comparing the two must not invent differences."""
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = SnapshotBench([SAME, SAME])
+    reference = admin.take_snapshot(RELEASE, "acme.tenant.example.com", bench_factory=lambda kind: bench)
+    aligned = admin.take_snapshot(RELEASE, "acme.tenant.example.com", bench_factory=lambda kind: bench, like=reference)
+    body = [call for call in bench.calls if call[0] == "python-body"][-1][2]
+    assert "hash_columns=json.loads(" in body and "tabItem" in body
+    assert aligned["tables"] == SAME["tables"]

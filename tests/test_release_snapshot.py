@@ -239,3 +239,32 @@ def test_a_site_beyond_the_row_ceiling_aborts_instead_of_growing_without_bound()
     db = FakeDB({'tabItem': rows('I', 30)})
     with pytest.raises(RuntimeError, match='max_rows'):
         rs.snapshot(FakeFrappe(db), max_rows=20)
+
+
+def test_the_row_ceiling_is_enforced_before_reading_and_while_paging_not_after():
+    """Review P2: the ceiling was checked after a whole table had been accumulated."""
+    db = FakeDB({'tabItem': rows('I', 30)})
+    with pytest.raises(RuntimeError, match='max_rows'):
+        rs.snapshot(FakeFrappe(db), max_rows=20)
+    assert not [q for q, _ in db.queries if 'select * from `tabItem`' in ' '.join(q.split())]  # refused on the count
+    # a count that lies (rows appear while paging) is still caught page by page
+    class GrowingDB(FakeDB):
+        def sql(self, query, values=None, as_dict=False):
+            if 'select count(*)' in ' '.join(query.split()):
+                return [(5,)]
+            return super().sql(query, values, as_dict)
+    growing = GrowingDB({'tabItem': rows('I', 30)})
+    with pytest.raises(RuntimeError, match='max_rows'):
+        rs.snapshot(FakeFrappe(growing), page=10, max_rows=20)
+    pages = [q for q, _ in growing.queries if 'select * from `tabItem`' in ' '.join(q.split())]
+    assert len(pages) <= 3
+
+
+def test_every_snapshot_records_the_exact_columns_each_hash_covers():
+    db = FakeDB({'tabItem': rows('I', 2, item_name='x'), 'tabDS Run Event': rows('E', 2, payload='{}')})
+    plain = rs.snapshot(FakeFrappe(db))
+    assert plain['tables']['tabItem']['hash_columns'] == ['name', 'modified', 'item_name']
+    aligned = rs.snapshot(FakeFrappe(db), hash_columns={'tabDS Run Event': ['name', 'payload']})
+    assert aligned['tables']['tabDS Run Event']['hash_columns'] == ['name', 'payload']
+    assert aligned['tables']['tabItem']['hash_columns'] == ['name', 'modified', 'item_name']
+    assert 'hash_columns' not in aligned['settings']  # the per-table record replaces the boolean

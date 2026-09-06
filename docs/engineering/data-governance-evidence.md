@@ -49,7 +49,7 @@
 
 | 门 | 结果 |
 |---|---|
-| 非集成 `pytest tests --ignore=tests/integration` | `435 passed`（main 合并后 402；本切片新增 33 条：比对 14、读取 12、CLI 12 替换原 5 条、契约 1 处扩展） |
+| 非集成 `pytest tests --ignore=tests/integration` | `441 passed`（main 合并后 402；本切片新增 39 条） |
 | Node / 前端 | Node `10/10`；前端未改动 |
 | 集成 | 本切片不改 Frappe App 代码，未重跑集成门 |
 
@@ -88,3 +88,14 @@
 | 恢复后删一条 Item，与基线比对 | 退出码 1，差异 `tabItem / DSHERP-HITL-ITEM / deleted` |
 
 演练后 `compose down -v` 拆栈、`.runtime/prod-local/` 清理；rc1/rc2 镜像与本地 `prod.env`（tag 复位为 rc2）保留。失败边界（migrate 后快照失败、restore 失败、比对不干净）在本机无法不破坏容器地制造，由带假 bench 的单元测试覆盖（R1 一行）。
+
+### PR #7 第二轮审查（GPT，2026-09-06）的四处与处置
+
+| 优先级 | 问题 | 处置 | 测试 |
+|---|---|---|---|
+| P1 | `forget-release` 未校验 tag，`../` 可删到发布记录目录之外 | tag 必须匹配 `deploy_env.TAG`；目标解析后必须是发布记录根目录下的普通子目录（拒绝符号链接与越界路径） | `test_forget_release_validates_the_tag_and_never_leaves_the_release_records_root` |
+| P1 | 镜像身份只比 tag 后缀，记录的镜像 id 不参与校验 | `release` 要求两个 bench 运行的镜像**全名**等于 `prod.env` 解析出的发布镜像，且当 `infra/releases/<tag>.json` 清单存在时镜像 id 等于清单记录的 id；发布记录同时保存 `previous_images`（来自 `current.json`，即升级前实际运行的镜像与 id）；`rollback` 要求运行的镜像全名等于旧 tag 的镜像，id 等于 `previous_images`（或旧 tag 清单）记录的 id | `test_image_identity_is_checked_by_full_name_and_by_manifest_id_not_by_tag_suffix` |
+| P2 | 行数上限在整表读完后才检查 | 先用 count 在读取前拒绝明显超限，再在分页累计时按剩余预算检查（count 可能陈旧） | `test_the_row_ceiling_is_enforced_before_reading_and_while_paging_not_after` |
+| P2 | 快照没保存准确的哈希列集合，普通快照与 release 快照口径不一致 | 每张表保存 `hash_columns`（求哈希时实际覆盖的列）；只留哈希的表在两份快照列集不同时拒绝比对并提示用 `snapshot --like <快照>` 对齐；`release`/`rollback` 的第二份快照都按第一份的 `hash_columns` 求哈希 | `test_every_snapshot_records_the_exact_columns_each_hash_covers`、`test_hash_only_rows_are_compared_only_when_both_snapshots_hashed_the_same_columns`、`test_snapshot_command_can_align_its_hash_columns_with_an_existing_snapshot` |
+
+**第二轮复审修法后的跨版本重跑（2026-09-06 16:42–16:45）**：`release v0.3.1-rc2 --from v0.3.1-rc1` 在 rc2 容器上退出码 0，两个容器镜像 id `sha256:c9147d67…` 与 `infra/releases/v0.3.1-rc2.json` 清单一致（清单 id 校验第一次真实生效）；同 tag 再发布退出码 2；注入的 qty 改动用 `snapshot --like after.json` 对齐后被点名；rc2 仍在运行时回滚退出码 2。切回 rc1 后回滚**先被拒绝**：运行的 rc1 镜像 id `sha256:9f7ec33e…` 与仓库里 rc1 清单记录的上一次本机构建 `sha256:2de0a39f…` 不同——同一提交本机两次构建的镜像 id 不同，id 校验如实判定"不是同一个制品"。rc1 从未推送，清单只是本机演练记录，因此按当前 rc1 构建重生成清单（`infra/releases/v0.3.1-rc1.json`，id `9f7ec33e…`）后再回滚：退出码 0，两站差异 0（g1 10.2 s、平台 5.3 s），`current.json` 记回 rc1 并带镜像 id。这条边界在 runbook 里的含义：目标主机必须运行清单记录的那一次构建（从 registry 拉取或 `docker load` 构建机导出的镜像），本地重建会被拒绝。演练后拆栈清理。

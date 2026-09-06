@@ -166,3 +166,24 @@ def test_snapshots_of_different_formats_are_refused_and_row_hash_is_shared_with_
     with pytest.raises(ValueError, match='format'):
         rc.compare({**snap(), 'format': 1}, {**snap(), 'format': 2})
     assert rc.compare({**snap(), 'format': 1}, {**snap(), 'format': 1})['clean'] is True
+
+
+def test_hash_only_rows_are_compared_only_when_both_snapshots_hashed_the_same_columns():
+    """Review P2: release's after-snapshot hashes over the before-columns; a plain snapshot of
+    identical data hashes over all columns. The two hashes are not comparable."""
+    same_data = {'name': 'e1', 'payload': '{}'}
+    before = {'tables': {'tabDS Run Event': {'columns': ['name', 'payload'], 'hash_columns': ['name', 'payload'],
+                                             'rows': {'e1': {'hash': rc.row_hash(same_data, {'name', 'payload'}), 'values': None}}}},
+              'singles': {}, 'auth': {}}
+    after = {'tables': {'tabDS Run Event': {'columns': ['name', 'payload', 'new_column'], 'hash_columns': ['name', 'payload', 'new_column'],
+                                            'rows': {'e1': {'hash': rc.row_hash({**same_data, 'new_column': None}), 'values': None}}}},
+             'singles': {}, 'auth': {}}
+    with pytest.raises(ValueError, match='hash_columns'):
+        rc.compare(before, after)
+    after['tables']['tabDS Run Event']['hash_columns'] = ['name', 'payload']
+    after['tables']['tabDS Run Event']['rows']['e1']['hash'] = rc.row_hash({**same_data, 'new_column': None}, {'name', 'payload'})
+    assert rc.compare(before, after)['clean'] is True
+    # tables whose rows carry values are compared by value and need no hash agreement
+    valued = snap({'tabItem': (['name', 'v'], {'A': {'name': 'A', 'v': 1}})})
+    widened = snap({'tabItem': (['name', 'v', 'w'], {'A': {'name': 'A', 'v': 1, 'w': None}})})
+    assert rc.compare(valued, widened)['clean'] is True

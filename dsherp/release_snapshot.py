@@ -118,7 +118,9 @@ def _columns(frappe, table):
     return [row[0] for row in rows]
 
 
-def _read_table(frappe, table, keep_values, page, columns=None):
+def _read_table(frappe, table, keep_values, page, columns=None, budget=None):
+    # `budget` is the number of rows this table may still contribute under max_rows; it is
+    # enforced page by page because a count taken before reading can be stale.
     partition = ROW_PARTITION.get(table)
     rows, last = {}, None
     while True:
@@ -140,6 +142,8 @@ def _read_table(frappe, table, keep_values, page, columns=None):
                     value = _digest(value)
                 row[column] = value
             rows[row['name']] = {'hash': row_hash(row, columns), 'values': row if keep_values else None}
+        if budget is not None and len(rows) > budget:
+            raise RuntimeError('max_rows exceeded while paging ' + table)
         if len(chunk) < page:
             return rows
         last = chunk[-1]['name']
@@ -160,17 +164,20 @@ def snapshot(frappe, page=2000, detail_rows=5000, hash_columns=None, max_rows=10
             try:
                 partition = ROW_PARTITION.get(table)
                 count = frappe.db.sql('select count(*) from `' + table + '`' + (' where ' + partition if partition else ''))[0][0]
+                if total + count > max_rows:
+                    raise RuntimeError('max_rows=' + str(max_rows) + ' would be exceeded by ' + table + ' (' + str(count)
+                                       + ' rows after ' + str(total) + '); raise the ceiling deliberately or narrow the scope')
                 keep = bucket == 'strict' and count <= detail_rows
                 columns = _columns(frappe, table)
                 restrict = set(hash_columns[table]) if hash_columns and table in hash_columns else None
-                tables[table] = {'columns': columns, 'rows': _read_table(frappe, table, keep, page, restrict)}
+                hashed = [c for c in columns if c not in VOLATILE_COLUMNS and (restrict is None or c in restrict)]
+                tables[table] = {'columns': columns, 'hash_columns': hashed,
+                                 'rows': _read_table(frappe, table, keep, page, restrict, budget=max_rows - total)}
                 counts[table] = len(tables[table]['rows'])
             except Exception as error:
                 raise RuntimeError('snapshot failed on ' + table + ': ' + type(error).__name__ + ': ' + str(error)[:200]) from error
             timings[table] = round(time.monotonic() - started, 3)
             total += counts[table]
-            if total > max_rows:
-                raise RuntimeError('snapshot exceeds max_rows=' + str(max_rows) + ' at ' + table + '; raise the ceiling deliberately or narrow the scope')
     wanted = set(scope['singles'])
     singles = {}
     for doctype, field, value in frappe.db.sql('select doctype, field, value from `tabSingles`'):
@@ -186,8 +193,7 @@ def snapshot(frappe, page=2000, detail_rows=5000, hash_columns=None, max_rows=10
         auth[doctype + '|' + name + '|' + fieldname] = hashlib.sha256((str(encrypted) + ':' + str(password)).encode()).hexdigest()
     return {'format': FORMAT, 'site': getattr(frappe.local, 'site', None), 'tables': tables, 'singles': singles,
             'auth': auth, 'patches': patches, 'scope': scope, 'row_counts': counts, 'timings': timings,
-            'settings': {'page': page, 'detail_rows': detail_rows, 'max_rows': max_rows,
-                         'hash_columns': bool(hash_columns)}}
+            'settings': {'page': page, 'detail_rows': detail_rows, 'max_rows': max_rows}}
 
 
 def container_script(page=2000, detail_rows=5000, hash_columns=None):

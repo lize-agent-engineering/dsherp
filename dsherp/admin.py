@@ -698,11 +698,20 @@ def _release_site(bench, site, flags):
     _set_flag(bench, site, 'pause_scheduler', flags.get('pause_scheduler', 0))
 
 
-def take_snapshot(resolved, site, *, root=ROOT, runner=subprocess.run, bench_factory=None, bench=None, hash_columns=None):
-    """Read the Site's data inside its bench; any table it cannot read aborts the snapshot."""
+def _hash_columns_of(snapshot):
+    """The column set each table's digests cover in a snapshot (older files: all columns)."""
+    return {table: row.get('hash_columns') or row['columns'] for table, row in snapshot['tables'].items()}
+
+
+def take_snapshot(resolved, site, *, root=ROOT, runner=subprocess.run, bench_factory=None, bench=None,
+                  hash_columns=None, like=None):
+    """Read the Site's data inside its bench; any table it cannot read aborts the snapshot.
+    `like` aligns the digests with an existing snapshot so the two can be compared."""
     if bench is None:
         factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
         bench = factory('platform' if site == resolved['platform_site'] else 'tenant')
+    if like is not None:
+        hash_columns = _hash_columns_of(like)
     script = release_snapshot.container_script(hash_columns=hash_columns)
     return release_snapshot.parse_output(bench.python(site, script, timeout=3600))
 
@@ -763,32 +772,49 @@ def _running_images(resolved, runner, root):
     return images
 
 
-def _image_tag(image):
-    name = image.rsplit('/', 1)[-1]
-    return name.rsplit(':', 1)[1] if ':' in name else ''
+def _manifest_image_id(root, tag, image):
+    """The immutable id release_images.py recorded for this image, when a manifest exists."""
+    path = Path(root) / 'infra' / 'releases' / f'{tag}.json'
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())['images'][image]['id']
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
-def _require_running(images, tag):
-    wrong = {service: row['image'] for service, row in images.items() if _image_tag(row['image']) != tag}
-    if wrong:
-        raise Fault(f'运行中的镜像不是 {tag}：' + '、'.join(f'{service}={image}' for service, image in wrong.items())
-                    + '；先把 prod.env 改到该 tag 并 compose up -d')
+def _require_running(images, expected_image, expected_ids=None):
+    """Every bench must run exactly the expected image: full name, and the immutable id when
+    one is on record (a release manifest, or what current.json saw running)."""
+    for service, row in images.items():
+        if row['image'] != expected_image:
+            raise Fault(f'服务 {service} 运行的镜像是 {row["image"]}，不是 {expected_image}；'
+                        '先把 prod.env 改到正确的 tag 并 compose up -d')
+        wanted = (expected_ids or {}).get(service)
+        if wanted and row['image_id'] != wanted:
+            raise Fault(f'服务 {service} 运行的 {row["image"]} 镜像 id 是 {row["image_id"]}，记录里的是 {wanted}；'
+                        '这不是同一个制品，先核对镜像来源')
 
 
 def _current_path(resolved, root=ROOT):
     return runtime_dir(resolved, root) / 'releases' / 'current.json'
 
 
-def _current_tag(resolved, root=ROOT):
+def _current(resolved, root=ROOT):
     path = _current_path(resolved, root)
-    return json.loads(path.read_text())['tag'] if path.exists() else None
+    return json.loads(path.read_text()) if path.exists() else None
 
 
 def forget_release(resolved, tag, *, root=ROOT):
     """Drop the host-side record of a release (baseline snapshots and backup pointers); the
     archived backup set inside the benches stays. For drills and for a deliberate redo."""
     import shutil
-    record = _release_dir(resolved, tag, root)
+    if not deploy_env.TAG.fullmatch(tag or ''):
+        raise Fault('forget-release 需要一个 tag')
+    records = (runtime_dir(resolved, root) / 'releases').resolve()
+    record = records / tag
+    if record.is_symlink() or records not in record.resolve().parents or record.resolve() == records:
+        raise Fault(f'{record} 不是发布记录目录下的普通子目录，拒绝删除')
     if record.exists():
         shutil.rmtree(record)
     return {'tag': tag, 'forgotten': str(record)}
@@ -816,7 +842,8 @@ def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=No
     if from_tag is not None and not deploy_env.TAG.fullmatch(from_tag):
         raise Fault('--from 必须是一个 tag')
     images = _running_images(resolved, runner, root)
-    _require_running(images, tag)
+    built = _manifest_image_id(root, tag, resolved['frappe_image'])
+    _require_running(images, resolved['frappe_image'], {service: built for service in images} if built else None)
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     targets = _targets(resolved, root, factory)
     if len(targets) < 2:
@@ -825,9 +852,11 @@ def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=No
     if any((record_root / site / 'before.json').exists() for _, site in targets):
         raise Fault(f'release {tag} 已有升级前基线（{record_root}）：基线只写一次，否则回滚会回到错误的状态。'
                     f'要重来，换一个 tag，或确认不再需要那份基线后执行 forget-release {tag}')
-    previous = from_tag or _current_tag(resolved, root)
+    current = _current(resolved, root)
+    previous = from_tag or (current['tag'] if current else None)
     if not previous:
         raise Fault('没有当前版本的记录：第一次发布必须用 --from <升级前运行的 tag> 说明从哪个版本升上来')
+    previous_images = current['images'] if current and current.get('tag') == previous else None
     # Pre-flight before anything is recorded or quiesced: a Site with runs in flight stops
     # the whole release while nothing has changed yet.
     for bench, site in targets:
@@ -836,7 +865,8 @@ def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=No
             raise Fault(f"站点 {site} 仍有 {flags['active']} 个运行未结束（Queued/Running/Cancelling）；"
                         '先停 worker（systemctl stop dsherp-agent-worker）并等它们结束，再发布')
     started_at = time.strftime('%Y-%m-%d %H:%M:%S')
-    _write_json(record_root / 'release.json', {'tag': tag, 'previous_tag': previous, 'images': images, 'started': started_at})
+    _write_json(record_root / 'release.json', {'tag': tag, 'previous_tag': previous, 'images': images,
+                                               'previous_images': previous_images, 'started': started_at})
     report = {'tag': tag, 'previous_tag': previous, 'images': images, 'sites': {}, 'steps': [], 'clean': False}
     for bench, site in targets:
         record = record_root / site
@@ -857,8 +887,7 @@ def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=No
             migrated = bench.run('bench', '--site', site, 'migrate', timeout=3600)
             report['steps'].append((site, 'migrated'))
             step = 'snapshot-after'
-            columns = {table: row['columns'] for table, row in before['tables'].items()}
-            after = take_snapshot(resolved, site, bench=bench, hash_columns=columns)
+            after = take_snapshot(resolved, site, bench=bench, hash_columns=_hash_columns_of(before))
             _write_json(record / 'after.json', after)
             report['steps'].append((site, 'snapshot-after'))
             step = 'expectations'
@@ -917,7 +946,15 @@ def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=N
         raise Fault(f"回滚 {tag} 要在升级前的版本 {previous} 上进行：infra/env/prod.env 的 DSHERP_IMAGE_TAG 现在是 "
                     f"{resolved['image_tag']!r}，先改回 {previous} 并 compose up -d")
     images = _running_images(resolved, runner, root)
-    _require_running(images, previous)
+    # prod.env is back on the previous tag, so resolved['frappe_image'] names the previous image;
+    # its id comes from what ran before the upgrade (current.json at release time) or its manifest.
+    recorded = record.get('previous_images') or {}
+    expected_ids = {service: row['image_id'] for service, row in recorded.items()
+                    if row.get('image') == resolved['frappe_image']}
+    built = _manifest_image_id(root, previous, resolved['frappe_image'])
+    for service in images:
+        expected_ids.setdefault(service, built)
+    _require_running(images, resolved['frappe_image'], {k: v for k, v in expected_ids.items() if v})
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     targets = [(bench, site) for bench, site in _targets(resolved, root, factory)
                if (record_root / site / 'before.json').exists() or site in (backups or {})]
@@ -955,8 +992,7 @@ def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=N
             bench.run(*arguments, timeout=3600, secrets=(db_root,))
             report['steps'].append((site, 'restored'))
             step = 'snapshot'
-            columns = {table: row['columns'] for table, row in expected['tables'].items()}
-            restored = take_snapshot(resolved, site, bench=bench, hash_columns=columns)
+            restored = take_snapshot(resolved, site, bench=bench, hash_columns=_hash_columns_of(expected))
             _write_json(record_root / site / 'restored.json', restored)
             step = 'compare'
             comparison = compare_snapshots(expected, restored, RESTORE_EXPECTATIONS)
@@ -1012,6 +1048,7 @@ def main(argv=None):
     snapshot_parser = sub.add_parser('snapshot', help='读取一个站的数据快照到文件（演练与排查用）')
     snapshot_parser.add_argument('site')
     snapshot_parser.add_argument('--out', required=True)
+    snapshot_parser.add_argument('--like', metavar='SNAPSHOT', help='按这份快照的哈希列集合求哈希，使两者可比')
     compare_parser = sub.add_parser('compare', help='比对两个快照文件；有未声明差异退出码 1')
     compare_parser.add_argument('before')
     compare_parser.add_argument('after')
@@ -1069,7 +1106,8 @@ def main(argv=None):
             _print(forget_release(resolved, arguments.tag))
             return 0
         if arguments.command == 'snapshot':
-            target = _write_json(Path(arguments.out), take_snapshot(resolved, arguments.site))
+            like = json.loads(Path(arguments.like).read_text()) if arguments.like else None
+            target = _write_json(Path(arguments.out), take_snapshot(resolved, arguments.site, like=like))
             _print({'site': arguments.site, 'path': str(target)})
             return 0
         if arguments.command == 'compare':

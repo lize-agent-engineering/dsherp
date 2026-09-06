@@ -108,6 +108,12 @@ def compare(before, after, expectations=None, *, detail_limit=DETAIL_LIMIT, allo
             for column in removed_columns[table]:
                 note(table, '*', 'column_removed', column)
         rows_before, rows_after = first.get('rows', {}), second.get('rows', {})
+        hashed_before, hashed_after = first.get('hash_columns'), second.get('hash_columns')
+        hash_only = any(row.get('values') is None for row in rows_before.values()) or \
+            any(row.get('values') is None for row in rows_after.values())
+        if hash_only and hashed_before is not None and hashed_after is not None and hashed_before != hashed_after:
+            raise ValueError(f'{table}: the two snapshots hashed different column sets (hash_columns), so their row '
+                             'digests are not comparable; take the second snapshot with --like the first')
         for name in sorted(set(rows_before) | set(rows_after)):
             if name not in rows_before:
                 note(table, name, 'inserted')
