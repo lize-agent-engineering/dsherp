@@ -24,7 +24,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from dsherp import admin, backup_sets, backup_status, deploy_env, site_holds
+from dsherp import admin, backup_retention, backup_sets, backup_status, deploy_env, site_holds
 from dsherp.admin import Fault, ROOT, SITES
 
 BACKUPS = '/home/frappe/backups'
@@ -507,5 +507,87 @@ def upload_sets(resolved, set_docs, *, root=ROOT, runner=subprocess.run, clock=t
     return outcome
 
 
+def _remote_sets(resolved, status, *, root, runner):
+    """Every set either repository holds, with the state the status file knows for it. A set
+    the record does not know is not assumed complete: it is offered to the pairing check."""
+    held = {}
+    for side in ('data', 'secrets'):
+        rows = json.loads(restic(resolved, side, ['snapshots', '--json'], root=root, runner=runner, timeout=900) or '[]')
+        for row in rows:
+            tags = dict(tag.split('=', 1) for tag in (row.get('tags') or []) if '=' in tag)
+            set_id = tags.get('set')
+            if not set_id or not backup_sets.parse_set_id(set_id) or not row.get('id'):
+                continue
+            entry = held.setdefault(set_id, {'site': tags.get('site'), 'kind': tags.get('kind', 'scheduled')})
+            entry[side] = row['id']
+            entry['site'] = entry['site'] or tags.get('site')
+    sets = []
+    for set_id, row in held.items():
+        known = status['sets'].get(set_id, {})
+        site = known.get('site') or row.get('site')
+        if not site:
+            continue
+        sets.append({'set_id': set_id, 'site': site, 'kind': known.get('kind') or row['kind'],
+                     'stamp': backup_sets.parse_set_id(set_id)['stamp'],
+                     'state': known.get('state', 'staged'), 'data': row.get('data'), 'secrets': row.get('secrets')})
+    return sets
+
+
 def backup_sync(resolved, *, root=ROOT, runner=subprocess.run, clock=time.time, locked=False):
-    raise Fault('异地淘汰与检查尚未接入')
+    """Send what is pending, prove each pair, expire what the policy no longer keeps, and read
+    a slice of the data back. Nothing is expired unless the host record is intact."""
+    if not require_repositories(resolved):
+        _require_configured(resolved)
+    report = {'ok': True, 'complete': [], 'pending': [], 'forgotten': [], 'errors': [], 'warnings': [], 'check_ok': True}
+    with (operations_lock(resolved, root, 'backup-sync') if not locked else _nothing()):
+        status, state = read_status(resolved, root)
+        if state == 'corrupt':
+            report['ok'] = False
+            report['warnings'].append('备份状态文件损坏：本次不做异地淘汰（保护"最后一份已验证副本"的依据在里面）；'
+                                      '先检查 backups/status.json')
+        pending = [dict(row, set_id=set_id) for set_id, row in status['sets'].items()
+                   if row.get('state') not in ('complete', 'verified')]
+        try:
+            outcome = upload_sets(resolved, pending, root=root, runner=runner, clock=clock, status=status)
+            report['complete'], report['pending'] = outcome['complete'], outcome['pending']
+            if outcome['failed']:
+                report['ok'] = False
+                report['errors'] += list(outcome['failed'].values())
+        except Fault as error:
+            report['ok'] = False
+            report['errors'].append(str(error))
+        if state == 'ok':
+            try:
+                remote = _remote_sets(resolved, status, root=root, runner=runner)
+                decision = backup_retention.select(remote)
+                doomed = [row for row in remote
+                          if decision.get(row['set_id']) == 'drop' and row.get('data') and row.get('secrets')]
+                for side in ('data', 'secrets'):
+                    ids = [row[side] for row in doomed]
+                    if ids:
+                        restic(resolved, side, ['forget', *ids], root=root, runner=runner, timeout=1800)
+                        restic(resolved, side, ['prune'], root=root, runner=runner, timeout=1800)
+                report['forgotten'] = [row['set_id'] for row in doomed]
+                for row in doomed:
+                    status['sets'].pop(row['set_id'], None)
+            except Fault as error:
+                report['ok'] = False
+                report['errors'].append(str(error))
+        backup_status.record_run(status, 'sync', at=backup_status.now_iso(clock), ok=report['ok'],
+                                 error='；'.join(report['errors']) or None)
+        # Structure alone proves nothing about the data: a rotating seventh of it is read back
+        # every run, so a week of runs reads all of it.
+        subset = f'{int(time.strftime("%j", time.gmtime(clock()))) % 7 + 1}/7'
+        errors = []
+        for side in ('data', 'secrets'):
+            try:
+                restic(resolved, side, ['check', f'--read-data-subset={subset}'], root=root, runner=runner, timeout=3600)
+            except Fault as error:
+                errors.append(str(error))
+        report['check_ok'] = not errors
+        report['ok'] = report['ok'] and report['check_ok']
+        backup_status.record_run(status, 'check', at=backup_status.now_iso(clock), ok=report['check_ok'],
+                                 error='；'.join(errors) or None)
+        report['errors'] += errors
+        save_status(resolved, status, root)
+    return report

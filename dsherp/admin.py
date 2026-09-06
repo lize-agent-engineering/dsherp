@@ -1218,6 +1218,8 @@ def main(argv=None):
     backup_parser = sub.add_parser('backup', help='对平台站与全部租户站在稳定窗口内生成四件套与核验快照，暂存为备份集；--sync 随后异地同步')
     backup_parser.add_argument('--sync', action='store_true', help='生成后立即把未完成的备份集推到异地并核对配对')
     backup_parser.add_argument('--site', action='append', default=[], help='只备份这些站（缺省是平台站与全部租户站），可重复')
+    sub.add_parser('backup-init', help='一次性初始化两个异地备份仓库（幂等）')
+    sub.add_parser('backup-sync', help='把未完成的备份集推到异地并核对配对，按保留策略淘汰，抽读数据校验')
     release_parser = sub.add_parser('release', help='发布到 prod.env 里的 tag：静默站点、备份并归档、快照、migrate、快照、逐字段比对')
     release_parser.add_argument('tag')
     release_parser.add_argument('--from', dest='from_tag', metavar='TAG',
@@ -1274,6 +1276,15 @@ def main(argv=None):
             report = backup_module.backup(resolved, sync=arguments.sync, sites=arguments.site or None)
             _print({key: value for key, value in report.items() if key != 'sets'}
                    | {'sets': {site: doc['set_id'] for site, doc in report['sets'].items()}})
+            return 0 if report['ok'] else 1
+        if arguments.command == 'backup-init':
+            from dsherp import backup as backup_module
+            _print(backup_module.backup_init(resolved))
+            return 0
+        if arguments.command == 'backup-sync':
+            from dsherp import backup as backup_module
+            report = backup_module.backup_sync(resolved)
+            _print(report)
             return 0 if report['ok'] else 1
         if arguments.command == 'release':
             report = release(resolved, arguments.tag, from_tag=arguments.from_tag, manifest=arguments.manifest)

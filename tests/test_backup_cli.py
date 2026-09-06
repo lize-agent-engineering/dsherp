@@ -375,3 +375,89 @@ def test_retiring_a_tenant_drops_it_only_after_its_final_set_is_complete_in_both
     assert report["set_id"] in restic.state["data"] and report["set_id"] in restic.state["secrets"]
     assert bench.written[f"/home/frappe/backups/sets/acme.tenant.example.com/{report['set_id']}/set.json"]["kind"] == "retire"
     assert not admin.load_tenants(RELEASE)
+
+
+def test_sync_uploads_pending_sets_expires_only_pairs_dropped_on_both_sides_and_checks_the_data(host):
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    restic = _restic(bench)
+    report = backup.backup_sync(RELEASE, runner=restic, clock=lambda: 1_788_660_100.0)
+    assert report["ok"] and set_doc["set_id"] in report["complete"]
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    assert status["sets"][set_doc["set_id"]]["state"] == "complete"
+    assert status["runs"]["sync"]["last_success"] and status["runs"]["check"]["last_success"]
+    checks = [command for command in restic.calls if "check" in command]
+    assert len(checks) == 2 and all(any(word.startswith("--read-data-subset=") for word in command) for command in checks), \
+        "structure alone is not proof: a slice of the data is read every run"
+    assert not [command for command in restic.calls if "forget" in command], "nothing is old enough to expire"
+
+
+def test_retention_forgets_a_set_on_both_sides_or_on_neither(host):
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    restic = _restic(bench)
+    status = backup_status.empty()
+    site = "acme.tenant.example.com"
+    monthly = [f"{2025 + month // 12}{month % 12 + 1:02d}01_020000-acme_tenant_example_com-aaaaaa" for month in range(0, 20)]
+    for set_id in monthly:
+        doc = {"set_id": set_id, "site": site, "kind": "scheduled", "stamp": set_id[:15],
+               "image_tag": "v0.4.0", "image_id": "sha256:id-v0.4.0"}
+        import hashlib
+        ids = {side: hashlib.sha256((set_id + side).encode()).hexdigest() for side in ("data", "secrets")}
+        backup_status.record_set(status, doc, "complete", data_snapshot=ids["data"], secrets_snapshot=ids["secrets"])
+        for side in ("data", "secrets"):
+            restic.state[side][set_id] = {"id": ids[side], "path": backup.set_paths(RELEASE, site, set_id)[side]}
+    backup_status.save(backup.status_path(RELEASE, admin.ROOT), status)
+    del restic.state["secrets"][monthly[0]]      # the oldest one is already gone on one side
+    report = backup.backup_sync(RELEASE, runner=restic, clock=lambda: 1_788_660_100.0)
+    dropped_ids = {snapshot for command in restic.calls if "forget" in command
+                   for snapshot in command[command.index("forget") + 1:]}
+    import hashlib
+    assert hashlib.sha256((monthly[0] + "data").encode()).hexdigest() not in dropped_ids, \
+        "a set the other repository no longer holds is not forgotten here"
+    assert hashlib.sha256((monthly[1] + "data").encode()).hexdigest() in dropped_ids
+    assert hashlib.sha256((monthly[-1] + "data").encode()).hexdigest() not in dropped_ids, "the newest complete set stays"
+    assert [command for command in restic.calls if "prune" in command], "space is only reclaimed after forget"
+    assert report["forgotten"]
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    assert monthly[1] not in status["sets"], "a forgotten set leaves the record too"
+
+
+def test_sync_refuses_to_expire_anything_while_the_status_file_is_corrupt(host):
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    _staged_set(bench)
+    path = backup.status_path(RELEASE, admin.ROOT)
+    path.write_text("{not json")
+    restic = _restic(bench)
+    report = backup.backup_sync(RELEASE, runner=restic, clock=lambda: 1_788_660_100.0)
+    assert not [command for command in restic.calls if "forget" in command or "prune" in command]
+    assert report["ok"] is False and any("状态" in warning for warning in report["warnings"])
+
+
+def test_a_failing_repository_check_is_reported_and_does_not_pass_as_success(host):
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    _staged_set(bench)
+    report = backup.backup_sync(RELEASE, runner=_restic(bench, fail=(("data", "check"),)),
+                                clock=lambda: 1_788_660_100.0)
+    assert report["ok"] is False and report["check_ok"] is False
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    assert status["runs"]["check"]["last_attempt"]["ok"] is False and status["runs"]["check"]["last_success"] is None
+
+
+def test_the_cli_wires_backup_init_and_backup_sync(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(backup, "backup_init", lambda resolved, **kw: seen.setdefault("init", True) or {"data": "kept", "secrets": "kept"})
+    monkeypatch.setattr(backup, "backup_sync", lambda resolved, **kw: {"ok": False, "complete": [], "pending": ["x"],
+                                                                       "forgotten": [], "errors": ["boom"], "warnings": [],
+                                                                       "check_ok": True})
+    from dsherp import deploy_env
+    monkeypatch.setattr(deploy_env, "settings", lambda *a, **k: RELEASE)
+    assert admin.main(["backup-init"]) == 0 and seen["init"]
+    assert admin.main(["backup-sync"]) == 1, "a run that left something pending is not a success"
