@@ -329,7 +329,60 @@ DSHERP_ENV=prod ./bin/dsherp-admin restore-site acme.tenant.example.com     # �
 
 `restore-site` 的契约：目标站在本机**必须不存在**（不覆盖、不自动清理）；先读回并核对两侧清单与全部摘要；本机运行的镜像 tag 与 id 必须等于该集记录的那次构建（不符即拒绝，先把 `prod.env` 改到那个 tag 再 `compose up -d`）；随后按常规 `provision-*` 建站、恢复、注入 `encryption_key`、与集内快照比对、再 `provision-*` 一次让主机相关配置按**这台**主机重算，最后抽样解密；只有比对干净才解除维护。任一步失败站点保持维护模式，报告在 `<runtime>/backups/restore-<站>.json`。升级到更新的 tag 是随后显式的 `release`。
 
-**保留与用户数据删除（裁决 #10）**：备份是个人数据的副本。删除只作用于在线数据；已生成的集不改写，按上面的保留规则随运行淘汰；`kind=retire` 的集是否最终清除，与审计保留切片一起裁决。将来的 `delete-user-data` 只影响其后产生的集。
+**保留与用户数据删除（裁决 #10）**：备份是个人数据的副本。删除只作用于在线数据；已生成的集不改写，按上面的保留规则随运行淘汰；`kind=retire` 的集是否最终清除，与审计保留切片一起裁决。`delete-user-data` 只影响其后产生的集。
+
+## 13. 个人数据的导出与删除
+
+```sh
+DSHERP_ENV=prod ./bin/dsherp-admin export-user-data acme.tenant.example.com someone@example.com
+DSHERP_ENV=prod ./bin/dsherp-admin delete-user-data acme.tenant.example.com someone@example.com            # 只打印计划，退出码 1
+DSHERP_ENV=prod ./bin/dsherp-admin delete-user-data acme.tenant.example.com someone@example.com --confirm
+```
+
+导出只读，不改站点，写成 `<runtime>/user-data/export-<站点>-<用户>-<时间>.json`（0600），含本人的会话、
+运行、提案与执行；**里面是个人内容，按交付流程转交，不要留在共享目录**。删除先导出再清除，清除范围
+逐 DocType 声明在 `dsherp/user_data.py`：本人内容（提问、页面快照、回答、错误正文、`platform_grant`、
+会话标题）清除，追责事实（谁、何时、读了哪些记录、提案与执行结果）保留，并删除 `track_changes` 为
+这些列留下的 Version 行、按会话删除该用户的原生会话目录。报告里的 `residue` 逐条列出**知道留下了什么
+以及唯一的移除方式**：运行事件不改写（只能走登记的受控脱敏迁移）、已生成的异地备份按保留策略到期淘汰。
+
+原生会话目录另有 `sessions` 命令查看与按 90 天清理（`--sweep`）；旧布局留下的扁平哈希目录报为
+"未归属"，由人判断，不做猜测删除。
+
+## 14. 凭据：短期业务凭据与轮换
+
+平台不长期持有成员的业务站凭据：业务站在 SSO 回调时把当前凭据交给平台，并记一个 12 小时的窗口，
+窗口过后业务站自己拒绝这把 key，成员**重新登录即续签**（剩余 ≤4 小时才换新，所以同一成员的两个
+会话不会互相踢掉）。
+
+```sh
+DSHERP_ENV=prod ./bin/dsherp-admin credentials acme.tenant.example.com                  # 借出了什么、还能用多久
+DSHERP_ENV=prod ./bin/dsherp-admin credentials acme.tenant.example.com --issue someone@example.com
+```
+
+`credentials` 在发现"有 API key 却没有登记窗口"的用户时以退出码 1 结束——那是一把不受期限约束的
+钥匙。`--issue` 是成员无法通过平台登录续签时的运维路径：在业务站签发并交给平台，密钥只走标准输入
+与容器 stdin，不出现在命令行或报告里。
+
+升级顺序：**先 `bench migrate` 再切流量**。没迁移的站点没有 `DS Business Credential`，机器凭据一律被
+拒（刻意 fail-closed）；两个 App 的 patch 会把既有 key 与既有绑定纳入一个窗口。
+
+三类长期凭据用 `rotate` 轮换，账簿在 `<runtime>/rotations.json`（只记类别、目标、第几次、生效时间与
+值的指纹，不记值）：
+
+```sh
+DSHERP_ENV=prod ./bin/dsherp-admin rotate provider --file /srv/dsherp/.env < new-key.txt
+DSHERP_ENV=prod ./bin/dsherp-admin rotate runtime acme.tenant.example.com --profile /srv/dsherp/worker.json
+DSHERP_ENV=prod ./bin/dsherp-admin rotate oauth-client acme
+```
+
+- `provider`：新 key 只从标准输入读，只改 worker 单元读的那个 `.env` 里的那一行；**改完重启 worker 单元**。
+- `runtime`：按站点 `site_config` 声明的运行身份轮换；`--profile` 可给多次，所有文件先校验后签发；
+  改完重启 worker 单元。
+- `oauth-client`：平台与业务站两侧一起换；进行中的登录会失败一次，重新登录即可，已建立的会话不受影响。
+
+`doctor` 会把从未登记轮换和超过窗口的目标列出来（provider/runtime 90 天、oauth-client 180 天）。轮换
+不会作废原生会话：`runtime_revision` 不计入 provider key。
 
 ## 与其他服务共用的主机
 
