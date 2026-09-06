@@ -172,3 +172,89 @@ def test_the_release_manifest_refuses_an_image_whose_labels_do_not_name_the_sour
     ):
         with pytest.raises(ValueError):
             release_images.write_manifest(_settings(), git_commit="abc1234", platform="linux/amd64", inspected=bad, root=tmp_path)
+
+
+def _saving(calls, digests):
+    """A docker that writes a real save-format tar (manifest.json with the config digests)."""
+    import io
+    import tarfile
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        out = command[command.index("-o") + 1]
+        entries = [{"Config": f"blobs/sha256/{digest}", "RepoTags": [image]} for image, digest in digests.items()]
+        data = json.dumps(entries).encode()
+        with tarfile.open(out, "w") as tar:
+            info = tarfile.TarInfo("manifest.json")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    return runner
+
+
+IMAGES = ["registry.example.com/dsherp/dsherp-frappe:v0.3.0", "registry.example.com/dsherp/dsherp-worker:v0.3.0"]
+A, B = "a" * 64, "b" * 64
+
+
+def _manifest_file(path, ids):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"tag": "v0.3.0", "images": {image: {"id": "sha256:" + digest} for image, digest in ids.items()}}))
+    return path
+
+
+def test_a_bundle_ships_the_images_and_the_manifest_together(tmp_path):
+    """Review round 3: the manifest enters git after the tag, so a host that fetches source by
+    tag lacks it. The bundle a build machine hands over carries the manifest next to the images,
+    and the tar is proven to hold exactly the images the manifest names."""
+    manifest = _manifest_file(tmp_path / "infra" / "releases" / "v0.3.0.json", {IMAGES[0]: A, IMAGES[1]: B})
+    calls = []
+    written = release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving(calls, {IMAGES[0]: A, IMAGES[1]: B}))
+    assert calls == [["docker", "save", "-o", str(tmp_path / "out" / "dsherp-v0.3.0.tar"), *IMAGES]]
+    assert written == {"images": tmp_path / "out" / "dsherp-v0.3.0.tar", "manifest": tmp_path / "out" / "v0.3.0.json"}
+    assert (tmp_path / "out" / "v0.3.0.json").read_text() == manifest.read_text()
+
+    def failed(command, **kwargs):
+        return type("Result", (), {"returncode": 1, "stdout": "", "stderr": "no space left"})()
+
+    with pytest.raises(RuntimeError, match="no space left"):
+        release_images.bundle(tmp_path / "out2", IMAGES, manifest, runner=failed)
+    assert not (tmp_path / "out2" / "v0.3.0.json").exists()  # no half bundle: the manifest follows the images
+
+
+def test_a_bundle_whose_tar_does_not_hold_the_manifests_images_is_not_handed_over(tmp_path):
+    manifest = _manifest_file(tmp_path / "infra" / "releases" / "v0.3.0.json", {IMAGES[0]: A, IMAGES[1]: B})
+    with pytest.raises(RuntimeError, match="sha256:" + B):
+        release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving([], {IMAGES[0]: A, IMAGES[1]: "c" * 64}))
+    assert not (tmp_path / "out" / "v0.3.0.json").exists()
+    with pytest.raises(RuntimeError, match=IMAGES[1]):
+        release_images.bundle(tmp_path / "out3", IMAGES, manifest, runner=_saving([], {IMAGES[0]: A}))  # image missing from tar
+
+
+def test_a_bundle_never_overwrites_an_earlier_one_and_never_lands_in_the_build_context(tmp_path):
+    manifest = _manifest_file(tmp_path / "infra" / "releases" / "v0.3.0.json", {IMAGES[0]: A, IMAGES[1]: B})
+    calls = []
+    release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving(calls, {IMAGES[0]: A, IMAGES[1]: B}))
+    with pytest.raises(RuntimeError, match="dsherp-v0.3.0.tar"):
+        release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving(calls, {IMAGES[0]: A, IMAGES[1]: B}))
+    assert len(calls) == 1  # refused before docker save
+    with pytest.raises(ValueError, match="build context"):
+        release_images.bundle(release_images.ROOT / "dist", IMAGES, manifest, runner=_saving(calls, {}))
+    assert len(calls) == 1 and not (release_images.ROOT / "dist").exists()
+
+
+def test_the_cli_bundles_after_the_manifest_is_written(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setenv("DSHERP_ENV", "prod")
+    resolved = _settings()
+    monkeypatch.setattr(release_images.deploy_env, "settings", lambda *a, **k: resolved)
+    monkeypatch.setattr(release_images, "source", lambda *a, **k: "abc1234")
+    monkeypatch.setattr(release_images.subprocess, "run", lambda *a, **k: seen.setdefault("built", []).append(a[0]))
+    monkeypatch.setattr(release_images, "inspect", lambda images: {name: _labelled("sha256:" + A) for name in images})
+    monkeypatch.setattr(release_images, "write_manifest", lambda *a, **k: tmp_path / "infra" / "releases" / "v0.3.0.json")
+    def bundled(target, images, manifest):
+        seen["bundle"] = (target, images, manifest)
+        return {}
+    monkeypatch.setattr(release_images, "bundle", bundled)
+    release_images.main(["--platform", "linux/amd64", "--bundle", str(tmp_path / "dist")])
+    assert seen["bundle"] == (str(tmp_path / "dist"), IMAGES, tmp_path / "infra" / "releases" / "v0.3.0.json")
+    assert len(seen["built"]) == 2

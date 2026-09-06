@@ -129,6 +129,54 @@ def write_manifest(resolved, *, git_commit, platform, inspected, root=ROOT):
     return target
 
 
+IMAGE_DIGEST = re.compile("[0-9a-f]{64}")
+
+
+def _saved_digests(archive):
+    """repo:tag -> 'sha256:<config digest>' for every image a `docker save` tar holds."""
+    import tarfile
+    with tarfile.open(archive) as tar:
+        entries = json.loads(tar.extractfile("manifest.json").read())
+    digests = {}
+    for entry in entries:
+        found = IMAGE_DIGEST.search(entry.get("Config") or "")
+        for repo_tag in entry.get("RepoTags") or []:
+            digests[repo_tag] = "sha256:" + found.group(0) if found else None
+    return digests
+
+
+def bundle(target, images, manifest, runner=subprocess.run, root=ROOT):
+    """Hand the images and their manifest over as one set. The manifest is committed after the
+    tag it describes, so a host that fetches the source by tag has no other way to get it, and
+    dsherp-admin release/rollback refuse to run without it. The tar is proven to hold exactly
+    the images the manifest names before the manifest is put next to it; an existing bundle
+    is never overwritten; the directory must lie outside the build context."""
+    target = Path(target)
+    manifest = Path(manifest)
+    context = Path(root).resolve()
+    if target.resolve() == context or context in target.resolve().parents:
+        raise ValueError(f"The bundle directory {target} is inside the build context {context}; put it outside the source tree")
+    archive = target / f"dsherp-{manifest.stem}.tar"
+    copy = target / manifest.name
+    for existing in (archive, copy):
+        if existing.exists():
+            raise RuntimeError(f"{existing} already exists; a bundle is never overwritten, move the old one away first")
+    target.mkdir(parents=True, exist_ok=True)
+    result = runner(["docker", "save", "-o", str(archive), *images], text=True, capture_output=True, timeout=3600)
+    if result.returncode:
+        raise RuntimeError("docker save failed, no bundle was made: " + (result.stderr or "").strip())
+    recorded = json.loads(manifest.read_text()).get("images") or {}
+    held = _saved_digests(archive)
+    for image in images:
+        wanted = (recorded.get(image) or {}).get("id")
+        if image not in held:
+            raise RuntimeError(f"{archive} does not hold {image}; not handing it over")
+        if held[image] != wanted:
+            raise RuntimeError(f"{archive} holds {image} as {held[image]} but the manifest records {wanted}; not handing it over")
+    copy.write_text(manifest.read_text())
+    return {"images": archive, "manifest": copy}
+
+
 def inspect(images):
     result = subprocess.run(["docker", "image", "inspect", *images], text=True, capture_output=True, timeout=120)
     if result.returncode:
@@ -141,6 +189,8 @@ def main(argv=None):
     parser.add_argument("--platform", choices=PLATFORMS, default="linux/amd64")
     parser.add_argument("--git-commit", default=None,
                         help="cross-check only: must be the commit the tree is (checkout HEAD or the exported one)")
+    parser.add_argument("--bundle", metavar="DIR", default=None,
+                        help="also docker save the images and copy the manifest there, to hand over together")
     arguments = parser.parse_args(argv)
     resolved = deploy_env.settings(dict(os.environ, DSHERP_ENV="prod"))
     commit = source(ROOT, resolved["image_tag"], git_commit=arguments.git_commit)
@@ -150,6 +200,9 @@ def main(argv=None):
     images = [resolved[key] for _, _, key in TARGETS]
     target = write_manifest(resolved, git_commit=commit, platform=arguments.platform, inspected=inspect(images))
     print(target)
+    if arguments.bundle:
+        for path in bundle(arguments.bundle, images, target).values():
+            print(path)
 
 
 if __name__ == "__main__":

@@ -94,6 +94,12 @@ def _origins(values):
     return overrides
 
 
+def image_name(registry, kind, tag):
+    """The full name of one of our two images for a tag: what compose runs, what the release
+    manifest is keyed by, and what release/rollback compare container by container."""
+    return f'{registry + "/" if registry else ""}dsherp-{kind}:{tag}'
+
+
 def settings(environ=None, root=ROOT):
     """Resolve one environment: process variables win over the environment file."""
     environ = dict(os.environ if environ is None else environ)
@@ -115,9 +121,8 @@ def settings(environ=None, root=ROOT):
         _match(TAG, tag, 'Production requires an explicit release tag')
         if tag in ('latest', 'main', 'master'):
             raise ValueError('Production release tag must identify one build: ' + repr(tag))
-        prefix = registry + '/' if registry else ''
-        frappe_image = f'{prefix}dsherp-frappe:{tag}'
-        worker_image = f'{prefix}dsherp-worker:{tag}'
+        frappe_image = image_name(registry, 'frappe', tag)
+        worker_image = image_name(registry, 'worker', tag)
     else:
         frappe_image = worker_image = BASE_IMAGE
     uid, gid = _identity(values)

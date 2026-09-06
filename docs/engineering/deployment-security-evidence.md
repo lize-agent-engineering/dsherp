@@ -107,8 +107,8 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 | `provision-tenant <slug>` | 建站 → 装 `dsherp_bridge` → 运行服务身份 → `site_config` → 关密码登录（prod）→ DS Enterprise → OAuth Client → Social Login Key → `dsherp_platform_oauth` → 租户清单 → 平台端点表 → 入口渲染 → healthcheck；每步先查后改，重复执行全为 kept |
 | `retire-tenant <slug>` | 先 `bench backup --with-files` 再 `drop-site`；站不存在即拒绝 |
 | `render-ingress` | 按租户清单渲染 Caddyfile |
-| `release <tag>` | 逐站备份 → 逐站 migrate → 按 DocType 比对行数与整表摘要 → 报告；有差异退出码 1。**2026-09-06 更正**：这不是逐字段比对——子表（`istable`）与单值文档（`issingle`）被排除，读取异常被静默跳过，而 Patch Log、DocType、Custom Field 等随 migrate 合法变动的表都在比对之内，因此任何改 schema 的发布都会报不一致；`SNAPSHOT` 脚本没有被任何测试执行过，也没有对真实站点跑过一次。G2 按此只是骨架，可核验的升级校验是计划 4 首片（见项目状态审查 D 项） |
-| `rollback <tag>` | 必须显式给出每站备份文件；恢复后快照入报告 |
+| `release <tag>` | 计划 3 交付的是骨架（按 DocType 比对整表摘要、排除子表与单值、读错误静默跳过、从未真实跑过；2026-09-06 更正）。计划 4 首片已重写：按元数据分桶、原生 SQL 分页、任何读错误即中止、逐行逐字段比对、patch 声明预期变化、备份集落归档卷，见 [data-governance-evidence.md](data-governance-evidence.md) |
+| `rollback <tag>` | 计划 3 版本只恢复不比对。计划 4 首片已重写：从 release 归档找到备份集（可显式覆盖）、带 files 恢复、恢复后与升级前快照比对，见 [data-governance-evidence.md](data-governance-evidence.md) |
 
 回调、授权、端点、业务站内部地址四类 URL 统一由 `deploy_env` 派生，`infra/provision_desk_oauth.py` 等脚本里的硬编码不再是 prod 路径。验证：`tests/test_admin_cli.py` 27 条（收尾后）（FakeBench 记录每一步对容器提出的命令）。本机 `bin/dsherp-admin doctor` 对 dev 返回空 findings。
 
