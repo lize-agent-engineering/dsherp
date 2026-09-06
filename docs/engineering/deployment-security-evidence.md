@@ -276,8 +276,8 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 | 项 | 改动 | 测试 |
 |---|---|---|
 | A 归档进容器临时层 | `retire_tenant` 先在容器里证明 `/home/frappe/frappe-bench/archived/sites` 可写，再 `bench backup --with-files`，再 `bench drop-site --archived-sites-path` 显式指到该目录，然后回读新增的归档目录（含 Frappe 重名时的数字后缀）与其中 `site_config.json`、`private/backups` 文件清单，最后才改租户清单与入口；归档缺失时报错且清单不动。`compose.prod.yml` 给 backend 挂 `tenant-archive` 卷；镜像 `install -d -o frappe -g frappe …/archived`——空命名卷在镜像里没有对应目录时会是 root 所有，drop-site 会在库已删掉之后才搬目录失败 | `test_admin_cli.py` 3 条（归档路径与备份清单、不可写时不动站点、重名后缀与归档丢失报错）、`test_deployment_contract.py` 1 条 |
-| B 发布来源不绑定 | `release_images.source()`：有 `.git` 时要求 `git rev-parse --show-toplevel` 等于构建上下文、`git status --porcelain` 只允许 `infra/releases/` 下的清单未跟踪、tag 必须指向 HEAD；没有 `.git` 时读 `git archive` 替换过的 `infra/RELEASE_SOURCE`（`.gitattributes` `export-subst`，内容 `$Format:%H %D$`），要求装饰里有 `tag: <镜像 tag>`；`--git-commit` 只作交叉核对。`write_manifest` 核对两个镜像的 `org.opencontainers.image.revision/version` 标签。新增 `.dockerignore`（`.git`、`.runtime`、`.venv`、`infra/env`、`work`、`docs`、`tests` 等） | `test_release_images.py` 5 条、`test_deployment_contract.py` 1 条 |
-| C 宿主隔离不持久 | `infra/systemd/dsherp-agent-firewall.sh`（POSIX sh，`apply/check/remove`，规则带 `-m comment --comment dsherp-agent-firewall`，`apply` 先删旧标签规则再按当前网桥插入并把网桥名写到 `/run/dsherp-agent-firewall/<网络名>`）；`render_worker_units.py` 新增 `render_firewall_unit`（oneshot + RemainAfterExit，`Requires/After=docker.service`），worker unit 改为 `Requires=docker.service dsherp-agent-firewall.service`；worker `prepare_host` 在生产比对记录的网桥与实际网络，不一致拒绝启动（无记录只记 `agent_firewall_state_missing` 日志，前台演练允许）；`dsherp-admin agent-firewall` 打印的规则加同一标签并给出 unit/脚本路径 | `test_deployment_contract.py` 2 条、`test_context_worker.py` 1 条、`test_admin_cli.py` 断言扩展 |
+| B 发布来源不绑定 | `release_images.source()`：要求构建上下文有 `.git`、`git rev-parse --show-toplevel` 等于该目录、`git status --porcelain` 只允许 `infra/releases/` 下的清单未跟踪、tag 必须指向 HEAD；`--git-commit` 只作交叉核对。`write_manifest` 核对两个镜像的 `org.opencontainers.image.revision/version` 标签。新增 `.dockerignore`（`.git`、`.runtime`、`.venv`、`infra/env`、`work`、`docs`、`tests` 等）。第一版曾接受 `git archive` 导出树（靠 `export-subst` 替换的 `infra/RELEASE_SOURCE`），审查者实际改了导出目录里的 `context_worker.py` 后来源检查仍放行——标记只记录导出时的来源，证明不了当前内容——已整个撤掉：没有 `.git` 的树一律拒绝，目标主机只装镜像 | `test_release_images.py` 5 条（含「无 `.git` 拒绝」）、`test_deployment_contract.py` 1 条
+| C 宿主隔离不持久 | `infra/systemd/dsherp-agent-firewall.sh`（POSIX sh，`apply/check/remove`，规则带 `-m comment --comment dsherp-agent-firewall`，`apply` 先删旧标签规则再按当前网桥插入并把网桥名写到 `/run/dsherp-agent-firewall/<网络名>`）；`render_worker_units.py` 新增 `render_firewall_unit`（oneshot + RemainAfterExit，`Requires/After=docker.service`），worker unit 改为 `Requires=docker.service dsherp-agent-firewall.service`。worker 侧 `HostIsolation`（生产）：启动时记录文件缺失或网桥不符都拒绝启动（第一版缺失只记日志，审查指出后改为 fail-closed），并用发布镜像在 agent 网络里起探针容器连网关——`refused`/`connected` 都判失败，只有超时算隔离；运行中每 tick 重查记录与网桥，网络 id 变化即重新探针；失败期间不领取、`dsherp_host_isolation_ok=0`、告警 `host_isolation_failed`（critical）；`dsherp-admin agent-firewall` 打印的规则加同一标签并给出 unit/脚本路径 | `test_deployment_contract.py` 2 条、`test_context_worker.py` 4 条（缺记录/网桥过期拒绝、探针 refused/connected/无结论拒绝、网络变化重探针、隔离失败不领取）、`test_alerts.py` 1 条、`test_admin_cli.py` 断言扩展
 | 计划 3 回归：熔断探针 | `3f79ac0` 把探针 settings 换成 `agent_settings()`，其 `DEEPSEEK_BASE_URL` 是容器用的 `http://agent-egress:8890`，宿主解析不了，`probe_models` 恒为 False，熔断打开后直到进程重启都不关闭。新增 `context_worker.host_probe()` 读 `.env` 直连地址；`main()` 改用它 | `test_context_worker.py` 1 条（锁定探针地址 ≠ 容器地址，且 `main()` 用 `host_probe`） |
 | 本机验收凭据漂移 | 根因：`tests/integration/test_sso_machine_auth.py`（`f9bd051`）对共享 reader 调 `generate_keys`。测试改为自建/删除临时探针用户；`infra/run_validation_provision.py` 新增 `--reissue <actor>`，在 backend 容器内只对该演员 `generate_keys`、核对 api_key 未变后原地改写 `erp-users.json` 与 `erp-<actor>.json`（0600，原子替换） | `test_validation_provisioner.py` 2 条；真实执行后 reader `get_logged_user`/`read_schema(Customer)` 200、denied 403；改后的集成测试跑完 reader 仍 200、无残留探针用户 |
 
@@ -293,7 +293,18 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 | 模拟重启：手工删掉内核里的两条规则 | `check` 退出 1，网关 REACHABLE；`systemctl restart` 后 `check` ok，网关 BLOCKED |
 | `systemctl stop` | 规则 0 条、状态文件删除，网关 REACHABLE |
 
-**B：本机。** 工作树有未提交改动时 `release_images.py` 拒绝并列出脏文件，不调用 docker；提交 `1cd8927` 打 tag `v0.3.1-rc1` 后构建成功，manifest 记 `git_commit=1cd8927dac49…`，两个镜像标签 `version=v0.3.1-rc1 / revision=1cd8927dac49…`（arm64）；`git archive v0.3.1-rc1` 导出树里 `infra/RELEASE_SOURCE` 为「`1cd8927… HEAD -> plan3/closeout, tag: v0.3.1-rc1`」，`source()` 返回该提交，改成别的 tag 或错误的 `--git-commit` 均被拒绝。镜像内 `/home/frappe/frappe-bench/archived` 为 `frappe:frappe` 所有。
+补修 fail-closed 与探针后，在同一台服务器上用 `python:3.12-alpine` 容器跑 worker 的探针代码（`ISOLATION_PROBE` 原文），核对分类与内核行为一致（2026-09-06）：
+
+| 状态 | 探针结论 | 耗时 |
+|---|---|---|
+| 未装规则 | `connected`（sshd :22 应答）→ 判失败 | 0.7s |
+| 单元启动后 | `blocked`（两个端口各 3s 超时）→ 判隔离 | 6.5s |
+| 网络重建、规则过期 | `connected` → 判失败 | 0.5s |
+| `systemctl restart` 后 | `blocked` | 6.5s |
+
+演练后全部清除（残留规则 0）。worker 的完整启动/领取门只在单元测试里用假 docker 验证（真实 worker 需要宿主 venv，该机 glibc 2.17 装不上运行时锁），端到端仍待合规主机。
+
+**B：本机。** 工作树有未提交改动时 `release_images.py` 拒绝并列出脏文件，不调用 docker；提交 `1cd8927` 打本地 tag `v0.3.1-rc1` 后构建成功，manifest 记 `git_commit=1cd8927dac49…`，两个镜像标签 `version=v0.3.1-rc1 / revision=1cd8927dac49…`（arm64）；镜像内 `/home/frappe/frappe-bench/archived` 为 `frappe:frappe` 所有。当时还验证了 `git archive` 导出树的标记替换与校验，但审查者随后证明导出树改文件后仍放行，该路径已撤销（见修复表）。清单文件 `infra/releases/v0.3.1-rc1.json` 的来源提交是 `1cd8927`，文件本身在 `3beb5cf` 入库；tag 未推送，B/C 补修后应另打 `v0.3.1-rc2` 重建。
 
 **A：本机 Docker Desktop 上以生产形态演练「下线 → 重建容器 → 从归档恢复」（2026-09-06，项目名 `dsherp`，镜像 `local/dsherp-frappe:v0.3.1-rc1`，独立 `.runtime/prod-local/`）。** 只起 db、两个 redis、platform-backend 与 backend；platform-backend 的探针在平台站开通前必然是 404，本演练脚本在这里多等了 5 分钟才继续（runbook 本来就不在此等待，非缺陷）。
 
@@ -312,7 +323,7 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 
 | 门 | 结果 |
 |---|---|
-| 非集成 `pytest tests --ignore=tests/integration` | `386 passed`（收口前 370；新增 16 条全部先红后绿） |
+| 非集成 `pytest tests --ignore=tests/integration` | `389 passed`（收口前 370；新增 19 条全部先红后绿，含 B/C 补修的 6 条） |
 | Node Runtime `node --test runtime/*.test.cjs` | `tests 10 / pass 10 / fail 0` |
 | 前端 `npm test` | 22 个文件 `202 passed`；dist 无变化 |
 | 集成（只跑本轮改动的一条）`tests/integration/test_sso_machine_auth.py` | `1 passed`（跑前先停 `scheduler` 让 `scheduler-worker` 排空 25 条 `run_scheduled_job`，跑后重启）；跑完 reader 仍 200，无残留探针用户 |
@@ -322,7 +333,7 @@ systemd unit：`Type=notify`、`WatchdogSec=60s`、`Restart=always`、`ProtectSy
 
 - 第 69 行「宿主熔断探针仍走 .env 里自己的地址」在 `3f79ac0` 之后曾不成立（见该行随附更正），本轮修复后重新成立。
 - 第 110 行 `release` 的「逐字段比对」改为按 DocType 的行数与整表摘要，并说明子表/单值文档缺失与合法迁移误判；G2 未实现。
-- runbook 第 8 节此前说「规则不随重启保留，按发行版的方式持久化」并把持久化留给操作者，现由 unit 负责；第 1、2 节的「手工记提交号」改为 `git archive` 替换的 `infra/RELEASE_SOURCE`；第 11 节补了归档位置与恢复路径。
+- runbook 第 8 节此前说「规则不随重启保留，按发行版的方式持久化」并把持久化留给操作者，现由 unit 负责且 worker fail-closed；第 1、2 节的「手工记提交号」改为「构建机必须是干净 git checkout，无 git 的主机只装镜像」；第 11 节补了归档位置与恢复路径。
 
 ### 仍未闭合
 

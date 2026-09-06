@@ -146,34 +146,19 @@ def test_a_dirty_tree_a_missing_or_moved_tag_or_a_foreign_commit_is_refused(tmp_
         release_images.source(tmp_path, "v0.3.0", git_commit="b" * 40, runner=_git(_clean(tmp_path)))
 
 
-def test_an_exported_tree_proves_its_source_through_the_substituted_release_file(tmp_path):
+def test_a_tree_without_a_git_checkout_cannot_be_a_build_context(tmp_path):
+    """Reviewer bypass: a `git archive` export with a substituted marker file still let a
+    modified file build under the original commit. Only a clean checkout proves content."""
     (tmp_path / "infra").mkdir()
-    marker = tmp_path / "infra" / "RELEASE_SOURCE"
-    marker.write_text(HEAD + " tag: v0.3.0, HEAD -> main, origin/main\n")
+    (tmp_path / "infra" / "RELEASE_SOURCE").write_text("a" * 40 + " tag: v0.3.0\n")
 
     def no_git(command, **kwargs):
         raise AssertionError("git must not be consulted without a checkout")
 
-    assert release_images.source(tmp_path, "v0.3.0", runner=no_git) == HEAD
-    assert release_images.source(tmp_path, "v0.3.0", git_commit=HEAD[:7], runner=no_git) == HEAD
-    with pytest.raises(ValueError):
-        release_images.source(tmp_path, "v0.4.0", runner=no_git)
-    with pytest.raises(ValueError):
-        release_images.source(tmp_path, "v0.3.0", git_commit="b" * 7, runner=no_git)
-    marker.write_text(HEAD + " HEAD -> main\n")  # exported from a branch tip, not a tag
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="checkout"):
         release_images.source(tmp_path, "v0.3.0", runner=no_git)
-    marker.write_text("$Format:%H %D$\n")  # not an export at all
-    with pytest.raises(ValueError):
-        release_images.source(tmp_path, "v0.3.0", runner=no_git)
-    marker.unlink()
-    with pytest.raises(ValueError):
-        release_images.source(tmp_path, "v0.3.0", runner=no_git)
-
-
-def test_the_release_source_file_is_substituted_by_git_archive():
-    assert (release_images.ROOT / "infra/RELEASE_SOURCE").read_text().strip() == "$Format:%H %D$"
-    assert "infra/RELEASE_SOURCE export-subst" in (release_images.ROOT / ".gitattributes").read_text()
+    assert not (release_images.ROOT / "infra/RELEASE_SOURCE").exists()
+    assert not (release_images.ROOT / ".gitattributes").exists()
 
 
 def test_the_release_manifest_refuses_an_image_whose_labels_do_not_name_the_source(tmp_path):

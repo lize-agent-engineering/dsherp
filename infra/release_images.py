@@ -5,10 +5,11 @@ manifest is the only place that maps a tag to concrete image identifiers, so a
 rollback never has to guess which image a Site was running.
 
 The build context is the working directory, so the manifest may only name a commit
-the directory provably is: a clean git checkout whose tag points at HEAD, or a
-`git archive <tag>` export whose infra/RELEASE_SOURCE was substituted on the way out.
-`--git-commit` is a cross-check against that, never the source of truth. The image
-labels are compared with the same values before the manifest is written.
+the directory provably is: a clean git checkout whose tag points at HEAD. An exported
+tree cannot prove its content (a substituted marker file only records where the export
+came from, not what was changed afterwards), so a build machine needs git; a target
+host only loads images. `--git-commit` is a cross-check, never the source of truth.
+The image labels are compared with the same values before the manifest is written.
 """
 import argparse
 import json
@@ -25,8 +26,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = ("linux/amd64", "linux/arm64")
 COMMIT = re.compile("[0-9a-f]{7,40}")
 FULL_COMMIT = re.compile("[0-9a-f]{40}")
-# `git archive` expands this file (see .gitattributes export-subst) to "<commit> <decorations>".
-RELEASE_SOURCE = "infra/RELEASE_SOURCE"
 REVISION_LABEL = "org.opencontainers.image.revision"
 VERSION_LABEL = "org.opencontainers.image.version"
 TARGETS = (
@@ -74,29 +73,14 @@ def _checkout_source(root, image_tag, runner):
     return commit
 
 
-def _export_source(root, image_tag):
-    marker = Path(root) / RELEASE_SOURCE
-    if not marker.is_file():
-        raise ValueError(f"No git checkout and no {RELEASE_SOURCE}: this tree cannot say which commit it is")
-    text = marker.read_text().strip()
-    if text.startswith("$Format"):
-        raise ValueError(f"{RELEASE_SOURCE} was not substituted: this tree is not a `git archive <tag>` export")
-    commit, _, decorations = text.partition(" ")
-    if not FULL_COMMIT.fullmatch(commit):
-        raise ValueError(f"{RELEASE_SOURCE} does not start with a commit id: " + repr(text))
-    tags = {entry.strip()[len("tag: "):] for entry in decorations.split(",") if entry.strip().startswith("tag: ")}
-    if image_tag not in tags:
-        raise ValueError(f"{RELEASE_SOURCE} names tags {sorted(tags) or 'none'}, not {image_tag!r}: "
-                         f"export the tree with `git archive {image_tag}`")
-    return commit
-
-
 def source(root, image_tag, *, git_commit=None, runner=subprocess.run):
     """The commit this tree provably is, for the tag being released."""
     if git_commit is not None and not COMMIT.fullmatch(git_commit or ""):
         raise ValueError("Release images require one clean commit id: " + repr(git_commit))
     root = Path(root)
-    commit = _checkout_source(root, image_tag, runner) if (root / ".git").exists() else _export_source(root, image_tag)
+    if not (root / ".git").exists():
+        raise ValueError("Release images are built from a clean git checkout only; this tree has no .git: " + str(root))
+    commit = _checkout_source(root, image_tag, runner)
     if git_commit is not None and not commit.startswith(git_commit):
         raise ValueError(f"--git-commit {git_commit!r} is not the commit this tree is built from ({commit[:12]})")
     return commit

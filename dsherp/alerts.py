@@ -42,6 +42,9 @@ def evaluate(snapshot,metrics,now):
                 found.append(Alert('worker_not_claiming','critical','有排队但未领取'))
     if (metrics.get('consecutive_run_failures') or 0)>=CONSECUTIVE_RUN_FAILURES:
         found.append(Alert('provider_or_runtime_failing','critical','连续运行失败'))
+    # Production only reports this gauge; while it is 0 the worker claims nothing.
+    if metrics.get('host_isolation_ok')==0:
+        found.append(Alert('host_isolation_failed','critical','运行容器可达宿主，已停止领取'))
     if snapshot is not None and current is not None and (metrics.get('orphan_containers') or 0)>0:
         found.append(Alert('orphan_containers','warning','存在孤儿容器'))
     return found

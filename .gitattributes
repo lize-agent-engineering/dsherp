@@ -1,3 +1,0 @@
-# git archive substitutes the commit and its decorations (tags) into this file, so a
-# tree exported without git can still prove which tagged commit it is (release_images.py).
-infra/RELEASE_SOURCE export-subst
