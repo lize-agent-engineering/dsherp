@@ -47,13 +47,18 @@ docker push "$DSHERP_IMAGE_REGISTRY/dsherp-frappe:$TAG"
 docker push "$DSHERP_IMAGE_REGISTRY/dsherp-worker:$TAG"
 ```
 
-没有 registry 时改为把两个镜像导出后在目标主机导入（gzip 到处都有，zstd 不一定）：
+**清单必须随镜像一起交付。** `infra/releases/$TAG.json` 记录的就是 tag 指向的构建提交，所以它只能在 tag 之后才提交进仓库；按 tag 取源码的目标主机（`git archive` 导出树）没有这个文件，而 `release`/`rollback` 拿不到有效清单就拒绝改动站点（见第 10 步）。用 registry 时把 `$TAG.json` 另行传到目标主机；没有 registry 时用 `--bundle` 一次产出镜像 tar 与清单，两者一起传（gzip 到处都有，zstd 不一定）：
 
 ```sh
-docker save "$DSHERP_IMAGE_REGISTRY/dsherp-frappe:$TAG" "$DSHERP_IMAGE_REGISTRY/dsherp-worker:$TAG" | gzip > dsherp-$TAG.tar.gz
-# 目标主机：
-gunzip -c dsherp-$TAG.tar.gz | docker load
+DSHERP_ENV=prod .venv/bin/python -m infra.release_images --platform linux/amd64 --bundle ../dsherp-dist/
+# ../dsherp-dist/dsherp-$TAG.tar 与 ../dsherp-dist/$TAG.json 一起传到目标主机；目标主机：
+docker load -i dsherp-$TAG.tar
+mkdir -p "$RUNTIME/manifests" && cp $TAG.json "$RUNTIME/manifests/"   # RUNTIME 是 prod.env 里的 DSHERP_RUNTIME_DIR；或发布时 --manifest $TAG.json
 ```
+
+`--bundle` 的目录必须在源码树之外（源码树就是构建上下文，脚本拒绝树内目录）；同名 tar 或清单已存在时拒绝覆盖；`docker save` 之后先读 tar 里的 `manifest.json`，两个镜像的 config 摘要必须等于清单记录的 id，否则不把清单放到 tar 旁边——交付出去的一对一定是互相对应的。
+
+`release`/`rollback` 找清单的顺序：命令行 `--manifest FILE`（给了就只看它）→ 缺省同时看 `<DSHERP_RUNTIME_DIR>/manifests/<tag>.json` 与源码树里的 `infra/releases/<tag>.json`，两处都有时记录的 id 必须一致，不一致就拒绝并列出两份（本地重建后重生成的仓库清单会与交付的那份不同，这时删掉过期的一份或用 `--manifest` 指定）。找到的清单必须是这个 tag 的、含该镜像 `sha256:` 开头的 id，且与两个 bench 运行容器的镜像 id 一致；本地重建的同 tag 镜像 id 不同，会被拒绝。**构建机与目标主机的 Docker 必须用同一种镜像存储**：经典存储（overlay2）下 `docker image inspect` 的 `Id` 是 config 摘要，containerd 镜像存储下是 manifest 摘要，同一制品在两边会报出不同的 id，发布会被如实拒绝——本项目按经典存储核对，主机不要开启 containerd 镜像存储。
 
 目标主机自己当构建机也可以（早先的真机演练就是），但那不是 G1 的形态，而且它必须有 git 与干净 checkout：要求主机有 buildx、能访问 PyPI，并把构建时间算进拉起时间。
 
@@ -205,6 +210,8 @@ admin agent-firewall            # 只打印同一组规则（含 nft 写法与�
 
 发布前提：没有运行在飞（`release` 会检查每站的 Queued/Running/Cancelling 计数，非零即拒绝），所以先停 worker：`sudo systemctl stop dsherp-agent-worker`。发布期间每个站被置为维护模式并暂停调度（`maintenance_mode`/`pause_scheduler` 写进 site_config，结束时恢复原值），用户在此期间看到 503。
 
+升级前先把主机上的源码树换到 `$NEW_TAG`（按第 1 步的取源方式重新导出或 checkout，并重跑第 7 步的 `.venv` 同步）：`bin/dsherp-admin`、compose 文件和下面的预检都来自这棵树，不换就是在用旧 tag 的工具发布新 tag。再按第 2 步把新 tag 的清单交付到主机；**第一次发布**还要把 `--from` 那个旧 tag 的清单一并交付——首次发布没有 `current.json`，它的回滚只能以旧 tag 清单为锚，`release` 会在改动任何站点之前核对旧清单可用，拿不到就拒绝发布。
+
 ```sh
 $EDITOR infra/env/prod.env          # DSHERP_IMAGE_TAG 改为新 tag
 compose pull && compose up -d       # 两个 bench 都换到新镜像
@@ -214,7 +221,7 @@ sudo systemctl start dsherp-agent-worker
 
 退出码：0 = 各站数据与升级前一致（或差异都被本次执行的 patch 声明），站点已重新开放；1 = 有未声明差异，**有差异的站保持维护模式**，人核对报告后要么 `rollback`，要么确认接受再 `resume-site <站>`；2 = 中途失败，失败的站保持维护模式并有带 `failed` 的部分报告。
 
-`release` 先做预检：`prod.env` 的 tag 就是要发布的 tag、两个 bench 的**运行容器**镜像全名就是该 tag 的发布镜像（读容器而不是读环境文件；`infra/releases/<tag>.json` 清单存在时镜像 id 也必须一致）、每站没有在飞运行、这个 tag 还没有升级前基线（基线只写一次，重来要换 tag 或先 `forget-release`，后者只删发布记录目录下的合法子目录）。然后写发布记录（新旧 tag、两个容器的镜像与镜像 id），再对每个站（租户站与平台站）按序：静默 → `bench backup --with-files` → 把四件套备份集复制到 `/home/frappe/frappe-bench/archived/releases/<tag>/<站>/`（`tenant-archive`/`platform-archive` 卷；Frappe 自己会在 23 小时后清掉 `private/backups`）→ 升级前快照 → `bench migrate` → 升级后快照（按升级前的列集求哈希）→ 从 Patch Log 算出本次实际执行的 patch，只采纳它们声明的预期变化 → 比对 → 只有干净才恢复站点标志。全部干净后把 `current.json` 记为新 tag。报告在 `.runtime/releases/release-<tag>-<时间戳>.json`（`release-<tag>.json` 是最新一份），快照与备份记录在 `.runtime/releases/<tag>/{release.json,<站>/before.json,after.json,backup.json}`。
+`release` 先做预检：`prod.env` 的 tag 就是要发布的 tag、两个 bench 服务各恰好一个运行容器（多于一个拒绝，不会只查第一个）且**运行容器**镜像全名就是该 tag 的发布镜像（读容器而不是读环境文件）、该 tag 的发布清单可用且两个容器的镜像 id 与清单记录一致（清单缺失、读不出、tag 不符、没有该镜像的记录或 id 不是 `sha256:` 开头的非空串，都在改动任何站点之前拒绝——不会退化成"没有预期 id 就不核对"；清单查找顺序见第 2 步，`--manifest FILE` 可直接指定）、`--from` 与 `current.json` 的记录一致（有记录时给出不同的 `--from` 会被拒绝：记录对就不要给，记录错就先改对或删掉）、`current.json` 里的镜像记录完整（否则将来的回滚用不了，现在就拒绝）或——没有 `current.json` 时——旧 tag 的清单可用、每站没有在飞运行、这个 tag 还没有升级前基线（基线只写一次，重来要换 tag 或先 `forget-release`，后者只删发布记录目录下的合法子目录）。然后写发布记录（新旧 tag、两个容器的镜像与镜像 id），再对每个站（租户站与平台站）按序：静默 → `bench backup --with-files` → 把四件套备份集复制到 `/home/frappe/frappe-bench/archived/releases/<tag>/<站>/`（`tenant-archive`/`platform-archive` 卷；Frappe 自己会在 23 小时后清掉 `private/backups`）→ 升级前快照 → `bench migrate` → 升级后快照（按升级前的列集求哈希）→ 从 Patch Log 算出本次实际执行的 patch，只采纳它们声明的预期变化 → 比对 → 只有干净才恢复站点标志。全部干净后把 `current.json` 记为新 tag。报告在 `.runtime/releases/release-<tag>-<时间戳>.json`（`release-<tag>.json` 是最新一份），快照与备份记录在 `.runtime/releases/<tag>/{release.json,<站>/before.json,after.json,backup.json}`。
 
 比对口径：站上每个 DocType 按元数据归入且只归入一桶——**严格**（erpnext 与两个 dsherp App 的全部 DocType、自定义 DocType、联系人与身份表、租户写的权限与流程：Role、Custom DocPerm、Workflow 族、非标准的 Notification/Report/Print Format/Web Form、Client/Server Script 等：逐行逐字段）、**日志**（Comment/Version/Deleted Document/Communication/Activity Log：只比哈希，允许新增）、**排除**（Frappe 自己的元数据、缓存与技术日志，每次 migrate 都会改写）；租户写过的元数据按行分区（`custom=1` 的 DocType 及其字段、`is_system_generated=0` 的 Custom Field/Property Setter、`is_standard` 为否的报表/通知/打印格式、User 与 Role Profile 下的 Has Role）。新出现的表和列是 schema 变化，报告为信息不算差异；消失的表和列、行的增删改、单值文档任何设置值的变化（含首次落库）都是差异，除非本次执行的某个 patch 在自己的模块里用 `EXPECTED_CHANGES = [{'doctype': ..., 'fields': [...] 或 ['*'], 'rows': 'existing'|'inserted'|'deleted'|'any'}]` 声明过——只留哈希的大表只能被 `['*']` 整行声明放行。任何一张表读不出来就中止，不会带着"部分快照"下结论。原生 SQL 分页读取，密码列与密钥类单值只存摘要；快照行数超过上限（默认 100 万）也中止。
 
@@ -227,7 +234,7 @@ compose up -d
 DSHERP_ENV=prod ./bin/dsherp-admin rollback "$NEW_TAG"    # 参数是要撤销的发布 tag；退出码 0=数据与升级前一致
 ```
 
-`rollback` 先核对：`prod.env` 的 tag 是发布记录里的 `previous_tag`，两个 bench 运行容器的镜像全名是该 tag 的镜像，且镜像 id 等于升级前实际运行的那一个（发布记录的 `previous_images`，来自 `current.json`；没有时用旧 tag 的清单）——在新镜像、同名异构镜像或别的旧版本上恢复都会被拒绝，数据不动。然后从 `.runtime/releases/<tag>/<站>/backup.json` 找到归档的备份集，`bench restore <db> --with-public-files … --with-private-files … --force`，再快照并与 `before.json` 比对；唯一容忍的差异是 restore 自己回写的 `System Settings.enable_scheduler`。干净的站才重新开放，全部干净后 `current.json` 记回旧 tag；恢复失败或有差异的站保持维护模式（退出码 2 / 1）。`--backup SITE=FILE` 可改用别的数据库转储（同前缀的 files tar 一并恢复）。`resume-site <站>` 是人确认后解除维护的唯一途径；`forget-release <tag>` 删除宿主侧记录（容器内归档不动）。演练与排查用 `snapshot <站> --out FILE [--like 已有快照]` 与 `compare BEFORE AFTER`；只留哈希的大表在两份快照的哈希列集不同时不能比，`--like` 让第二份按第一份的列集求哈希。
+`rollback` 先核对：`prod.env` 的 tag 是发布记录里的 `previous_tag`，两个 bench 运行容器的镜像全名是该 tag 的镜像，且镜像 id 等于升级前实际运行的那一个：发布记录的 `previous_images`（来自 `current.json`）必须两个服务齐全、镜像名就是旧 tag 的镜像、id 非空，记录存在但不完整就直接拒绝；记录里根本没有 `previous_images`（只有第一次发布如此）时改用旧 tag 的发布清单（查找顺序同第 2 步，`--manifest FILE` 可指定），清单也拿不到有效 id 就不恢复；记录里有 `previous_images` 而又给了 `--manifest` 时，那份清单仍会被读取并须与记录一致，否则拒绝；`release.json` 缺 `previous_tag` 也拒绝——在新镜像、同名异构镜像或别的旧版本上恢复都会被拒绝，数据不动。然后从 `.runtime/releases/<tag>/<站>/backup.json` 找到归档的备份集，`bench restore <db> --with-public-files … --with-private-files … --force`，再快照并与 `before.json` 比对；唯一容忍的差异是 restore 自己回写的 `System Settings.enable_scheduler`。干净的站才重新开放，全部干净后 `current.json` 记回旧 tag；恢复失败或有差异的站保持维护模式（退出码 2 / 1）。`--backup SITE=FILE` 可改用别的数据库转储（同前缀的 files tar 一并恢复）。`resume-site <站>` 是人确认后解除维护的唯一途径；`forget-release <tag>` 删除宿主侧记录（容器内归档不动）。演练与排查用 `snapshot <站> --out FILE [--like 已有快照]` 与 `compare BEFORE AFTER`；只留哈希的大表在两份快照的哈希列集不同时不能比，`--like` 让第二份按第一份的列集求哈希。
 
 ## 11. 下线租户与从归档恢复
 

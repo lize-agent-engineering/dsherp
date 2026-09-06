@@ -99,3 +99,32 @@
 | P2 | 快照没保存准确的哈希列集合，普通快照与 release 快照口径不一致 | 每张表保存 `hash_columns`（求哈希时实际覆盖的列）；只留哈希的表在两份快照列集不同时拒绝比对并提示用 `snapshot --like <快照>` 对齐；`release`/`rollback` 的第二份快照都按第一份的 `hash_columns` 求哈希 | `test_every_snapshot_records_the_exact_columns_each_hash_covers`、`test_hash_only_rows_are_compared_only_when_both_snapshots_hashed_the_same_columns`、`test_snapshot_command_can_align_its_hash_columns_with_an_existing_snapshot` |
 
 **第二轮复审修法后的跨版本重跑（2026-09-06 16:42–16:45）**：`release v0.3.1-rc2 --from v0.3.1-rc1` 在 rc2 容器上退出码 0，两个容器镜像 id `sha256:c9147d67…` 与 `infra/releases/v0.3.1-rc2.json` 清单一致（清单 id 校验第一次真实生效）；同 tag 再发布退出码 2；注入的 qty 改动用 `snapshot --like after.json` 对齐后被点名；rc2 仍在运行时回滚退出码 2。切回 rc1 后回滚**先被拒绝**：运行的 rc1 镜像 id `sha256:9f7ec33e…` 与仓库里 rc1 清单记录的上一次本机构建 `sha256:2de0a39f…` 不同——同一提交本机两次构建的镜像 id 不同，id 校验如实判定"不是同一个制品"。rc1 从未推送，清单只是本机演练记录，因此按当前 rc1 构建重生成清单（`infra/releases/v0.3.1-rc1.json`，id `9f7ec33e…`）后再回滚：退出码 0，两站差异 0（g1 10.2 s、平台 5.3 s），`current.json` 记回 rc1 并带镜像 id。这条边界在 runbook 里的含义：目标主机必须运行清单记录的那一次构建（从 registry 拉取或 `docker load` 构建机导出的镜像），本地重建会被拒绝。演练后拆栈清理。
+
+### PR #7 第三轮审查（GPT，2026-09-06）的一处阻断与处置
+
+审查独立重跑 441 passed，关闭了删除范围、分页预算、哈希列集三项，只剩一处 P1：`_manifest_image_id` 在清单缺失、JSON 损坏、没有对应镜像、id 为空四种情况下都返回 `None`，`_require_running` 随即把"没有预期 id"当作"不核对"，错误的镜像 id 被接受。审查还指出这不是假设：`v0.3.1-rc2` 清单在 `d7e115b` 入库，而 tag 指向 `690136a`，按 tag 取源码的主机确实没有它。处置：
+
+| 规则 | 实现 | 测试 |
+|---|---|---|
+| release 必须取得**有效**的目标清单，否则在改动站点前失败 | `_manifest_image_id` 不再返回 `None`：文件不存在、读不出或不是 JSON、`tag` 字段不等于目标 tag、`images` 里没有该镜像、`id` 不是 `sha256:` 开头的非空字符串，各自抛出说明原因的 `Fault`；`_require_image_ids` 对没有预期 id 的服务直接拒绝，不再跳过；镜像全名检查、清单校验、id 校验都在 `_targets`、写记录与静默之前 | `test_release_refuses_unless_a_valid_manifest_vouches_for_the_running_image_id`：缺失、损坏、无该镜像、`""`、`null`、他 tag 的清单、有效清单但运行 id 不同，七种都拒绝且 bench 无任何动作、不写 `release.json`；`--manifest` 与源码树内清单两种来源都能放行 |
+| rollback 用**完整有效**的 `previous_images`；没有时必须取得有效旧清单；两者都拿不到 id 就拒绝恢复 | `_previous_ids`：记录里没有 `previous_images` 才返回 `None`（只有第一次发布如此）；存在但缺服务、镜像名不符、id 为空或非字符串，一律 `Fault`，不再"有多少用多少"；`None` 时才用旧 tag 清单，清单同样严格校验 | `test_rollback_needs_complete_previous_images_or_a_valid_old_manifest_and_never_restores_blind`：无记录且无清单、清单是 `[]`、id 为空、清单 id 与运行不符，四种都在静默与 restore 之前拒绝；`--manifest` 指定有效旧清单后干净；记录里的 `previous_images` 缺一个服务 / id 为空 / 镜像名不同，即使旧清单有效也拒绝 |
+| 清单随发布制品交付，不依赖 tag 之后的仓库提交 | `release_images.py --bundle DIR`：`docker save` 两个镜像到 `DIR/dsherp-<tag>.tar` 并把清单复制为 `DIR/<tag>.json`，save 失败不留半份；`release`/`rollback` 查找顺序 `--manifest FILE` → `infra/releases/<tag>.json` → `<runtime>/manifests/<tag>.json`（放在 `releases/` 之外，`forget-release` 的包含性检查碰不到它）；runbook 第 2 步与第 10 步改写 | `test_a_bundle_ships_the_images_and_the_manifest_together`；`test_the_cli_passes_an_explicit_manifest_to_release_and_rollback`；测试夹具改为"构建机交付两份清单到运行目录"、假 docker 按镜像而不是按服务派生 id |
+
+门禁：非集成 445 passed（新增 4 个测试）。`--bundle` 用本机 rc2 镜像真实跑过一次（2026-09-06 17:20）：`docker save` 52 s 产出 3.48 GB 的 `dsherp-v0.3.1-rc2.tar`，tar 内 docker manifest 的两个 config 摘要 `sha256:c9147d67…`（frappe）与 `sha256:ec323b54…`（worker）就是 `infra/releases/v0.3.1-rc2.json` 记录的镜像 id，旁边的 `v0.3.1-rc2.json` 与仓库清单逐字节相同；产物已删除。对抗核验后的加固版又真实跑了一次（17:45，46 s）：`_saved_digests` 从真正的 save tar 里读出的两个 config 摘要与清单 id 一致才放清单，重复 bundle 到同一目录被拒绝，`--bundle dist`（源码树内）被拒绝且没有创建目录；产物已删除。
+
+**对第三轮修法的对抗核验（2026-09-06）**：修法完成后派 5 个只读代理分别从"release 绕过""rollback 绕过""测试诚实性""操作链与交付""既有行为回归"五个视角攻击工作树差异，25 条候选每条再由 2 名反驳者独立复核（共 55 个代理，不碰容器与数据库）。处置如下：
+
+| 类别 | 发现 | 处置 |
+|---|---|---|
+| 修代码 | `_running_images` 只查 `compose ps -q` 的第一个容器，同服务第二个容器不核对（预存问题） | 多于一个容器直接拒绝 |
+| 修代码 | 仓库清单遮蔽交付清单、`--manifest ""` 被当作未给、拒绝信息不说用的是哪份 | 显式路径只看它且不能为空；缺省两处都有时必须一致，否则列出两份拒绝；来源与路径进入拒绝信息 |
+| 修代码 | `release --from` 与 `current.json` 矛盾时静默丢弃 `previous_images`，回滚以人打的 tag 为锚 | 有记录而 `--from` 不同即拒绝 |
+| 修代码 | 首次发布后回滚才发现旧 tag 清单不在主机上，正是需要它时被挡住 | 没有 `current.json` 时 `release` 先核对旧 tag 清单可用；有 `current.json` 时先核对其镜像记录完整 |
+| 修代码 | `release.json` 缺 `previous_tag` 抛 `KeyError`；`_previous_ids` 不校验 id 形状；记录有 `previous_images` 时 `--manifest` 被静默忽略（连不存在的路径也不报） | 各自 `Fault`；id 形状与清单同一口径；`--manifest` 总会被读取并须与记录一致 |
+| 修代码 | `bundle()` 静默覆盖旧包，tar 与旁边的清单没有绑定；runbook 示例把 3.5 GB 的 tar 写进构建上下文（`.dockerignore` 有意不排除 `dist`） | 拒绝覆盖；save 后读 tar 的 `manifest.json`，config 摘要必须等于清单 id 才放清单；目录必须在源码树外；runbook 改为 `../dsherp-dist/` |
+| 修测试 | 缺失/损坏/空 id 的断言只匹配"清单"或"镜像 id"，回退到"无 id 不核对"时会被后一道检查的措辞顶过去；rollback 兜底没测损坏 JSON 与无该镜像；`previous_images` 不完整的断言也会被部分集合顶过去；`_require_image_ids` 的"无预期 id"分支无隔离测试；来源优先级未测；测试隐含依赖真实仓库没有 `v0.3.0/v0.4.0` 清单；`--bundle` 的 CLI 接线未测 | 每种拒绝钉住自己的措辞；补齐上述场景；夹具显式断言前置条件；补 CLI 接线测试 |
+| 改文档 | runbook 第 10 步从不更新主机源码树，升级跑的是旧 tag 的 `dsherp-admin`；构建机与主机的 Docker 镜像存储类型不同会让同一制品 id 不同（经典 overlay2 记 config 摘要，containerd 存储记 manifest 摘要） | 第 10 步加"先换源码树"；第 2 步注明必须同种镜像存储 |
+| 不是缺陷 | 同 tag 重做（`forget-release` 后再 `release` 同一 tag，或 `--from` 等于目标 tag）让 `previous_tag == tag`，回滚在"新"镜像上恢复 | 有意允许：重做前的备份就是在这个镜像上做的，恢复它到同一镜像是一致的，既有测试即如此断言 |
+| 不适用 | 早于本修法开通的主机没有旧 tag 清单 | 目前没有真实部署的主机（G1 未过），无存量 |
+
+门禁：非集成 452 passed（较上一轮再加 7 个测试）。

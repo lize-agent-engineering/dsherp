@@ -760,9 +760,13 @@ def _running_images(resolved, runner, root):
             command += ['--env-file', str(env_file)]
         command += ['-f', str(file), 'ps', '-q', service]
         listed = runner(command, text=True, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
-        container = (listed.stdout or '').strip().splitlines()[:1] if not listed.returncode else []
+        container = [line.strip() for line in (listed.stdout or '').splitlines() if line.strip()] if not listed.returncode else []
         if not container:
             raise Fault(f'服务 {service} 没有在运行的容器；先 compose up -d 再发布或回滚')
+        if len(container) > 1:
+            # Checking the first and letting the others serve would make the identity check order-dependent.
+            raise Fault(f'服务 {service} 有 {len(container)} 个容器在运行（{", ".join(container)}）；发布与回滚要求每个 '
+                        'bench 服务恰好一个容器，先收敛到一个再来')
         inspected = runner(['docker', 'inspect', '-f', '{{.Config.Image}} {{.Image}}', container[0]],
                            text=True, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
         parts = (inspected.stdout or '').split()
@@ -772,28 +776,96 @@ def _running_images(resolved, runner, root):
     return images
 
 
-def _manifest_image_id(root, tag, image):
-    """The immutable id release_images.py recorded for this image, when a manifest exists."""
-    path = Path(root) / 'infra' / 'releases' / f'{tag}.json'
-    if not path.exists():
-        return None
+MANIFESTS = 'manifests'  # under the runtime directory: where a delivered release manifest goes
+
+
+def _valid_image_id(value):
+    return isinstance(value, str) and value.startswith('sha256:') and len(value) > len('sha256:')
+
+
+def _read_manifest_id(path, tag, image):
+    """The immutable id one manifest file recorded for `image`. Never None: a file that is
+    missing, unreadable, for another tag or without a usable id is a Fault, because 'no
+    expected id' must not turn into 'any id will do'."""
+    hint = (f'；清单由构建机的 release_images.py 写出并随镜像一起交付（--bundle），'
+            f'放到 <runtime>/{MANIFESTS}/{tag}.json 或用 --manifest 指定')
+    if not path.is_file():
+        raise Fault(f'没有 {tag} 的发布清单（找过 {path}），无法核对运行镜像的 id，不改动站点' + hint)
     try:
-        return json.loads(path.read_text())['images'][image]['id']
-    except (ValueError, KeyError, TypeError):
-        return None
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        raise Fault(f'发布清单 {path} 读不出来或不是 JSON（{error}），无法核对镜像 id，不改动站点') from error
+    recorded = payload.get('tag') if isinstance(payload, dict) else None
+    if recorded != tag:
+        raise Fault(f'发布清单 {path} 记录的 tag 是 {recorded!r}，不是 {tag}；不是这个版本的清单，不改动站点')
+    rows = payload.get('images')
+    row = rows.get(image) if isinstance(rows, dict) else None
+    if not isinstance(row, dict):
+        raise Fault(f'发布清单 {path} 没有 {image} 的记录，无法核对镜像 id，不改动站点')
+    image_id = row.get('id')
+    if not _valid_image_id(image_id):
+        raise Fault(f'发布清单 {path} 里 {image} 的镜像 id 是 {image_id!r}，不是可核对的镜像 id，不改动站点')
+    return image_id
 
 
-def _require_running(images, expected_image, expected_ids=None):
-    """Every bench must run exactly the expected image: full name, and the immutable id when
-    one is on record (a release manifest, or what current.json saw running)."""
+def _manifest_image_id(resolved, root, tag, image, explicit=None):
+    """The immutable id on record for `image` under `tag`, and where it came from. An explicit
+    --manifest is the only file consulted; otherwise the copy delivered to the runtime
+    directory and the repository copy (the manifest enters git after the tag it describes, so
+    a tree fetched by tag never has it) — when both exist they must agree."""
+    if explicit is not None:
+        if not str(explicit).strip():
+            raise Fault('--manifest 需要一个文件路径')
+        path = Path(explicit)
+        return _read_manifest_id(path, tag, image), f'{tag} 的发布清单 {path}'
+    delivered = runtime_dir(resolved, root) / MANIFESTS / f'{tag}.json'
+    repo = Path(root) / 'infra' / 'releases' / f'{tag}.json'
+    present = [path for path in (delivered, repo) if path.is_file()]
+    if not present:
+        raise Fault(f'没有 {tag} 的发布清单（找过 {delivered} 与 {repo}），无法核对运行镜像的 id，不改动站点；'
+                    f'清单由构建机的 release_images.py 写出并随镜像一起交付（--bundle），'
+                    f'放到 <runtime>/{MANIFESTS}/{tag}.json 或用 --manifest 指定')
+    ids = {path: _read_manifest_id(path, tag, image) for path in present}
+    if len(set(ids.values())) > 1:
+        raise Fault(f'{tag} 的两份发布清单不一致：' + '；'.join(f'{path} 记录 {image_id}' for path, image_id in ids.items())
+                    + '；删掉过期的那份或用 --manifest 指定，不改动站点')
+    return ids[present[0]], f'{tag} 的发布清单 {present[0]}'
+
+
+def _require_image_names(images, expected_image):
+    """Every bench must run exactly the expected image by full name (registry, repository, tag)."""
     for service, row in images.items():
         if row['image'] != expected_image:
             raise Fault(f'服务 {service} 运行的镜像是 {row["image"]}，不是 {expected_image}；'
                         '先把 prod.env 改到正确的 tag 并 compose up -d')
-        wanted = (expected_ids or {}).get(service)
-        if wanted and row['image_id'] != wanted:
-            raise Fault(f'服务 {service} 运行的 {row["image"]} 镜像 id 是 {row["image_id"]}，记录里的是 {wanted}；'
+
+
+def _require_image_ids(images, expected_ids, source):
+    """Every bench must run the immutable id `source` recorded; a service with no id on record
+    is refused, never skipped."""
+    for service, row in images.items():
+        wanted = expected_ids.get(service)
+        if not wanted:
+            raise Fault(f'{source}没有服务 {service} 的镜像 id，无法核对，不改动站点')
+        if row['image_id'] != wanted:
+            raise Fault(f'服务 {service} 运行的 {row["image"]} 镜像 id 是 {row["image_id"]}，{source}记录的是 {wanted}；'
                         '这不是同一个制品，先核对镜像来源')
+
+
+def _previous_ids(recorded, images, expected_image, action='回滚', record='发布记录的 previous_images'):
+    """The ids of what ran before the upgrade, from the release record: None when the record
+    holds none (a first release), a Fault when it holds an unusable one; never a partial set."""
+    if recorded is None:
+        return None
+    ids = {}
+    for service in images:
+        row = recorded.get(service) if isinstance(recorded, dict) else None
+        image_id = row.get('image_id') if isinstance(row, dict) else None
+        if not isinstance(row, dict) or row.get('image') != expected_image or not _valid_image_id(image_id):
+            raise Fault(f'{record} 里没有服务 {service} 运行 {expected_image} 的有效镜像 id（{row!r}）；'
+                        f'记录不可用，不{action}')
+        ids[service] = image_id
+    return ids
 
 
 def _current_path(resolved, root=ROOT):
@@ -828,7 +900,7 @@ def resume_site(resolved, site, *, root=ROOT, runner=subprocess.run, bench_facto
     return {'site': site, 'maintenance_mode': 0, 'pause_scheduler': 0}
 
 
-def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, from_tag=None):
+def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, from_tag=None, manifest=None):
     """Quiesce, back up and archive, snapshot, migrate, snapshot, judge; per Site, platform included.
 
     A site reopens only after a completed, clean judgement; anything else leaves it in
@@ -842,8 +914,11 @@ def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=No
     if from_tag is not None and not deploy_env.TAG.fullmatch(from_tag):
         raise Fault('--from 必须是一个 tag')
     images = _running_images(resolved, runner, root)
-    built = _manifest_image_id(root, tag, resolved['frappe_image'])
-    _require_running(images, resolved['frappe_image'], {service: built for service in images} if built else None)
+    _require_image_names(images, resolved['frappe_image'])
+    # The manifest is the only record of which build this tag is; without a valid one the
+    # running image cannot be vouched for and nothing is touched.
+    built, source = _manifest_image_id(resolved, root, tag, resolved['frappe_image'], manifest)
+    _require_image_ids(images, {service: built for service in images}, source)
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     targets = _targets(resolved, root, factory)
     if len(targets) < 2:
@@ -853,10 +928,20 @@ def release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=No
         raise Fault(f'release {tag} 已有升级前基线（{record_root}）：基线只写一次，否则回滚会回到错误的状态。'
                     f'要重来，换一个 tag，或确认不再需要那份基线后执行 forget-release {tag}')
     current = _current(resolved, root)
+    if from_tag and current and current.get('tag') != from_tag:
+        raise Fault(f"current.json 记录的是 {current.get('tag')}，--from 给的是 {from_tag}；记录与声明不一致，先核对："
+                    '记录对就不要给 --from，记录错了就把它改对或删掉（{path}）'.format(path=_current_path(resolved, root)))
     previous = from_tag or (current['tag'] if current else None)
     if not previous:
         raise Fault('没有当前版本的记录：第一次发布必须用 --from <升级前运行的 tag> 说明从哪个版本升上来')
-    previous_images = current['images'] if current and current.get('tag') == previous else None
+    previous_image = deploy_env.image_name(resolved['registry'], 'frappe', previous)
+    previous_images = current.get('images') if current else None
+    if previous_images is not None:
+        _previous_ids(previous_images, images, previous_image, action='发布', record='current.json 的 images')
+    else:
+        # A first release: its rollback can only anchor on the previous tag's manifest, so prove
+        # now, before anything is touched, that a usable one is at hand.
+        _manifest_image_id(resolved, root, previous, previous_image)
     # Pre-flight before anything is recorded or quiesced: a Site with runs in flight stops
     # the whole release while nothing has changed yet.
     for bench, site in targets:
@@ -932,7 +1017,8 @@ def _backup_set(bench, site, database):
     return found
 
 
-def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, backups=None, before=None):
+def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=None, backups=None, before=None,
+             manifest=None):
     """Undo `release <tag>`: on the previous images, restore what it archived (or the named
     files) and prove the data is what it was before the upgrade."""
     if not deploy_env.TAG.fullmatch(tag or ''):
@@ -941,20 +1027,31 @@ def rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=N
     if not (record_root / 'release.json').exists():
         raise Fault(f'没有 release {tag} 的记录（{record_root}）；不知道升级前是哪个版本，也不知道该恢复什么')
     record = json.loads((record_root / 'release.json').read_text())
-    previous = record['previous_tag']
+    previous = record.get('previous_tag')
+    if not isinstance(previous, str) or not deploy_env.TAG.fullmatch(previous):
+        raise Fault(f'release {tag} 的记录没有可用的 previous_tag（{previous!r}）；不知道升级前是哪个版本，不回滚')
     if resolved['image_tag'] != previous:
         raise Fault(f"回滚 {tag} 要在升级前的版本 {previous} 上进行：infra/env/prod.env 的 DSHERP_IMAGE_TAG 现在是 "
                     f"{resolved['image_tag']!r}，先改回 {previous} 并 compose up -d")
     images = _running_images(resolved, runner, root)
-    # prod.env is back on the previous tag, so resolved['frappe_image'] names the previous image;
-    # its id comes from what ran before the upgrade (current.json at release time) or its manifest.
-    recorded = record.get('previous_images') or {}
-    expected_ids = {service: row['image_id'] for service, row in recorded.items()
-                    if row.get('image') == resolved['frappe_image']}
-    built = _manifest_image_id(root, previous, resolved['frappe_image'])
-    for service in images:
-        expected_ids.setdefault(service, built)
-    _require_running(images, resolved['frappe_image'], {k: v for k, v in expected_ids.items() if v})
+    _require_image_names(images, resolved['frappe_image'])
+    # prod.env is back on the previous tag, so resolved['frappe_image'] names the previous image.
+    # Its id is what actually ran before the upgrade (the release record's previous_images, from
+    # current.json), complete and valid; only a record with none falls back to the previous
+    # tag's manifest, and without a valid manifest either nothing is restored.
+    expected_ids = _previous_ids(record.get('previous_images'), images, resolved['frappe_image'])
+    if expected_ids is None:
+        built, source = _manifest_image_id(resolved, root, previous, resolved['frappe_image'], manifest)
+        expected_ids = {service: built for service in images}
+    else:
+        source = '发布记录的 previous_images（升级前实际运行的镜像）'
+        if manifest is not None:
+            # Named explicitly, so it is read and must tell the same story as the record.
+            built, named = _manifest_image_id(resolved, root, previous, resolved['frappe_image'], manifest)
+            if any(image_id != built for image_id in expected_ids.values()):
+                raise Fault(f'{named} 记录的 {built} 与{source}记录的 {sorted(set(expected_ids.values()))} 不一致；'
+                            '先核对哪一份是对的，不回滚')
+    _require_image_ids(images, expected_ids, source)
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     targets = [(bench, site) for bench, site in _targets(resolved, root, factory)
                if (record_root / site / 'before.json').exists() or site in (backups or {})]
@@ -1037,6 +1134,8 @@ def main(argv=None):
     release_parser.add_argument('tag')
     release_parser.add_argument('--from', dest='from_tag', metavar='TAG',
                                 help='升级前运行的 tag；有 current.json 记录时可省略，第一次发布必填')
+    release_parser.add_argument('--manifest', metavar='FILE',
+                                help=f'该 tag 的发布清单；缺省找 infra/releases/<tag>.json，再找 <runtime>/{MANIFESTS}/<tag>.json')
     resume_parser = sub.add_parser('resume-site', help='解除某站的维护模式与调度暂停（发布或回滚未自动解除时，由人确认后执行）')
     resume_parser.add_argument('site')
     forget_parser = sub.add_parser('forget-release', help='删除某个 tag 的宿主侧发布记录（升级前基线与备份指针）；容器内归档不动')
@@ -1045,6 +1144,8 @@ def main(argv=None):
     rollback_parser.add_argument('tag', help='要撤销的发布 tag（release 时用的那个）')
     rollback_parser.add_argument('--backup', action='append', default=[], metavar='SITE=FILE',
                                  help='改用指定的数据库转储（*-database.sql.gz，同名 files tar 一并恢复），可重复')
+    rollback_parser.add_argument('--manifest', metavar='FILE',
+                                 help='升级前 tag 的发布清单；只在发布记录没有 previous_images 时需要（第一次发布，或 --from 与 current.json 不一致）')
     snapshot_parser = sub.add_parser('snapshot', help='读取一个站的数据快照到文件（演练与排查用）')
     snapshot_parser.add_argument('site')
     snapshot_parser.add_argument('--out', required=True)
@@ -1081,7 +1182,7 @@ def main(argv=None):
             _print({'rendered': str(render_ingress(resolved, load_tenants(resolved)))})
             return 0
         if arguments.command == 'release':
-            report = release(resolved, arguments.tag, from_tag=arguments.from_tag)
+            report = release(resolved, arguments.tag, from_tag=arguments.from_tag, manifest=arguments.manifest)
             _print({key: value for key, value in report.items() if key != 'sites'} | {
                 'sites': {site: {'clean': row['comparison']['clean'], 'summary': row['comparison']['summary'],
                                  'backup': row['backup'], 'seconds': row['seconds']}
@@ -1094,7 +1195,7 @@ def main(argv=None):
                 if not separator:
                     raise Fault('备份参数格式为 SITE=FILE')
                 pairs[site] = file
-            report = rollback(resolved, arguments.tag, backups=pairs or None)
+            report = rollback(resolved, arguments.tag, backups=pairs or None, manifest=arguments.manifest)
             _print({key: value for key, value in report.items() if key != 'sites'} | {
                 'sites': {site: {'clean': row['comparison']['clean'], 'summary': row['comparison']['summary'],
                                  'seconds': row['seconds']} for site, row in report['sites'].items()}})
