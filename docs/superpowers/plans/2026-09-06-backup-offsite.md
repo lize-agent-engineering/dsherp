@@ -2736,3 +2736,26 @@ git commit -m "docs: runbook 新增备份与容灾一节，密钥保管、定时
 - 设计 §4.0–§4.8 每条都有对应任务：协议（1）、保持与互斥（2、5）、状态（3、14）、卷与目录（4）、生成（5）、事件集与归档分目录（6）、配置/密钥/服务（7）、保留（8）、同步配对检查（9）、隔离栈（10）、演练与清理（11）、异机路径（12）、定时与 OnFailure（13）、可见性（14）、文档（15）、演练证据（16）。
 - 名称一致性：`backup.stage_set / find_pieces / backup_window / operations_lock / upload_sets / backup_sync / backup_init / notify_failure / restic / status_path / load_status`；`backup_status.record_run / record_site / record_set / evaluate / load / save / empty / now_iso`；`backup_sets.new_set_id / parse_set_id / set_manifest / pair_manifest / pair_matches / set_sha256 / local_prune / slug`；`backup_retention.select`；`site_holds.hold / release / held`；`restore_drill.DrillStack / restore_drill / restore_site`；`render_backup_units`。
 - Task 3 已含 `first_at`（首次成功时写入并保留，Task 14 的新站宽限据此判断）；Task 5 的 `backup()` 里 `sync=True` 调用 `backup_sync(..., locked=True)`；Task 11 的 `_verify_fetched` 去掉占位行；Task 7 决定 CA 不进 compose `secrets:`，由 `restic()` 包装以 `run -v/-e` 注入。
+
+---
+
+## 实施记录（2026-09-06，同会话顺序 TDD）
+
+计划里的代码块是候选方案；实际实现与它在下列地方不同，都是真实链路逼出来的（每一条都有测试与代码注释）：
+
+| 与计划不同之处 | 原因 |
+|---|---|
+| `SITE_FLAGS` 增加 `running`/`counts`，窗口只等 `Running`/`Cancelling` | `active` 含 Queued，排队的运行会让备份永远推迟 |
+| 窗口多一步"排空写入者"（RQ 作业 + 非空闲数据库连接连续两轮为 0） | 维护标志不终止已经开始的 HTTP 写入与后台作业 |
+| `claim_run` 增加 `dsherp_hold` 闸门 | 关掉"worker 已过保持检查、claim 尚未落地"的缝 |
+| `upload_sets` 读回 `set.json`/`pair.json` 逐项核对，并在候选快照间查找配对 | 两个快照 id 不是配对证据；重试会在同一标签下留多个快照 |
+| `backup_sync` 先从仓库列表调和已记录的完整集，并收养远端未知集 | 远端副本被删后记录仍显示完整；被 forget 的集残留快照再也无法淘汰 |
+| 远端内容与本机暂存不符时按本机重传一次 | 远端存在不等于内容正确 |
+| `evaluate` 的 RPO 取记录里最新的已核对集 | 补传历史集时"最后一次上传成功"会把站点判成陈旧 |
+| `backup_sync` 先 60 秒探可达性，超时清掉 compose run 留下的容器 | restic 对不可达端点重试一刻钟；`compose run` 的客户端被杀后容器还在 |
+| 同步容器以 bench uid 运行，取回容器以 root 运行并只加 `CHOWN`/`FOWNER` | `cap_drop: [ALL]` 后 root 不再绕过属主；两类容器面对的文件属主不同 |
+| 恢复用一次 `_new_site(source_sql=)`，且先看磁盘再 `frappe.init(..., new_site=True)` | 分两步会在站点不存在时读配置报 404 |
+| 拆栈带 `--profile fetch`，残留判定排除 restic 缓存卷 | 否则第一次演练之后每次都被自己挡住 |
+| 计划里的 `PROVIDED_SECRETS`、`_manifest_path` 等命名按实际实现调整 | 与既有代码风格一致 |
+
+阶段末的真实验证结果见[数据治理与容灾证据](../../engineering/data-governance-evidence.md)「切片 2」。
