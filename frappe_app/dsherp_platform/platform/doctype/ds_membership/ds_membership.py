@@ -2,6 +2,15 @@ import hashlib
 import frappe
 from frappe.model.document import Document
 
+# What a binding is. A change to any of these is a change of binding and bumps the version;
+# the credential columns on the same row are not part of it, so a renewal does not.
+BINDING_FIELDS = ("enterprise", "platform_user", "erp_user", "enabled")
+
+
+def active_key(enterprise, erp_user):
+    return f"{enterprise}\0{erp_user}"
+
+
 class DSMembership(Document):
     def autoname(self):
         self.name = hashlib.sha256((self.enterprise + "\0" + self.platform_user).encode()).hexdigest()[:32]
@@ -11,22 +20,39 @@ class DSMembership(Document):
         if previous and (previous.enterprise != self.enterprise or previous.platform_user != self.platform_user):
             frappe.throw("Membership identity cannot be changed; disable and create a new binding")
         self._sole_holder_of_the_business_user()
+        self._count_the_binding(previous)
 
     def _sole_holder_of_the_business_user(self):
         """A business user answers to one platform member.
 
         The business Site keeps a single api_secret per user, so two enabled memberships on
         the same erp_user would take turns renewing and invalidating each other's credential.
-        The binding refuses that instead of letting logins fight."""
+        The guarantee is the unique index on `active_binding`: two transactions inserting the
+        same enabled binding both pass a read-then-write check, and the second one has to fail
+        at the database. The lookup below only exists to say so in words before that happens."""
+        self.active_binding = active_key(self.enterprise, self.erp_user) if self.enabled else None
         if not self.enabled:
             return
         clash = frappe.db.get_value("DS Membership", {
-            "enterprise": self.enterprise, "erp_user": self.erp_user, "enabled": 1,
-            "name": ("!=", self.name or ""),
+            "active_binding": self.active_binding, "name": ("!=", self.name or ""),
         }, "platform_user")
         if clash:
             frappe.throw(f"业务用户 {self.erp_user} 已绑定到平台成员 {clash}；"
                          "一个业务用户只能有一个启用中的绑定，先停用原绑定再新建")
+
+    def _count_the_binding(self, previous):
+        """An integer that goes up when the binding changes and only then.
+
+        A grant carries this number; the business Site refuses a grant whose number no longer
+        matches. A content hash would hand a disabled-then-re-enabled binding its old number
+        back, and an old grant with it (R8). Renewing the borrowed credential leaves it alone."""
+        if previous is None:
+            self.binding_version = 1
+            return
+        if any(self.get(field) != previous.get(field) for field in BINDING_FIELDS):
+            self.binding_version = int(previous.binding_version or 0) + 1
+        else:
+            self.binding_version = int(previous.binding_version or 1)
 
     def on_update(self):
         """Disabling a membership takes back the credential it lent out.

@@ -1,7 +1,4 @@
 """Platform session identity and explicit per-member ERP read delegation."""
-import hashlib
-import json
-
 import frappe
 import requests
 from contextlib import contextmanager
@@ -10,15 +7,12 @@ from frappe.utils import now_datetime
 from dsherp_platform import business_credentials as credential_policy
 
 
-# What makes a binding what it is. Deliberately not the row's modified time: the credential
-# the platform borrows is stored on the same row, and renewing it every twelve hours must not
-# read as "the membership changed" and end every session that member has (S9).
-BINDING_FIELDS = ('enterprise','platform_user','erp_user','enabled')
-
-
 def binding_version(member):
-    material=json.dumps([str(member.get(field)) for field in BINDING_FIELDS],separators=(',',':'))
-    return hashlib.sha256(material.encode()).hexdigest()[:32]
+    """The membership's own counted version: bumped by the controller when the binding
+    changes, untouched when the borrowed credential is renewed. Not the row's modified time
+    (a renewal would end every session), and not a content hash (a binding disabled and
+    re-enabled would get its old number - and its old grants - back)."""
+    return str(int(member.get('binding_version') or 0))
 
 
 class CredentialStale(frappe.PermissionError):

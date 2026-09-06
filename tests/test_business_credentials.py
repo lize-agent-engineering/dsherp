@@ -93,12 +93,33 @@ def test_the_platform_stores_when_the_credential_it_holds_dies():
     assert fields["api_secret"]["fieldtype"] == "Password"
 
 
-def test_a_business_user_answers_to_one_platform_member_so_a_renewal_cannot_evict_another():
+def test_a_business_user_answers_to_one_platform_member_and_the_database_is_what_guarantees_it():
     """Frappe keeps one api_secret per User. Two platform members bound to the same business
-    user would take turns invalidating each other, so the binding refuses it outright."""
+    user would take turns invalidating each other. A read-then-write check in the controller
+    lets two concurrent transactions both through (R2), so the guarantee is a unique index on
+    a key the controller fills only while the binding is enabled. The concurrent proof against
+    the real Site is tests/integration/test_membership_binding.py."""
+    fields = {field["fieldname"]: field for field in json.loads(MEMBERSHIP.read_text())["fields"]}
+    assert fields["active_binding"]["unique"] == 1 and fields["active_binding"]["fieldtype"] == "Data"
     controller = (ROOT / "frappe_app/dsherp_platform/platform/doctype/ds_membership/ds_membership.py").read_text()
-    assert "erp_user" in controller and "frappe.throw" in controller
-    assert "enabled" in controller
+    assert "active_binding" in controller and "else None" in controller, "disabled rows must not collide on an empty key"
+    patches = (ROOT / "frappe_app/dsherp_platform/patches.txt").read_text()
+    pre = patches.split("[pre_model_sync]", 1)[1].split("[post_model_sync]", 1)[0]
+    assert "binding_uniqueness" in pre, "duplicates must be resolved before the index is created"
+
+
+def test_the_binding_version_is_a_counter_not_a_hash_of_the_row():
+    """A grant carries the binding version. A content hash would give a disabled-then-re-enabled
+    binding its old number back, and an old grant with it (R8); the repository rule is also
+    plain: no hash stands in for a version number."""
+    fields = {field["fieldname"]: field for field in json.loads(MEMBERSHIP.read_text())["fields"]}
+    assert fields["binding_version"]["fieldtype"] == "Int"
+    api = PLATFORM_API.read_text()
+    helper = api.split("def binding_version", 1)[1].split("\ndef ", 1)[0]
+    assert "hashlib" not in helper and "binding_version" in helper
+    controller = (ROOT / "frappe_app/dsherp_platform/platform/doctype/ds_membership/ds_membership.py").read_text()
+    counting = controller.split("def _count_the_binding", 1)[1]
+    assert "+ 1" in counting and "BINDING_FIELDS" in counting
 
 
 def test_the_business_site_refuses_a_key_whose_window_has_passed():

@@ -71,3 +71,16 @@ def test_the_conversation_is_not_an_audit_record_but_cannot_be_deleted_while_run
     removed, but deleting it while its runs exist would orphan the audit trail."""
     source = _controller("ds_conversation")
     assert "def on_trash" in source and "DS Model Run" in source
+
+
+def test_a_finished_run_is_closed_to_the_document_path_and_only_cancellation_stays_open():
+    """G7 is not a permission: Administrator with ignore_permissions gets past permissions.
+    The controller's validate refuses any rewrite of a terminal run, and on a live run allows
+    only the cancel transition. The real-site proof, three ways, is in
+    tests/integration/test_audit_immutability.py."""
+    source = _controller("ds_model_run")
+    assert "def validate" in source
+    body = source.split("def validate", 1)[1].split("def on_trash", 1)[0]
+    assert "TERMINAL" in body and "frappe.throw" in body
+    assert "('Queued', 'Cancelled')" in source and "('Running', 'Cancelling')" in source
+    assert "cancel_request_id" in source, "the person's cancel request is the only other change allowed"
