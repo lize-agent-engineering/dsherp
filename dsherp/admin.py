@@ -136,28 +136,41 @@ def render_ingress(resolved, tenants, root=ROOT):
 
 
 class Bench:
-    """Runs one command inside a Site container of this deployment."""
+    """Runs one command inside a Site container of this deployment.
 
-    def __init__(self, resolved, kind, root=ROOT, runner=subprocess.run):
+    `project`, `compose_file` and `environment` let a drill drive an isolated stack with the
+    same class: a different compose project, a different file, and the image tag and secrets
+    directory that stack must use."""
+
+    def __init__(self, resolved, kind, root=ROOT, runner=subprocess.run, *, project=None, compose_file=None,
+                 environment=None, service=None):
         self.resolved = resolved
-        self.service = SERVICES[resolved['env']][kind]
+        self.service = service or SERVICES[resolved['env']][kind]
         self.root = Path(root)
         self.runner = runner
+        self.project = project or resolved['project']
+        self.compose_file = compose_file
+        self.environment = dict(environment or {})
 
     def _compose(self, *arguments):
-        file = self.root / COMPOSE[self.resolved['env']]
-        command = ['docker', 'compose', '-p', self.resolved['project']]
+        file = Path(self.compose_file) if self.compose_file else self.root / COMPOSE[self.resolved['env']]
+        command = ['docker', 'compose', '-p', self.project]
         # The same file deploy_env resolved from, so compose interpolates the same values.
         env_file = deploy_env.env_file(self.resolved['env'], self.root)
-        if env_file.exists():
+        if env_file.exists() and not self.compose_file:
             command += ['--env-file', str(env_file)]
         return command + ['-f', str(file), *arguments]
+
+    def _environment(self):
+        return {**os.environ, **self.environment} if self.environment else None
 
     def run(self, *arguments, stdin=None, timeout=900, secrets=()):
         command = self._compose('exec', '-T', self.service, *arguments)
         # A container command must never inherit the operator's stdin: when this CLI is
         # driven from a script piped over ssh, bench would read the rest of that script.
         io = {'input': stdin} if stdin is not None else {'stdin': subprocess.DEVNULL}
+        if self.environment:
+            io['env'] = self._environment()
         result = self.runner(command, text=True, capture_output=True, timeout=timeout, **io)
         if result.returncode:
             tail = '\n'.join((result.stderr or result.stdout or '').strip().splitlines()[-6:])
@@ -177,6 +190,13 @@ class Bench:
                   + ''.join('    ' + line + '\n' for line in body.splitlines()) +
                   "finally:\n    frappe.destroy()\n")
         return self.run(BENCH_PYTHON, '-', stdin=script, timeout=timeout)
+
+    def script(self, body, timeout=900, secrets=()):
+        """Run a snippet in the bench's interpreter without connecting to a Site.
+
+        Credentials belong here, not on a command line: bench logs its own argv, and this
+        stdin never reaches a log. Used for `_new_site`, restore and site_config writes."""
+        return self.run(BENCH_PYTHON, '-', stdin='import json,os,sys\n' + body, timeout=timeout, secrets=secrets)
 
     def site_state(self, site):
         """'present' (has site_config.json), 'partial' (directory only) or 'absent'."""
@@ -1218,6 +1238,9 @@ def main(argv=None):
     backup_parser = sub.add_parser('backup', help='对平台站与全部租户站在稳定窗口内生成四件套与核验快照，暂存为备份集；--sync 随后异地同步')
     backup_parser.add_argument('--sync', action='store_true', help='生成后立即把未完成的备份集推到异地并核对配对')
     backup_parser.add_argument('--site', action='append', default=[], help='只备份这些站（缺省是平台站与全部租户站），可重复')
+    drill_parser = sub.add_parser('restore-drill', help='在隔离栈里从最新的完整异地备份集恢复并核验（每周；用毕删除该栈）')
+    drill_parser.add_argument('site', nargs='*', help='缺省是平台站与全部租户站')
+    drill_parser.add_argument('--discard-failed', action='store_true', help='清掉上一次失败演练留下的隔离栈后再演练')
     sub.add_parser('backup-init', help='一次性初始化两个异地备份仓库（幂等）')
     sub.add_parser('backup-sync', help='把未完成的备份集推到异地并核对配对，按保留策略淘汰，抽读数据校验')
     release_parser = sub.add_parser('release', help='发布到 prod.env 里的 tag：静默站点、备份并归档、快照、migrate、快照、逐字段比对')
@@ -1276,6 +1299,12 @@ def main(argv=None):
             report = backup_module.backup(resolved, sync=arguments.sync, sites=arguments.site or None)
             _print({key: value for key, value in report.items() if key != 'sets'}
                    | {'sets': {site: doc['set_id'] for site, doc in report['sets'].items()}})
+            return 0 if report['ok'] else 1
+        if arguments.command == 'restore-drill':
+            from dsherp import restore_drill as drill_module
+            report = drill_module.restore_drill(resolved, arguments.site or None,
+                                                discard_failed=arguments.discard_failed)
+            _print(report)
             return 0 if report['ok'] else 1
         if arguments.command == 'backup-init':
             from dsherp import backup as backup_module

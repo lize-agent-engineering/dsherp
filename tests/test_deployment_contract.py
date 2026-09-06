@@ -30,6 +30,7 @@ IMAGE_SOURCES = (
     "infra/docker/frappe/Dockerfile",
     "infra/docker/worker/Dockerfile",
     "infra/probe_v16/compose.yml",
+    "infra/compose.restore.yml",
     "dsherp/deploy_env.py",
     "dsherp/runtime_host.py",
 )
@@ -519,3 +520,32 @@ def test_merge_context_worker_profiles_fast_fails_on_missing_or_invalid_input(tm
     daily.write_text(json.dumps({"site": "alpha.localhost"}))
     with pytest.raises(ValueError):
         merge_context_worker_profiles(tmp_path)
+
+
+def test_the_restore_stack_is_isolated_from_users_from_production_and_from_the_network():
+    """A restored copy must not answer a user, claim a run, send mail or reach anything; only
+    the two fetch containers get a route out, and each sees one half of a set."""
+    text = (ROOT / "infra/compose.restore.yml").read_text()
+    body = text.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+    services = set(re.findall(r"^  ([a-z0-9-]+):$", body, re.MULTILINE))
+    assert "ports:" not in text, "a restored copy has no way in"
+    assert not services & {"caddy", "frontend", "scheduler", "queue", "agent-egress", "worker"}
+    assert re.search(r"^  restore: \{internal: true\}$", text, re.MULTILINE)
+    for service in services:
+        block = _block(body, service)
+        route = "provider" in block
+        assert route == service.startswith("restore-fetch-"), service
+    data, secrets_block = _block(body, "restore-fetch-data"), _block(body, "restore-fetch-secrets")
+    assert "restore-fetched-data:/fetched" in data and "restore-fetched-secrets" not in data
+    assert "restore-fetched-secrets:/fetched" in secrets_block and "restore-fetched-data" not in secrets_block
+    for block in (data, secrets_block):
+        assert "profiles: [fetch]" in block and "cap_drop: [ALL]" in block and "read_only: true" in block
+    bench = _block(body, "backend")
+    assert "restore-fetched-data:/home/frappe/fetched/data:ro" in bench
+    assert "restore-fetched-secrets:/home/frappe/fetched/secrets:ro" in bench
+    assert "${DSHERP_IMAGE_REGISTRY:?set DSHERP_IMAGE_REGISTRY}/dsherp-frappe:${DSHERP_IMAGE_TAG:?set DSHERP_IMAGE_TAG}" in bench
+    volumes = text.split("\nvolumes:\n", 1)[1].split("\nsecrets:\n", 1)[0]
+    declared = set(re.findall(r"^  ([a-z0-9-]+):$", volumes, re.MULTILINE))
+    assert all(name.startswith("restore-") for name in declared), declared
+    assert not re.search(r"^      - [$./]", body, re.MULTILINE), "named volumes only; no host paths"
+    assert f"@sha256:{DB_V16}" in _block(body, "db"), "the same database build production runs"
