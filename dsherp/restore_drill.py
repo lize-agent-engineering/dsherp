@@ -406,3 +406,94 @@ def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.ru
         backup.save_status(resolved, status, root)
         admin._write_json(admin.runtime_dir(resolved, root) / 'backups' / f'restore-{site}.json', report)
     return report
+
+
+def migrate_drill(resolved, tag, sites=None, *, root=ROOT, runner=subprocess.run, stack_bench_factory=None,
+                  clock=time.time, sleep=time.sleep, discard_failed=False):
+    """The automated form of G2 (D4): restore a set taken on the build being upgraded away
+    from into an isolated stack running the NEW build, migrate it, and judge the result the
+    way a release judges it - only differences a patch declared are allowed.
+
+    A restore drill refuses a stack whose image is not the one the set records; this one
+    requires the opposite, which is the whole point: it answers "will this release's migration
+    keep the data intact" before the release touches a Site."""
+    backup.require_repositories(resolved)
+    if not deploy_env.TAG.fullmatch(tag or ''):
+        raise Fault('迁移演练要给出目标 tag')
+    status, state = backup.read_status(resolved, root)
+    if state == 'corrupt':
+        raise Fault('备份状态文件损坏：先修复 backups/status.json 再做迁移演练')
+    targets = list(sites) if sites else [row['site'] for row in admin.load_tenants(resolved, root)] + [resolved['platform_site']]
+    drill_id = time.strftime('%Y%m%d_%H%M%S', time.gmtime(clock())) + '-' + tokens.token_hex(3)
+    report = {'ok': True, 'drill_id': drill_id, 'tag': tag, 'sites': {}}
+    bundle = admin.runtime_dir(resolved, root) / 'backups' / 'drills' / drill_id
+    with backup.operations_lock(resolved, root, 'migrate-drill'):
+        chosen = {}
+        for site in targets:
+            try:
+                chosen[site] = newest_complete(status, site)
+            except Fault as error:
+                report['ok'] = False
+                report['sites'][site] = {'error': str(error)}
+        secrets_dir = bundle / 'secrets'
+        root_password, admin_password = tokens.token_urlsafe(24), tokens.token_urlsafe(24)
+        admin._write_private(secrets_dir / 'db_root_password', root_password + '\n')
+        for name in ('backup_repository_password', 'backup_secrets_repository_password',
+                     'backup_storage_credentials', 'backup_secrets_storage_credentials', 'backup_storage_ca.pem'):
+            source = admin.secrets_dir(resolved, root) / name
+            if source.exists():
+                admin._write_private(secrets_dir / name, source.read_text())
+        stack = DrillStack(resolved, root, runner, image_tag=tag, secrets_dir=secrets_dir)
+        if stack.volumes_exist():
+            if not discard_failed:
+                raise Fault('上一次演练留下的恢复栈还在；先看 backups/drills/ 下的报告，确认后用 --discard-failed')
+            stack.down(volumes=True)
+        failed = False
+        try:
+            stack.up(clock=clock, sleep=sleep)
+            bench = stack_bench_factory(stack) if stack_bench_factory else stack.bench()
+            for site, row in chosen.items():
+                started = time.monotonic()
+                try:
+                    stack.fetch('data', row['data_snapshot'])
+                    stack.fetch('secrets', row['secrets_snapshot'])
+                    set_doc, data_root, before, config = verify_fetched(bench, site, row['set_id'])
+                    restore_into(bench, site, data_root, config,
+                                 root_password=root_password, admin_password=admin_password)
+                    migrated = bench.run('bench', '--site', site, 'migrate', timeout=3600)
+                    after = admin.take_snapshot(resolved, site, bench=bench,
+                                                hash_columns=admin._hash_columns_of(before))
+                    declared = admin._expected_changes(bench, site)
+                    executed = sorted(set(after.get('patches', [])) - set(before.get('patches', [])))
+                    applicable = [entry for entry in declared if entry['patch'] in executed]
+                    comparison = admin.compare_snapshots(before, after, applicable)
+                    if not comparison['clean']:
+                        raise Fault(f'{site} 从 {set_doc["image_tag"]} 迁移到 {tag} 后有 '
+                                    f'{comparison["summary"]["undeclared"]} 处未声明差异；'
+                                    '要么补 patch 的 EXPECTED_CHANGES 声明，要么这次迁移会改坏数据')
+                    report['sites'][site] = {'set_id': row['set_id'], 'from_tag': set_doc['image_tag'], 'to_tag': tag,
+                                             'seconds': round(time.monotonic() - started, 1),
+                                             'summary': comparison['summary'], 'patches_executed': executed,
+                                             'expectations_ignored': [entry for entry in declared
+                                                                      if entry['patch'] not in executed],
+                                             'migrate_tail': migrated.strip().splitlines()[-10:]}
+                except Exception as error:
+                    failed = True
+                    report['ok'] = False
+                    report['sites'][site] = {'set_id': row.get('set_id'), 'error': str(error)[:800]}
+        except Exception as error:
+            failed = True
+            report['ok'] = False
+            for site in chosen:
+                report['sites'].setdefault(site, {'error': str(error)[:800]})
+        finally:
+            admin._write_json(bundle / 'report.json', report)
+            try:
+                stack.down(volumes=not failed)
+            except Fault as error:
+                report['ok'] = False
+                report['sites'].setdefault('_teardown', {'error': str(error)[:400]})
+        if report['ok']:
+            shutil.rmtree(secrets_dir, ignore_errors=True)
+        admin._write_json(bundle / 'report.json', report)
+    return report

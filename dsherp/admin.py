@@ -1241,6 +1241,10 @@ def main(argv=None):
     restore_parser = sub.add_parser('restore-site', help='在新主机上从异地备份集恢复一个站（G3 冷启动；见 runbook 第 12 节）')
     restore_parser.add_argument('site')
     restore_parser.add_argument('--set', dest='set_id', metavar='SET_ID', help='指定备份集；缺省用该站最新的完整配对')
+    migrate_drill_parser = sub.add_parser('migrate-drill', help='把旧构建的备份集恢复进运行新构建的隔离栈并 migrate，按 G2 口径判定（发布前跑）')
+    migrate_drill_parser.add_argument('tag', help='要验证的目标 tag')
+    migrate_drill_parser.add_argument('site', nargs='*', help='缺省是平台站与全部租户站')
+    migrate_drill_parser.add_argument('--discard-failed', action='store_true')
     drill_parser = sub.add_parser('restore-drill', help='在隔离栈里从最新的完整异地备份集恢复并核验（每周；用毕删除该栈）')
     drill_parser.add_argument('site', nargs='*', help='缺省是平台站与全部租户站')
     drill_parser.add_argument('--discard-failed', action='store_true', help='清掉上一次失败演练留下的隔离栈后再演练')
@@ -1309,6 +1313,12 @@ def main(argv=None):
             from dsherp import restore_drill as drill_module
             _print(drill_module.restore_site(resolved, arguments.site, set_id=arguments.set_id))
             return 0
+        if arguments.command == 'migrate-drill':
+            from dsherp import restore_drill as drill_module
+            report = drill_module.migrate_drill(resolved, arguments.tag, arguments.site or None,
+                                                discard_failed=arguments.discard_failed)
+            _print(report)
+            return 0 if report['ok'] else 1
         if arguments.command == 'restore-drill':
             from dsherp import restore_drill as drill_module
             report = drill_module.restore_drill(resolved, arguments.site or None,

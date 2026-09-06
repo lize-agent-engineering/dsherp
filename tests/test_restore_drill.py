@@ -56,9 +56,10 @@ class DrillRunner:
 class DrillBench:
     """The isolated stack's bench: serves the fetched files from what the source staged."""
 
-    def __init__(self, source, snapshot, *, decrypt_failed=(), site=SITE):
+    def __init__(self, source, snapshot, *, decrypt_failed=(), site=SITE, expectations=()):
         self.source = source
         self.snapshot = snapshot
+        self.expectations = list(expectations)
         self.decrypt_failed = list(decrypt_failed)
         self.site = site
         self.verbs = []
@@ -121,6 +122,8 @@ class DrillBench:
             return "DSHERP_SNAPSHOT " + json.dumps(self.snapshot) + "\n"
         if "DSHERP_DECRYPT" in body:
             return "DSHERP_DECRYPT " + json.dumps({"checked": 3, "failed": self.decrypt_failed}) + "\n"
+        if "EXPECTED_CHANGES" in body:
+            return "DSHERP_EXPECTATIONS " + json.dumps(self.expectations) + "\n"
         return "{}\n"
 
     def site_state(self, site):
@@ -297,3 +300,57 @@ def test_the_cli_wires_restore_site(monkeypatch):
     monkeypatch.setattr(deploy_env, "settings", lambda *a, **k: RELEASE)
     assert admin.main(["restore-site", SITE, "--set", "20260906_020007-acme_tenant_example_com-aaaaaa"]) == 0
     assert seen["site"] == SITE and seen["set_id"].endswith("-aaaaaa")
+
+
+def test_a_migration_drill_restores_an_older_set_into_the_new_build_migrates_and_judges(host):
+    """The automated form of G2 (D4): before a release touches production, take a set from the
+    build being upgraded away from, restore it into the isolated stack running the NEW build,
+    migrate, and compare - a DocType change without a migration path shows up here."""
+    bench, restic, sets = _complete_set(host)
+    drill_runner = DrillRunner(bench, image_id="sha256:id-v0.5.0")
+    drill_bench = DrillBench(bench, SAME)
+    report = restore_drill.migrate_drill(RELEASE, "v0.5.0", sites=[SITE], root=admin.ROOT,
+                                         runner=lambda command, **kwargs: (
+                                             restic(command, **kwargs) if any(word.startswith("backup-sync-") for word in command)
+                                             else drill_runner(command, **kwargs)),
+                                         stack_bench_factory=lambda stack: drill_bench,
+                                         clock=lambda: 1_788_736_000.0, sleep=lambda seconds: None)
+    assert report["ok"] is True, report
+    assert report["tag"] == "v0.5.0" and report["sites"][SITE]["set_id"] == sets[SITE]["set_id"]
+    calls = [" ".join(command) for command in drill_runner.calls]
+    up = next(call for call in calls if "up -d" in call)
+    assert "-p dsherp-restore" in up
+    verbs = drill_bench.verbs
+    assert any("migrate" in verb for verb in verbs), "a migration drill migrates; a restore drill does not"
+    scripts = "\n".join(drill_bench.scripts)
+    assert "source_sql" in scripts, "the old set is restored before it is migrated"
+    assert scripts.index("source_sql") < len(scripts), "restore comes first"
+    assert report["sites"][SITE]["patches_executed"] == [] or isinstance(report["sites"][SITE]["patches_executed"], list)
+
+
+def test_a_migration_that_changes_data_without_declaring_it_fails_the_drill(host):
+    bench, restic, sets = _complete_set(host)
+    drill_bench = DrillBench(bench, DRIFTED)          # the Site's data differs after migrate
+    drill_runner = DrillRunner(bench, image_id="sha256:id-v0.5.0")
+    report = restore_drill.migrate_drill(RELEASE, "v0.5.0", sites=[SITE], root=admin.ROOT,
+                                         runner=lambda command, **kwargs: (
+                                             restic(command, **kwargs) if any(word.startswith("backup-sync-") for word in command)
+                                             else drill_runner(command, **kwargs)),
+                                         stack_bench_factory=lambda stack: drill_bench,
+                                         clock=lambda: 1_788_736_000.0, sleep=lambda seconds: None)
+    assert report["ok"] is False
+    assert "差异" in report["sites"][SITE]["error"]
+    downs = [" ".join(command) for command in drill_runner.calls if "down" in command]
+    assert downs and "-v" not in downs[-1].split("down", 1)[1], "a failed drill keeps its stack"
+
+
+def test_the_cli_wires_the_migration_drill(monkeypatch):
+    seen = {}
+    def fake(resolved, tag, sites=None, **kwargs):
+        seen.update({"tag": tag, "sites": sites, **kwargs})
+        return {"ok": True, "sites": {}}
+    monkeypatch.setattr(restore_drill, "migrate_drill", fake)
+    from dsherp import deploy_env
+    monkeypatch.setattr(deploy_env, "settings", lambda *a, **k: RELEASE)
+    assert admin.main(["migrate-drill", "v0.5.0", SITE]) == 0
+    assert seen["tag"] == "v0.5.0" and seen["sites"] == [SITE]
