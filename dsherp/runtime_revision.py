@@ -6,7 +6,9 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
 FILES=tuple(json.loads((ROOT/'config/runtime-files.json').read_text()))
+# Both must be present for a run to start; only the endpoint takes part in the digest.
 KEYS=('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL')
+BOUND=('DEEPSEEK_BASE_URL',)
 
 
 def verify_business_skills(root=ROOT):
@@ -40,6 +42,8 @@ def configuration_revision(settings,root=ROOT):
         raise ValueError('Missing runtime configuration: deployment_digest')
     verify_business_skills(root)
     files=[[name,hashlib.sha256((root/name).read_bytes()).hexdigest()] for name in FILES]
-    # The digest binds credentials too, but never stores or exposes their value.
-    value=[files,[settings[key] for key in KEYS],deployment]
+    # The provider key is deliberately not part of this. The digest decides whether a
+    # conversation keeps its native session, so binding the key would end every session on
+    # the host each time that key is rotated (S9). What the runtime talks to still counts.
+    value=[files,[settings[key] for key in BOUND],deployment]
     return hashlib.sha256(json.dumps(value,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()

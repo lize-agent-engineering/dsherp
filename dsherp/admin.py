@@ -5,6 +5,7 @@ before it changes anything, so a half-finished tenant can be resumed instead of
 being torn down, and a repeat run is a no-op rather than a duplicate.
 """
 import argparse
+import datetime
 import json
 import os
 from pathlib import Path
@@ -652,7 +653,23 @@ def doctor(resolved, root=ROOT, runner=subprocess.run):
                                 '否则 compose 会回落到 ../.runtime 下的开发密钥')
         if resolved['agent_uid'] == 0:
             findings.append('Agent 容器身份解析为 root')
+    findings += _rotation_findings(resolved, root)
     return findings
+
+
+def _rotation_findings(resolved, root):
+    """Long-lived credentials nobody has changed. Reported here because the operator reads
+    doctor before a release, and a credential's age is exactly that kind of fact."""
+    from dsherp import rotation
+    try:
+        rows = rotation.read(runtime_dir(resolved, root) / 'rotations.json')
+    except ValueError as error:
+        return [str(error)]
+    return [f"凭据轮换：{item['kind']} {item['target']} {item['note']}"
+            f"（{item['age_days']} 天 / 窗口 {item['window_days']} 天）"
+            if item['age_days'] is not None else
+            f"凭据轮换：{item['kind']} {item['target']} {item['note']}"
+            for item in rotation.findings(rows, rotation_targets(resolved, root), datetime.datetime.now())]
 
 
 # --- release and rollback -------------------------------------------------------
@@ -1539,6 +1556,180 @@ def issue_credential(resolved, site, user, *, root=ROOT, runner=subprocess.run, 
                      else '该业务用户在平台上没有启用中的绑定，凭据只存在于业务站')}
 
 
+RUNTIME_USER_SCRIPT = "print(frappe.conf.get('dsherp_runtime_user') or '')"
+
+
+def _rotate_oauth_script(slug, callback):
+    return (f"app_name={'DSHERP ' + slug + ' Desk'!r};callback={callback!r}\n"
+            "import secrets as _s\n"
+            "name=frappe.db.get_value('OAuth Client',{'app_name':app_name},'name')\n"
+            # A client renamed by hand is still that tenant's client: its callback says so.
+            "name=name or frappe.db.get_value('OAuth Client',{'default_redirect_uri':callback},'name')\n"
+            "if not name:\n"
+            "    raise SystemExit('该租户的 OAuth Client 尚未创建，先 provision-tenant')\n"
+            "client=frappe.get_doc('OAuth Client',name)\n"
+            "client.client_secret=_s.token_urlsafe(32);client.save();frappe.db.commit()\n"
+            "print(json.dumps({'state':'rotated','client_id':client.client_id,"
+            "'client_secret':client.get_password('client_secret')}))")
+
+
+def _register_oauth_script(credentials):
+    return ("values=json.loads(" + repr(json.dumps(credentials)) + ")\n"
+            "name=frappe.db.get_value('Social Login Key',{'provider_name':'DSHERP Platform'},'name')\n"
+            "if not name:\n"
+            "    raise SystemExit('该业务站尚未登记平台登录，先 provision-tenant')\n"
+            "doc=frappe.get_doc('Social Login Key',name)\n"
+            "doc.client_id=values['client_id'];doc.client_secret=values['client_secret']\n"
+            "doc.save();frappe.db.commit()\n"
+            "print(json.dumps({'state':'updated'}))")
+
+
+def _profile_rows(path, site):
+    """The rows in this worker profile that run as this Site's identity.
+
+    Both shapes the worker itself accepts: a `sites` list, and the older flat profile that is
+    one site on its own."""
+    path = Path(path)
+    if not path.exists():
+        raise Fault(f'找不到 worker profile {path}')
+    try:
+        document = json.loads(path.read_text())
+    except json.JSONDecodeError as error:
+        raise Fault(f'worker profile 不是有效的 JSON：{path}') from error
+    rows = document['sites'] if isinstance(document.get('sites'), list) else [document]
+    matching = [row for row in rows if isinstance(row, dict) and row.get('site') == site]
+    if not matching:
+        raise Fault(f'worker profile 里没有 {site}：{path}')
+    return document, matching
+
+
+def _profile_pair(path, site, pair):
+    """Put a rotated identity where the worker reads it, without touching anything else."""
+    document, rows = _profile_rows(path, site)
+    for row in rows:
+        row['api_key'] = pair['api_key']
+        row['api_secret'] = pair['api_secret']
+    _write_private_json(Path(path), document)
+    return [row['site'] for row in rows]
+
+
+def _write_private_json(path, payload):
+    temporary = path.with_name('.' + path.name + f'.{os.getpid()}')
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, 'w') as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=1, sort_keys=True)
+            handle.write('\n')
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return path
+
+
+def rotate(resolved, kind, *, target=None, value=None, file=None, profile=None,
+           root=ROOT, runner=subprocess.run, bench_factory=None):
+    """Replace one long-lived credential and write the change into the ledger (S4/S9).
+
+    Three kinds, each rotated where it lives: the provider key in the file the worker reads,
+    a Site's own execution identity on that Site, and a tenant's OAuth client secret on the
+    platform and on the business Site that trusts it. The ledger records the version, the
+    time and a fingerprint - never the value, which is why an operator can read it.
+
+    None of these end a member's session: `runtime_revision` deliberately does not bind the
+    provider key, the execution identity belongs to the worker, and the OAuth secret is only
+    used while logging in."""
+    from dsherp import rotation
+    if kind not in rotation.MAX_AGE_DAYS:
+        raise Fault('可轮换的类别：' + '、'.join(rotation.KINDS))
+    ledger = runtime_dir(resolved, root) / 'rotations.json'
+    rows = rotation.read(ledger)
+    factory = bench_factory or (lambda name: Bench(resolved, name, root=root, runner=runner))
+    at = datetime.datetime.now()
+    if kind == 'provider':
+        path = Path(file) if file else Path(root) / '.env'
+        if not path.exists():
+            raise Fault(f'找不到 provider 配置文件 {path}；用 --file 指定 worker 单元读的那个')
+        if not value:
+            raise Fault('新的 provider key 必须从标准输入给出：dsherp-admin rotate provider < key.txt')
+        current = _value_of(path, 'DEEPSEEK_API_KEY')
+        if current == value.strip():
+            raise Fault('新值与当前值相同，这不是一次轮换')
+        try:
+            previous = rotation.replace_value(path, 'DEEPSEEK_API_KEY', value.strip())
+        except ValueError as error:
+            raise Fault(str(error))
+        item = rotation.entry(kind=kind, target='host', value=value.strip(), previous=previous,
+                              version=rotation.next_version(rows, kind, 'host'), at=at)
+        rotation.record(ledger, item)
+        return {'kind': kind, 'target': 'host', 'version': item['version'],
+                'effective_at': item['effective_at'], 'fingerprint': item['fingerprint'],
+                'file': str(path),
+                'next': '重启 worker 单元让新 key 生效：systemctl restart dsherp-context-worker'}
+    if kind == 'runtime':
+        site = target or resolved['platform_site']
+        bench = _user_site_bench(resolved, root, factory, site)
+        # Whoever the Site says its execution identity is. Deriving the name from the Site
+        # would rotate a user that does not exist on a Site provisioned any other way, and
+        # report success for a key nobody uses.
+        user = _last_line(bench.python(site, RUNTIME_USER_SCRIPT, timeout=120)).strip()
+        if not user or user == 'None':
+            raise Fault(f'{site} 的 site_config 里没有 dsherp_runtime_user，先确认这个站是否已开通')
+        # More than one profile may name this identity; a rotation that updates one and
+        # leaves the other is a worker that dies at its next claim. Every file is checked
+        # before the key changes: a secret is issued once, and a write that fails afterwards
+        # leaves a credential nobody holds.
+        paths = [profile] if isinstance(profile, (str, Path)) else list(profile or [])
+        for path in paths:
+            _profile_rows(path, site)
+        issued = ensure_runtime_identity(bench, site, user, rotate=True)
+        if 'api_secret' not in issued:
+            raise Fault(f'{site} 没有返回新的运行身份凭据')
+        updated = []
+        for path in paths:
+            updated += _profile_pair(path, site, issued)
+        item = rotation.entry(kind=kind, target=site, value=issued['api_secret'], previous=None,
+                              version=rotation.next_version(rows, kind, site), at=at)
+        rotation.record(ledger, item)
+        return {'kind': kind, 'target': site, 'user': user, 'version': item['version'],
+                'effective_at': item['effective_at'], 'fingerprint': item['fingerprint'],
+                'api_key': issued['api_key'], 'profile_updated': bool(updated),
+                'profile_sites': updated or [],
+                'next': ('重启 worker 单元' if updated else
+                         '把新的 api_secret 写进 worker profile 后重启 worker 单元；'
+                         '本次未提供 --profile，密钥只在本次输出中出现过')}
+    slug = target
+    if not slug or not any(row['slug'] == slug for row in load_tenants(resolved, root)):
+        raise Fault('oauth-client 轮换需要给出当前清单里的租户 slug')
+    site = deploy_env.site_name(resolved, slug)
+    platform = factory('platform')
+    credentials = json.loads(_last_line(platform.python(
+        site_for_platform(resolved), _rotate_oauth_script(slug, deploy_env.callback_url(resolved, slug)))))
+    tenant = factory('tenant')
+    registered = json.loads(_last_line(tenant.python(site, _register_oauth_script(credentials))))
+    item = rotation.entry(kind=kind, target=slug, value=credentials['client_secret'], previous=None,
+                          version=rotation.next_version(rows, kind, slug), at=at)
+    rotation.record(ledger, item)
+    return {'kind': kind, 'target': slug, 'site': site, 'version': item['version'],
+            'effective_at': item['effective_at'], 'fingerprint': item['fingerprint'],
+            'client': credentials['state'], 'business_site': registered['state'],
+            'next': '已在两侧生效；进行中的登录会失败一次，重新登录即可'}
+
+
+def _value_of(path, key):
+    for line in Path(path).read_text().splitlines():
+        if line.split('=', 1)[0].strip() == key and '=' in line:
+            return line.split('=', 1)[1].strip()
+    return None
+
+
+def rotation_targets(resolved, root=ROOT):
+    """What this deployment has that needs rotating, by kind."""
+    rows = load_tenants(resolved, root)
+    return {'provider': ['host'],
+            'runtime': [row['site'] for row in rows] + [resolved['platform_site']],
+            'oauth-client': [row['slug'] for row in rows]}
+
+
 def _print(payload):
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -1569,6 +1760,14 @@ def main(argv=None):
     sessions_parser = sub.add_parser('sessions', help='查看宿主上的原生会话目录；--sweep 清掉超过保留期的（默认 90 天）')
     sessions_parser.add_argument('--sweep', action='store_true')
     sessions_parser.add_argument('--days', type=int, default=None)
+    rotate_parser = sub.add_parser('rotate',
+                                   help='轮换一类长期凭据并记入账簿：provider（模型 key，从标准输入读）、'
+                                        'runtime（某站点的运行身份）、oauth-client（某租户的平台登录密钥）')
+    rotate_parser.add_argument('kind', choices=('provider', 'runtime', 'oauth-client'))
+    rotate_parser.add_argument('target', nargs='?', help='runtime 给站点名，oauth-client 给租户 slug')
+    rotate_parser.add_argument('--file', default=None, help='provider：worker 单元读的那个 .env')
+    rotate_parser.add_argument('--profile', action='append', default=None,
+                                   help='runtime：把新凭据写回这个 worker profile（可给多次）')
     credentials_parser = sub.add_parser('credentials',
                                         help='查看某站点借出的短期业务凭据及其有效期；--issue 为某个业务用户重新签发并交给平台')
     credentials_parser.add_argument('site')
@@ -1660,6 +1859,13 @@ def main(argv=None):
         if arguments.command == 'sessions':
             report = sessions_report(resolved, days=arguments.days, sweep=arguments.sweep)
             _print(report)
+            return 0
+        if arguments.command == 'rotate':
+            # The new provider key never travels on a command line: bench and shell
+            # histories both keep argv, and this one is read from standard input.
+            value = sys.stdin.read().strip() if arguments.kind == 'provider' else None
+            _print(rotate(resolved, arguments.kind, target=arguments.target, value=value,
+                          file=arguments.file, profile=arguments.profile))
             return 0
         if arguments.command == 'credentials':
             if arguments.issue:
