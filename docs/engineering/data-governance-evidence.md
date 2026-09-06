@@ -45,6 +45,22 @@
 
 快照大小：g1 的 `before.json` 3.6 MB（严格桶保留字段值），读取耗时最长的表 Deleted Document 0.22 s、Comment 0.12 s（分页哈希）。演练后 `compose down -v` 拆栈、`.runtime/prod-local/` 清理；`local/dsherp-*:v0.3.1-rc2` 镜像与 `infra/env/prod.env` 保留给后续切片。
 
+### 故障注入（2026-09-06，真实链路）
+
+worker 的 `monitor_backups` 每次读真实状态文件，下面是它当场给出的告警与 gauge：
+
+| 注入 | 结果 |
+|---|---|
+| 健康（刚同步完） | `alerts=[]`，`rpo_ok=1`，最旧异地副本 0.24 小时 |
+| 停掉对象存储后同步 | 120.4 秒内返回失败（两侧各探 60 秒），`containers left=0`（超时留下的容器已清掉），错误点名 `data 仓库 cat 超过 60 秒没有返回`；worker 随即报 `backup_run_failed`，且 `rpo_ok` 仍为 1——上一份完整副本还在，这次只是没同步成功 |
+| 状态文件被删 | `backup_status_missing`（critical），`rpo_ok=0`，最旧异地副本 -1 |
+| 状态文件损坏 | 同上（缺失与损坏都报同一条，但操作命令对损坏的处置不同：拒绝任何淘汰） |
+| 把最新已核对集的时间戳改成 5 天前 | `backup_rpo_unmet`（critical），`oldest_h=134.2` |
+| 租户清单读不到 | `backup_scope_unknown`（critical），`sites_expected=-1`，**不缩小范围计算** |
+| 单元失败且 worker 停止 | `notify-failure` 直接写出 journal 行 `{"event":"alert","key":"backup_unit_failed",…}`；未配置 webhook 时如实返回 `not configured`，配置后投递失败返回 `failed` 而不是 `posted`（单元测试覆盖） |
+
+演练中还查到并修掉三处只有真跑才会暴露的问题：可达性探测原先排在仓库列表之后（端点已死时先卡在 `snapshots` 上）；探测用的 `cat config` 会由本地缓存作答（改用 `--no-cache`）；`compose run` 的客户端被超时杀掉后容器仍在重试（按 compose 标签清理）。
+
 ### 门禁
 
 | 门 | 结果 |
@@ -159,7 +175,6 @@
 | 保留淘汰 | 造 20 个跨 20 个月的历史集：一次同步后两侧各剩 7 个（7 日槽位吃掉了 7 个不同日期），记录同步收敛，第二次运行无操作 |
 | 完整性 | 每次同步两侧 `check --read-data-subset=<n>/7`，按天轮换 |
 | 隔离恢复 | `restore-drill` 在 `dsherp-restore` 项目里按集记录的构建起栈、核对镜像 id、取回两侧、核对配对与全部摘要、进程内恢复、注入 `encryption_key`、比对与抽样解密：**50 张表 1311 行 0 处未声明差异，6 个加密字段全部解密通过，8.1 秒**；成功后 `down -v` 只删本项目的容器与卷，第二次演练无需 `--discard-failed` 即可开始 |
-| 故障注入 | 见下表 |
 | 调度表达式 | `*-*-* 02,14:00:00 Asia/Shanghai` 与 `Sun *-*-* 04:00:00 Asia/Shanghai` 由真实 `systemd-analyze calendar`（容器内）确认可解析并给出下次触发 |
 
 ### 门禁
