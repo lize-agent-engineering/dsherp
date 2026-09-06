@@ -377,6 +377,17 @@ def _redactions(resolved, root):
     return values
 
 
+def _remove_run_containers(resolved, side, *, runner=subprocess.run):
+    listed = runner(['docker', 'ps', '-q', '--filter', f'label=com.docker.compose.project={resolved["project"]}',
+                     '--filter', f'label=com.docker.compose.service=backup-sync-{side}'],
+                    text=True, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+    containers = (listed.stdout or '').split()
+    if containers:
+        runner(['docker', 'rm', '-f', *containers], text=True, capture_output=True, timeout=120,
+               stdin=subprocess.DEVNULL)
+    return containers
+
+
 def restic(resolved, side, arguments, *, root=ROOT, runner=subprocess.run, timeout=3600, mounts=()):
     """One restic call against one repository, through its own one-shot compose service. The
     repository URL, its password and its storage identity come from compose, never from argv."""
@@ -388,8 +399,11 @@ def restic(resolved, side, arguments, *, root=ROOT, runner=subprocess.run, timeo
     try:
         result = runner(command, text=True, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as error:
+        # `compose run` only kills its own client; the container keeps retrying against a
+        # storage endpoint that is not answering, so it is removed here by its compose labels.
+        _remove_run_containers(resolved, side, runner=runner)
         raise Fault(f'restic（{side} 仓库）{arguments[0]} 超过 {timeout} 秒没有返回；'
-                    '对象存储可能不可达，本次不改动任何副本') from error
+                    '对象存储可能不可达，本次不改动任何副本，已清掉该次运行的容器') from error
     if result.returncode:
         tail = '\n'.join((result.stderr or result.stdout or '').strip().splitlines()[-6:])
         for value in _redactions(resolved, root):
@@ -425,7 +439,7 @@ def notify_failure(resolved, unit, *, root=ROOT, profile_path=None, client=None)
     return {'unit': unit, 'webhook': 'posted'}
 
 
-REACH_TIMEOUT_SECONDS = 120
+REACH_TIMEOUT_SECONDS = 60
 
 
 def reachable(resolved, *, root=ROOT, runner=subprocess.run):

@@ -300,6 +300,12 @@ sudo systemctl daemon-reload && sudo systemctl enable --now dsherp-backup.timer 
 
 **发布与下线**：`release` 的升级前备份与 `retire-tenant` 的最终备份用同一套协议产出 `kind=release`/`kind=retire` 的集并立即上传。生产环境两个命令都以"两个仓库已配置"为前置，未配置即在任何破坏性动作前拒绝；下线的最终集必须两侧配对完成才 `drop-site`。归档目录下 `site_config` 现在放在 `secrets/` 子目录（0700/0600），与转储不同目录不同权限。
 
+**排障**：`backup-sync` 先用 60 秒探两个仓库是否应答，不通就立刻记失败并退出（restic 自己对不可达端点会重试一刻钟），并清掉那次运行留下的容器。上一次运行被强杀会在仓库里留锁，表现为 `check`/`backup` 报 "repository is already locked"；确认没有别的进程在跑之后：
+
+```sh
+DSHERP_ENV=prod .venv/bin/python -c "from dsherp import backup, deploy_env; import os; r=deploy_env.settings(dict(os.environ)); print(backup.restic(r,'data',['unlock','--remove-all']))"
+```
+
 **可见性**：`backup` 与 `backup-sync` 把每站每阶段的最后一次尝试与最后一次成功写进 `<runtime>/backups/status.json`（失败不抹掉成功）。worker 每 tick 读它，产出 `dsherp_backup_sites_expected`、`dsherp_backup_sites_rpo_ok`、`dsherp_backup_offsite_oldest_hours`（有站从未完整则为 -1）、`dsherp_backup_local_oldest_hours`、`dsherp_backup_status_age_seconds`、`dsherp_backup_last_run_ok`、`dsherp_backup_unverified_days_max`，并按规则告警：
 
 | 告警键 | 级别 | 条件 |

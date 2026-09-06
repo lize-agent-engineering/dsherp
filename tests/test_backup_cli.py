@@ -638,5 +638,15 @@ def test_a_restic_call_that_never_returns_becomes_a_refusal_not_a_hang(host):
 
     def hanging(command, **kwargs):
         raise sp.TimeoutExpired(command, kwargs.get("timeout", 1))
+    removed = []
+
+    def hanging_then_listing(command, **kwargs):
+        if command[:2] == ["docker", "ps"]:
+            return type("R", (), {"returncode": 0, "stdout": "abc123\n", "stderr": ""})()
+        if command[:3] == ["docker", "rm", "-f"]:
+            removed.append(command)
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        return hanging(command, **kwargs)
     with pytest.raises(admin.Fault, match="没有返回"):
-        backup.restic(RELEASE, "data", ["cat", "config"], runner=hanging, timeout=120)
+        backup.restic(RELEASE, "data", ["cat", "config"], runner=hanging_then_listing, timeout=60)
+    assert removed and removed[0][-1] == "abc123", "the container the timed-out client left behind is removed"
