@@ -478,16 +478,17 @@ def _restic(bench, fail=(), missing=(), corrupt=()):
         if (side, verb) in fail:
             return 1, "", f"Fatal: {verb} failed on the {side} repository"
         if verb == "backup":
-            set_id = next(word for word in command if word.startswith("set=")).removeprefix("set=")
+            tags = [word for word in command if word.startswith(("set=", "site=", "kind="))]
+            set_id = next(word for word in tags if word.startswith("set=")).removeprefix("set=")
             path = command[-1]
             if side not in missing:
                 digest = hashlib.sha256((set_id + side).encode()).hexdigest()   # restic ids are 64 hex chars
-                state[side][set_id] = {"id": digest, "path": path}
+                state[side][set_id] = {"id": digest, "path": path, "tags": tags}
             return 0, "", ""
         if verb == "snapshots":
             wanted = [word.removeprefix("set=") for word in command if word.startswith("set=")]
             rows = [{"id": row["id"], "short_id": row["id"][:8], "time": "2026-09-06T02:01:00Z",
-                     "tags": [f"set={set_id}"], "paths": [row["path"]]}
+                     "tags": row.get("tags") or [f"set={set_id}"], "paths": [row["path"]]}
                     for set_id, row in state[side].items() if not wanted or set_id in wanted]
             return 0, json.dumps(rows), ""
         if verb == "dump":

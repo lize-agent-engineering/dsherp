@@ -421,6 +421,9 @@ def test_retention_forgets_a_set_on_both_sides_or_on_neither(host):
     assert hashlib.sha256((monthly[1] + "data").encode()).hexdigest() in dropped_ids
     assert hashlib.sha256((monthly[-1] + "data").encode()).hexdigest() not in dropped_ids, "the newest complete set stays"
     assert [command for command in restic.calls if "prune" in command], "space is only reclaimed after forget"
+    # A retried upload can leave more than one snapshot under the same tag; expiry takes them all.
+    duplicate = hashlib.sha256((monthly[1] + "data").encode()).hexdigest()
+    assert duplicate in dropped_ids
     assert report["forgotten"]
     status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
     assert monthly[1] not in status["sets"], "a forgotten set leaves the record too"
@@ -461,3 +464,109 @@ def test_the_cli_wires_backup_init_and_backup_sync(monkeypatch):
     monkeypatch.setattr(deploy_env, "settings", lambda *a, **k: RELEASE)
     assert admin.main(["backup-init"]) == 0 and seen["init"]
     assert admin.main(["backup-sync"]) == 1, "a run that left something pending is not a success"
+
+
+def test_sync_demotes_a_set_whose_copy_disappeared_from_one_repository_and_heals_it(host):
+    """The status file is a record, not evidence: every run asks both repositories what they
+    hold, and a set that is no longer complete over there stops counting as complete here."""
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    restic = _restic(bench)
+    backup.backup_sync(RELEASE, runner=restic, clock=lambda: 1_788_660_100.0)
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    assert status["sets"][set_doc["set_id"]]["state"] == "complete"
+
+    lost = _restic(bench)
+    lost.state["data"] = dict(restic.state["data"])          # somebody removed the secret half
+    report = backup.backup_sync(RELEASE, runner=lost, clock=lambda: 1_788_660_200.0)
+    assert any("不再完整" in error for error in report["errors"])
+    assert set_doc["set_id"] in report["complete"], "the missing half is sent again in the same run"
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    assert status["sets"][set_doc["set_id"]]["state"] == "complete"
+
+    gone = _restic(bench, missing=("secrets",))
+    gone.state["data"] = dict(restic.state["data"])
+    report = backup.backup_sync(RELEASE, runner=gone, clock=lambda: 1_788_660_300.0)
+    assert report["ok"] is False and set_doc["set_id"] in report["pending"]
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    assert status["sets"][set_doc["set_id"]]["state"] != "complete", "it cannot be re-sent, so it is not complete"
+
+
+def test_a_set_the_repositories_hold_but_the_record_forgot_is_adopted_and_can_expire(host):
+    """Otherwise a leftover copy would live in the repositories forever: unknown to the
+    record, so never verified, so never a candidate for expiry."""
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    restic = _restic(bench)
+    backup.backup_sync(RELEASE, runner=restic, clock=lambda: 1_788_660_100.0)
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    status["sets"].pop(set_doc["set_id"])                 # the record loses it, the repositories do not
+    backup_status.save(backup.status_path(RELEASE, admin.ROOT), status)
+    report = backup.backup_sync(RELEASE, runner=restic, clock=lambda: 1_788_660_200.0)
+    assert any("收养" in warning for warning in report["warnings"])
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    assert status["sets"][set_doc["set_id"]]["state"] == "complete", "adopted, read back, understood again"
+
+
+def test_a_leftover_snapshot_from_a_retried_upload_does_not_make_the_set_unverifiable(host):
+    """A tag can carry more than one snapshot; the good pair is found rather than assumed to
+    be the newest."""
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    restic = _restic(bench)
+    backup.upload_sets(RELEASE, [set_doc], runner=restic, status=backup_status.empty())
+    good = dict(restic.state["data"][set_doc["set_id"]])
+    # An earlier attempt left a snapshot under the same tag whose manifest belongs elsewhere.
+    stale = {"id": "e" * 64, "path": good["path"], "tags": good["tags"], "stale": True}
+    calls = []
+
+    def with_stale(command, **kwargs):
+        calls.append(command)
+        result = restic(command, **kwargs)
+        if "snapshots" in command and "backup-sync-data" in command:
+            rows = json.loads(result.stdout or "[]")
+            rows.append({"id": stale["id"], "short_id": stale["id"][:8], "time": "2026-09-07T00:00:00Z",
+                         "tags": stale["tags"], "paths": [stale["path"]]})
+            result.stdout = json.dumps(rows)
+        if "dump" in command and stale["id"] in command:
+            result.returncode, result.stdout = 0, json.dumps({"set_id": "somebody_elses_set", "format": 1})
+        return result
+    status = backup_status.empty()
+    outcome = backup.upload_sets(RELEASE, [set_doc], runner=with_stale, status=status)
+    assert outcome["complete"] == [set_doc["set_id"]], "the good pair is found behind the stale one"
+    assert status["sets"][set_doc["set_id"]]["data_snapshot"] == good["id"]
+
+
+def test_a_remote_copy_that_no_longer_describes_the_set_is_replaced_from_the_staging_area(host):
+    """Existence is not enough: if what is over there does not describe this set, it is sent
+    again from the copy this host still holds, and only the new pair may count."""
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    set_doc = _staged_set(bench)
+    restic = _restic(bench)
+    status = backup_status.empty()
+    backup.upload_sets(RELEASE, [set_doc], runner=restic, status=status)
+    # The data half over there is replaced by something describing another set.
+    entry = restic.state["data"][set_doc["set_id"]]
+    wrong = {"set_id": "20260101_000000-acme_tenant_example_com-zzzzzz", "format": 1}
+    uploads = []
+
+    def stale_content(command, **kwargs):
+        result = restic(command, **kwargs)
+        if "dump" in command and "backup-sync-data" in command and entry["id"] in command and not uploads:
+            result.stdout = json.dumps(wrong)
+        if "backup" in command and "backup-sync-data" in command:
+            uploads.append(command)
+        return result
+    status["sets"][set_doc["set_id"]]["state"] = "staged"
+    outcome = backup.upload_sets(RELEASE, [set_doc], runner=stale_content, status=status)
+    assert outcome["complete"] == [set_doc["set_id"]]
+    assert uploads, "the set was sent again rather than accepted as it was"
+    assert status["sets"][set_doc["set_id"]]["state"] == "complete"

@@ -284,7 +284,7 @@ def test_compose_uses_only_fresh_v16_named_volumes():
         "v16-sites", "v16-logs", "v16-db-data", "v16-redis-data",
         "v16-platform-sites", "v16-platform-logs", "v16-beta-sites", "v16-beta-logs",
         # Backup sets are staged here in development too, so a drill exercises the real layout.
-        "v16-backups", "v16-backup-secrets", "v16-platform-backups", "v16-platform-backup-secrets",
+        "v16-backups", "v16-backup-secrets", "v16-platform-backups", "v16-platform-backup-secrets", "v16-backup-cache",
     }
     volumes_section = DEV_COMPOSE.split("\nvolumes:\n", 1)[1].split("\nsecrets:\n", 1)[0]
     declared = set(re.findall(r"^  ([a-z0-9-]+):$", volumes_section, re.MULTILINE))

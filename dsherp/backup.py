@@ -418,15 +418,18 @@ def set_paths(resolved, site, set_id):
     return {'data': f'/backups/{kind}/sets/{site}/{set_id}', 'secrets': f'/backups/{kind}/{site}/{set_id}'}
 
 
-def _snapshot_id(resolved, side, set_id, *, root, runner):
-    """The full id of the snapshot tagged with this set, or None. Full ids only: a short id is
-    a display convenience, and `dump` must address exactly one snapshot."""
+CANDIDATES = 5
+
+
+def _snapshot_ids(resolved, side, set_id, *, root, runner):
+    """Every snapshot tagged with this set, newest first. Full ids only: a short id is a
+    display convenience, and `dump` must address exactly one snapshot. There can be more than
+    one - a retried upload leaves the earlier attempt behind - so the caller tries them in
+    turn rather than trusting the newest to be the good one."""
     rows = json.loads(restic(resolved, side, ['snapshots', '--json', '--tag', f'set={set_id}'],
                              root=root, runner=runner, timeout=300) or '[]')
     matching = [row for row in rows if f'set={set_id}' in (row.get('tags') or []) and row.get('id')]
-    if not matching:
-        return None
-    return sorted(matching, key=lambda row: row.get('time') or '')[-1]['id']
+    return [row['id'] for row in sorted(matching, key=lambda row: row.get('time') or '', reverse=True)][:CANDIDATES]
 
 
 def _read_back(resolved, side, snapshot, path, *, root, runner):
@@ -467,7 +470,8 @@ def upload_sets(resolved, set_docs, *, root=ROOT, runner=subprocess.run, clock=t
         paths = set_paths(resolved, site, set_id)
         known = status['sets'].get(set_id, {})
         ids = {'data': known.get('data_snapshot'), 'secrets': known.get('secrets_snapshot')}
-        errors = []
+        candidates = {'data': [], 'secrets': []}
+        errors, last = [], '两侧未配对'
         for side in ('data', 'secrets'):
             try:
                 if not ids[side]:
@@ -475,20 +479,43 @@ def upload_sets(resolved, set_docs, *, root=ROOT, runner=subprocess.run, clock=t
                                             '--tag', f'set={set_id}', '--tag', f'kind={kind}', paths[side]],
                            root=root, runner=runner, timeout=3600)
                 # Always ask the repository, even for an id we recorded: the copy may be gone.
-                ids[side] = _snapshot_id(resolved, side, set_id, root=root, runner=runner)
+                candidates[side] = _snapshot_ids(resolved, side, set_id, root=root, runner=runner)
+                ids[side] = candidates[side][0] if candidates[side] else None
                 if not ids[side]:
                     errors.append(f'{side} 仓库里没有 set={set_id} 的快照')
             except Fault as error:
-                ids[side] = None
+                ids[side], candidates[side] = None, []
                 errors.append(str(error))
         complete = False
-        if ids['data'] and ids['secrets']:
+        for data_id in candidates['data']:
+            for secrets_id in candidates['secrets']:
+                try:
+                    verify_pair(resolved, set_id, {'data': data_id, 'secrets': secrets_id}, root=root, runner=runner,
+                                site=site, expected=doc if 'pieces' in doc else None)
+                except Fault as error:
+                    last = str(error)
+                    continue
+                ids['data'], ids['secrets'], complete = data_id, secrets_id, True
+                break
+            if complete:
+                break
+        if not complete and candidates['data'] and candidates['secrets']:
+            # Both halves are over there but no pair of them agrees: the copies do not describe
+            # this set. While the staging area still holds it, send it again and judge the new
+            # snapshots; otherwise say so and stay pending.
+            errors.append(last)
             try:
-                verify_pair(resolved, set_id, ids, root=root, runner=runner, site=site,
-                            expected=doc if 'pieces' in doc else None)
-                complete = True
-            except Fault as error:
-                errors.append(str(error))
+                for side in ('data', 'secrets'):
+                    restic(resolved, side, ['backup', '--host', resolved['project'], '--tag', f'site={site}',
+                                            '--tag', f'set={set_id}', '--tag', f'kind={kind}', paths[side]],
+                           root=root, runner=runner, timeout=3600)
+                    candidates[side] = _snapshot_ids(resolved, side, set_id, root=root, runner=runner)
+                verify_pair(resolved, set_id, {'data': candidates['data'][0], 'secrets': candidates['secrets'][0]},
+                            root=root, runner=runner, site=site, expected=doc if 'pieces' in doc else None)
+                ids['data'], ids['secrets'], complete = candidates['data'][0], candidates['secrets'][0], True
+                errors.append(f'备份集 {set_id} 的异地副本与本机不一致，已按本机内容重新上传')
+            except (Fault, IndexError) as error:
+                errors.append(f'重新上传 {set_id} 也没能配对：{error}')
         state = ('complete' if complete else
                  'data_uploaded' if ids['data'] else 'secrets_uploaded' if ids['secrets'] else 'staged')
         backup_status.record_set(status, {**doc, 'kind': kind}, state,
@@ -518,8 +545,11 @@ def _remote_sets(resolved, status, *, root, runner):
             set_id = tags.get('set')
             if not set_id or not backup_sets.parse_set_id(set_id) or not row.get('id'):
                 continue
-            entry = held.setdefault(set_id, {'site': tags.get('site'), 'kind': tags.get('kind', 'scheduled')})
-            entry[side] = row['id']
+            entry = held.setdefault(set_id, {'site': tags.get('site'), 'kind': tags.get('kind', 'scheduled'),
+                                              'data_ids': [], 'secrets_ids': []})
+            # A retried upload can leave more than one snapshot under the same tag; the newest
+            # is the one to read back, and expiry has to take them all.
+            entry[f'{side}_ids'].append((row.get('time') or '', row['id']))
             entry['site'] = entry['site'] or tags.get('site')
     sets = []
     for set_id, row in held.items():
@@ -527,9 +557,12 @@ def _remote_sets(resolved, status, *, root, runner):
         site = known.get('site') or row.get('site')
         if not site:
             continue
+        newest = {side: (sorted(row[f'{side}_ids'])[-1][1] if row[f'{side}_ids'] else None) for side in ('data', 'secrets')}
         sets.append({'set_id': set_id, 'site': site, 'kind': known.get('kind') or row['kind'],
                      'stamp': backup_sets.parse_set_id(set_id)['stamp'],
-                     'state': known.get('state', 'staged'), 'data': row.get('data'), 'secrets': row.get('secrets')})
+                     'state': known.get('state', 'staged'), 'data': newest['data'], 'secrets': newest['secrets'],
+                     'data_ids': [item[1] for item in row['data_ids']],
+                     'secrets_ids': [item[1] for item in row['secrets_ids']]})
     return sets
 
 
@@ -545,6 +578,35 @@ def backup_sync(resolved, *, root=ROOT, runner=subprocess.run, clock=time.time, 
             report['ok'] = False
             report['warnings'].append('备份状态文件损坏：本次不做异地淘汰（保护"最后一份已验证副本"的依据在里面）；'
                                       '先检查 backups/status.json')
+        # The record is not evidence: ask both repositories what they actually hold, and
+        # demote any set whose copy is gone before deciding anything else with it.
+        listing = {}
+        try:
+            listing = {row['set_id']: row for row in _remote_sets(resolved, status, root=root, runner=runner)}
+        except Fault as error:
+            report['ok'] = False
+            report['errors'].append(str(error))
+        # A set the repositories hold but the record does not know (a record rebuilt, an
+        # upload whose verification failed and left a snapshot behind) is adopted as pending,
+        # so it is read back, understood, and can then take part in expiry like any other.
+        for set_id, held in listing.items():
+            if set_id in status['sets']:
+                continue
+            parsed = backup_sets.parse_set_id(set_id)
+            backup_status.record_set(status, {'set_id': set_id, 'site': held['site'], 'kind': held.get('kind', 'scheduled'),
+                                              'stamp': parsed['stamp']}, 'staged',
+                                     data_snapshot=held.get('data'), secrets_snapshot=held.get('secrets'))
+            report['warnings'].append(f'异地有记录里没有的备份集 {set_id}：已收养并按待核对处理')
+        for set_id, row in status['sets'].items():
+            held = listing.get(set_id, {})
+            if row.get('state') not in ('complete', 'verified'):
+                continue
+            if held.get('data') and held.get('secrets'):
+                continue
+            row['state'] = 'data_uploaded' if held.get('data') else 'secrets_uploaded' if held.get('secrets') else 'staged'
+            row['data_snapshot'], row['secrets_snapshot'] = held.get('data'), held.get('secrets')
+            report['ok'] = False
+            report['errors'].append(f'备份集 {set_id} 在异地不再完整（{row["state"]}）：已退回待补齐')
         pending = [dict(row, set_id=set_id) for set_id, row in status['sets'].items()
                    if row.get('state') not in ('complete', 'verified')]
         try:
@@ -563,7 +625,7 @@ def backup_sync(resolved, *, root=ROOT, runner=subprocess.run, clock=time.time, 
                 doomed = [row for row in remote
                           if decision.get(row['set_id']) == 'drop' and row.get('data') and row.get('secrets')]
                 for side in ('data', 'secrets'):
-                    ids = [row[side] for row in doomed]
+                    ids = [snapshot for row in doomed for snapshot in row.get(f'{side}_ids', [row[side]])]
                     if ids:
                         restic(resolved, side, ['forget', *ids], root=root, runner=runner, timeout=1800)
                         restic(resolved, side, ['prune'], root=root, runner=runner, timeout=1800)

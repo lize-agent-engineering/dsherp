@@ -256,6 +256,58 @@ services:
     networks: [validation, api]
     logging: *logging
 
+  # The same one-shot shape production uses, so a drill exercises the real chain: two
+  # repositories, two passwords, two storage identities, each container seeing one half.
+  backup-sync-data:
+    profiles: [ops]
+    image: restic/restic:0.18.0@sha256:4cf4a61ef9786f4de53e9de8c8f5c040f33830eb0a10bf3d614410ee2fcb6120
+    restart: "no"
+    entrypoint: ["restic"]
+    # Capabilities are dropped, so root inside the container no longer bypasses file
+    # permissions: it has to be the bench user that owns the staged sets (0700).
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      RESTIC_REPOSITORY: ${DSHERP_BACKUP_REPOSITORY}
+      RESTIC_PASSWORD_FILE: /run/secrets/backup_repository_password
+      RESTIC_CACHE_DIR: /cache
+      TMPDIR: /cache
+    env_file: ../.runtime/control/backup_storage_credentials
+    secrets: [backup_repository_password]
+    volumes:
+      - v16-backups:/backups/tenant:ro
+      - v16-platform-backups:/backups/platform:ro
+      - v16-backup-cache:/cache
+    networks: [validation]
+    logging: *logging
+
+  backup-sync-secrets:
+    profiles: [ops]
+    image: restic/restic:0.18.0@sha256:4cf4a61ef9786f4de53e9de8c8f5c040f33830eb0a10bf3d614410ee2fcb6120
+    restart: "no"
+    entrypoint: ["restic"]
+    # Capabilities are dropped, so root inside the container no longer bypasses file
+    # permissions: it has to be the bench user that owns the staged sets (0700).
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      RESTIC_REPOSITORY: ${DSHERP_BACKUP_SECRETS_REPOSITORY}
+      RESTIC_PASSWORD_FILE: /run/secrets/backup_secrets_repository_password
+      RESTIC_CACHE_DIR: /cache
+      TMPDIR: /cache
+    env_file: ../.runtime/control/backup_secrets_storage_credentials
+    secrets: [backup_secrets_repository_password]
+    volumes:
+      - v16-backup-secrets:/backups/tenant:ro
+      - v16-platform-backup-secrets:/backups/platform:ro
+      - v16-backup-cache:/cache
+    networks: [validation]
+    logging: *logging
+
 networks:
   validation:
     internal: true
@@ -267,6 +319,7 @@ networks:
   egress:
 
 volumes:
+  v16-backup-cache:
   v16-backups:
   v16-backup-secrets:
   v16-platform-backups:
@@ -283,6 +336,10 @@ volumes:
 secrets:
   db_root_password:
     file: ../.runtime/control/db_root_password
+  backup_repository_password:
+    file: ../.runtime/control/backup_repository_password
+  backup_secrets_repository_password:
+    file: ../.runtime/control/backup_secrets_repository_password
   daily_admin_password:
     file: ../.runtime/control/daily_admin_password
   validation_admin_password:
