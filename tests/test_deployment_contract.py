@@ -590,3 +590,47 @@ def test_every_calendar_expression_the_units_carry_is_one_systemd_accepts():
             pytest.skip("no systemd-analyze available to check the calendar expressions")
         assert result.returncode == 0, (expression, (result.stderr or result.stdout)[-300:])
         assert "Next elapse" in result.stdout, result.stdout
+
+
+def _dev_service(name):
+    """One service block from the development compose file, by its two-space-indented key."""
+    body = DEV_COMPOSE.split(f"\n  {name}:\n", 1)[1]
+    end = re.search(r"^  [A-Za-z#]", body, re.MULTILINE)
+    return body[: end.start()] if end else body
+
+
+def _ignore_patterns():
+    return [line.strip() for line in (ROOT / ".dockerignore").read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+
+
+def test_the_two_throwaway_test_sites_are_provisioned_by_their_own_bench_and_only_their_secrets():
+    """`bench run-tests` truncates tables, so the Frappe-native tests get their own Sites and
+    never the four development ones. Each provisioner runs on the bench that will serve its
+    Site, carries only the database root password and the throwaway admin password, and is
+    one-shot under the control profile - it must never be able to reach the other bench's
+    sites volume, nor any of the four development admin passwords."""
+    for service, volume, kind in (("test-provision", "v16-sites", "bridge"),
+                                  ("platform-test-provision", "v16-platform-sites", "platform")):
+        block = _dev_service(service)
+        assert "profiles: [control]" in block, service
+        assert 'restart: "no"' in block, service
+        assert "secrets: [db_root_password, test_admin_password]" in block, service
+        assert f"- {volume}:/home/frappe/frappe-bench/sites" in block, service
+        assert "./provision_test_site.py:/opt/provision_test_site.py:ro" in block, service
+        assert f'"{kind}"]' in block, service
+        for forbidden in ("validation_admin_password", "daily_admin_password", "platform_admin_password",
+                          "beta_admin_password", "backup_repository_password"):
+            assert forbidden not in block, (service, forbidden)
+    assert "v16-platform-sites" not in _dev_service("test-provision")
+    assert "v16-sites:" not in _dev_service("platform-test-provision")
+    assert "test_admin_password:\n    file: ../.runtime/control/test_admin_password" in DEV_COMPOSE
+
+
+def test_the_native_test_packages_never_reach_a_release_image():
+    """frappe_app is COPYed into both release images. The tests under it are test data - the
+    permission matrix and synthetic fixtures - and a running tenant has no use for them, so
+    the build context drops them without dropping the application."""
+    patterns = _ignore_patterns()
+    assert "frappe_app/*/tests" in patterns
+    assert not any(pattern in ("frappe_app", "frappe_app/", "**/frappe_app") for pattern in patterns)
