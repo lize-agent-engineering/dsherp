@@ -8,6 +8,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 import pytest
 
+from credentials_check import UNAUTHENTICATED, UNREACHABLE, classify
 from infra.v16_integration_queue import purge_validation_jobs, purge_validation_jobs_if_backlogged
 
 INTEGRATION_DIR = Path(__file__).resolve().parent
@@ -62,34 +63,30 @@ def validation_queue_backlog():
     yield
 
 
-def _key_answers_as(profile):
-    """Whether the secret in this profile still authenticates as its user."""
-    opener = build_opener(ProxyHandler({}))
-    headers = {"X-Frappe-Site-Name": profile["site"],
-               "Authorization": "token " + profile["api_key"] + ":" + profile["api_secret"]}
-    try:
-        with opener.open(Request(profile["base_url"] + "/api/method/frappe.auth.get_logged_user",
-                                 headers=headers), timeout=15) as response:
-            return json.load(response).get("message") == profile["user"]
-    except (HTTPError, OSError, ValueError):
-        return False
-
-
 @pytest.fixture(autouse=True)
 def fixture_credentials_agree_with_the_sites():
     """The synthetic actors' API secrets live in .runtime/erp-*.json. A business credential is
-    short-lived now (S2): a platform login can renew it and a membership revocation kills it -
-    both legitimately, both inside this very suite - and the files are left behind. Before each
-    test the profiles are tried, and one that no longer answers is reissued through the
-    provisioner, the one path that puts the Site, the files and the platform binding back on
-    one secret."""
+    short-lived (S2): a platform login renews it and a membership revocation kills it - both
+    legitimately, both inside this very suite - and the files are left behind. Before each test
+    the profiles are tried. One the Site refuses is reissued through the provisioner, the one
+    path that puts the Site, the files and the platform binding back on one secret. A Site that
+    does not answer is not a credential problem: the run stops here, naming it, because
+    reissuing into a Site that may come back holding the old key would rewrite the files for
+    nothing."""
     from infra.run_validation_provision import reissue
     path = Path(__file__).resolve().parents[2] / ".runtime" / "erp-users.json"
     if path.is_file():
         profiles = json.loads(path.read_text())
         for actor in ("reader", "denied"):
-            if actor in profiles and not _key_answers_as(profiles[actor]):
+            if actor not in profiles:
+                continue
+            state, detail = classify(profiles[actor])
+            if state == UNAUTHENTICATED:
                 reissue(actor)
+            elif state == UNREACHABLE:
+                profile = profiles[actor]
+                pytest.fail(f"站点 {profile['site']}（{profile['base_url']}）不可达或应答异常：{detail}。"
+                            "这不是凭据问题，不重发；先确认 dsherp-validation 栈在运行、backend 端口 18081 可达")
     yield
 
 
