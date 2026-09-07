@@ -21,7 +21,7 @@ def execute(container, site, body, timeout=180):
 
 
 def main():
-    state = json.loads(execute(BUSINESS, SITE, f"""
+    json.loads(execute(BUSINESS, SITE, f"""
 assert (not frappe.is_setup_complete() and frappe.db.count('Company')==0) or frappe.db.exists('Company','DSHERP 日常合成企业')
 assert not frappe.db.exists('User',{ERP_USER!r})
 print(json.dumps({{'setup_complete':bool(frappe.is_setup_complete())}}))

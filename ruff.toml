@@ -1,0 +1,11 @@
+# 门禁只用 pyflakes 的 F 系列与 E9（语法/读取错误）。风格规则（E701/E702 等）在本仓库有
+# 700+ 处一行多语句，明确不作为门禁；不要在这里加 E/W 风格规则或 mypy。
+target-version = "py312"
+extend-exclude = [".venv", "node_modules", "work", "evals/runs", "frappe_app/dsherp_bridge/public/dist", ".runtime"]
+
+[lint]
+select = ["F", "E9"]
+
+[lint.per-file-ignores]
+# pytest 夹具以形参名注入：与同名导入/定义"重复"是框架约定，不是错误。
+"tests/**" = ["F811"]

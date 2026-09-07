@@ -19,7 +19,9 @@ unless declared.
 Pure Python on purpose: importable by the unit tests without Frappe and by the CLI on
 the host; the same module text never runs inside the container.
 """
-from dsherp.release_snapshot import FORMAT, VOLATILE_COLUMNS, row_hash  # one digest convention
+# row_hash is re-exported on purpose: tests build snapshots with release_compare.row_hash,
+# so both sides of a comparison use one digest convention.
+from dsherp.release_snapshot import FORMAT, VOLATILE_COLUMNS, row_hash  # noqa: F401
 
 # A Single is re-saved by migrate and by restore with identical values; only these move.
 SINGLE_STAMPS = frozenset({'modified', 'modified_by'})

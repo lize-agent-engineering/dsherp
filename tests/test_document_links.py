@@ -28,7 +28,6 @@ def test_the_record_is_written_with_its_target_where_the_result_is_finalised():
     assert "target_doctype" in finalise and "target_name" in finalise
 
 
-import pytest   # noqa: E402
 import sys, types   # noqa: E402
 
 

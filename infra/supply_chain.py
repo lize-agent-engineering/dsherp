@@ -10,7 +10,6 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-import sys
 
 from dsherp import deploy_env
 

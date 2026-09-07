@@ -17,7 +17,7 @@ import uuid
 from urllib.parse import urlsplit
 import httpx
 from dsherp import alerts,backup_status,deploy_env,metrics,sd_notify,sessions,site_holds,worker_log
-from dsherp.runtime_host import ROOT,IMAGE,agent_settings,container_base,load_settings
+from dsherp.runtime_host import ROOT,agent_settings,container_base,load_settings
 from dsherp.context_container import docker_command
 from dsherp.context_mcp import BusinessRuntimeError,ToolFailure,post
 from dsherp.provider_circuit import CircuitBreaker,probe_models
