@@ -29,12 +29,33 @@ def test_a_non_zero_exit_still_names_the_container(monkeypatch):
         daily.execute('dsherp-validation-backend-1', 's', 'print(1)')
 
 
-def test_exit_zero_with_no_output_is_a_failure_that_names_where_it_happened(monkeypatch):
+def test_a_block_that_only_asserts_is_allowed_to_print_nothing(monkeypatch):
+    """Half of these calls are assertion or mutation blocks with no print in them at all.
+    Demanding output from every call turns those into false failures - which is exactly what
+    the second nightly reported, against a body whose last statement is frappe.destroy()."""
+    monkeypatch.setattr(subprocess, 'run', _result(stdout=''))
+    assert daily.execute('c', 's', "assert True\nfrappe.destroy()") == ''
+
+
+def test_exit_zero_with_no_output_is_a_failure_where_the_output_is_the_result(monkeypatch):
     """This is the shape the first nightly hit: returncode 0, empty stdout, and a JSONDecodeError
-    several frames away from the call that actually went wrong."""
+    several frames away from the call that actually went wrong. Where the caller parses what the
+    script printed, silence is a failure and has to name itself."""
     monkeypatch.setattr(subprocess, 'run', _result(stdout='   \n', stderr='some warning\n'))
     with pytest.raises(RuntimeError) as error:
-        daily.execute('dsherp-validation-backend-1', 'dsherp-daily.localhost', "print(json.dumps({}))")
+        daily.execute_json('dsherp-validation-backend-1', 'dsherp-daily.localhost', "print(json.dumps({}))")
     message = str(error.value)
     assert 'dsherp-validation-backend-1' in message and 'dsherp-daily.localhost' in message
     assert 'some warning' in message, '容器说了什么要留在消息里'
+
+
+def test_unparsable_output_names_the_call_instead_of_blaming_the_json_module(monkeypatch):
+    monkeypatch.setattr(subprocess, 'run', _result(stdout='Traceback: something else\n'))
+    with pytest.raises(RuntimeError) as error:
+        daily.execute_json('dsherp-validation-platform-backend-1', 'dsherp-platform.localhost', 'x')
+    assert 'dsherp-platform.localhost' in str(error.value)
+
+
+def test_parsed_output_comes_back_as_the_object(monkeypatch):
+    monkeypatch.setattr(subprocess, 'run', _result(stdout='noise\n{"user": "a@example.invalid"}\n'))
+    assert daily.execute_json('c', 's', 'x') == {'user': 'a@example.invalid'}
