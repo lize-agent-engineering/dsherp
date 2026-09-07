@@ -1,9 +1,26 @@
 import json
+from pathlib import Path
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+
+INTEGRATION = Path(__file__).resolve().parent / "integration"
+
+
+def pytest_ignore_collect(collection_path, config):
+    """tests/integration is its own suite: it needs the four-Site stack, and it reuses unit-test
+    file names (test_run_events.py, ...), so the two can never share one session. It is collected
+    only when named on the command line: `python -m pytest tests/integration -m integration`."""
+    if Path(collection_path).resolve() != INTEGRATION:
+        return None
+    base = Path(config.invocation_params.dir)
+    requested = []
+    for argument in config.args:
+        path = (base / argument.split("::", 1)[0]).resolve()
+        requested.append(path == INTEGRATION or INTEGRATION in path.parents)
+    return not any(requested)
 
 
 @pytest.fixture

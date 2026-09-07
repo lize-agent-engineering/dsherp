@@ -66,8 +66,11 @@
 ```sh
 uv venv --python 3.12.11 .venv
 uv pip sync --python .venv/bin/python --require-hashes requirements.lock
-.venv/bin/python -m pytest tests/test_dsh_probe.py tests/test_erp_mcp_config.py -q
+.venv/bin/ruff check .
+.venv/bin/python -m pytest -q
 ```
+
+`pytest -q` 是非集成套件（`pytest.ini` 让它默认不收集 `tests/integration`，那套需要四站与 `.runtime` 夹具）。
 
 真实模型调用需事先授权费用，并通过进程环境提供 `DEEPSEEK_API_KEY`、`DSH_MODEL`、`DEEPSEEK_BASE_URL`，随后运行 `.venv/bin/python -m dsherp.dsh_probe`。脚本不自动加载 `.env`，不读取其他项目凭证；只执行固定合成提示，不访问 ERP。会话临时目录执行后清理，只输出脱敏摘要。
 
@@ -77,8 +80,10 @@ uv pip sync --python .venv/bin/python --require-hashes requirements.lock
 
 ```sh
 docker compose -f infra/compose.validation.yml up -d
-.venv/bin/python -m pytest tests/integration -q
+.venv/bin/python -m pytest tests/integration -m integration -q
 ```
+
+从零拉起并开通四站（空 Docker 也可以）：`.venv/bin/python infra/dev_stack.py up --provision`；拆掉：`down --volumes`。
 
 生产形态不用这份 compose：镜像由 `infra/release_images.py` 从 tag 构建，栈由 `infra/compose.prod.yml` 加 `infra/env/prod.env` 拉起，开站与发布走 `bin/dsherp-admin`，逐步命令见[部署 runbook](docs/engineering/deployment-runbook.md)。
 
