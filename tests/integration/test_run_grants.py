@@ -61,8 +61,8 @@ frappe.session.data.pop('dsherp_platform_grant',None)
 doc=api.send_message('No-grant probe',{'schema_version':1,'page_type':'unknown','route':[]},uuid.uuid4().hex)
 run=doc['active_run'];frappe.db.commit()
 out={'cached':grants.of(run)}
-# this Site allows password login (dev); make the executor see the production rule
-sso._password_login_disabled=lambda:True
+# this Site allows password login (dev); the production switch is the site_config key
+frappe.conf.dsherp_sso_required=1
 frappe.conf.dsherp_runtime_user=actor
 claim=execution.claim_run('a'*64);frappe.db.commit()
 out['claim']=claim

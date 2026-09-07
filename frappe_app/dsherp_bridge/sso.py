@@ -133,6 +133,17 @@ def _password_login_disabled():
     return bool(frappe.get_system_settings('disable_user_pass_login'))
 
 
+def sso_enforced():
+    """Whether every business session on this Site must come through the platform.
+
+    Production provisioning sets `dsherp_sso_required` in site_config and disables password
+    login in System Settings. The two used to be one condition: an operator re-enabling
+    password login for a day would silently have switched off the grant requirement on
+    background executors and the credential window on API keys as well. The site_config
+    key is the deliberate switch; the System Settings switch still counts on its own."""
+    return bool(frappe.conf.get('dsherp_sso_required')) or _password_login_disabled()
+
+
 def _machine_authenticated():
     """True only when the Authorization header carries the session user's own API key.
 
@@ -206,7 +217,7 @@ def validate_grant(grant,user):
 def validate_session():
     if getattr(frappe.local,'request',None) is None:return
     path=frappe.request.path
-    if path=='/api/method/login' and _password_login_disabled():
+    if path=='/api/method/login' and sso_enforced():
         raise frappe.PermissionError('本站只接受企业平台登录')
     if path in EXEMPT_PATHS:return
     user=frappe.session.user
@@ -227,7 +238,7 @@ def validate_session():
         # credentials the platform borrows, which exist only where every session comes from
         # the platform: a Site that still allows password login (development) records the
         # windows but does not refuse on them, the same line _actor draws for grants.
-        if _password_login_disabled():
+        if sso_enforced():
             credentials.require(user)
         return
     raise frappe.PermissionError('需要通过企业平台登录后再访问')

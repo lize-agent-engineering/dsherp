@@ -1,10 +1,16 @@
 """Platform session identity and explicit per-member ERP read delegation."""
+import datetime
+
 import frappe
 import requests
 from contextlib import contextmanager
 from frappe.utils import now_datetime
 
 from dsherp_platform import business_credentials as credential_policy
+
+
+# Tolerated difference between the platform's clock and a business Site's.
+CLOCK_SKEW_SECONDS=300
 
 
 def binding_version(member):
@@ -108,8 +114,11 @@ def accept_credential(enterprise: str,site: str,api_key: str,api_secret: str,exp
     if site!=target.site:
         raise frappe.PermissionError('凭据来自另一个业务站')
     expires=credential_policy.moment(expires_at)
-    ceiling=credential_policy.expiry(now_datetime())
-    if expires is None or expires<=now_datetime() or expires>ceiling:
+    now=now_datetime()
+    # The business Site stamps the window on its own clock. A few minutes of skew between two
+    # containers - or two hosts, later - must not turn every login into a refused delivery.
+    ceiling=credential_policy.expiry(now)+datetime.timedelta(seconds=CLOCK_SKEW_SECONDS)
+    if expires is None or expires<=now-datetime.timedelta(seconds=CLOCK_SKEW_SECONDS) or expires>ceiling:
         raise frappe.PermissionError('凭据有效期不在允许的窗口内')
     with requests.Session() as client:
         client.trust_env=False

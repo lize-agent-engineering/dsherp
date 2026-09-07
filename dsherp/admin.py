@@ -503,6 +503,9 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
         'dsherp_runtime_user': runtime_user,
         'host_name': deploy_env.public_origin(resolved, slug),
         'dsherp_agent_sources': agent_sources(resolved, runner) if resolved['env'] == 'prod' else None,
+        # The deliberate switch for "every session comes through the platform"; the System
+        # Settings password switch below is the user-facing half of the same decision.
+        'dsherp_sso_required': 1,
     } if resolved['env'] == 'prod' else {
         'dsherp_runtime_user': runtime_user,
         'host_name': deploy_env.public_origin(resolved, slug),

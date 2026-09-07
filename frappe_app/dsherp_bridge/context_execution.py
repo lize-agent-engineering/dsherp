@@ -42,11 +42,11 @@ def _actor(run):
         conversations._user()
         identity=None
         from dsherp_bridge import grants
-        from dsherp_bridge.sso import validate_grant,_password_login_disabled
+        from dsherp_bridge.sso import validate_grant,sso_enforced
         grant=grants.of(run.name)
         if grant:
             identity=validate_grant(grant,run.owner)
-        elif _password_login_disabled():
+        elif sso_enforced():
             # Every business session on this Site comes through the platform; an executor
             # acting for a member with no authorization on file is not acting for anyone (R6).
             raise frappe.PermissionError('运行缺少企业平台授权，不能继续执行')
@@ -556,7 +556,7 @@ def finish_run(run_id,capability,status,answer='',error=''):
         if flagged:
             events.record_safely(run.name,'unverified_completion_claim',{'proposals':proposals,'executions':executions})
     frappe.db.set_value('DS Model Run',run.name,values)
-    if status in ('Succeeded','Failed','Cancelled'):
-        # The executor is done acting for the member; nothing keeps the authorization now.
-        grants.drop(run.name)
+    # The executor is done acting for the member - finished, or paused for the person, in
+    # which case the next message starts a new run with a grant of its own.
+    grants.drop(run.name)
     return {'run_id':run.name,'status':status,'provider_failures':provider_failures}
