@@ -136,10 +136,10 @@ Internet ──TLS──▶ 反向代理（Caddy，自动证书，*.tenant.examp
 - **schema 演进（D4）**。两个 App 建立 `patches.txt`；CI 规则：DocType JSON 变更必须伴随 patch 或 `no-patch:` 说明；每个 JSON payload 字段的 `schema_version` 变更必须附回填 patch；迁移测试在 CI 中对"上一 tag 的备份"执行 `bench migrate` 并做逐字段比对（即 G2 的自动化形态）。
 - **审计不可篡改（T2）**。DS Model Run、DS Operation Proposal、DS Execution Record、DS Configuration * 全部加 `on_trash` 守卫（无条件拒绝，含 Administrator）、`track_changes: 1`（DS Run Event 已自计划 1 起无条件拒绝改写与删除）；DS Doctype Policy 加 `track_changes` 与变更原因字段。租户下线时整站归档而非删记录（计划 3 收口后归档落在 backend 的 `tenant-archive` 卷，命令回读归档路径）。
 - **业务单据关联（T3）**。执行记录增加 `Dynamic Link`（target_doctype/target_name）指向产生的单据，单据侧通过原生 Connections 反查；单据取消/删除时执行记录保留并标注。
-- **会话存储纳管（T4）**。`.runtime/business-sessions/*` 改为按 `(site, user, conversation)` 的可枚举目录，加密静态存储（宿主级磁盘加密作为最低要求），会话归档 90 天后清理；转录关键内容已在 DS Run Event 落库，原生会话目录不再是唯一真相。
+- **会话存储纳管（T4）**。`.runtime/business-sessions/*` 改为按 `(site, user, conversation)` 的可枚举目录，加密静态存储（宿主级磁盘加密作为最低要求），原生会话目录按最后写入时间超过 90 天清理（`dsherp-admin sessions --sweep`，常量 `dsherp/sessions.py:RETENTION_DAYS`），不按"归档"时间；旧布局的未归属目录只报告不删；转录关键内容已在 DS Run Event 落库，原生会话目录不再是唯一真相。
 - **保留、导出与删除（T4）**。`dsherp-admin export-user-data <site> <user>` 与 `delete-user-data`。删除的边界按已裁决 #10：删除原生会话目录与非审计的个人内容；运行、事件、提案、执行记录及其动作、对象、版本、确认与执行结果等审计事实一律保留，保留量必须仍能回放与追责；已有事件禁止改写，若必须物理清除事件内的个人信息，只能以明确登记的受控脱敏迁移作为不可变承诺的例外执行；界面遮挡不算删除。字段级边界由计划 4 的实施计划逐字段列出。
 - **用量计量（T5）**。DS Model Run 增加 `model`、`provider_request_ids`、`actual_input_tokens`、`actual_output_tokens`、`duration_ms`、`skill_versions`；每租户每月用量由平台聚合报表展示。
-- **读放大与时区（T8）**。为 conversation、status、expires_at 加索引；`_summaries` 改为聚合查询；时间统一 UTC 存储。
+- **读放大与时区（T8）**。为 conversation、status、expires_at 加索引；`_summaries` 改为聚合查询；时间沿用 Frappe 的存储口径（站点系统时区、无时区标记）；跨站月报把每站时间按其时区换算成 UTC 后分月（`dsherp/usage.py`），未声明时区的站按 UTC 读并在报告里标 `assumed_utc`；不改存储口径。
 
 不变量：任一站点在任一时刻都有一份 24h 内的异地备份可恢复；审计类记录只增不删；DocType 变更必有迁移路径。
 
@@ -188,9 +188,23 @@ Internet ──TLS──▶ 反向代理（Caddy，自动证书，*.tenant.examp
 | 2 | 运行底座可靠性（2026-09-05 终审阻断项逐项关闭；2026-09-06 架构方派 12 个互不知情的代理独立复核 13 项关闭，7 项成立、6 项被推翻——熔断探针地址一项为计划 3 引入的回归，随计划 3 收口修复；其余 5 项 major 残余按用户裁决在收尾切片 `plan2/closeout` 修复并经全量集成门，见证据文档「收尾切片」节；**放行以该切片合入 main 为准**） | 工作流 C 全部；H 的错误透传与 ErrorBoundary | G5；崩溃安全负例全绿（计划：[2026-09-04-runtime-reliability](../plans/2026-09-04-runtime-reliability.md)，证据：[runtime-reliability-evidence](../../engineering/runtime-reliability-evidence.md)） | 1（用事件流验证） |
 | 3 | 部署制品与安全边界（2026-09-05 由 Claude 直接实施并经独立审计：G4 判据在 dev、本机生产形态与 x86_64 服务器实测；2026-09-06 按[项目状态审查](../../engineering/project-state-review-2026-09-05.md)收口：归档落持久卷、发布来源可核实、宿主防火墙随开机恢复，各以真实路径演练。状态：**主体实现完成、验收未闭合**——G1 字面判据与 ACME 仍待合规专用主机由审计方执行，按已裁决 #9 不再阻塞计划 4 开工） | 工作流 A 全部；B 的出口控制、非 root、SSO 强制、guest 加固、CSP | G1、G4（证据：[deployment-security-evidence](../../engineering/deployment-security-evidence.md)，runbook：[deployment-runbook](../../engineering/deployment-runbook.md)） | 2（worker 多站形态确定后再打包） |
 | 4 | 数据治理与容灾（2026-09-06 首片 G2 由 Claude 直接实施：`release`/`rollback` 重写为按元数据分桶、原生 SQL 分页、任何读错误即中止、逐行逐字段比对、patch 以 `EXPECTED_CHANGES` 声明预期变化、备份集落归档卷、`rollback` 恢复后与升级前快照比对，本机生产形态用 2026-09-03 旧 schema 的真实形状数据演练升级/注入/回滚，证据见 [runtime-baseline 同目录的 data-governance-evidence](../../engineering/data-governance-evidence.md)；后续切片：备份「定时生成 → 异地同步 → 失败可见 → 异机恢复验证」（本机两站今日无任何定时备份任务，T1 从零建）、审计保留与数据生命周期、短期凭据与轮换） | 工作流 E 全部；B 的凭证托管与轮换 | G2、G3、G7 | 3 的制品已合入 main 即可开工；G1/ACME 的外部主机验收按已裁决 #9 与本计划解耦，仍是真实租户接入前的必要验收 |
-| 5 | 质量门禁 | 工作流 G 全部；H 剩余项 | G9 | 3（CI 需镜像与 compose.prod） |
+| 5 | 质量门禁（瘦身版，2026-09-07 起） | 工作流 G 全部；H 剩余项；与本节原文的偏离逐项见下方「计划 5 偏离表」 | G9 | 3（CI 需镜像与 compose.prod） |
 | 6 | Agent 质量与成本 | 工作流 F 全部；B 的注入信封 | G8 | 5（串行执行，见已裁决 #7） |
 | 终 | 生产浸泡终验 | 全部 | G10 + 十道门复审 | 1–6 |
+
+### 计划 5 偏离表（瘦身版，2026-09-07）
+
+| 项 | 原文（工作流 G） | 本计划 | 理由 |
+|---|---|---|---|
+| mypy | 每次 push 跑 ruff + mypy（宿主包） | 不跑 mypy | 仓库没有类型注解基线，首跑即大量报错，只能加忽略或整文件补注解，都是非行为改动；另评估 |
+| 风格 lint | ruff | ruff 只启用错误类规则（F、E9），不启用风格规则 | 既有紧凑书写（单行多语句）有 700+ 处，风格规则会触发大面积无行为改动，淹没真实问题 |
+| 浏览器 e2e | Playwright 五条路径并自动落截图 | 不做；保留 vitest 组件测试与既有浏览器截图证据 | 需在 CI 内走真实登录链，成本超出瘦身范围；列入"未闭合" |
+| Frappe 原生测试 | bridge/platform 业务逻辑测试全部改用 `bench run-tests` | 建立 `frappe_app/*/tests/` 骨架与首批用例（身份金丝雀、权限矩阵、交接窗口），存量注入脚本保留；集成测试改为先登记后创建 | 存量 57 个注入脚本整体改写是整文件重构（复盘 Q5 明确避免）；新逻辑先原生，存量按触碰逐步迁 |
+| SBOM / CVE | 每次 push | 每周独立 workflow，不计入 G9 连续绿 | 上游漏洞库变化会让无代码变更的 push 变红，污染"30 天绿"的口径 |
+| 权限矩阵 | `tests/permission_matrix.yml` | JSON，放在 `frappe_app/dsherp_bridge/tests/`，宿主静态测试与容器原生测试各读一次 | 容器内不引入 YAML 依赖；与读取它的测试同目录 |
+| 每日集成 | 集成与 e2e 每日跑 | 每日在 GitHub 托管 runner 上从零开通四站跑集成 + 原生测试；e2e 不做 | 顺带补上一条命令的可复现开发环境 |
+| 原生测试判定 | （原文未涉及） | 退出码非零即失败，**且**必须有 runner 自报的 `Running N <category> tests for <app>` 且 N>0；不产出 junit | 固定镜像里没有 `xmlrunner`，`--junit-xml-output` 不写文件；站点未开 `allow_tests` 时退出码 0 却什么也没跑（容器内实测） |
+| G9 判据 | CI 配置存在且历史 30 天绿 | 只对 `ci.yml` 与 `nightly.yml` 计算，从第一个含原生测试步的绿色 nightly 起算（日期与 run 记证据） | 周报型 workflow 不代表代码状态；起算点要可指认 |
 
 计划 1 与 2 完成即解除本轮审计的 R1–R3、A1、Q1 与七维审计的全部五项；计划 3 与 4 解除 D1–D4、S1–S2、T1–T2。终验通过前，任何环境都不接入真实租户。
 

@@ -348,8 +348,9 @@ DSHERP_ENV=prod ./bin/dsherp-admin delete-user-data acme.tenant.example.com some
 清除，追责事实（谁、何时、读了哪些记录、提案与执行结果）保留，并删除 `track_changes` 为这些列留下的
 Version 行、按会话删除该用户的原生会话目录；清除脚本在与 `send_message` 相同的 User 行锁下再查一次
 在途，有就回滚拒绝。报告里的 `residue` 逐条列出**知道留下了什么以及唯一的移除方式**：运行事件不改写
-（只能走登记的受控脱敏迁移）、已生成的异地备份按保留策略到期淘汰。平台授权令牌不在运行行里（它只在
-运行期间存于站点缓存，运行结束即删），删除时无需处理。
+（只能走登记的受控脱敏迁移）、已生成的异地备份按保留策略到期淘汰。平台授权令牌不在任何行里：运行期间
+存于站点缓存、运行结束即删；配置交接期间也只存于缓存、随交接窗口（默认 2 小时，
+`configuration_transfer.TRANSFER_WINDOW_SECONDS`）到期即失效。两者删除时都无需处理。
 
 原生会话目录另有 `sessions` 命令查看与按 90 天清理（`--sweep`）；旧布局留下的扁平哈希目录报为
 "未归属"，由人判断，不做猜测删除。
@@ -394,6 +395,88 @@ DSHERP_ENV=prod ./bin/dsherp-admin rotate oauth-client acme
 
 `doctor` 会把从未登记轮换和超过窗口的目标列出来（provider/runtime 90 天、oauth-client 180 天）。轮换
 不会作废原生会话：`runtime_revision` 不计入 provider key。
+
+## 15. 质量门禁与 CI
+
+### 什么在哪跑
+
+| 工作流 | 触发 | 跑什么 | 计入 G9 |
+|---|---|---|---|
+| `ci.yml` | 每次 PR 与合入 main | ruff（F、E9）、非集成 pytest（含迁移守卫的真实调用）、vitest、`dist` 一致性、Node runtime | 是 |
+| `nightly.yml` | 02:00 Asia/Shanghai，可手动 | `dev_stack.py up --provision` 从零拉起四站 → 全部集成 → Frappe 原生测试 → 工件 → 总是拆栈 | 是 |
+| `supply-chain.yml` | 每周一 03:00，可手动 | 构建两个发布镜像、syft SBOM、grype high 门 | **否**（允许红） |
+
+**任何工作流都不配置重试**（`retries`、`--reruns`、失败后自动 re-run 都不允许）。唯一的退避
+循环是 Docker Hub 拉镜像——那是取件，不是测试。
+
+### 怎么读一个红的 nightly
+
+先分三类，不要先改超时：
+
+1. **环境**。看 `work/dev-stack-status.json` 与 `work/compose.log`。容器退出码 137 是被内存
+   上限杀掉的，上限就是 `infra/compose.validation.yml` 里该服务的 `mem_limit`；数据库是
+   `restart: "no"`，被杀之后不会自愈，后面所有用例都会错在夹具上。
+2. **夹具**。看 `work/junit-integration.xml` 里错在 setup/teardown 的条目，以及台账
+   `work/dev-stack-ledger.json`。集成套件的残留登记见
+   [计划 5 证据](quality-gates-evidence.md)：清不掉的条目会留在
+   `.runtime/integration-residue.json` 里，下一次会话开头再清；清不掉就挡住运行，等人处理。
+3. **真实回归**。以上都排除之后才是。
+
+红了当天修或删那条用例（记提交号与 run 链接），不许重试到绿。不能复现的失败按复盘 Q3 处理：
+记录 run 链接、日志与现场数据，开缺陷项并留在证据文档的"未闭合"里，不得"未复现即结案"。
+
+### 本地重跑一次 nightly 做的事
+
+```sh
+.venv/bin/python infra/dev_stack.py up --provision      # 从零；本机含 agent 运行时卷，约 15–25 分钟
+.venv/bin/python -m pytest tests/integration -m integration -q --timeout 600
+.venv/bin/python infra/dev_stack.py native-tests --out work/native
+.venv/bin/python infra/dev_stack.py down --volumes      # 会销毁合成数据；控制面口令保留
+```
+
+开发栈已经在跑时，四条本机门：
+
+```sh
+.venv/bin/ruff check .
+.venv/bin/python -m pytest -q
+(cd frontend && npm test)
+node --test runtime/*.test.cjs
+```
+
+跑进程内 `worker.run_once` 的集成测试前要停常驻 worker
+（`launchctl bootout gui/$(id -u)/com.dsherp.agent-worker-v16`），`scheduled` profile 也不能在跑。
+
+### 原生测试
+
+两个一次性测试站 `dsherp-test.localhost`（backend）与 `dsherp-platform-test.localhost`
+（platform-backend）只给 `frappe_app/*/tests` 用，nginx 不暴露（对两站都回 421）。
+`up --provision` 的最后一步会建它们。
+
+成败不由 `bench` 的退出码单独判定：站点没开 `allow_tests` 时它打印
+"Testing is disabled for the site!" 并返回 0，什么也没跑。判据是退出码非零即失败，
+**且**必须出现 runner 自己的 `Running N <category> tests for <app>` 且 N>0
+（`dsherp/native_tests.py`）。镜像里没有 `xmlrunner`，`--junit-xml-output` 不写文件。
+
+### 改了 DocType JSON 或 patch 之后
+
+六站都要 migrate，然后重启三个后端（gunicorn 缓存模块；`bench run-tests` 是另一个进程，不缓存）：
+
+```sh
+for s in backend:dsherp-validation.localhost backend:dsherp-daily.localhost backend:dsherp-test.localhost \
+         beta-backend:dsherp-beta.localhost platform-backend:dsherp-platform.localhost \
+         platform-backend:dsherp-platform-test.localhost; do
+  docker compose -f infra/compose.validation.yml exec -T ${s%%:*} bench --site ${s##*:} migrate; done
+docker restart dsherp-validation-backend-1 dsherp-validation-beta-backend-1 dsherp-validation-platform-backend-1
+```
+
+改 DocType JSON 的提交必须在该 App 的 `patches.txt` 里加一行，或在提交信息里写
+`no-patch: <原因>`（`infra/check_doctype_patches.py` 检查）。
+
+### G9 的计算口径
+
+只对 `ci.yml` 与 `nightly.yml` 计算连续 30 天绿，从第一个含原生测试步的绿色 nightly 起算
+（日期与 run 链接记在[计划 5 证据](quality-gates-evidence.md)）。周报型的
+`supply-chain.yml` 不代表代码状态，不计入。
 
 ## 与其他服务共用的主机
 
