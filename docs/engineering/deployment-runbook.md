@@ -294,7 +294,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now dsherp-backup.timer 
 
 **备份集**：一次备份产出一个集，`<UTC 时间戳>-<站名下划线形式>-<6 位随机>`。数据侧在 `tenant-backups`/`platform-backups` 卷的 `sets/<站>/<集>/`：三件数据（`database.sql.gz`、`files.tar`、`private-files.tar`）、`snapshot.json`（G2 口径的核验快照）、`set.json`（各件 sha256、快照摘要、窗口起止、**当时运行的镜像 tag 与镜像 id**、Frappe 版本）。密钥侧在 `tenant-backup-secrets`/`platform-backup-secrets` 卷的 `<站>/<集>/`：`site_config_backup.json`（0600，目录 0700）与 `pair.json`（把数据侧各摘要抄一份 + `config_sha256` + `set.json` 的摘要）。两侧互证同一个集。
 
-**稳定窗口**：逐站先写保持文件（worker 不再领取，心跳照旧）→ `set-config dsherp_hold 1`（服务端 `claim_run` 直接拒绝，关掉"worker 已过检查、claim 未落地"的缝）→ 等在途执行者（Running/Cancelling）归零，最多 10 分钟（排队的运行被冻结，不计入，也不会让备份永远推迟）→ 维护模式 + 暂停调度 → 排空已在里面的写入者（本站 RQ 作业与非空闲数据库连接连续两轮为 0，最多 2 分钟）→ `bench backup --with-files` 与快照 → **逆序撤销**每一步。失败或超时都按已完成的动作逆序清理，该站记失败或推迟，其他站照常。
+**稳定窗口**：逐站先写保持文件（worker 不再领取，心跳照旧）→ `set-config dsherp_hold_until <窗口结束的 epoch 秒>`（服务端 `claim_run` 直接拒绝，关掉"worker 已过检查、claim 未落地"的缝；保持文件与该值都自带结束时刻，命令被杀也只挡到期为止）→ 等在途执行者（Running/Cancelling）归零，最多 10 分钟（排队的运行被冻结，不计入，也不会让备份永远推迟）→ 维护模式 + 暂停调度 → 排空已在里面的写入者（本站 RQ 作业与非空闲数据库连接连续两轮为 0，最多 2 分钟）→ `bench backup --with-files` 与快照 → **逆序撤销**每一步。失败或超时都按已完成的动作逆序清理，该站记失败或推迟，其他站照常。
 
 **异地**：两个仓库、两个口令、两个存储身份。`backup-sync` 先向两个仓库列快照核对记录（远端少一侧立即降级并在同一次运行补齐），再补传未完成的集，读回 `set.json` 与 `pair.json` 逐项核对后才算 `complete`——**两个快照 id 不算数**。远端有而记录没有的集会被收养并核对；远端内容与本机暂存不符时按本机重传一次。保留按站点从集的时间戳选 7 日 + 4 周 + 3 月，另外永远保留每站最新的完整集与最新的已验证集、`kind=retire` 的下线集与尚未配对的集；两侧都判淘汰才 `forget`（该集的**全部**快照）再 `prune`。每次运行按天轮换 `check --read-data-subset=<n>/7`，一周读完全部数据。**保留语义**：没有备份的周期不占名额；不运行 `backup-sync` 就不会有任何淘汰；`keep 3 monthly` 不等于"三个月后一定消失"。
 
@@ -343,7 +343,7 @@ DSHERP_ENV=prod ./bin/dsherp-admin delete-user-data acme.tenant.example.com some
 运行、提案与执行；**里面是个人内容，按交付流程转交，不要留在共享目录**。删除先导出，再让该用户的在途
 运行停下来：排队中的直接取消，运行中的标为 Cancelling，命令等执行者放手（`--wait`，默认 120 秒）；到时
 仍有在途就拒绝，不清任何内容，报告写成 `delete-blocked` 并列出那些运行（先停 worker 或等它们结束再重跑）。
-整个确认路径在站点保持之下进行（写宿主保持文件并置 `dsherp_hold`，服务端不再交出领取），从结算到目录删除完成才归还；
+整个确认路径在站点保持之下进行（写宿主保持文件并置 `dsherp_hold_until`，服务端不再交出领取；两者都在 30 分钟后自行失效），从结算到目录删除完成才归还；
 只删除计划时枚举的会话目录，其后出现的目录不在本次范围内。清除范围逐 DocType 声明在 `dsherp/user_data.py`：本人内容（提问、页面快照、回答、错误正文、会话标题）
 清除，追责事实（谁、何时、读了哪些记录、提案与执行结果）保留，并删除 `track_changes` 为这些列留下的
 Version 行、按会话删除该用户的原生会话目录；清除脚本在与 `send_message` 相同的 User 行锁下再查一次

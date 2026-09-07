@@ -173,7 +173,9 @@ def claim_run(runtime_revision):
     # A stable backup window is opened by the host CLI; the worker's own hold file closes the
     # door a tick later, so the site itself must refuse in between. Queued runs are frozen,
     # not failed: the window ends in minutes and the user's question is still valid.
-    if frappe.conf.get('dsherp_hold'):
+    # The gate is an epoch second set by the host CLI for the length of its window, so a
+    # command killed mid-window cannot hold the Site's claims for ever.
+    if int(frappe.conf.get('dsherp_hold_until') or 0) > time.time():
         _set_worker_heartbeat(now_datetime())
         return None
     frappe.db.rollback()

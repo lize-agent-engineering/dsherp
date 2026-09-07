@@ -287,7 +287,7 @@ def test_a_run_started_between_the_database_clear_and_the_directory_removal_keep
         def python(self, site, body, timeout=900):
             answer = super().python(site, body, timeout=timeout)
             if "DSHERP_USER_SETTLE" in body:
-                seen["hold_flag_at_settle"] = self.site_config.get((site, "dsherp_hold"))
+                seen["hold_flag_at_settle"] = int(self.site_config.get((site, "dsherp_hold_until"), 0)) > 0
                 seen["hold_file_at_settle"] = site in site_holds.held(admin.runtime_dir(RELEASE))
             if "DSHERP_USER_DELETE" in body:
                 newer.mkdir(parents=True)
@@ -298,9 +298,9 @@ def test_a_run_started_between_the_database_clear_and_the_directory_removal_keep
     result = admin.delete_user_data(RELEASE, "acme.tenant.example.com", "alice@example.invalid",
                                     bench_factory=lambda kind: bench, confirm=True, wait=0)
     assert result["applied"] is True and result["hold"] == "released"
-    assert seen == {"hold_flag_at_settle": "1", "hold_file_at_settle": True}, "held before anything is settled"
+    assert seen == {"hold_flag_at_settle": True, "hold_file_at_settle": True}, "held before anything is settled"
     assert not older.exists(), "the planned scope is gone"
     assert newer.exists(), "a scope that appeared after the plan is not this deletion's to take"
-    assert bench.site_config.get(("acme.tenant.example.com", "dsherp_hold")) == "0", "the hold is given back"
+    assert bench.site_config.get(("acme.tenant.example.com", "dsherp_hold_until")) == "0", "the hold is given back"
     assert "acme.tenant.example.com" not in site_holds.held(admin.runtime_dir(RELEASE))
     assert result["sessions_removed"] == [str(older.resolve())]

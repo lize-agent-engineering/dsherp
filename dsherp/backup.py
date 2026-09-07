@@ -216,18 +216,20 @@ def backup_window(resolved, bench, site, kind_of_bench, *, root=ROOT, kind='sche
     require_staging(bench, site)
     window = _Window()
     try:
-        site_holds.hold(runtime, site, kind)
+        site_holds.hold(runtime, site, kind, ttl_seconds=site_holds.DEFAULT_TTL_SECONDS)
         window.did(lambda: site_holds.release(runtime, site))
         flags = admin._site_flags(bench, site)
-        admin._set_flag(bench, site, 'dsherp_hold', 1)
-        window.did(lambda: admin._set_flag(bench, site, 'dsherp_hold', flags.get('dsherp_hold', 0)))
+        # The server-side gate carries its own end as well: a window whose command was
+        # killed must not keep the Site from claiming for ever.
+        admin._set_flag(bench, site, 'dsherp_hold_until', int(time.time()) + site_holds.DEFAULT_TTL_SECONDS)
+        window.did(lambda: admin._set_flag(bench, site, 'dsherp_hold_until', flags.get('dsherp_hold_until', 0)))
         deadline = clock() + EXECUTOR_WAIT_SECONDS
         while flags['running']:
             if clock() >= deadline:
                 return 'busy'
             sleep(EXECUTOR_POLL_SECONDS)
             flags = {**admin._site_flags(bench, site), 'maintenance_mode': flags['maintenance_mode'],
-                     'pause_scheduler': flags['pause_scheduler'], 'dsherp_hold': flags.get('dsherp_hold', 0)}
+                     'pause_scheduler': flags['pause_scheduler'], 'dsherp_hold_until': flags.get('dsherp_hold_until', 0)}
         admin._set_flag(bench, site, 'maintenance_mode', 1)
         window.did(lambda: admin._set_flag(bench, site, 'maintenance_mode', flags.get('maintenance_mode', 0)))
         admin._set_flag(bench, site, 'pause_scheduler', 1)

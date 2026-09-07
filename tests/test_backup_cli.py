@@ -33,14 +33,17 @@ def test_a_backup_opens_a_held_quiesced_drained_window_stages_one_set_and_record
     assert report["ok"] is True and set(report["sets"]) == {"acme.tenant.example.com", "platform.tenant.example.com"}
     site = "acme.tenant.example.com"
     verbs = bench.verbs
-    order = [next(i for i, v in enumerate(verbs) if v == needle) for needle in (
-        f"bench --site {site} set-config --parse dsherp_hold 1",
+    def matches(verb, needle):
+        return verb == needle or (needle.endswith("dsherp_hold_until +") and verb.startswith(needle[:-1])
+                                  and not verb.endswith(" 0"))
+    order = [next(i for i, v in enumerate(verbs) if matches(v, needle)) for needle in (
+        f"bench --site {site} set-config --parse dsherp_hold_until +",
         f"bench --site {site} set-config --parse maintenance_mode 1",
         f"bench --site {site} set-config --parse pause_scheduler 1",
         f"bench --site {site} backup --with-files",
         f"snapshot {site}",
         f"bench --site {site} set-config --parse maintenance_mode 0",
-        f"bench --site {site} set-config --parse dsherp_hold 0")]
+        f"bench --site {site} set-config --parse dsherp_hold_until 0")]
     assert order == sorted(order), "hold, quiesce, drain, back up, snapshot, then undo in reverse"
     assert [call for call in bench.calls if call[0] == "writers"], "the window waits for in-flight writers"
     set_doc = report["sets"][site]
@@ -81,8 +84,7 @@ def test_queued_runs_alone_never_defer_a_backup_but_a_running_executor_does(host
     assert "platform.tenant.example.com" in report["sets"], "one busy Site does not stop the others"
     assert not any("acme" in verb and "backup --with-files" in verb for verb in busy.verbs)
     assert not any("acme" in verb and "maintenance_mode 1" in verb for verb in busy.verbs)
-    assert not any("acme" in verb and "dsherp_hold 1" in verb and verb.endswith("1")
-                   for verb in busy.verbs[-2:]), "the hold is lifted again"
+    assert busy.site_config[("acme.tenant.example.com", "dsherp_hold_until")] == "0", "the hold is lifted again"
     assert site_holds.held(admin.runtime_dir(RELEASE)) == set()
     status = backup_status.load(admin.runtime_dir(RELEASE) / "backups" / "status.json")
     assert status["sites"]["acme.tenant.example.com"]["backup"]["last_attempt"]["deferred"] == "busy"
@@ -102,7 +104,7 @@ def test_a_window_waits_for_http_and_background_writers_and_defers_when_they_do_
     assert report["deferred"]["acme.tenant.example.com"] == "draining"
     assert not any("acme" in verb and "backup --with-files" in verb for verb in stuck.verbs)
     assert stuck.site_config[("acme.tenant.example.com", "maintenance_mode")] == "0", "flags are undone on the way out"
-    assert stuck.site_config[("acme.tenant.example.com", "dsherp_hold")] == "0"
+    assert stuck.site_config[("acme.tenant.example.com", "dsherp_hold_until")] == "0"
     assert site_holds.held(admin.runtime_dir(RELEASE)) == set()
 
 
@@ -120,7 +122,7 @@ def test_a_failure_inside_the_window_undoes_every_step_it_had_taken(host):
     assert report["ok"] is False and "acme.tenant.example.com" in report["failed"]
     assert bench.site_config[("acme.tenant.example.com", "maintenance_mode")] == "0"
     assert bench.site_config[("acme.tenant.example.com", "pause_scheduler")] == "0"
-    assert bench.site_config[("acme.tenant.example.com", "dsherp_hold")] == "0"
+    assert bench.site_config[("acme.tenant.example.com", "dsherp_hold_until")] == "0"
     assert site_holds.held(admin.runtime_dir(RELEASE)) == set()
     status = backup_status.load(admin.runtime_dir(RELEASE) / "backups" / "status.json")
     assert status["sites"]["acme.tenant.example.com"]["backup"]["last_success"] is None

@@ -114,3 +114,25 @@ def test_a_backup_reporting_failure_never_costs_the_business_tick(tmp_path, monk
     assert context_worker.serve_once(coordinator, [{"site": "a", "client": object()}], None, {},
                                      now=0, backups={"runtime_dir": tmp_path, "sites": lambda: ["a"]})
     assert ticked == [0], "the heartbeat still ran"
+
+
+def test_a_hold_left_behind_by_a_killed_command_stops_blocking_when_it_expires(tmp_path):
+    claimed, heartbeats = [], []
+    client = _client("acme", claimed, heartbeats, queue=["r1-acme", "r2-acme"])
+    import time
+    clock = {"now": time.time()}
+    try:
+        coordinator = Coordinator([{"site": "acme", "client": client, "business": {"business_url": "http://x", "site": "acme"}}],
+                                  lambda: SETTINGS, slots=1, execute=lambda *a, **k: {"status": "Succeeded", "answer": "ok"},
+                                  breaker=None, probe=lambda: True, state_root=tmp_path,
+                                  holds=lambda: site_holds.held(tmp_path, now=clock["now"]))
+        site_holds.hold(tmp_path, "acme", "backup", ttl_seconds=60)
+        coordinator.tick(now=0)
+        coordinator.wait_idle()
+        assert "acme" not in claimed
+        clock["now"] += 61            # the command that wrote the hold was killed; its end passes
+        coordinator.tick(now=10)
+        coordinator.wait_idle()
+        assert "acme" in claimed
+    finally:
+        client.close()

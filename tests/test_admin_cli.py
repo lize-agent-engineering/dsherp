@@ -444,7 +444,7 @@ class SnapshotBench(FakeBench):
             if counts and all(isinstance(value, dict) for value in counts.values()):
                 counts = counts.get(site, {"Queued": 0, "Running": 0, "Cancelling": 0, "NeedsInput": 0})
             counts = {status: counts.get(status, 0) for status in ("Queued", "Running", "Cancelling", "NeedsInput")}
-            flags = {key: int(self.site_config.get((site, key), 0)) for key in ("maintenance_mode", "pause_scheduler", "dsherp_hold")}
+            flags = {key: int(self.site_config.get((site, key), 0)) for key in ("maintenance_mode", "pause_scheduler", "dsherp_hold_until")}
             return json.dumps({"active": counts["Queued"] + counts["Running"] + counts["Cancelling"],
                                "running": counts["Running"] + counts["Cancelling"], "counts": counts, **flags}) + "\n"
         return super().python(site, body, timeout=timeout)
@@ -1324,7 +1324,7 @@ def test_retiring_a_tenant_stages_its_final_set_and_refuses_to_drop_until_it_has
     assert admin.load_tenants(RELEASE), "the tenant list is untouched"
     staged = [key for key in bench.written if key.endswith("set.json")]
     assert staged and bench.written[staged[0]]["kind"] == "retire"
-    assert any("dsherp_hold 1" in verb for verb in bench.verbs), "the final backup runs in a stable window"
+    assert any("dsherp_hold_until" in verb and not verb.endswith(" 0") for verb in bench.verbs), "the final backup runs in a stable window"
 
 
 def test_production_refuses_to_retire_or_release_before_the_off_site_repositories_are_configured(host):

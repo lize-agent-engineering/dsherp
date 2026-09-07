@@ -29,3 +29,26 @@ def test_an_unreadable_hold_directory_is_reported_not_treated_as_no_holds(tmp_pa
         raise AssertionError("an unreadable hold directory must raise when asked to")
     finally:
         (tmp_path / "holds").chmod(0o700)
+
+
+def test_a_hold_past_its_end_no_longer_counts(tmp_path):
+    """A command killed mid-window leaves its file behind; the file must not stop a Site's
+    claims until somebody notices."""
+    site_holds.hold(tmp_path, "acme.tenant.example.com", "backup", ttl_seconds=60)
+    import time
+    assert site_holds.held(tmp_path, now=time.time() + 30) == {"acme.tenant.example.com"}
+    assert site_holds.held(tmp_path, now=time.time() + 61) == set()
+
+
+def test_a_hold_whose_holder_died_no_longer_counts(tmp_path, monkeypatch):
+    path = site_holds.hold(tmp_path, "acme.tenant.example.com", "backup")
+    record = json.loads(path.read_text())
+    record["pid"] = 2 ** 22 + 12345      # nobody is running as this
+    path.write_text(json.dumps(record))
+    assert site_holds.held(tmp_path) == set()
+
+
+def test_an_unreadable_hold_file_still_counts_as_held(tmp_path):
+    path = site_holds.hold(tmp_path, "acme.tenant.example.com", "backup")
+    path.write_text("{ not json")
+    assert site_holds.held(tmp_path) == {"acme.tenant.example.com"}

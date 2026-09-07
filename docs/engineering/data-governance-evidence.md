@@ -154,7 +154,7 @@ worker 的 `monitor_backups` 每次读真实状态文件，下面是它当场给
 | 机制 | 防的是 |
 |---|---|
 | 备份集协议：一个 id 贯穿两侧目录、两个仓库标签、`set.json`/`pair.json`，每件（含快照与 site_config）都有 sha256 | 数据与密钥配错批次；远端内容与本机不符而无人察觉 |
-| 稳定窗口：保持文件 + 服务端 `dsherp_hold` 闸门 + 等在途执行者 + 维护标志 + 排空 RQ 与数据库连接，逆序撤销 | 备份文件与核验快照描述不同状态；排队的运行让备份永远推迟；worker 已过检查而 claim 未落地的缝 |
+| 稳定窗口：保持文件 + 服务端 `dsherp_hold_until` 闸门（均自带结束时刻） + 等在途执行者 + 维护标志 + 排空 RQ 与数据库连接，逆序撤销 | 备份文件与核验快照描述不同状态；排队的运行让备份永远推迟；worker 已过检查而 claim 未落地的缝 |
 | `complete` 必须读回两份清单逐项核对，且每次运行重新向仓库确认 | "两个快照 id"被当成配对成功；远端副本被删或被改后仍算数 |
 | 保留在宿主侧按站点算，两侧都判淘汰才 forget 该集全部快照 | restic 按唯一标签分组导致永不淘汰；一侧删干净另一侧留下孤儿 |
 | 隔离恢复栈：internal 网络、无入口无 worker、按集记录的构建起栈并核对镜像 id、凭据只走 stdin | 恢复副本对外产生副作用；在错误的版本上恢复；新链路继续往 bench.log 写明文口令 |
@@ -167,7 +167,7 @@ worker 的 `monitor_backups` 每次读真实状态文件，下面是它当场给
 
 | 环节 | 实测 |
 |---|---|
-| 生成 | `backup` 对 `dsherp-platform.localhost` 真实开窗：`dsherp_hold` → 等在途执行者 → 维护标志 → 排空写入者 → `bench backup --with-files` → 快照 → 逆序撤销。集内五个文件与两个密钥侧文件齐全，密钥目录 0700、文件 0600，`private/backups` 里已无 `site_config_backup.json`，逐件 sha256 与 `set.json` 一致（集成测试 `tests/integration/test_backup_sets_real.py`） |
+| 生成 | `backup` 对 `dsherp-platform.localhost` 真实开窗：`dsherp_hold_until` → 等在途执行者 → 维护标志 → 排空写入者 → `bench backup --with-files` → 快照 → 逆序撤销。集内五个文件与两个密钥侧文件齐全，密钥目录 0700、文件 0600，`private/backups` 里已无 `site_config_backup.json`，逐件 sha256 与 `set.json` 一致（集成测试 `tests/integration/test_backup_sets_real.py`） |
 | 仓库初始化 | `backup-init` 经私有 CA 的 TLS 建两个仓库，重跑报 `kept` |
 | 上传与配对 | 上传后从两个仓库 `dump` 读回 `set.json` 与 `pair.json` 逐项核对才标 `complete`；**伪造的历史集（复制目录未改 set.json）被如实拒绝** |
 | 单边丢失 | 在密钥仓库 `forget` 掉一侧后再同步：如实降级并在同一次运行补齐，`errors` 里点名 |
