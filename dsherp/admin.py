@@ -503,6 +503,9 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
         'dsherp_runtime_user': runtime_user,
         'host_name': deploy_env.public_origin(resolved, slug),
         'dsherp_agent_sources': agent_sources(resolved, runner) if resolved['env'] == 'prod' else None,
+        # The deliberate switch for "every session comes through the platform"; the System
+        # Settings password switch below is the user-facing half of the same decision.
+        'dsherp_sso_required': 1,
     } if resolved['env'] == 'prod' else {
         'dsherp_runtime_user': runtime_user,
         'host_name': deploy_env.public_origin(resolved, slug),
@@ -722,7 +725,7 @@ SITE_FLAGS = ("has=frappe.db.exists('DocType','DS Model Run')\n"
               "'running':counts['Running']+counts['Cancelling'],'counts':counts,"
               "'maintenance_mode':int(frappe.conf.get('maintenance_mode') or 0),"
               "'pause_scheduler':int(frappe.conf.get('pause_scheduler') or 0),"
-              "'dsherp_hold':int(frappe.conf.get('dsherp_hold') or 0)}))")
+              "'dsherp_hold_until':int(frappe.conf.get('dsherp_hold_until') or 0)}))")
 EXPECTATIONS = ("import importlib,os\n"
                 "found=[]\n"
                 "for app in frappe.get_installed_apps():\n"
@@ -1295,6 +1298,12 @@ def usage_report(resolved, month, *, root=ROOT, runner=subprocess.run, bench_fac
                                                                'model_calls', 'duration_ms', 'unknown_calls',
                                                                'runs_with_unknown_usage')}, 'complete': True})
     report['unreachable'] = unreachable
+    # A Site that did not answer has usage this report does not contain. Its row and the
+    # totals say so; the numbers that are here stay, as the known part.
+    for site in unreachable:
+        report['sites'].setdefault(site, {})['complete'] = False
+    if unreachable:
+        report['totals']['complete'] = False
     report['path'] = str(_write_json(runtime_dir(resolved, root) / 'usage' / f'usage-{month}.json', report))
     return report
 
@@ -1507,6 +1516,8 @@ def _user_export(resolved, root, site, user, found):
 
 SETTLE_WAIT_SECONDS = 120
 SETTLE_POLL_SECONDS = 3
+# The deletion's hold ends on its own if the command is killed: wait, clear and remove fit in it.
+DELETE_HOLD_SECONDS = 1800
 
 
 def _settle_user(bench, site, user, *, wait, clock, sleep):
@@ -1564,9 +1575,9 @@ def delete_user_data(resolved, site, user, *, root=ROOT, runner=subprocess.run, 
     runtime = runtime_dir(resolved, root)
     with backup_module.operations_lock(resolved, root, 'delete-user-data'):
         flags = _site_flags(bench, site)
-        site_holds.hold(runtime, site, 'delete-user-data')
+        site_holds.hold(runtime, site, 'delete-user-data', ttl_seconds=DELETE_HOLD_SECONDS)
         try:
-            _set_flag(bench, site, 'dsherp_hold', 1)
+            _set_flag(bench, site, 'dsherp_hold_until', int(time.time()) + DELETE_HOLD_SECONDS)
             report['hold'] = 'held'
             settled, remaining = _settle_user(bench, site, user, wait=wait, clock=clock, sleep=sleep)
             report['settled'] = settled
@@ -1589,7 +1600,7 @@ def delete_user_data(resolved, site, user, *, root=ROOT, runner=subprocess.run, 
                     raise Fault(f'{user} 在清除前一刻又有运行进入在途（{len(report["inflight"])} 个）；本次未清除任何内容，请重跑')
             report['sessions_removed'] = sessions_module.remove_scopes(state_root, site, sessions)
         finally:
-            _set_flag(bench, site, 'dsherp_hold', flags.get('dsherp_hold', 0))
+            _set_flag(bench, site, 'dsherp_hold_until', flags.get('dsherp_hold_until', 0))
             site_holds.release(runtime, site)
             report['hold'] = 'released'
     report['applied'] = True

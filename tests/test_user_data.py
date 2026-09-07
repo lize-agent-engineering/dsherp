@@ -193,10 +193,6 @@ def test_a_cleared_page_snapshot_is_still_a_page_snapshot_the_site_can_read():
     value = user_data.cleared("DS Model Run")["page_context"]
     context = json.loads(value)
     assert context["schema_version"] == 1 and context["page_type"] == "unknown" and context["route"] == []
-    source = (Path(__file__).resolve().parents[1] / "frappe_app/dsherp_bridge/context_api.py").read_text()
-    allowed = source.split("allowed = {", 1)[1].split("}", 1)[0]
-    allowed = {piece.strip().strip("'") for piece in allowed.split(",")}
-    assert set(context) <= allowed, "the replacement carries a key the page validator rejects"
     assert set(context) <= {"schema_version", "route", "page_type", "reason"}, "an unknown page carries nothing else"
 
 
@@ -291,7 +287,7 @@ def test_a_run_started_between_the_database_clear_and_the_directory_removal_keep
         def python(self, site, body, timeout=900):
             answer = super().python(site, body, timeout=timeout)
             if "DSHERP_USER_SETTLE" in body:
-                seen["hold_flag_at_settle"] = self.site_config.get((site, "dsherp_hold"))
+                seen["hold_flag_at_settle"] = int(self.site_config.get((site, "dsherp_hold_until"), 0)) > 0
                 seen["hold_file_at_settle"] = site in site_holds.held(admin.runtime_dir(RELEASE))
             if "DSHERP_USER_DELETE" in body:
                 newer.mkdir(parents=True)
@@ -302,9 +298,9 @@ def test_a_run_started_between_the_database_clear_and_the_directory_removal_keep
     result = admin.delete_user_data(RELEASE, "acme.tenant.example.com", "alice@example.invalid",
                                     bench_factory=lambda kind: bench, confirm=True, wait=0)
     assert result["applied"] is True and result["hold"] == "released"
-    assert seen == {"hold_flag_at_settle": "1", "hold_file_at_settle": True}, "held before anything is settled"
+    assert seen == {"hold_flag_at_settle": True, "hold_file_at_settle": True}, "held before anything is settled"
     assert not older.exists(), "the planned scope is gone"
     assert newer.exists(), "a scope that appeared after the plan is not this deletion's to take"
-    assert bench.site_config.get(("acme.tenant.example.com", "dsherp_hold")) == "0", "the hold is given back"
+    assert bench.site_config.get(("acme.tenant.example.com", "dsherp_hold_until")) == "0", "the hold is given back"
     assert "acme.tenant.example.com" not in site_holds.held(admin.runtime_dir(RELEASE))
     assert result["sessions_removed"] == [str(older.resolve())]

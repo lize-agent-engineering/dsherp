@@ -154,7 +154,7 @@ worker 的 `monitor_backups` 每次读真实状态文件，下面是它当场给
 | 机制 | 防的是 |
 |---|---|
 | 备份集协议：一个 id 贯穿两侧目录、两个仓库标签、`set.json`/`pair.json`，每件（含快照与 site_config）都有 sha256 | 数据与密钥配错批次；远端内容与本机不符而无人察觉 |
-| 稳定窗口：保持文件 + 服务端 `dsherp_hold` 闸门 + 等在途执行者 + 维护标志 + 排空 RQ 与数据库连接，逆序撤销 | 备份文件与核验快照描述不同状态；排队的运行让备份永远推迟；worker 已过检查而 claim 未落地的缝 |
+| 稳定窗口：保持文件 + 服务端 `dsherp_hold_until` 闸门（均自带结束时刻） + 等在途执行者 + 维护标志 + 排空 RQ 与数据库连接，逆序撤销 | 备份文件与核验快照描述不同状态；排队的运行让备份永远推迟；worker 已过检查而 claim 未落地的缝 |
 | `complete` 必须读回两份清单逐项核对，且每次运行重新向仓库确认 | "两个快照 id"被当成配对成功；远端副本被删或被改后仍算数 |
 | 保留在宿主侧按站点算，两侧都判淘汰才 forget 该集全部快照 | restic 按唯一标签分组导致永不淘汰；一侧删干净另一侧留下孤儿 |
 | 隔离恢复栈：internal 网络、无入口无 worker、按集记录的构建起栈并核对镜像 id、凭据只走 stdin | 恢复副本对外产生副作用；在错误的版本上恢复；新链路继续往 bench.log 写明文口令 |
@@ -167,7 +167,7 @@ worker 的 `monitor_backups` 每次读真实状态文件，下面是它当场给
 
 | 环节 | 实测 |
 |---|---|
-| 生成 | `backup` 对 `dsherp-platform.localhost` 真实开窗：`dsherp_hold` → 等在途执行者 → 维护标志 → 排空写入者 → `bench backup --with-files` → 快照 → 逆序撤销。集内五个文件与两个密钥侧文件齐全，密钥目录 0700、文件 0600，`private/backups` 里已无 `site_config_backup.json`，逐件 sha256 与 `set.json` 一致（集成测试 `tests/integration/test_backup_sets_real.py`） |
+| 生成 | `backup` 对 `dsherp-platform.localhost` 真实开窗：`dsherp_hold_until` → 等在途执行者 → 维护标志 → 排空写入者 → `bench backup --with-files` → 快照 → 逆序撤销。集内五个文件与两个密钥侧文件齐全，密钥目录 0700、文件 0600，`private/backups` 里已无 `site_config_backup.json`，逐件 sha256 与 `set.json` 一致（集成测试 `tests/integration/test_backup_sets_real.py`） |
 | 仓库初始化 | `backup-init` 经私有 CA 的 TLS 建两个仓库，重跑报 `kept` |
 | 上传与配对 | 上传后从两个仓库 `dump` 读回 `set.json` 与 `pair.json` 逐项核对才标 `complete`；**伪造的历史集（复制目录未改 set.json）被如实拒绝** |
 | 单边丢失 | 在密钥仓库 `forget` 掉一侧后再同步：如实降级并在同一次运行补齐，`errors` 里点名 |
@@ -313,3 +313,17 @@ Frappe 每个 `User` 只有一个 `api_secret`，所以短期凭据**属于业�
 审查单 [plan4-pr9-review-2026-09-07](plan4-pr9-review-2026-09-07.md) 的九项发现逐条修正并复验，逐项处置、真实结果与
 门禁见 [plan4-pr9-review-response-2026-09-07](plan4-pr9-review-response-2026-09-07.md)。本文上面各切片里与之相悖的
 陈述（`platform_grant` 列、月报口径、绑定哈希）已同步更正。
+
+## 整体复盘（[plan4-retrospective](plan4-retrospective-2026-09-07.md)）的处置
+
+| 项 | 处置 | 复验 |
+|---|---|---|
+| B1 · `backup --sync` 同步失败仍退出 0 | `backup()` 把同步结果并入顶层 `ok`，命令一个结论；systemd 单元的 `OnFailure` 因此能在对象存储不可达时触发 | 复盘探针：`exit 1, backup_ok false`；回归覆盖 `backup(sync=True)` 与 `admin.main(['backup','--sync'])` |
+| B2 · 灾后重发现的备份集丢失镜像身份 | `upload_sets` 把读回并配对的远端 `set.json` 里的 `image_tag/image_id` 回填到重建的记录；`restore-site` 与演练对没有身份的记录直接拒绝（提示先 `backup-sync`），取回清单后再以清单为准核对一次运行镜像 | 复盘探针：收养后记录带 `sha256:id-v0.4.0`，错误构建被拒；回归覆盖"清空状态→重发现→身份齐全""缺身份拒绝""记录被改、清单为准" |
+| B3 · 部分失败仍标为完整 | `summarise` 把"服务端已预留但 provider 没有回报"的调用计入未知；`usage_report` 对不可达站点把该站与总计的 `complete` 置 false | 复盘探针：超时后 `unknown_calls 1, complete false`；两站不可达时站点与总计均 `complete false` |
+| Q1 · 测错对象的断言 | 断言改查实际传入演练的 bench | 复盘探针：模拟实际对象记录建站后，断言如实失败 |
+| 灾后 `current.json` | 冷启动成功后若本机没有发布记录则写入（tag、运行镜像、来源备份集），已有则保留 | 回归覆盖 |
+| skill 版本归因 | runner 的 `runtime_started` 事件带上固定清单里的 `skill_versions` | 回归覆盖清单读取；真实运行的落库待下一次有模型调用时抽样 |
+| 保持无过期（复盘之外，来自执行方自查） | 宿主保持文件带 `until` 与 pid，服务端闸门改为 `dsherp_hold_until`（epoch 秒）；备份 2 小时、删除 30 分钟，命令被杀只挡到期 | 单元覆盖过期/持有进程已死/文件损坏；集成 `test_backup_hold_gate` 改为按到期判定 |
+| 登录续签 `User.save()` 副作用 | 直接写 `api_key` 列与 `__Auth` 加密 secret，不再触发 User 控制器与 `create_contact` 入队 | 真实站点：签发时无 enqueue、无控制器调用，新 key 立即可用 |
+| SSO 强制单一开关耦合 | `sso_enforced()` = `dsherp_sso_required`（生产开通写入）或禁用密码登录；三处规则统一 | 真实站点：置 `dsherp_sso_required` 后无令牌的后台执行被拒 |

@@ -288,7 +288,9 @@ def restore_drill(resolved, sites=None, *, root=ROOT, runner=subprocess.run, sta
                     started = time.monotonic()
                     try:
                         running = stack.image_id()
-                        if row.get('image_id') and running != row['image_id']:
+                        if not row.get('image_id'):
+                            raise Fault(f'备份集 {row["set_id"]} 的记录没有镜像身份；先 backup-sync 让它从异地清单补齐')
+                        if running != row['image_id']:
                             raise Fault(f'恢复栈运行的镜像 id 是 {running}，备份集记录的是 {row["image_id"]}；'
                                         '按备份记录的那次构建恢复，不要用别的镜像')
                         stack.fetch('data', row['data_snapshot'])
@@ -372,7 +374,11 @@ def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.ru
         images = admin._running_images(resolved, runner, root)
         service = admin.bench_service_of(resolved, site)
         running = (images.get(service) or {}).get('image_id')
-        if row.get('image_id') and running != row['image_id']:
+        if not row.get('image_id'):
+            # A record without the build's identity cannot be checked, so it is not restored
+            # on trust: a sync reads the identity back from the verified manifest.
+            raise Fault(f'本机记录里的备份集 {row["set_id"]} 没有镜像身份；先 backup-sync 让它从异地清单补齐，再恢复')
+        if running != row['image_id']:
             raise Fault(f'本机 {service} 运行的镜像 id 是 {running}，备份集记录的是 {row["image_id"]}；'
                         f'先把 prod.env 的 tag 改成 {row.get("image_tag")} 并 compose up -d，再恢复')
         # Each half comes back onto the volume that already holds that half's kind of data,
@@ -392,6 +398,10 @@ def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.ru
                               mounts=[f'{volumes[side]}:/incoming'])
             set_doc, data_root, expected, config = verify_fetched(bench, site, row['set_id'],
                                                                   base=bases['data'], secrets_base=bases['secrets'])
+            # The fetched manifest is the authority on which build made the set; the record
+            # was only ever a copy of it.
+            if set_doc.get('image_id') and set_doc['image_id'] != running:
+                raise Fault(f'取回的清单记录的镜像 id 是 {set_doc["image_id"]}，本机运行的是 {running}；不恢复')
             report['image_tag'] = set_doc['image_tag']
             # 2. the Site, by the normal path in its closed form: it goes into maintenance the
             # moment it exists, the enterprise stays Provisioning, and nothing is published
@@ -442,6 +452,15 @@ def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.ru
             # No copy of either half is left behind on the volumes, whichever way it went.
             for side in ('data', 'secrets'):
                 bench.run('sh', '-c', f'rm -rf {bases[side]}/{side}', timeout=600)
+        # The next release on this host needs to know what runs here; a rebuilt host has no
+        # record. One that already has one keeps it - a release wrote it, and it knows better.
+        current = admin._current_path(resolved, root)
+        if not current.exists():
+            admin._write_json(current, {'tag': set_doc['image_tag'], 'images': images,
+                                        'at': time.strftime('%Y-%m-%d %H:%M:%S'), 'restored_from': row['set_id']})
+            report['current_json'] = 'written'
+        else:
+            report['current_json'] = 'kept'
         admin._set_flag(bench, site, 'maintenance_mode', 0)
         report['maintenance'] = 'released'
         report['seconds'] = round(time.monotonic() - started, 1)

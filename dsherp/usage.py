@@ -51,6 +51,7 @@ def summarise(events):
     """The metering fields for one run, from its own event stream."""
     models, requests = [], []
     input_tokens = output_tokens = unknown = 0
+    reserved = responses = 0
     skills = None
     first = last = None
     for event in events:
@@ -63,8 +64,11 @@ def summarise(events):
         payload = _payload(event)
         if kind == 'runtime_started' and isinstance(payload.get('skill_versions'), dict):
             skills = payload['skill_versions']
+        if kind == 'model_call_reserved':
+            reserved += 1
         if kind != 'model_response':
             continue
+        responses += 1
         model = payload.get('model')
         if isinstance(model, str) and model and model not in models:
             models.append(model)
@@ -84,6 +88,10 @@ def summarise(events):
         output_tokens += given_output or 0
         if given_input is None or given_output is None:
             unknown += 1
+    # A call the server reserved but the provider never answered for - the stream timed out
+    # after partial output, the runner died - consumed something nobody reported. It is not
+    # zero; it is unknown.
+    unknown += max(reserved - responses, 0)
     duration = None
     if first is not None and last is not None:
         duration = max(int((last - first).total_seconds() * 1000), 0)

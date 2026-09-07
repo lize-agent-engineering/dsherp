@@ -58,7 +58,7 @@ def test_a_real_backup_stages_one_set_with_matching_digests_and_split_permission
 
     flags = json.loads(_exec("platform-backend", "sh", "-c",
                              f"cat /home/frappe/frappe-bench/sites/{site}/site_config.json"))
-    assert int(flags.get("maintenance_mode") or 0) == 0 and int(flags.get("dsherp_hold") or 0) == 0, \
+    assert int(flags.get("maintenance_mode") or 0) == 0 and int(flags.get("dsherp_hold_until") or 0) == 0, \
         "the window is closed again"
 
     status = backup_status.load(backup.status_path(resolved))

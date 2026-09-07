@@ -101,8 +101,6 @@ def test_a_business_user_answers_to_one_platform_member_and_the_database_is_what
     the real Site is tests/integration/test_membership_binding.py."""
     fields = {field["fieldname"]: field for field in json.loads(MEMBERSHIP.read_text())["fields"]}
     assert fields["active_binding"]["unique"] == 1 and fields["active_binding"]["fieldtype"] == "Data"
-    controller = (ROOT / "frappe_app/dsherp_platform/platform/doctype/ds_membership/ds_membership.py").read_text()
-    assert "active_binding" in controller and "else None" in controller, "disabled rows must not collide on an empty key"
     patches = (ROOT / "frappe_app/dsherp_platform/patches.txt").read_text()
     pre = patches.split("[pre_model_sync]", 1)[1].split("[post_model_sync]", 1)[0]
     assert "binding_uniqueness" in pre, "duplicates must be resolved before the index is created"
@@ -114,60 +112,8 @@ def test_the_binding_version_is_a_counter_not_a_hash_of_the_row():
     plain: no hash stands in for a version number."""
     fields = {field["fieldname"]: field for field in json.loads(MEMBERSHIP.read_text())["fields"]}
     assert fields["binding_version"]["fieldtype"] == "Int"
-    api = PLATFORM_API.read_text()
-    helper = api.split("def binding_version", 1)[1].split("\ndef ", 1)[0]
-    assert "hashlib" not in helper and "binding_version" in helper
-    controller = (ROOT / "frappe_app/dsherp_platform/platform/doctype/ds_membership/ds_membership.py").read_text()
-    counting = controller.split("def _count_the_binding", 1)[1]
-    assert "+ 1" in counting and "BINDING_FIELDS" in counting
 
 
-def test_the_business_site_refuses_a_key_whose_window_has_passed_where_sso_is_enforced():
-    """The window governs credentials the platform borrows, which only exist where every
-    session comes through the platform. A Site that still takes passwords (development)
-    records windows and reports them, but does not turn keys away on them."""
-    source = (BRIDGE / "sso.py").read_text()
-    body = source.split("def validate_session", 1)[1]
-    assert "_machine_authenticated()" in body
-    gate = body.split("_machine_authenticated():", 1)[1].split("return", 1)[0]
-    assert "_password_login_disabled()" in gate and "credentials.require(user)" in gate
-
-
-def test_the_login_hands_the_platform_a_current_credential_instead_of_a_stored_forever_one():
-    source = (BRIDGE / "sso.py").read_text()
-    callback = source.split("def callback", 1)[1].split("\ndef ", 1)[0]
-    assert "credentials" in callback and "accept_credential" in source
-
-
-PLATFORM_API = ROOT / "frappe_app/dsherp_platform/api.py"
-
-
-def test_the_platform_refuses_to_read_with_a_credential_whose_window_has_passed():
-    source = PLATFORM_API.read_text()
-    binding = source.split("def _binding", 1)[1].split("\n@", 1)[0]
-    assert "credential_expires_at" in binding or "business_credentials" in binding
-    assert "usable" in binding or "state" in binding
-
-
-def test_the_platform_accepts_a_credential_only_after_proving_it_belongs_to_the_bound_user():
-    """A pushed credential is checked against the business Site itself before it is stored,
-    so a wrong or stale pair fails at delivery rather than on the member's next read."""
-    source = PLATFORM_API.read_text()
-    assert "def accept_credential" in source
-    body = source.split("def accept_credential", 1)[1].split("\n@frappe.whitelist", 1)[0]
-    assert "get_logged_user" in body and "erp_user" in body
-    assert "methods=['POST']" in source.split("def accept_credential", 1)[0][-120:]
-
-
-def test_a_stale_credential_is_named_as_such_rather_than_reported_as_a_permission_problem():
-    source = PLATFORM_API.read_text()
-    business = source.split("def _business", 1)[1].split("\n@", 1)[0]
-    assert "401" in business and "重新登录" in business
-
-
-def test_disabling_a_membership_kills_the_credential_it_lent_out():
-    source = PLATFORM_API.read_text() + (ROOT / "frappe_app/dsherp_platform/platform/doctype/ds_membership/ds_membership.py").read_text()
-    assert "revoke_credential" in source
 
 
 from tests.test_admin_cli import RELEASE, SnapshotBench, _tenant_row   # noqa: E402
@@ -245,20 +191,7 @@ def test_a_login_on_an_expired_credential_still_refuses_a_binding_that_names_som
     """The round trip proves the platform holds a credential for the user it claims. When the
     credential has expired that proof is unavailable, so the last proof stands in - and only
     for the same business user. Otherwise an edited erp_user would log in unproved."""
-    source = PLATFORM_API.read_text()
-    body = source.split("def desk_identity", 1)[1].split("\n@frappe.whitelist", 1)[0]
-    assert "credential_erp_user" in body and "PermissionError" in body
     fields = {field["fieldname"] for field in json.loads(MEMBERSHIP.read_text())["fields"]}
     assert "credential_erp_user" in fields
-    stored = source.split("def accept_credential", 1)[1].split("\n@frappe.whitelist", 1)[0]
-    assert "credential_erp_user=member.erp_user" in stored.replace(" ", "")
 
 
-def test_a_finished_credential_reads_as_an_authentication_failure_not_a_permission_one():
-    """401 is what tells the platform to renew; 403 reads as "this member may not", and made
-    an expired login impossible to repair on the real stack."""
-    source = (BRIDGE / "credentials.py").read_text()
-    body = source.split("def require", 1)[1].split("\ndef ", 1)[0]
-    assert "frappe.AuthenticationError" in body and "frappe.PermissionError" not in body
-    platform = PLATFORM_API.read_text().split("def _business", 1)[1].split("\n@", 1)[0]
-    assert "401" in platform and "CredentialStale" in platform

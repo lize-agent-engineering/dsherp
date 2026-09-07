@@ -7,7 +7,7 @@ import json
 import pytest
 
 from dsherp import admin, backup, backup_sets, backup_status, site_holds
-from tests.test_admin_cli import RELEASE, RUNNING_NEW, SAME, SnapshotBench, _tenant_row
+from tests.test_admin_cli import _restic, RELEASE, RUNNING_NEW, SAME, SnapshotBench, _tenant_row
 from tests.test_admin_cli import host  # noqa: F401  the autouse fixture that isolates runtime and secrets dirs
 
 
@@ -33,14 +33,17 @@ def test_a_backup_opens_a_held_quiesced_drained_window_stages_one_set_and_record
     assert report["ok"] is True and set(report["sets"]) == {"acme.tenant.example.com", "platform.tenant.example.com"}
     site = "acme.tenant.example.com"
     verbs = bench.verbs
-    order = [next(i for i, v in enumerate(verbs) if v == needle) for needle in (
-        f"bench --site {site} set-config --parse dsherp_hold 1",
+    def matches(verb, needle):
+        return verb == needle or (needle.endswith("dsherp_hold_until +") and verb.startswith(needle[:-1])
+                                  and not verb.endswith(" 0"))
+    order = [next(i for i, v in enumerate(verbs) if matches(v, needle)) for needle in (
+        f"bench --site {site} set-config --parse dsherp_hold_until +",
         f"bench --site {site} set-config --parse maintenance_mode 1",
         f"bench --site {site} set-config --parse pause_scheduler 1",
         f"bench --site {site} backup --with-files",
         f"snapshot {site}",
         f"bench --site {site} set-config --parse maintenance_mode 0",
-        f"bench --site {site} set-config --parse dsherp_hold 0")]
+        f"bench --site {site} set-config --parse dsherp_hold_until 0")]
     assert order == sorted(order), "hold, quiesce, drain, back up, snapshot, then undo in reverse"
     assert [call for call in bench.calls if call[0] == "writers"], "the window waits for in-flight writers"
     set_doc = report["sets"][site]
@@ -81,8 +84,7 @@ def test_queued_runs_alone_never_defer_a_backup_but_a_running_executor_does(host
     assert "platform.tenant.example.com" in report["sets"], "one busy Site does not stop the others"
     assert not any("acme" in verb and "backup --with-files" in verb for verb in busy.verbs)
     assert not any("acme" in verb and "maintenance_mode 1" in verb for verb in busy.verbs)
-    assert not any("acme" in verb and "dsherp_hold 1" in verb and verb.endswith("1")
-                   for verb in busy.verbs[-2:]), "the hold is lifted again"
+    assert busy.site_config[("acme.tenant.example.com", "dsherp_hold_until")] == "0", "the hold is lifted again"
     assert site_holds.held(admin.runtime_dir(RELEASE)) == set()
     status = backup_status.load(admin.runtime_dir(RELEASE) / "backups" / "status.json")
     assert status["sites"]["acme.tenant.example.com"]["backup"]["last_attempt"]["deferred"] == "busy"
@@ -102,7 +104,7 @@ def test_a_window_waits_for_http_and_background_writers_and_defers_when_they_do_
     assert report["deferred"]["acme.tenant.example.com"] == "draining"
     assert not any("acme" in verb and "backup --with-files" in verb for verb in stuck.verbs)
     assert stuck.site_config[("acme.tenant.example.com", "maintenance_mode")] == "0", "flags are undone on the way out"
-    assert stuck.site_config[("acme.tenant.example.com", "dsherp_hold")] == "0"
+    assert stuck.site_config[("acme.tenant.example.com", "dsherp_hold_until")] == "0"
     assert site_holds.held(admin.runtime_dir(RELEASE)) == set()
 
 
@@ -120,7 +122,7 @@ def test_a_failure_inside_the_window_undoes_every_step_it_had_taken(host):
     assert report["ok"] is False and "acme.tenant.example.com" in report["failed"]
     assert bench.site_config[("acme.tenant.example.com", "maintenance_mode")] == "0"
     assert bench.site_config[("acme.tenant.example.com", "pause_scheduler")] == "0"
-    assert bench.site_config[("acme.tenant.example.com", "dsherp_hold")] == "0"
+    assert bench.site_config[("acme.tenant.example.com", "dsherp_hold_until")] == "0"
     assert site_holds.held(admin.runtime_dir(RELEASE)) == set()
     status = backup_status.load(admin.runtime_dir(RELEASE) / "backups" / "status.json")
     assert status["sites"]["acme.tenant.example.com"]["backup"]["last_success"] is None
@@ -654,3 +656,41 @@ def test_a_restic_call_that_never_returns_becomes_a_refusal_not_a_hang(host):
     with pytest.raises(admin.Fault, match="没有返回"):
         backup.restic(RELEASE, "data", ["cat", "config"], runner=hanging_then_listing, timeout=60)
     assert removed and removed[0][-1] == "abc123", "the container the timed-out client left behind is removed"
+
+
+def test_a_backup_whose_sync_fails_is_a_failed_command_so_the_timer_unit_can_notify(host, monkeypatch):
+    """The systemd unit runs `backup --sync`; its OnFailure fires only on a non-zero exit. A
+    local set that never reached the repositories must not end the command with 0 (B1)."""
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    offline = _restic(bench, fail=(("data", "cat"), ("secrets", "cat")))
+    report = backup.backup(RELEASE, bench_factory=lambda kind: bench, runner=offline, sync=True,
+                           clock=lambda: 1_788_660_100.0)
+    assert report["sets"], "the local sets were made"
+    assert report["sync"]["ok"] is False and report["ok"] is False
+    assert any("异地同步失败" in warning for warning in report["warnings"])
+    from dsherp import deploy_env
+    monkeypatch.setattr(deploy_env, "settings", lambda *a, **k: RELEASE)
+    monkeypatch.setattr(backup, "backup", lambda *a, **k: report)
+    assert admin.main(["backup", "--sync"]) == 1
+
+
+def test_a_set_rediscovered_after_the_host_lost_its_record_carries_the_build_that_made_it(host):
+    """After a host is rebuilt there is no status.json. A sync re-discovers the repositories'
+    sets; the manifest it reads back and pairs is what names the build, and the rebuilt record
+    must carry it - a record without it cannot be checked against the running image (B2)."""
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    report = _backup(bench)
+    restic = _restic(bench)
+    backup.backup_sync(RELEASE, runner=restic, clock=lambda: 1_788_660_100.0)
+    before = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    set_id, source = next(iter(before["sets"].items()))
+    assert source["image_id"], "the source record knows its build"
+    backup.status_path(RELEASE, admin.ROOT).unlink()          # the host lost everything
+    rediscovered = backup.backup_sync(RELEASE, runner=restic, clock=lambda: 1_788_660_200.0)
+    assert rediscovered["ok"] is True
+    after = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    row = after["sets"][set_id]
+    assert row["image_id"] == source["image_id"] and row["image_tag"] == source["image_tag"]
+    assert row["state"] in ("complete", "verified")

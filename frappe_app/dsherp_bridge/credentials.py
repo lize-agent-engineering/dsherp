@@ -34,15 +34,22 @@ def _write(user, values):
 
 
 def _new_secret(user):
-    """Frappe's own key generation, without its System Manager gate: a member's login has to
-    be able to renew that member's credential, and this call is about that member only."""
-    document = frappe.get_doc('User', user)
+    """A fresh secret for this user, written where Frappe reads it and nowhere else.
+
+    Not `User.save()`: that runs the User controller, which clears the user's cache and
+    enqueues a contact job on every save - a background job and a controller's validations
+    inside every login that renews. Frappe checks an API key straight from the database
+    (`validate_api_key_secret` reads the User row and the encrypted secret), so writing the
+    two columns is the whole operation."""
+    from frappe.utils.password import set_encrypted_password
+    key = frappe.db.get_value('User', user, 'api_key')
+    if not key:
+        key = frappe.generate_hash(length=15)
+        frappe.db.set_value('User', user, 'api_key', key, update_modified=False)
     secret = frappe.generate_hash(length=15)
-    if not document.api_key:
-        document.api_key = frappe.generate_hash(length=15)
-    document.api_secret = secret
-    document.save(ignore_permissions=True)
-    return document.api_key, secret
+    set_encrypted_password('User', user, secret, 'api_secret')
+    frappe.clear_cache(user=user)
+    return key, secret
 
 
 def issue(user, issued_for=None):

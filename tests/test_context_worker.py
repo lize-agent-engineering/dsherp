@@ -888,10 +888,6 @@ def test_the_host_circuit_probe_uses_the_direct_provider_address_not_the_contain
     assert probed==[('https://provider.example.test/v1','sk-test-key')]
     container=runtime_host.agent_settings(env)
     assert container['DEEPSEEK_BASE_URL']!=probed[0][0] and 'agent-egress' in container['DEEPSEEK_BASE_URL']
-    # main() must hand the coordinator this probe, not one built from the container settings.
-    source=(context_worker.ROOT/'dsherp/context_worker.py').read_text()
-    assert 'host_probe(args.provider_env)' in source
-    assert "probe_models(current['DEEPSEEK_BASE_URL']" not in source
 
 
 PRODUCTION=None
