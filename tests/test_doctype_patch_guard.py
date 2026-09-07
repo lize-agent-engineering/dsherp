@@ -91,3 +91,44 @@ def test_the_guard_base_comes_from_the_environment_before_the_merge_base():
         return subprocess.CompletedProcess(command, 128, "", "fatal: Not a valid object name origin/main")
 
     assert base_revision({}, runner=no_origin) is None
+
+
+def test_a_rebuilt_frontend_bundle_is_not_a_stored_payload_schema_change():
+    """The built Desk bundles are committed - ci.yml requires dist to match source - and esbuild
+    minifies the whole application onto a handful of enormous lines, two of which contain the
+    string `schema_version` because the page-context snapshot carries a version of its own. So
+    every frontend change adds a `+` line containing `schema_version`, and this guard's one
+    branch with no escape hatch fired on it: every commit in this repository that ever touched
+    those bundles trips it, each reporting a stored-payload migration that never happened.
+
+    The gate itself stays: a real stored payload whose schema_version moves still needs a
+    backfill, and no-patch still cannot excuse it. What must not count is a build artefact."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import pytest
+
+    root = Path(__file__).resolve().parents[1]
+
+    def git(*arguments):
+        return subprocess.run(['git', *arguments], cwd=root, text=True, capture_output=True,
+                              timeout=60).stdout
+
+    bundles = sorted(str(path.relative_to(root)) for path in (root / 'frappe_app').glob('*/public/dist'))
+    assert bundles, '仓库里应当有被提交的前端产物目录'
+    dist_commits = git('log', '--format=%H', '-20', '--', *bundles).split()
+    innocent = None
+    for commit in dist_commits:
+        touched = git('show', '--name-only', '--format=', commit).split()
+        if not any('/doctype/' in name and name.endswith('.json') for name in touched):
+            innocent = commit
+            break
+    if innocent is None:
+        pytest.skip('no commit in recent history rebuilt the bundles without touching a DocType')
+
+    result = subprocess.run(
+        [sys.executable, '-m', 'infra.check_doctype_patches', innocent + '^', innocent],
+        cwd=root, text=True, capture_output=True, timeout=120)
+    assert result.returncode == 0, (
+        f'{innocent[:9]} 只重建了前端产物、没碰任何 DocType，守卫却拒绝了它：\n{result.stderr}')

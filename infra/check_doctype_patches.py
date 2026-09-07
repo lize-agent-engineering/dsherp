@@ -90,9 +90,16 @@ def main(argv=None):
         match = PATCHES.match(name)
         if match:
             patch_diffs[match.group('app')] = _git('diff', span, '--', name)
+    # The built Desk bundles are committed and esbuild puts the whole application on a few
+    # enormous lines, two of which carry the page-context snapshot's own `schema_version`. Every
+    # frontend change therefore added such a line, and the branch below has no escape hatch: it
+    # refused every commit that ever rebuilt them, each time naming a stored-payload migration
+    # that had not happened. A build artefact is not a stored payload.
     schema_version_changed = any(
-        '+' in line and 'schema_version' in line
-        for line in _git('diff', span, '--', 'frappe_app').splitlines() if line.startswith('+'))
+        'schema_version' in line
+        for line in _git('diff', span, '--', 'frappe_app',
+                         ':(exclude)frappe_app/*/public/dist/**').splitlines()
+        if line.startswith('+') and not line.startswith('+++'))
     problems = review(changed, patch_diffs, _git('log', '--format=%B', span), schema_version_changed)
     for problem in problems:
         print(problem, file=sys.stderr)
