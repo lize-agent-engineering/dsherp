@@ -6,10 +6,12 @@ import sys
 
 import pytest
 
+from site_exec import run_site_json, run_site_script
+
 
 ROOT = Path(__file__).resolve().parents[2]
-COMPOSE = ["docker", "compose", "-f", "infra/compose.validation.yml"]
 PROVISIONER = ROOT / "infra" / "provision_alpha_doctype_policies.py"
+ALPHA = "dsherp-validation.localhost"
 
 
 SITES = [
@@ -17,6 +19,44 @@ SITES = [
     ("dsherp-beta.localhost", "beta-backend"),
     ("dsherp-daily.localhost", "backend"),
 ]
+
+READ_ROWS_BODY = r'''
+rows = frappe.get_all(
+    'DS Doctype Policy',
+    fields=['target_doctype', 'enabled', 'allow_read', 'allow_create', 'allow_update',
+            'allow_submit', 'allow_cancel', 'allow_fill', 'company_scope'],
+    order_by='target_doctype asc',
+)
+for row in rows:
+    row['routes'] = frappe.get_all(
+        'DS Doctype Policy Route',
+        filters={'parent': row['target_doctype']},
+        fields=['route_name', 'method_path', 'target_doctype'],
+        order_by='idx asc, name asc',
+    )
+print(json.dumps(rows, ensure_ascii=False, sort_keys=True))
+'''
+
+SET_ROUTES_BODY = r'''
+policy=frappe.get_doc('DS Doctype Policy','Sales Order')
+policy.set('routes',json.loads(__ROUTES__))
+policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save()
+frappe.db.commit()
+'''
+
+# Idempotent on purpose: the policy demands a NEW change_reason on every save, so an
+# unconditional rewrite would fail whenever the registry replays this body over routes that
+# are already right. It writes only when the Site's routes differ from the provisioned ones.
+ROUTES_RESTORE_BODY = r'''
+expected=json.loads(EXPECTED)
+policy=frappe.get_doc('DS Doctype Policy','Sales Order')
+current=[{'route_name':row.route_name,'method_path':row.method_path,'target_doctype':row.target_doctype}
+         for row in policy.routes]
+if current!=expected:
+    policy.set('routes',expected);policy.change_reason='集成测试恢复 '+frappe.generate_hash(length=8)
+    policy.save();frappe.db.commit()
+print(json.dumps({'restored':current!=expected}))
+'''
 
 
 def _run_provision(site, *arguments):
@@ -35,73 +75,20 @@ def _provision(site, *arguments):
     return json.loads(result.stdout)
 
 
-def _read_policy_rows(site, service):
-    script = r'''
-import json, os, frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site=__SITE__)
-frappe.connect()
-try:
-    rows = frappe.get_all(
-        'DS Doctype Policy',
-        fields=['target_doctype', 'enabled', 'allow_read', 'allow_create', 'allow_update',
-                'allow_submit', 'allow_cancel', 'allow_fill', 'company_scope'],
-        order_by='target_doctype asc',
-    )
-    for row in rows:
-        row['routes'] = frappe.get_all(
-            'DS Doctype Policy Route',
-            filters={'parent': row['target_doctype']},
-            fields=['route_name', 'method_path', 'target_doctype'],
-            order_by='idx asc, name asc',
-        )
-    print(json.dumps(rows, ensure_ascii=False, sort_keys=True))
-finally:
-    frappe.destroy()
-'''.replace('__SITE__', repr(site))
-    result = subprocess.run(
-        [*COMPOSE, "exec", "-T", service, "/home/frappe/frappe-bench/env/bin/python", "-"],
-        cwd=ROOT,
-        input=script,
-        text=True,
-        capture_output=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+def _read_policy_rows(site, service=None):
+    """`service` is still accepted because the parametrisation table - and the test ids built
+    from it - still carries it; site_exec is what maps a Site to its container service now."""
+    return run_site_json(site, READ_ROWS_BODY, timeout=30)
 
 
 def _set_alpha_sales_order_routes(routes):
-    script = r'''
-import json, os, frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost')
-frappe.connect()
-try:
-    frappe.set_user('Administrator')
-    policy=frappe.get_doc('DS Doctype Policy','Sales Order')
-    policy.set('routes',json.loads(__ROUTES__))
-    policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save()
-    frappe.db.commit()
-finally:
-    frappe.destroy()
-'''.replace("__ROUTES__", repr(json.dumps(routes)))
-    result = subprocess.run(
-        [
-            *COMPOSE,
-            "exec",
-            "-T",
-            "backend",
-            "/home/frappe/frappe-bench/env/bin/python",
-            "-",
-        ],
-        cwd=ROOT,
-        input=script,
-        text=True,
-        capture_output=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stderr
+    run_site_script(ALPHA, SET_ROUTES_BODY.replace("__ROUTES__", repr(json.dumps(routes))), timeout=30)
+
+
+def _routes_restore():
+    """The body the registry replays at teardown when a host-side timeout kills the client
+    before the corrupting test's own finally can put the shared alpha routes back."""
+    return ROUTES_RESTORE_BODY.replace("EXPECTED", repr(json.dumps(EXPECTED_ALPHA_SALES_ORDER["routes"])))
 
 
 EXPECTED_ROWS = [
@@ -328,70 +315,44 @@ EXPECTED_ALL_ROWS = sorted(
 )
 
 
-def test_policy_readback_does_not_hide_an_unexpected_extra_row():
+def test_policy_readback_does_not_hide_an_unexpected_extra_row(residue):
     site = "dsherp-beta.localhost"
     service = "beta-backend"
     _provision(site)
     create_script = r'''
-import os, frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-beta.localhost')
-frappe.connect()
-try:
-    assert not frappe.db.exists('DS Doctype Policy', 'BOM')
-    frappe.get_doc({
-        'doctype': 'DS Doctype Policy','change_reason':'集成测试 '+frappe.generate_hash(length=8),
-        'target_doctype': 'BOM',
-        'enabled': 1,
-        'allow_read': 1,
-        'allow_create': 0,
-        'allow_update': 0,
-        'allow_submit': 0,
-        'allow_cancel': 0,
-        'allow_fill': 0,
-        'company_scope': None,
-        'routes': [],
-    }).insert(ignore_permissions=True)
-    frappe.db.commit()
-finally:
-    frappe.destroy()
+assert not frappe.db.exists('DS Doctype Policy', 'BOM')
+frappe.get_doc({
+    'doctype': 'DS Doctype Policy','change_reason':'集成测试 '+frappe.generate_hash(length=8),
+    'target_doctype': 'BOM',
+    'enabled': 1,
+    'allow_read': 1,
+    'allow_create': 0,
+    'allow_update': 0,
+    'allow_submit': 0,
+    'allow_cancel': 0,
+    'allow_fill': 0,
+    'company_scope': None,
+    'routes': [],
+}).insert(ignore_permissions=True)
+frappe.db.commit()
 '''
     delete_script = r'''
-import os, frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-beta.localhost')
-frappe.connect()
-try:
-    if frappe.db.exists('DS Doctype Policy', 'BOM'):
-        frappe.delete_doc('DS Doctype Policy', 'BOM', ignore_permissions=True)
-        frappe.db.commit()
-finally:
-    frappe.destroy()
+if frappe.db.exists('DS Doctype Policy', 'BOM'):
+    frappe.delete_doc('DS Doctype Policy', 'BOM', ignore_permissions=True)
+    frappe.db.commit()
 '''
-    create = subprocess.run(
-        [*COMPOSE, "exec", "-T", service, "/home/frappe/frappe-bench/env/bin/python", "-"],
-        cwd=ROOT,
-        input=create_script,
-        text=True,
-        capture_output=True,
-        timeout=30,
-    )
-    assert create.returncode == 0, create.stderr
+    # Registered before the row exists: a timeout on the create or on the readback kills the
+    # docker client, not the committed row, and then the finally below never runs. The beta
+    # Site is shared, and a stray BOM policy would fail every later beta readback.
+    residue.doc(site, "DS Doctype Policy", "BOM")
+    run_site_script(site, create_script, timeout=30)
     try:
         assert _read_policy_rows(site, service) == sorted(
             [*EXPECTED_ROWS, EXPECTED_MANUFACTURING_ROWS[0]],
             key=lambda row: row["target_doctype"].casefold(),
         )
     finally:
-        delete = subprocess.run(
-            [*COMPOSE, "exec", "-T", service, "/home/frappe/frappe-bench/env/bin/python", "-"],
-            cwd=ROOT,
-            input=delete_script,
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
-        assert delete.returncode == 0, delete.stderr
+        run_site_script(site, delete_script, timeout=30)
 
 
 @pytest.mark.parametrize(("site", "service"), SITES)
@@ -485,9 +446,12 @@ def test_manufacturing_policy_set_second_run_is_idempotent():
     assert before == after == EXPECTED_ALL_ROWS
 
 
-def test_manufacturing_policy_set_migrates_exact_pre_delivery_sales_order_route():
-    site = "dsherp-validation.localhost"
+def test_manufacturing_policy_set_migrates_exact_pre_delivery_sales_order_route(residue):
+    site = ALPHA
     service = "backend"
+    # Registered before the routes are corrupted, so a timeout anywhere below still restores
+    # them: every other alpha test reads these routes back.
+    residue.restore(site, "alpha Sales Order routes", _routes_restore())
     _provision(site, "--policy-set", "manufacturing")
     _set_alpha_sales_order_routes([])
     try:
@@ -537,9 +501,13 @@ def test_manufacturing_policy_set_migrates_exact_pre_delivery_sales_order_route(
 )
 def test_manufacturing_policy_set_rejects_sales_order_route_drift_without_rewrite(
     routes,
+    residue,
 ):
-    site = "dsherp-validation.localhost"
+    site = ALPHA
     service = "backend"
+    # Same reason as the migration test: the drift written below is shared state, and the
+    # registry is the only thing that undoes it when the client is killed mid-test.
+    residue.restore(site, "alpha Sales Order routes", _routes_restore())
     _provision(site, "--policy-set", "manufacturing")
     _set_alpha_sales_order_routes(routes)
     try:
