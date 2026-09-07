@@ -1,11 +1,11 @@
 {
  "doctype":"DocType","name":"DS Configuration Transfer","module":"DSHERP Bridge",
  "custom":0,"engine":"InnoDB","autoname":"hash","sort_field":"creation","sort_order":"DESC","track_changes":1,
- "field_order":["request_id","bundle","payload","platform_grant"],
+ "field_order":["request_id","bundle","payload","expires_at"],
  "fields":[
   {"fieldname":"request_id","label":"Request identity digest","fieldtype":"Data","reqd":1,"unique":1,"hidden":1},
   {"fieldname":"bundle","label":"Configuration bundle","fieldtype":"Link","options":"DS Configuration Bundle","reqd":1},
   {"fieldname":"payload","label":"Immutable transfer binding","fieldtype":"Long Text","reqd":1},
-  {"fieldname":"platform_grant","label":"Encrypted source authorization","fieldtype":"Long Text","hidden":1}
+  {"fieldname":"expires_at","label":"Transfer valid until","fieldtype":"Datetime","reqd":1,"read_only":1,"in_list_view":1}
  ],"permissions":[]
 }

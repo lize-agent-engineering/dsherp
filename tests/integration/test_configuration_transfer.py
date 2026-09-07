@@ -5,8 +5,9 @@ def test_source_transfer_reauthorizes_current_owner_without_business_writes():
     script=r'''
 import os,json,frappe
 os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-beta.localhost');frappe.connect()
-from dsherp_bridge.configuration import propose_bundle
-from dsherp_bridge.configuration_transfer import prepare_transfer,export_transfer
+from dsherp_bridge import grants
+from dsherp_bridge.configuration import propose_bundle,get_bundle
+from dsherp_bridge.configuration_transfer import prepare_transfer,export_transfer,TRANSFER_WINDOW_SECONDS
 from dsherp_bridge.configuration_transport import seal,open_envelope
 try:
     actor='dsherp-preview@example.invalid';frappe.set_user(actor)
@@ -20,8 +21,17 @@ try:
     assert prepare_transfer(bundle['id'],bundle['digest'],'transfer-request-1')['id']==transfer['id']
     doc=frappe.get_doc('DS Configuration Transfer',transfer['id'])
     assert doc.owner==actor and doc.bundle==bundle['id']
+    assert 'platform_grant' not in frappe.db.get_table_columns('DS Configuration Transfer')
+    assert abs((doc.expires_at-doc.creation).total_seconds()-TRANSFER_WINDOW_SECONDS)<5
+    assert transfer['expires_at']==str(doc.expires_at)
+    # No platform grant in this session, but the lease is written anyway: a missing entry has
+    # to mean 'expired or lost', never 'never had one'.
+    assert grants.of_transfer(doc.name)=={'grant':None}
     doc.payload='{}'
     try:doc.save(ignore_permissions=True);raise AssertionError('mutable transfer')
+    except frappe.ValidationError:doc.reload()
+    doc.expires_at=frappe.utils.add_to_date(doc.expires_at,hours=1)
+    try:doc.save(ignore_permissions=True);raise AssertionError('window rewritten')
     except frappe.ValidationError:doc.reload()
     request=seal({'transfer_id':doc.name,'actor':actor,'source_site':frappe.local.site,'preview_site':'isolated-preview.localhost'},'test-pair-secret','export-request')
     frappe.set_user('Guest')
@@ -31,6 +41,31 @@ try:
     forged=seal({**request['payload'],'actor':'beta-reader@example.invalid'},'test-pair-secret','export-request')
     try:export_transfer(forged);raise AssertionError('foreign owner exported')
     except frappe.PermissionError:pass
+    # The window and the lease are two separate gates, and each refuses by name.
+    grants.drop_transfer(doc.name)
+    try:export_transfer(request);raise AssertionError('exported without a lease')
+    except frappe.ValidationError as error:assert '配置交接授权已失效' in str(error),str(error)
+    grants.stash_transfer(doc.name,None,TRANSFER_WINDOW_SECONDS)
+    # Age the row past its window with raw SQL, then drop the document cache: get_doc would
+    # otherwise hand export_transfer the copy it already has, with the old moment on it.
+    frappe.db.set_value('DS Configuration Transfer',doc.name,'expires_at',
+        frappe.utils.add_to_date(frappe.utils.now_datetime(),seconds=-1),update_modified=False)
+    frappe.db.commit();frappe.clear_document_cache('DS Configuration Transfer',doc.name)
+    try:export_transfer(request);raise AssertionError('exported after the window')
+    except frappe.ValidationError as error:assert '配置交接已过期' in str(error),str(error)
+    frappe.set_user(actor)
+    try:
+        prepare_transfer(bundle['id'],bundle['digest'],'transfer-request-1')
+        raise AssertionError('expired transfer replayed')
+    except frappe.ValidationError as error:assert '配置交接已过期' in str(error),str(error)
+    assert get_bundle(bundle['id'])['transfer'] is None, 'an expired transfer is not offered again'
+    frappe.db.set_value('DS Configuration Transfer',doc.name,'expires_at',
+        frappe.utils.add_to_date(frappe.utils.now_datetime(),seconds=TRANSFER_WINDOW_SECONDS),
+        update_modified=False)
+    frappe.db.commit();frappe.clear_document_cache('DS Configuration Transfer',doc.name)
+    offered=get_bundle(bundle['id'])['transfer']
+    assert offered['id']==doc.name and offered['expires_at']
+    frappe.set_user('Guest')
     frappe.set_user('Administrator');user=frappe.get_doc('User',actor);user.enabled=0;user.save()
     frappe.set_user('Guest')
     try:export_transfer(request);raise AssertionError('revoked source user exported')
@@ -41,7 +76,9 @@ try:
     except frappe.ValidationError:pass
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
-    if 'transfer' in locals():frappe.db.delete('DS Configuration Transfer',{'name':transfer['id']})
+    if 'transfer' in locals():
+        grants.drop_transfer(transfer['id'])
+        frappe.db.delete('DS Configuration Transfer',{'name':transfer['id']})
     if 'bundle' in locals():frappe.db.delete('DS Configuration Bundle',{'name':bundle['id']})
     if 'conversation' in locals():frappe.delete_doc('DS Conversation',conversation.name,force=True)
     frappe.db.commit();frappe.destroy()

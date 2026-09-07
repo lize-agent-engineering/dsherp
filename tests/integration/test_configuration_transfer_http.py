@@ -7,6 +7,13 @@ SOURCE, PREVIEW = 'dsherp-validation.localhost', 'dsherp-beta.localhost'
 PREVIEW_ACTOR = 'dsherp-preview@example.invalid'
 # The package the transfer carries, as the literal the script body embeds verbatim: the preview Site
 # must accept and freeze it without ever running the DDL it describes.
+# The transfer's authorization lease is host-side state on the source Site; the registry drops it
+# at teardown so a killed run cannot leave one behind for the window's remainder.
+DROP_LEASE = """
+from dsherp_bridge import grants
+grants.drop_transfer(TRANSFER)
+print(json.dumps({'dropped':TRANSFER}))
+"""
 PACKAGE = ("{'version':1,'doctypes':[{'name':'DS HTTP Transfer Test','module':'DSHERP Bridge',"
            "'fields':[{'fieldname':'result','label':'Result','fieldtype':'Data'}],"
            "'permissions':[{'role':'System Manager','read':1,'write':1,'create':1}]}],'extensions':[],'workflows':[]}")
@@ -46,4 +53,22 @@ frappe.db.commit();print(json.dumps({'session':result['session_id'],'bundle':doc
 '''.replace('TRANSFER', repr(prepared['transfer'])).replace('DIGEST', repr(prepared['digest'])),
                              user=PREVIEW_ACTOR, timeout=50)
     assert imported['bundle'] and imported['confirmation']
+    # Age the transfer past its window on the source Site, then ask the preview Site to accept it
+    # again: the refusal happens on the source, over HTTP, and the reason has to reach the person
+    # in front of the preview Site instead of a bare "source unavailable".
+    residue.restore(SOURCE, 'drop the transfer lease', DROP_LEASE.replace('TRANSFER', repr(prepared['transfer'])))
+    run_site_script(SOURCE, r'''
+from frappe.utils import add_to_date,now_datetime
+frappe.db.set_value('DS Configuration Transfer',TRANSFER,'expires_at',
+    add_to_date(now_datetime(),seconds=-1),update_modified=False)
+frappe.db.commit();frappe.clear_document_cache('DS Configuration Transfer',TRANSFER)
+'''.replace('TRANSFER', repr(prepared['transfer'])))
+    run_site_script(PREVIEW, r'''
+from dsherp_bridge.configuration_transfer import accept_transfer
+try:
+    accept_transfer(TRANSFER);raise AssertionError('expired transfer accepted over HTTP')
+except frappe.ValidationError as error:
+    assert '配置交接已过期' in str(error) and '对端站点拒绝' in str(error),str(error)
+assert not frappe.db.exists('DocType','DS HTTP Transfer Test')
+'''.replace('TRANSFER', repr(prepared['transfer'])), user=PREVIEW_ACTOR)
     run_site_script(SOURCE, "assert not frappe.db.exists('DocType','DS HTTP Transfer Test')")

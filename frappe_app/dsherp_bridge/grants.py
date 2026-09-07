@@ -32,3 +32,31 @@ def of(run_id):
 
 def drop(run_id):
     frappe.cache().delete_value(PREFIX + run_id)
+
+
+# A configuration transfer's authorization is held the same way, keyed by the transfer and
+# living exactly as long as the transfer's window (configuration_transfer.TRANSFER_WINDOW_SECONDS).
+TRANSFER_PREFIX = 'dsherp_transfer_grant:'
+
+
+def stash_transfer(transfer_id, grant, seconds):
+    """Write the transfer's lease. It is written even when there is no grant - a Site that
+    still allows password login has none - so that a missing entry always means 'expired or
+    lost', never 'never had one'."""
+    frappe.cache().set_value(TRANSFER_PREFIX + transfer_id, {'grant': grant or None},
+                             expires_in_sec=int(seconds))
+
+
+def of_transfer(transfer_id):
+    """The lease as {'grant': str | None}; None once it has expired or was lost.
+
+    Read through to redis rather than through frappe.local: set_value writes the process-local
+    copy unconditionally and ignores expires_in_sec (checked against the pinned image), so a
+    process that stashed a lease would keep answering with it after the window closed. The
+    window itself is enforced from the row, but a lease that outlives its own TTL is not a
+    lease."""
+    return frappe.cache().get_value(TRANSFER_PREFIX + transfer_id, use_local_cache=False)
+
+
+def drop_transfer(transfer_id):
+    frappe.cache().delete_value(TRANSFER_PREFIX + transfer_id)
