@@ -9,8 +9,14 @@ Frappe `16.31.0`，容器 Python `3.14.7`，DSH SDK/Runtime `0.1.1rc1`。
 **不宣称 G9 通过。** G9 是「CI 配置存在且历史 30 天绿」，只能由 workflow 的运行历史证明，
 不能由本文证明。本文证明的是：门禁本身建起来了、每一道都在本机真实跑过、并且被验证过有牙齿。
 
-**G9 起算**：`2026-MM-DD · <run URL>`（待第一个含原生测试步的绿色 nightly；本机尚未 push，
-push 与 workflow 首跑是用户检查点）。只有 `ci.yml` 与 `nightly.yml` 计入，`supply-chain.yml` 不计。
+**G9 起算**：**尚未起算。** 起点是第一个含原生测试步的绿色 nightly，而 nightly 至今未绿
+（三次尝试的纪实见切片 B）。`ci.yml` 侧已经在跑并且一直是绿的
+（PR #11/#13/#14 与 main 上的 push run），但 G9 要求两者都计入 30 天，所以还没有起点。
+`supply-chain.yml` 不计入。
+
+代码与文档已全部合入 `main`：[PR #11](https://github.com/lize-agent-engineering/dsherp/pull/11)
+（六个切片）、[#13](https://github.com/lize-agent-engineering/dsherp/pull/13)、
+[#14](https://github.com/lize-agent-engineering/dsherp/pull/14)（每夜可诊断性的两轮修正）。
 
 门禁要保证的三件事，与它不保证的：
 - 学过的失败不能悄悄回来 —— 每个 PR 与每次合入 main 自动跑 ruff、非集成 pytest、vitest、
@@ -34,13 +40,71 @@ push 与 workflow 首跑是用户检查点）。只有 `ci.yml` 与 `nightly.yml
 | 非集成 pytest | `731 passed / 2:12` |
 | 全量集成 | `212 passed / 22:49`（`work/junit-integration-slice0.xml`） |
 
+最慢的 20 条集成用例（秒，取自同一份 junit）——这是超时决策的第一份数据，
+所有关于「是不是该调超时」的讨论都从这里出发，不从感觉出发：
+
+| 秒 | 用例 |
+|---|---|
+| 118.7 | `test_context_mcp_chain::test_native_context_runtime_reads_actual_erp_through_run_capability` |
+| 79.5 | `test_context_worker_chain::test_service_worker_runs_two_messages_in_same_native_session` |
+| 75.3 | `test_backup_sets_real::test_a_real_backup_stages_one_set_with_matching_digests_and_split_permissions` |
+| 30.5 | `test_work_order_operations::test_work_order_chain_updates_stock` |
+| 27.3 | `test_policy_seed::test_policy_readback_does_not_hide_an_unexpected_extra_row` |
+| 26.8 | `test_platform_identity_revocation::test_revocation_committed_during_identity_check_stops_business_read` |
+| 26.5 | `test_membership_binding::test_two_transactions_cannot_both_insert_an_enabled_binding_for_the_same_business_user` |
+| 26.3 | `test_subcontracting_operations::test_supplied_material_subcontracting_chain` |
+| 18.1 | `test_manufacturing_fixture::test_provisioner_migrates_the_exact_legacy_fixture_then_remains_idempotent` |
+| 17.8 | `test_configuration_mcp_chain::test_configuration_native_runtime_reads_then_proposes_without_ddl` |
+| 15.8 | `test_agent_audit_report::test_agent_audit_report_filters_aggregates_and_requires_operator_role` |
+| 15.5 | `test_configuration_transfer_http::test_alpha_package_is_imported_once_into_beta_with_live_source_authorization` |
+| 14.9 | `test_policy_seed::test_policy_seed_second_run_is_idempotent[beta]` |
+| 13.7 | `test_purchase_operations::test_purchase_order_to_receipt_updates_stock` |
+| 13.7 | `test_policy_seed::test_manufacturing_policy_set_rejects_sales_order_route_drift[extra]` |
+| 13.4 | `test_make_proposal::test_make_freezes_mapped_result_and_rejects_drift` |
+| 13.1 | `test_desk_sso::test_real_native_oauth_code_exchange_logs_into_bound_business_user[beta]` |
+| 13.0 | `test_policy_seed::test_manufacturing_policy_set_rejects_sales_order_route_drift[near_match]` |
+| 12.8 | `test_daily_site::test_daily_agent_uses_separate_permissionless_runtime_and_explicit_member_mapping` |
+| 12.3 | `test_policy_seed::test_policy_seed_fast_fails_on_conflicting_governance[beta]` |
+
+注意最慢的三条都在 60 秒以上，而 C.11 讨论的 `test_policy_seed` 那几条一条都没进前三——
+最慢的不是被怀疑的那个，这正是先看数据再动超时的理由。
+
 ## 切片 A：PR 门
 
 `.github/workflows/ci.yml`，三个互不依赖的 job：`python`、`frontend`、`runtime`。
 全部 action 以 40 位提交 SHA 固定，后跟版本注释。无任何重试。
 
-**未闭合**：push、开 PR、三绿→故意一红→三绿的演练、以及 `main` 分支保护，都是用户检查点，
-本机无法代劳。三次 run URL 与 `required_status_checks.contexts` 的输出待补。
+### 三绿 → 故意一红 → 三绿（2026-09-07 实测）
+
+| 阶段 | 改动 | frontend | python | runtime | 合并门 | run |
+|---|---|---|---|---|---|---|
+| 三绿 | PR #11 全量 | pass 45s | pass 1m41s | pass 11s | 可合 | [34118532441](https://github.com/lize-agent-engineering/dsherp/actions/runs/34118532441) |
+| 故意一红 | PR #12，只改 `frontend/src/ConfigurationBundle.jsx` 一个可见字符串、**不重建 dist** | **fail 48s** | pass 1m32s | pass 12s | `BLOCKED` | [34119094931](https://github.com/lize-agent-engineering/dsherp/actions/runs/34119094931) |
+| revert 后三绿 | 同 PR，revert 上一提交 | pass 48s | pass 1m36s | pass 11s | `CLEAN` | [34119288316](https://github.com/lize-agent-engineering/dsherp/actions/runs/34119288316) |
+
+红得干净：它红在 `npm test` 通过**之后**的
+`git diff --exit-code --stat -- frappe_app/dsherp_bridge/public/dist` 这一步，
+输出是两个 bundle 各差一行——门抓的确实是「改了源码没重建产物」，不是测试本身出问题。
+`mergeStateStatus` 随之在 `BLOCKED` 与 `CLEAN` 之间切换，说明分支保护在 PR 路径上真的生效。
+演练 PR 已关闭并删除分支，没有合并任何演练代码。
+
+Linux 上的读数与本机不同，且更多：python job 是 **812 passed**（本机 810）——
+`requirements.lock` 里带 Linux wheel，那几条会拉起真实 DSH runtime 子进程的用例在 runner 上才跑得起来。
+所以这个绿不是靠跳过换来的。frontend job 的 dist 一致性在 Linux 上通过，跨平台构建确定性得到证实。
+
+### 分支保护实际生效值（`gh api .../branches/main/protection`）
+
+```json
+{"contexts":["python","frontend","runtime"],"strict":true,
+ "enforce_admins":false,"force_push":false,"deletions":false}
+```
+
+**如实说明一处**：`enforce_admins: false` 是计划指定的取值，它意味着保护对仓库所有者是
+劝告性的。实测过一次直推 main，服务端回的是 `Bypassed rule violations for refs/heads/main:
+- 3 of 3 required status checks are expected.`，推送**成功**。计划的验收判据是「PR 合并按钮在
+检查完成前禁用」，那一条不受影响并已由上表证实。要对所有者也强制，把 `enforce_admins` 改成
+`true` 即可，代价是 CI 不可用时所有者也推不了 main。那次实测在 main 上留下了空提交 `a15a97b`，
+它的信息宣称「验证分支保护会拒绝直推」——**那句话是错的**，如实记在这里；没有对默认分支强推去抹掉它。
 
 ## 切片 B：从零开通驱动、每夜与每周
 
@@ -50,8 +114,59 @@ push 与 workflow 首跑是用户检查点）。只有 `ci.yml` 与 `nightly.yml
 - `scan-artifacts` 只报密钥名与文件名，从不报值；上传前自检。
 - `nightly.yml`（02:00 Asia/Shanghai 从零）、`supply-chain.yml`（每周，允许红，**不计 G9**）。
 
-**未闭合**：nightly 与 supply-chain 的 `workflow_dispatch` 首跑、以及 Task B.7 的本机从零重建，
-都需要用户检查点。首跑要记录总时长、各步耗时、`docker-stats.txt` 峰值内存与 `disk.txt`。
+### 两个 workflow 的首跑（2026-09-07）
+
+**supply-chain**：[run 34119116075](https://github.com/lize-agent-engineering/dsherp/actions/runs/34119116075)，
+构建两个发布镜像成功、SBOM 生成成功，**红在 CVE 门**——这是计划里明确允许的，且**不计入 G9**。
+两个镜像各有 650 余条 high/critical，来源集中在上游基础镜像，不在本仓库控制内：
+
+| 包 | 版本 | 条数 | 代表编号 |
+|---|---|---|---|
+| `chromium-common` / `chromium-headless-shell` | 151.0.7922.173-1~deb12u1 | 各 143 | CVE-2026-78891、CVE-2026-78892、CVE-2026-78899 … |
+| `stdlib`（go-module，两个版本） | go1.19 / go1.19.8 | 27 + 28 | GO-2022-0969、GO-2023-1751、GO-2024-2887 … |
+| `vim` / `vim-common` / `vim-runtime` | 2:9.0.1378-2+deb12u2 | 各 24 | CVE-2026-26269、CVE-2026-33412、CVE-2026-39881 … |
+| `perl` / `perl-base` / `libperl5.36` / `perl-modules-5.36` | 5.36.0-7+deb12u3 | 各 11 | CVE-2026-12087、CVE-2026-42496、CVE-2026-57432 … |
+| `pillow`（python） | 12.2.0 | 10 | GHSA-45hq-cxwh-f6vc、GHSA-5x94-69rx-g8h2 … |
+
+`dsherp-frappe` 652 条、`dsherp-worker` 655 条。chromium 与 vim 是 `frappe/erpnext` 基础镜像自带的，
+产品运行时并不用它们；go stdlib 来自镜像里的某个 go 二进制。要真正降下来只能换基础镜像或
+在发布镜像里裁掉这些包，那是独立的一项工作，不在计划 5 范围内。**这也正是它不计入 G9 的原因**：
+上游漏洞库每周变化会让无代码变更的 push 变红，污染「30 天绿」的口径。
+
+**nightly**：见下一节，首跑与第二跑都未绿。
+
+**未闭合**：Task B.7 的本机从零重建仍未执行——它的前置条件是「驱动先在真实 Linux 上跑通」，
+而 nightly 尚未跑通。
+
+### nightly 的三次尝试：每一次都换来一个只有真实 runner 才给得出的事实
+
+| 次 | run | 结果 | 学到什么 |
+|---|---|---|---|
+| 1 | [34119113299](https://github.com/lize-agent-engineering/dsherp/actions/runs/34119113299) | 第 11 分钟失败于 `up --provision`，14/27 步 | 报告只有 8 行、且被 JSONDecodeError 的 traceback 占满，无法定位 |
+| 2 | [34145246685](https://github.com/lize-agent-engineering/dsherp/actions/runs/34145246685) | 同一步失败 | 报告可读了，但它指出的是**修复本身引入的误报** |
+| 3 | 进行中 | — | — |
+
+第一跑的其它读数（都来自这一轮新加的工件，本机拿不到）：
+- **没有任何容器被 OOM 杀掉**（`container-states.txt` 里八个容器全是 `OOMKilled=false ExitCode=0`）。
+- 磁盘 `/dev/root 145G，已用 63G，可用 82G`——预检时担心的「ubuntu-latest 只有约 14GB」不成立。
+- 台账停在 `daily-agent`，下一步 `daily-synthetic` 未完成。
+
+两跑合起来定位到的真实缺陷有三个，都已修（[PR #13](https://github.com/lize-agent-engineering/dsherp/pull/13)、
+[PR #14](https://github.com/lize-agent-engineering/dsherp/pull/14)）：
+
+1. **失败报告不足以诊断**。驱动只回显 stdout 与 stderr 合并后的最后 8 行，而 traceback 尾巴
+   刚好占满，报告里全是 json 模块自己的栈帧：没有命令、没有脚本、看不出哪个流为空。
+   改成两个流分别标注、各给最后 40 行、命令完整不截断。
+2. **退出码 0 被当成跑过**。`initialize_daily_synthetic.py` 的第一次调用返回空而退出 0，
+   失败在几帧之外表现为 `json.loads('')`。加了「输出即结果的调用必须有输出」的判定。
+   这与原生测试那条教训同源：退出码 0 证明没跑坏，不证明跑过。
+3. **修复本身过宽**。第 2 条第一版加在 `execute()` 上，而四次调用里有两次是纯断言块与纯写入块，
+   最后一句就是 `frappe.destroy()`，本来就不打印。第二跑因此报了一次自造的误报。
+   拆成 `execute` 与 `execute_json`，只在输出即结果处要求输出。
+
+**如实说明**：第一次调用返回空是**间歇性**的——第二跑同一处通过了，流程才走到第二处。
+现在 `execute_json` 会在复现时直接点名它，而不是让 json 模块在几帧之外抱怨第 1 列。
+没有为此加任何重试。
 
 ## 切片 C：集成清理（登记式残留）
 
@@ -332,10 +447,15 @@ bench 的 sites 卷与它需要的两个密钥，看不到另一台 bench 的卷
 
 ## 未闭合与如实说明
 
-- **G9 未起算**：需要第一个含原生测试步的绿色 nightly。push、开 PR、`main` 分支保护、
-  两个 workflow 的首跑都是用户检查点，本机无法代劳。
-- **切片 A 的红/绿演练未做**：需要真实 PR。
-- **切片 B 的本机从零重建（Task B.7）未做**：会销毁本机合成数据，需用户确认。
+- **G9 未起算**：需要第一个含原生测试步的绿色 nightly；三次尝试的纪实见切片 B。
+- **切片 B 的本机从零重建（Task B.7）未做**：它的前置条件是驱动先在真实 Linux 上跑通，
+  而 nightly 尚未跑通。这也意味着 `mem_limit: 2g` 那个数字仍是推算，没有六站从零的实测峰值。
+- **`enforce_admins: false` 使分支保护对仓库所有者是劝告性的**：实测直推 main 会被
+  `Bypassed rule violations` 放行。计划的验收判据（PR 合并按钮）不受影响，已证实。
+- **main 上有一个空提交 `a15a97b`**，其信息宣称验证了「分支保护拒绝直推」，实际那次推送成功；
+  没有对默认分支强推去抹掉它。
+- **供应链每周红**：两个镜像各 650 余条 high/critical，集中在 chromium、go stdlib、vim、perl、pillow，
+  全部来自上游基础镜像；要降下来只能换基础镜像或裁包，属于计划 5 之外的独立工作。
 - **Playwright 五路径、mypy、存量 57 个注入脚本整体改写**：明确不做，理由见偏离表。
 - **`dsherp/admin.py` 体量拆分**：推迟（复盘 Q5）。
 - **G1、G3 仍未闭合**：与本计划无关，沿用计划 3、4 的结论。
