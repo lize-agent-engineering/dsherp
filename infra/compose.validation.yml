@@ -174,6 +174,58 @@ services:
     networks: [validation]
     logging: *logging
 
+  # provision_identity.py 只读 /run/dsherp-control/ 下的两个文件；用密钥的绝对 target 精确给这两个，
+  # 不整目录挂载（那会把 backup/daily/admin 五个口令一并交给一次性容器）。
+  platform-provision:
+    profiles: [control]
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+    pull_policy: never
+    mem_limit: 640m
+    memswap_limit: 640m
+    cpus: 0.5
+    restart: "no"
+    entrypoint: []
+    command: ["/home/frappe/frappe-bench/env/bin/python", "/opt/provision_identity.py", "platform"]
+    environment: {PYTHONPATH: /opt/dsherp-frappe}
+    secrets:
+      - source: db_root_password
+        target: /run/dsherp-control/db_root_password
+      - source: platform_admin_password
+        target: /run/dsherp-control/platform_admin_password
+    volumes:
+      - v16-platform-sites:/home/frappe/frappe-bench/sites
+      - v16-platform-logs:/home/frappe/frappe-bench/logs
+      - ../frappe_app:/opt/dsherp-frappe:ro
+      - ./provision_identity.py:/opt/provision_identity.py:ro
+    depends_on: [db, redis]
+    networks: [validation]
+    logging: *logging
+
+  beta-provision:
+    profiles: [control]
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+    pull_policy: never
+    mem_limit: 640m
+    memswap_limit: 640m
+    cpus: 0.5
+    restart: "no"
+    entrypoint: []
+    command: ["/home/frappe/frappe-bench/env/bin/python", "/opt/provision_identity.py", "beta"]
+    environment: {PYTHONPATH: /opt/dsherp-frappe}
+    secrets:
+      - source: db_root_password
+        target: /run/dsherp-control/db_root_password
+      - source: beta_admin_password
+        target: /run/dsherp-control/beta_admin_password
+    volumes:
+      - v16-beta-sites:/home/frappe/frappe-bench/sites
+      - v16-beta-logs:/home/frappe/frappe-bench/logs
+      - ../frappe_app:/opt/dsherp-frappe:ro
+      - ./provision_identity.py:/opt/provision_identity.py:ro
+    depends_on: [db, redis]
+    networks: [validation]
+    logging: *logging
+
   platform-backend:
     image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
     pull_policy: never
@@ -344,3 +396,7 @@ secrets:
     file: ../.runtime/control/daily_admin_password
   validation_admin_password:
     file: ../.runtime/control/admin_password
+  platform_admin_password:
+    file: ../.runtime/control/platform_admin_password
+  beta_admin_password:
+    file: ../.runtime/control/beta_admin_password
