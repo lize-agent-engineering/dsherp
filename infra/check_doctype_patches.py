@@ -6,6 +6,7 @@ that App's patches.txt, or say "no-patch: <reason>" in its message. A change to 
 stored payload's schema_version has no such escape: it always needs a backfill.
 """
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -53,6 +54,19 @@ def review(changed_files, patch_diffs, message, schema_version_changed=False):
     return problems
 
 
+def base_revision(environ=None, runner=subprocess.run, root=ROOT):
+    """The revision a change is judged against. CI names it (DSHERP_GUARD_BASE: the PR's base
+    or the commit that was pushed over); a developer's checkout falls back to the merge-base
+    with origin/main; None when there is nothing to compare with."""
+    environ = os.environ if environ is None else environ
+    explicit = (environ.get('DSHERP_GUARD_BASE') or '').strip()
+    if explicit:
+        return explicit
+    found = runner(['git', 'merge-base', 'origin/main', 'HEAD'], cwd=root, text=True,
+                   capture_output=True, timeout=60)
+    return found.stdout.strip() if found.returncode == 0 and found.stdout.strip() else None
+
+
 def _git(*arguments, root=ROOT):
     result = subprocess.run(['git', *arguments], cwd=root, text=True, capture_output=True, timeout=120)
     if result.returncode:
@@ -62,10 +76,14 @@ def _git(*arguments, root=ROOT):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='DocType 变更必须带迁移路径')
-    parser.add_argument('base', nargs='?', default='origin/main')
+    parser.add_argument('base', nargs='?', default=None,
+                        help='缺省：$DSHERP_GUARD_BASE，否则 merge-base origin/main HEAD')
     parser.add_argument('head', nargs='?', default='HEAD')
     arguments = parser.parse_args(argv)
-    span = f'{arguments.base}..{arguments.head}'
+    base = arguments.base or base_revision()
+    if not base:
+        raise SystemExit('没有可比较的基线：设置 DSHERP_GUARD_BASE，或先 git fetch origin main')
+    span = f'{base}..{arguments.head}'
     changed = [name for name in _git('diff', '--name-only', span).splitlines() if name]
     patch_diffs = {}
     for name in changed:
