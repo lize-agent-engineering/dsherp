@@ -4,6 +4,22 @@
 
 ## 当前状态
 
+环境：本机隔离合成四站加两个一次性测试站，ERPNext `16.33.0` / Frappe `16.31.0`，容器 Python `3.14.7`，DSH SDK/Runtime `0.1.1rc1`。全部证据来自合成数据，不代表生产可用；任何环境都未接入真实租户。
+
+| 计划 | 范围 | 状态 | 证据 |
+|---|---|---|---|
+| 1 可观测与失败回放 | 工作流 D；评估集导出 | 2026-09-03 通过 C4 | [observability-evidence](docs/engineering/observability-evidence.md) |
+| 2 运行底座可靠性 | 工作流 C；错误透传与 ErrorBoundary | 收尾切片已合入 main，放行以此为准（12 个独立复核：7 项成立、6 项推翻并修复） | [runtime-reliability-evidence](docs/engineering/runtime-reliability-evidence.md) |
+| 3 部署制品与安全边界 | 工作流 A；出口控制、非 root、SSO 强制、CSP | 主体实现完成、验收未闭合：G1 字面判据与 ACME 待合规主机由审计方执行（已裁决 #9） | [deployment-security-evidence](docs/engineering/deployment-security-evidence.md)、[runbook](docs/engineering/deployment-runbook.md) |
+| 4 数据治理与容灾 | 工作流 E；凭证托管与轮换 | 全部合入 main（PR #7、#9、#10）；G3 正式验收与真机 `restore-site` 未闭合 | [data-governance-evidence](docs/engineering/data-governance-evidence.md)、runbook 第 12–14 节 |
+| 5 质量门禁（瘦身版） | CI 与每夜从零、一条命令开发栈、登记式清理、原生测试与权限矩阵、交接令牌落表 | 本机全部切片实现完成并合入本地 main；push/PR、分支保护、workflow 首跑属用户检查点，G9 从第一个含原生测试的绿色 nightly 起算 | [quality-gates-evidence](docs/engineering/quality-gates-evidence.md) |
+| 6 Agent 质量与成本 | 工作流 F；注入信封 | 未开始（串行于计划 5 之后，已裁决 #7） | [生产化总体设计](docs/superpowers/specs/2026-09-03-production-hardening-design.md) |
+| 终验 生产浸泡 | 全部 | 未开始 | — |
+
+已推迟、不在计划 5 范围：`dsherp/admin.py` 体量拆分（复盘 Q5）；Playwright 五路径、mypy、存量注入脚本整体改写（理由见证据文档的偏离表）。
+
+### 历史记录（保留，按时间倒序）
+
 2026-08-29 起按 [原生业务页面上下文 Agent 计划](docs/superpowers/plans/2026-08-29-context-agent-sidebar.md) 实施：原生 Desk 全局侧栏负责页面内协作，正式完整入口为 `/desk/dsherp-agent`，包含对话、待确认、执行记录和应用配置。旧 Demo `/desk/dsherp-studio` 独立保留并退出正式导航；所有业务/配置/填表操作继续复用同一 HITL 链路。当前工作台为本地合成环境实现，不代表生产上线。
 
 用户要求收敛旧服务后，旧独立聊天付费 worker 已于 2026-08-29 停止（无在途任务），其提交、领取、工具和完成端点及本地凭证随后退役；旧任务记录只读保留。下文“已启用”的历史描述不再代表当前运行状态。原生 ERP 与身份服务保留。新实现进度见 [上下文 Agent 证据](docs/engineering/context-agent-evidence.md)。
@@ -57,6 +73,9 @@
 - [计划 2：运行底座可靠性](docs/superpowers/plans/2026-09-04-runtime-reliability.md)
 - [计划 3：部署制品与安全边界 证据](docs/engineering/deployment-security-evidence.md)
 - [部署 runbook（单 Linux 主机 + Compose + 自建镜像）](docs/engineering/deployment-runbook.md)
+- [计划 4：数据治理与容灾 证据](docs/engineering/data-governance-evidence.md)
+- [计划 5：质量门禁 证据](docs/engineering/quality-gates-evidence.md)
+- [计划 5：质量门禁（瘦身版）实施计划](docs/superpowers/plans/2026-09-07-quality-gates.md)
 - [外部参考：PenguinHarness 对 dsherp 的可借鉴之处](docs/engineering/penguin-harness-reference-2026-09-07.md)
 
 ## 最小验证
