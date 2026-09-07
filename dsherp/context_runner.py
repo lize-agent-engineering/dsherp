@@ -92,7 +92,7 @@ def monitored_run(runtime,question,session_id,status,*,poll_interval=2,record=No
     initial=check()
     if initial['status']=='Cancelling':return {'status':'Cancelled','answer':''}
     if initial['status']=='NeedsInput':return {'status':'NeedsInput','answer':initial.get('needs_input','')}
-    emit([{'kind':'runtime_started','source':'runner','payload':{'session_id':session_id}}])
+    emit([{'kind':'runtime_started','source':'runner','payload':{'session_id':session_id,'skill_versions':_skill_versions()}}])
     def invoke():
         try:results.put((True,runtime.run(question,session_id=session_id,on_notification=notifications.append)))
         except BaseException as error:results.put((False,error))
@@ -146,6 +146,17 @@ def monitored_run(runtime,question,session_id,status,*,poll_interval=2,record=No
             except Exception:pass
         model_thread.join(max(0,limit-time.monotonic()))
         raise
+
+
+def _skill_versions():
+    """Which business skills, at which versions, this run executes with: the pinned manifest
+    the guard already verifies. Attributed on the runtime_started event so usage can be
+    broken down by skill version later (T5)."""
+    try:
+        manifest=json.loads((ROOT/'config/business-skills.json').read_text())
+        return {row['name']:row['version'] for row in manifest.get('skills',[]) if isinstance(row,dict) and row.get('name')}
+    except (OSError,ValueError,TypeError):
+        return None
 
 
 def run_business(config_path,directory):

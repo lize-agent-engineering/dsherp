@@ -7,7 +7,7 @@ import json
 import pytest
 
 from dsherp import admin, backup, backup_sets, backup_status, site_holds
-from tests.test_admin_cli import RELEASE, RUNNING_NEW, SAME, SnapshotBench, _tenant_row
+from tests.test_admin_cli import _restic, RELEASE, RUNNING_NEW, SAME, SnapshotBench, _tenant_row
 from tests.test_admin_cli import host  # noqa: F401  the autouse fixture that isolates runtime and secrets dirs
 
 
@@ -656,3 +656,41 @@ def test_a_restic_call_that_never_returns_becomes_a_refusal_not_a_hang(host):
     with pytest.raises(admin.Fault, match="没有返回"):
         backup.restic(RELEASE, "data", ["cat", "config"], runner=hanging_then_listing, timeout=60)
     assert removed and removed[0][-1] == "abc123", "the container the timed-out client left behind is removed"
+
+
+def test_a_backup_whose_sync_fails_is_a_failed_command_so_the_timer_unit_can_notify(host, monkeypatch):
+    """The systemd unit runs `backup --sync`; its OnFailure fires only on a non-zero exit. A
+    local set that never reached the repositories must not end the command with 0 (B1)."""
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    offline = _restic(bench, fail=(("data", "cat"), ("secrets", "cat")))
+    report = backup.backup(RELEASE, bench_factory=lambda kind: bench, runner=offline, sync=True,
+                           clock=lambda: 1_788_660_100.0)
+    assert report["sets"], "the local sets were made"
+    assert report["sync"]["ok"] is False and report["ok"] is False
+    assert any("异地同步失败" in warning for warning in report["warnings"])
+    from dsherp import deploy_env
+    monkeypatch.setattr(deploy_env, "settings", lambda *a, **k: RELEASE)
+    monkeypatch.setattr(backup, "backup", lambda *a, **k: report)
+    assert admin.main(["backup", "--sync"]) == 1
+
+
+def test_a_set_rediscovered_after_the_host_lost_its_record_carries_the_build_that_made_it(host):
+    """After a host is rebuilt there is no status.json. A sync re-discovers the repositories'
+    sets; the manifest it reads back and pairs is what names the build, and the rebuilt record
+    must carry it - a record without it cannot be checked against the running image (B2)."""
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    report = _backup(bench)
+    restic = _restic(bench)
+    backup.backup_sync(RELEASE, runner=restic, clock=lambda: 1_788_660_100.0)
+    before = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    set_id, source = next(iter(before["sets"].items()))
+    assert source["image_id"], "the source record knows its build"
+    backup.status_path(RELEASE, admin.ROOT).unlink()          # the host lost everything
+    rediscovered = backup.backup_sync(RELEASE, runner=restic, clock=lambda: 1_788_660_200.0)
+    assert rediscovered["ok"] is True
+    after = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    row = after["sets"][set_id]
+    assert row["image_id"] == source["image_id"] and row["image_tag"] == source["image_tag"]
+    assert row["state"] in ("complete", "verified")

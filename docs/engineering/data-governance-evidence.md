@@ -313,3 +313,17 @@ Frappe 每个 `User` 只有一个 `api_secret`，所以短期凭据**属于业�
 审查单 [plan4-pr9-review-2026-09-07](plan4-pr9-review-2026-09-07.md) 的九项发现逐条修正并复验，逐项处置、真实结果与
 门禁见 [plan4-pr9-review-response-2026-09-07](plan4-pr9-review-response-2026-09-07.md)。本文上面各切片里与之相悖的
 陈述（`platform_grant` 列、月报口径、绑定哈希）已同步更正。
+
+## 整体复盘（[plan4-retrospective](plan4-retrospective-2026-09-07.md)）的处置
+
+| 项 | 处置 | 复验 |
+|---|---|---|
+| B1 · `backup --sync` 同步失败仍退出 0 | `backup()` 把同步结果并入顶层 `ok`，命令一个结论；systemd 单元的 `OnFailure` 因此能在对象存储不可达时触发 | 复盘探针：`exit 1, backup_ok false`；回归覆盖 `backup(sync=True)` 与 `admin.main(['backup','--sync'])` |
+| B2 · 灾后重发现的备份集丢失镜像身份 | `upload_sets` 把读回并配对的远端 `set.json` 里的 `image_tag/image_id` 回填到重建的记录；`restore-site` 与演练对没有身份的记录直接拒绝（提示先 `backup-sync`），取回清单后再以清单为准核对一次运行镜像 | 复盘探针：收养后记录带 `sha256:id-v0.4.0`，错误构建被拒；回归覆盖"清空状态→重发现→身份齐全""缺身份拒绝""记录被改、清单为准" |
+| B3 · 部分失败仍标为完整 | `summarise` 把"服务端已预留但 provider 没有回报"的调用计入未知；`usage_report` 对不可达站点把该站与总计的 `complete` 置 false | 复盘探针：超时后 `unknown_calls 1, complete false`；两站不可达时站点与总计均 `complete false` |
+| Q1 · 测错对象的断言 | 断言改查实际传入演练的 bench | 复盘探针：模拟实际对象记录建站后，断言如实失败 |
+| 灾后 `current.json` | 冷启动成功后若本机没有发布记录则写入（tag、运行镜像、来源备份集），已有则保留 | 回归覆盖 |
+| skill 版本归因 | runner 的 `runtime_started` 事件带上固定清单里的 `skill_versions` | 回归覆盖清单读取；真实运行的落库待下一次有模型调用时抽样 |
+| 保持无过期（复盘之外，来自执行方自查） | 宿主保持文件带 `until` 与 pid，服务端闸门改为 `dsherp_hold_until`（epoch 秒）；备份 2 小时、删除 30 分钟，命令被杀只挡到期 | 单元覆盖过期/持有进程已死/文件损坏；集成 `test_backup_hold_gate` 改为按到期判定 |
+| 登录续签 `User.save()` 副作用 | 直接写 `api_key` 列与 `__Auth` 加密 secret，不再触发 User 控制器与 `create_contact` 入队 | 真实站点：签发时无 enqueue、无控制器调用，新 key 立即可用 |
+| SSO 强制单一开关耦合 | `sso_enforced()` = `dsherp_sso_required`（生产开通写入）或禁用密码登录；三处规则统一 | 真实站点：置 `dsherp_sso_required` 后无令牌的后台执行被拒 |

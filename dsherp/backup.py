@@ -315,6 +315,12 @@ def backup(resolved, *, root=ROOT, runner=subprocess.run, bench_factory=None, sy
         save_status(resolved, status, root)
         if sync:
             report['sync'] = backup_sync(resolved, root=root, runner=runner, clock=clock, locked=True)
+            if not report['sync'].get('ok', False):
+                # One command, one verdict: the systemd unit runs `backup --sync`, and its
+                # OnFailure notification only fires on a non-zero exit. A local set that never
+                # left the host is not a finished backup.
+                report['ok'] = False
+                report['warnings'].append('异地同步失败：' + '；'.join(report['sync'].get('errors') or ['见 sync']))
     return report
 
 
@@ -562,11 +568,12 @@ def upload_sets(resolved, set_docs, *, root=ROOT, runner=subprocess.run, clock=t
                 ids[side], candidates[side] = None, []
                 errors.append(str(error))
         complete = False
+        verified = None
         for data_id in candidates['data']:
             for secrets_id in candidates['secrets']:
                 try:
-                    verify_pair(resolved, set_id, {'data': data_id, 'secrets': secrets_id}, root=root, runner=runner,
-                                site=site, expected=doc if 'pieces' in doc else None)
+                    verified = verify_pair(resolved, set_id, {'data': data_id, 'secrets': secrets_id}, root=root,
+                                           runner=runner, site=site, expected=doc if 'pieces' in doc else None)
                 except Fault as error:
                     last = str(error)
                     continue
@@ -593,8 +600,15 @@ def upload_sets(resolved, set_docs, *, root=ROOT, runner=subprocess.run, clock=t
                 errors.append(f'重新上传 {set_id} 也没能配对：{error}')
         state = ('complete' if complete else
                  'data_uploaded' if ids['data'] else 'secrets_uploaded' if ids['secrets'] else 'staged')
-        backup_status.record_set(status, {**doc, 'kind': kind}, state,
-                                 data_snapshot=ids['data'], secrets_snapshot=ids['secrets'])
+        record = {**doc, 'kind': kind}
+        if verified:
+            # A set adopted from the repositories after this host lost its record knows only
+            # its id; the manifest just read back and paired is what says which build made
+            # it. Without that a restore would have nothing to check the running image against.
+            for key in ('image_tag', 'image_id', 'stamp', 'site'):
+                if verified.get(key):
+                    record[key] = verified[key]
+        backup_status.record_set(status, record, state, data_snapshot=ids['data'], secrets_snapshot=ids['secrets'])
         at = backup_status.now_iso(clock)
         if complete:
             outcome['complete'].append(set_id)

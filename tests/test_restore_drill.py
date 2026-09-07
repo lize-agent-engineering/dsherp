@@ -231,10 +231,11 @@ def test_a_leftover_failed_drill_blocks_the_next_one_until_it_is_discarded(host)
 def test_the_drill_runs_the_build_the_set_recorded_and_refuses_another_one(host):
     bench, restic, sets = _complete_set(host)
     drill_runner = DrillRunner(bench, image_id="sha256:some-other-build")
-    report = _drill(bench, restic, drill_runner, DrillBench(bench, SAME), sites=[SITE])
+    drill_bench = DrillBench(bench, SAME)
+    report = _drill(bench, restic, drill_runner, drill_bench, sites=[SITE])
     assert report["ok"] is False
     assert "sha256:some-other-build" in report["sites"][SITE]["error"] or "镜像" in report["sites"][SITE]["error"]
-    assert not any("_new_site" in (script or "") for script in DrillBench(bench, SAME).scripts)
+    assert not any("_new_site" in (script or "") for script in drill_bench.scripts), "refused before any site was created"
 
 
 def test_a_site_without_a_complete_pair_is_reported_rather_than_silently_skipped(host):
@@ -546,3 +547,50 @@ def test_a_provisioner_that_cannot_run_closed_is_refused_rather_than_run_open(ho
     assert "0" not in flags
 
 
+
+
+def test_a_record_without_a_build_identity_is_refused_before_anything_is_fetched(host):
+    """A rebuilt host's record may lack the build; restoring on trust would let a wrong build
+    load the data. Refused first, with the sync that repairs it named (B2)."""
+    cold, restic, sets = _cold_start(host)
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    set_id = sets[SITE]["set_id"]
+    status["sets"][set_id]["image_id"] = None
+    backup_status.save(backup.status_path(RELEASE, admin.ROOT), status)
+    with pytest.raises(admin.Fault, match="没有镜像身份"):
+        restore_drill.restore_site(RELEASE, SITE, set_id=set_id, bench_factory=lambda kind: cold, runner=restic,
+                                   provision=lambda **options: None)
+    assert not any("restore" in verb for verb in cold.verbs)
+
+
+def test_the_fetched_manifest_not_the_record_is_what_the_running_build_is_checked_against(host):
+    """A record can be edited; the manifest that was read back and paired cannot. When the two
+    disagree the manifest wins and the restore stops (B2)."""
+    cold, restic, sets = _cold_start(host)
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    set_id = sets[SITE]["set_id"]
+    # the host runs another build, and the record has been edited to claim exactly that build;
+    # the manifest in the repository still names the build that made the set
+    status["sets"][set_id]["image_id"] = "sha256:another-build"
+    backup_status.save(backup.status_path(RELEASE, admin.ROOT), status)
+
+    def other_build(command, **kwargs):
+        if command[:2] == ["docker", "inspect"]:
+            result = restic(command, **kwargs)
+            result.stdout = "registry.example.com/dsherp/dsherp-frappe:v0.4.0 sha256:another-build\n"
+            return result
+        return restic(command, **kwargs)
+    with pytest.raises(admin.Fault, match="不恢复"):
+        restore_drill.restore_site(RELEASE, SITE, set_id=set_id, bench_factory=lambda kind: cold, runner=other_build,
+                                   provision=lambda **options: None)
+    assert not any("source_sql" in script for script in getattr(cold, "scripts", [])), "nothing was restored"
+
+
+def test_a_successful_cold_start_leaves_a_release_record_for_the_next_release(host):
+    cold, restic, sets = _cold_start(host)
+    report = restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic,
+                                        provision=lambda **options: None)
+    assert report["current_json"] == "written"
+    current = json.loads(admin._current_path(RELEASE).read_text())
+    assert current["tag"] == report["image_tag"] and current["restored_from"] == report["set_id"]
+    assert current["images"], "the running images this host was checked against"

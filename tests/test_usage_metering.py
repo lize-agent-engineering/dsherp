@@ -224,3 +224,58 @@ def test_the_site_script_reads_the_unknown_count_so_the_report_cannot_lose_it():
     from dsherp import admin
 
     assert "usage_unknown_calls" in admin.USAGE_SCRIPT
+
+
+def test_a_call_the_server_reserved_but_the_provider_never_answered_for_is_unknown_not_free():
+    """The stream timed out after partial output: the events are a reservation and an error,
+    no model_response. Something was consumed and nobody reported it (B3)."""
+    events = [
+        _event("claimed", {}, "2026-09-06 02:00:00", source="server"),
+        _event("model_call_reserved", {"call_index": 1}, "2026-09-06 02:00:01", source="server"),
+        _event("model_error", {"purpose": "conversation"}, "2026-09-06 02:01:31", source="runner"),
+        _event("finished", {"status": "Failed"}, "2026-09-06 02:01:32", source="server"),
+    ]
+    summary = usage.summarise(events)
+    assert summary["usage_unknown_calls"] == 1
+    assert summary["actual_input_tokens"] == 0 and summary["actual_output_tokens"] == 0
+    report = usage.monthly([{"site": "a", "creation": "2026-09-06 02:00:00", "time_zone": "UTC", "status": "Failed",
+                             "model_calls": 1, **usage.storable(summary)}], "2026-09")
+    assert report["totals"]["unknown_calls"] == 1 and report["totals"]["complete"] is False
+
+
+def test_a_reserved_call_that_was_answered_is_not_counted_twice():
+    events = [
+        _event("model_call_reserved", {"call_index": 1}, source="server"),
+        _event("model_response", {"usage": {"input_tokens": 5, "output_tokens": 2}, "model": "deepseek-chat"}),
+    ]
+    assert usage.summarise(events)["usage_unknown_calls"] == 0
+
+
+def test_an_unreachable_site_makes_the_month_incomplete_in_the_report_itself(host_runtime):
+    from dsherp import admin
+    from tests.test_admin_cli import RELEASE, SnapshotBench, _tenant_row
+
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+
+    class Silent(SnapshotBench):
+        def python(self, site, body, timeout=900):
+            if "DSHERP_USAGE" in body:
+                if site == "acme.tenant.example.com":
+                    raise admin.Fault("容器命令失败（backend）：python -\nconnection refused")
+                return "DSHERP_USAGE []\n"
+            return super().python(site, body, timeout=timeout)
+
+    report = admin.usage_report(RELEASE, "2026-09", bench_factory=lambda kind: Silent([]))
+    assert "acme.tenant.example.com" in report["unreachable"]
+    assert report["sites"]["acme.tenant.example.com"]["complete"] is False
+    assert report["totals"]["complete"] is False
+    assert report["sites"]["platform.tenant.example.com"]["complete"] is True
+
+
+def test_the_runner_attributes_the_pinned_skill_versions_to_the_run():
+    from dsherp import context_runner
+
+    versions = context_runner._skill_versions()
+    manifest = json.loads((ROOT / "config/business-skills.json").read_text())
+    assert versions == {row["name"]: row["version"] for row in manifest["skills"]}

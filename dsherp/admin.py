@@ -1298,6 +1298,12 @@ def usage_report(resolved, month, *, root=ROOT, runner=subprocess.run, bench_fac
                                                                'model_calls', 'duration_ms', 'unknown_calls',
                                                                'runs_with_unknown_usage')}, 'complete': True})
     report['unreachable'] = unreachable
+    # A Site that did not answer has usage this report does not contain. Its row and the
+    # totals say so; the numbers that are here stay, as the known part.
+    for site in unreachable:
+        report['sites'].setdefault(site, {})['complete'] = False
+    if unreachable:
+        report['totals']['complete'] = False
     report['path'] = str(_write_json(runtime_dir(resolved, root) / 'usage' / f'usage-{month}.json', report))
     return report
 
