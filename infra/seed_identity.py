@@ -33,7 +33,17 @@ with contextlib.redirect_stdout(sys.stderr):
         key=secrets.token_hex(12);secret=secrets.token_urlsafe(24)
         doc=frappe.get_doc({'doctype':'User','email':user,'first_name':'平台验收' if kind=='platform' else '乙企业只读用户','enabled':1,'user_type':'System User','send_welcome_email':0,'language':'zh','time_zone':'Asia/Shanghai','roles':[{'role':'System Manager' if actor=='operator' else role}],'api_key':key,'api_secret':secret}).insert()
         update_password(user,password)
-        output[actor]={'user':user,'password':password,'site':site,'api_key':key,'api_secret':secret}
+        window={}
+        if kind=='beta':
+            # A business user whose credential the platform borrows must have a recorded window:
+            # the Site refuses a key it has no record of (S2), and the membership that borrows it
+            # would have no window to record either. The platform Site has no dsherp_bridge, so
+            # only this branch goes through the credential module.
+            from dsherp_bridge import credentials
+            issued=credentials.issue(user,issued_for='beta-identity-seed')
+            key=issued['api_key'];secret=issued['api_secret']
+            window={'expires_at':str(issued['expires_at']),'version':issued['version']}
+        output[actor]={'user':user,'password':password,'site':site,'api_key':key,'api_secret':secret,**window}
     if kind=='beta':
         for dt in ['Item','Customer']:
             frappe.permissions.add_permission(dt,role,ptype='read')
