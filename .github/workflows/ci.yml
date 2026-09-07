@@ -1,0 +1,98 @@
+# PR 门禁：学过的失败不能悄悄回来。三个 job 互不依赖，任何一个红都挡合入（分支保护）。
+# 没有任何重试：抖动的用例当天修或删（AGENTS.md）。
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# PR 上新推送取消旧运行；main 上不取消——迁移守卫的基线是"上一次 push 的 HEAD"，
+# 取消 main 上的运行会留下没检查过的区间。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # 迁移守卫要能 diff 到 base
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.9.27"
+          enable-cache: true
+          cache-dependency-glob: requirements.lock
+
+      - name: 与 README 完全相同的环境
+        run: |
+          uv python install 3.12.11
+          uv venv --python 3.12.11 .venv
+          uv pip sync --python .venv/bin/python --require-hashes requirements.lock
+
+      - name: ruff（只有 F/E9，见 ruff.toml）
+        run: .venv/bin/ruff check .
+
+      - name: 迁移守卫的比较基线
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSHED_OVER: ${{ github.event.before }}
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = pull_request ]; then base="$PR_BASE"; else base="$PUSHED_OVER"; fi
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "基线 ${base} 不在历史里（首个提交或强推），改用 HEAD~1"
+            base="$(git rev-parse HEAD~1)"
+          fi
+          echo "DSHERP_GUARD_BASE=${base}" >> "$GITHUB_ENV"
+
+      - name: 非集成 pytest（含迁移守卫对本次区间的真实调用）
+        run: |
+          mkdir -p work
+          .venv/bin/python -m pytest -q --junitxml work/junit-unit.xml --durations=25
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: junit-python
+          path: work/junit-unit.xml
+          retention-days: 30
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+      - name: 提交的 dist 必须与源码一致（构建是确定性的，2026-09-05 已逐字节核实）
+        run: git diff --exit-code --stat -- frappe_app/dsherp_bridge/public/dist
+
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - run: node --test runtime/*.test.cjs
