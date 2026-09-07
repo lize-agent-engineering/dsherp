@@ -68,21 +68,22 @@ jobs:
         # compose 以 bind mount 提供文件密钥，归属沿用宿主；runner 的用户不是 1000。
         run: sudo chown 1000 .runtime/control/*
 
-      - name: 从零拉起并开通四站
-        run: .venv/bin/python infra/dev_stack.py up --provision
-
-      # docker stats 只是瞬时值，跑完再看已经回落；而被 OOM 杀掉的容器压根不在列表里，
-      # 那份文件会读成「内存没问题」。峰值必须在运行期间采。
-      - name: 后台采样数据库内存
+      # docker stats 只是瞬时值，跑完再看已经回落；被 OOM 杀掉的容器更是压根不在列表里，
+      # 那份文件会被读成「内存没问题」。采样要覆盖整个作业——从零开通本身就是最重的一段，
+      # 而它失败时这条曲线恰恰最有用，所以它排在开通之前，不排在集成之前。
+      - name: 后台采样数据库内存（覆盖开通与其后的每一步）
         run: |
           mkdir -p work
           nohup sh -c 'while true; do
             printf "%s\t%s\n" "$(date -u +%H:%M:%S)" \
-              "$(docker stats --no-stream --format "{{.MemUsage}}" dsherp-validation-db-1 2>/dev/null || echo GONE)" \
+              "$(docker stats --no-stream --format "{{.MemUsage}}" dsherp-validation-db-1 2>/dev/null || echo 无此容器)" \
               >> work/db-mem.tsv
             sleep 15
           done' >/dev/null 2>&1 &
           echo "采样器已启动"
+
+      - name: 从零拉起并开通四站
+        run: .venv/bin/python infra/dev_stack.py up --provision
 
       - name: 集成测试（约 214 条；每条 600 秒安全网，无重试）
         run: |

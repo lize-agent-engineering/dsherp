@@ -585,3 +585,24 @@ def test_scan_artifacts_says_which_files_were_missing_instead_of_crashing(stack,
     code = dev_stack.main(["scan-artifacts", str(tmp_path / "work/junit-*.xml"), str(clean)])
     out = capsys.readouterr().out
     assert code == 0 and "不存在，未扫描" in out and "junit-*.xml" in out
+
+
+def test_a_failed_step_reports_enough_to_diagnose_it_and_labels_which_stream_said_what(stack):
+    """Eight lines was not enough. The first nightly died 11 minutes into provisioning on a
+    JSONDecodeError whose traceback tail filled the whole quota, so the report showed the json
+    module's frames and nothing about which call had returned nothing - not the command, not
+    the script, not which stream was empty. A failure nobody can read is a failure nobody can
+    fix, and on CI there is no second chance to look."""
+    def failing(command, **options):
+        return subprocess.CompletedProcess(
+            command, 2,
+            "".join(f"out {i}\n" for i in range(40)),
+            "".join(f"err {i}\n" for i in range(40)))
+    stack.runner = failing
+    with pytest.raises(dev_stack.Fault) as error:
+        stack.run(["docker", "compose", "-p", "x", "-f", "y", "up"], timeout=5)
+    message = str(error.value)
+    assert "err 39" in message and "out 39" in message, "两个流的结尾都要看得到"
+    assert "err 10" in message and "out 10" in message, "只给八行不够诊断"
+    assert "stderr" in message and "stdout" in message, "要说清哪一段是哪个流"
+    assert "up" in message, "命令要完整，不能截断到前五个词"
