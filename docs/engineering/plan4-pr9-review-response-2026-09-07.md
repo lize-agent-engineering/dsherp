@@ -45,3 +45,13 @@
 - `restore-site` 真机全流程仍未跑过；本轮修的是编排层，以替身 bench 驱动真实函数验证。
 - `frappe.db.delete` / 直接 SQL 绕过 `on_trash` 的边界不变；集成测试的清理正是走这条路。
 - 平台聚合报表目前是宿主 CLI 形态，与上位设计的展示形态对齐另排。
+
+## 第二轮复核（[followup](plan4-pr9-review-followup-2026-09-07.md)）的三项残余
+
+| 项 | 处置 | 复验 |
+|---|---|---|
+| R6 · 清除提交与目录删除之间的竞态 | 删除的确认路径整个放进站点保持：取操作锁，先写宿主保持文件并把 `dsherp_hold` 置 1（服务端拒绝领取、worker 不领取），再取消/等待/清除，最后只删除计划时枚举的 scope 目录（`sessions.remove_scopes`），`finally` 里恢复标志并释放保持。清除提交之后新起的运行既不会被领取，也不在删除范围内 | 审查方探针 `new_session_survived` 由 `false` 变为 `true`；单元测试断言保持在结算前已生效、结束后归还；dev 站真实演练：排队运行在保持下被取消，`hold: released`，`dsherp_hold` 回到 0，无保持文件残留 |
+| R3 · 恢复副本本身不可写 | 恢复目录与文件（O_EXCL、0600）在签发前打开，打不开就拒绝且不签发；签发后写入副本在 `try` 内，写入失败时错误信息本身带出新密钥（唯一还能交付的地方） | 审查方探针：`remote_key_rotated_before_refusal` 由 `true` 变为 `false`，profile 未动；单元测试覆盖签发后 fsync 失败 |
+| R4 · 第一次 provision 先公开空站 | `provision_tenant`/`provision_platform` 增加 `closed=True`：`bench new-site` 返回后立即置维护模式，企业记为 `Provisioning`（平台 `_binding` 只放行 Ready），不写租户清单、不更新平台端点、不渲染入口；冷启动的第一次开通用它，第二次用普通路径开站；注入的开通函数若不支持 `closed` 直接拒绝而不是先开后关 | 以真实 `provision_tenant` 接入真实 `restore_site` 的单元测试：首次企业记录为 Provisioning 且此时维护模式已为 1，Ready 之前没有任何 ingress/endpoints/tenant-list 调用。审查方探针里的 `provision=lambda: ...` 需改为 `lambda **options: admin.provision_tenant(..., **options)` 才能观察到关闭形态；`bench new-site` 命令本身返回到 `set-config maintenance_mode 1` 之间的窗口是 Frappe 建站方式固有的，期间无入口、无企业 Ready |
+
+非集成 `664 passed`。

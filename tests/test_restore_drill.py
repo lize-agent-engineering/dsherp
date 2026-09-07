@@ -428,7 +428,7 @@ def _cold_start(host, **bench_kwargs):
 def test_a_cold_start_keeps_the_site_closed_until_the_last_check_and_opens_it_only_then(host):
     cold, restic, sets = _cold_start(host)
     report = restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic,
-                                        provision=lambda: None)
+                                        provision=lambda **options: None)
     assert report["clean"] is True and report["maintenance"] == "released"
     flags = [(key, value) for key, value in cold.flag_history if key == "maintenance_mode"]
     assert flags[0] == ("maintenance_mode", "1"), "closed as soon as the site exists on this host"
@@ -442,7 +442,7 @@ def test_a_failed_decryption_leaves_the_cold_started_site_closed_and_says_so(hos
     cold, restic, sets = _cold_start(host, decrypt_failed=[["User", "Administrator", "api_secret"]])
     with pytest.raises(admin.Fault, match="无法解密"):
         restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic,
-                                   provision=lambda: None)
+                                   provision=lambda **options: None)
     flags = [value for key, value in cold.flag_history if key == "maintenance_mode"]
     assert flags and flags[-1] == "1" and "0" not in flags
     report = json.loads((admin.runtime_dir(RELEASE) / "backups" / f"restore-{SITE}.json").read_text())
@@ -453,8 +453,8 @@ def test_a_failing_second_provision_also_keeps_the_site_closed(host):
     cold, restic, sets = _cold_start(host)
     calls = []
 
-    def provision():
-        calls.append(1)
+    def provision(**options):
+        calls.append(options)
         if len(calls) == 2:
             raise admin.Fault("synthetic provision failure")
     with pytest.raises(admin.Fault, match="synthetic provision failure"):
@@ -467,7 +467,7 @@ def test_the_secret_half_is_fetched_onto_the_secrets_volume_and_both_halves_are_
     """Both halves used to land on the data backups volume, which the data-side sync
     container reads whole: one restore handed it the encryption key (R5)."""
     cold, restic, sets = _cold_start(host)
-    restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic, provision=lambda: None)
+    restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic, provision=lambda **options: None)
     mounts = {}
     for command in restic.calls:
         if "restore" in command:
@@ -484,6 +484,63 @@ def test_the_secret_half_is_fetched_onto_the_secrets_volume_and_both_halves_are_
 def test_the_halves_are_removed_even_when_the_cold_start_fails(host):
     cold, restic, sets = _cold_start(host, decrypt_failed=[["User", "Administrator", "api_secret"]])
     with pytest.raises(admin.Fault):
-        restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic, provision=lambda: None)
+        restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic, provision=lambda **options: None)
     removed = [verb for verb in cold.verbs if verb.startswith("sh -c rm -rf ")]
     assert len(removed) == 2
+
+
+def test_the_first_provisioning_of_a_cold_start_publishes_nothing_and_the_second_opens_it(host, monkeypatch):
+    """The reviewer's probe: the real provision_tenant wired into the real restore_site. The
+    first call must run in its closed form - maintenance set the moment the Site exists, the
+    enterprise recorded as Provisioning, no tenant-list entry, no endpoint, no ingress - and
+    only the ordinary second call may mark it Ready and publish it (R4)."""
+    cold, restic, sets = _cold_start(host)
+    timeline = []
+
+    def create_site(bench, resolved, site, *args, **kwargs):
+        new = site not in bench.existing
+        bench.existing.add(site)
+        timeline.append(("site", "created" if new else "kept", cold.site_config.get((site, "maintenance_mode"))))
+        return "created" if new else "kept"
+
+    def enterprise(bench, resolved, slug, site, status="Ready"):
+        timeline.append(("enterprise", status, cold.site_config.get((site, "maintenance_mode"))))
+        return "created"
+
+    def publish(name):
+        def record(*args, **kwargs):
+            timeline.append((name, None, cold.site_config.get((SITE, "maintenance_mode"))))
+            return "/synthetic/ingress" if name == "ingress" else False
+        return record
+
+    monkeypatch.setattr(admin, "ensure_site", create_site)
+    monkeypatch.setattr(admin, "ensure_enterprise", enterprise)
+    monkeypatch.setattr(admin, "render_ingress", publish("ingress"))
+    monkeypatch.setattr(admin, "ensure_platform_endpoints", publish("endpoints"))
+    monkeypatch.setattr(admin, "save_tenants", publish("tenant-list"))
+    for name, value in {"ensure_bench": [], "ensure_app": "installed", "ensure_scheduler_enabled": "enabled",
+                        "agent_sources": [],
+                        "ensure_runtime_identity": {"state": "kept"}, "ensure_site_config": [],
+                        "ensure_system_settings": [], "ensure_oauth_client": {"state": "kept"},
+                        "ensure_social_login_key": {"state": "kept"}, "load_tenants": [],
+                        "ensure_healthy": {"site": SITE}}.items():
+        monkeypatch.setattr(admin, name, lambda *a, _v=value, **k: _v)
+    report = restore_drill.restore_site(
+        RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic,
+        provision=lambda **options: admin.provision_tenant(RELEASE, "acme", bench_factory=lambda kind: cold, **options))
+    assert report["clean"] is True
+    first_enterprise = next(item for item in timeline if item[0] == "enterprise")
+    assert first_enterprise[1] == "Provisioning" and first_enterprise[2] == "1", timeline
+    before_ready = timeline[:next(i for i, item in enumerate(timeline) if item == ("enterprise", "Ready", "1"))]
+    assert not any(item[0] in ("ingress", "endpoints", "tenant-list") for item in before_ready), timeline
+    assert [item for item in timeline if item[0] == "enterprise"][-1][1] == "Ready"
+    assert any(item[0] == "ingress" for item in timeline), "the ordinary second call publishes"
+
+
+def test_a_provisioner_that_cannot_run_closed_is_refused_rather_than_run_open(host):
+    cold, restic, sets = _cold_start(host)
+    with pytest.raises(admin.Fault, match="closed=True"):
+        restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic,
+                                   provision=lambda: None)
+    flags = [value for key, value in cold.flag_history if key == "maintenance_mode"]
+    assert "0" not in flags

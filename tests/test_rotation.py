@@ -314,3 +314,44 @@ def test_a_clean_profile_rotation_leaves_no_secret_file_behind(host_runtime):
     admin.rotate(RELEASE, 'runtime', target='acme.tenant.example.com', profile=[profile],
                  bench_factory=lambda kind: bench)
     assert not list(Path(admin.runtime_dir(RELEASE)).glob('rotations/runtime-*.json'))
+
+
+def test_a_recovery_destination_that_cannot_be_written_is_found_before_the_key_changes(host_runtime):
+    """The reviewer's probe: <runtime>/rotations is a file, so no recovery copy can be made.
+    That has to be discovered while the old key still works - nothing rotated, profile
+    untouched, no half-delivered secret (R3)."""
+    from dsherp import admin
+
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    profile = Path(host_runtime) / 'worker.json'
+    profile.write_text(json.dumps({'sites': [{'site': 'acme.tenant.example.com', 'api_key': 'old',
+                                              'api_secret': 'synthetic-old'}]}))
+    (Path(admin.runtime_dir(RELEASE)) / 'rotations').write_text('synthetic path collision')
+    bench = RotateBench([])
+    with pytest.raises(admin.Fault, match='未签发新密钥'):
+        admin.rotate(RELEASE, 'runtime', target='acme.tenant.example.com', profile=[profile],
+                     bench_factory=lambda kind: bench)
+    assert not any('generate_keys' in body for _, body in bench.scripts), 'the key must not have changed'
+    assert json.loads(profile.read_text())['sites'][0]['api_secret'] == 'synthetic-old'
+
+
+def test_a_recovery_copy_that_fails_to_write_after_issuance_hands_the_secret_to_the_operator(host_runtime, monkeypatch):
+    """The disk can still fail between the check and the write. Then the only place the new
+    secret can go is the operator's screen, once, with the failure named."""
+    from dsherp import admin
+
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    profile = Path(host_runtime) / 'worker.json'
+    profile.write_text(json.dumps({'sites': [{'site': 'acme.tenant.example.com', 'api_key': 'old',
+                                              'api_secret': 'older'}]}))
+    bench = RotateBench([])
+
+    def failing_fsync(descriptor):
+        raise OSError('Input/output error')
+    monkeypatch.setattr(admin.os, 'fsync', failing_fsync)
+    with pytest.raises(admin.Fault) as caught:
+        admin.rotate(RELEASE, 'runtime', target='acme.tenant.example.com', profile=[profile],
+                     bench_factory=lambda kind: bench)
+    assert 'new-runtime-secret' in str(caught.value) and 'Input/output error' in str(caught.value)

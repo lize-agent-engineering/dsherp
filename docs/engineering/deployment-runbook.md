@@ -327,7 +327,7 @@ DSHERP_ENV=prod .venv/bin/python -c "from dsherp import backup, deploy_env; impo
 DSHERP_ENV=prod ./bin/dsherp-admin restore-site acme.tenant.example.com     # 也可 --set <备份集 id>
 ```
 
-`restore-site` 的契约：目标站在本机**必须不存在**（不覆盖、不自动清理）；先读回并核对两侧清单与全部摘要；本机运行的镜像 tag 与 id 必须等于该集记录的那次构建（不符即拒绝，先把 `prod.env` 改到那个 tag 再 `compose up -d`）；随后按常规 `provision-*` 建站、恢复、注入 `encryption_key`、与集内快照比对、再 `provision-*` 一次让主机相关配置按**这台**主机重算，最后抽样解密；只有比对干净才解除维护。任一步失败站点保持维护模式，报告在 `<runtime>/backups/restore-<站>.json`。升级到更新的 tag 是随后显式的 `release`。
+`restore-site` 的契约：目标站在本机**必须不存在**（不覆盖、不自动清理）；先读回并核对两侧清单与全部摘要；本机运行的镜像 tag 与 id 必须等于该集记录的那次构建（不符即拒绝，先把 `prod.env` 改到那个 tag 再 `compose up -d`）；随后以关闭形态建站（建站即维护模式、企业记为 Provisioning、不发布入口）、恢复、注入 `encryption_key`、与集内快照比对、抽样解密，再以常规 `provision-*` 让主机相关配置按**这台**主机重算并把企业标为 Ready、发布入口；只有比对干净才解除维护。任一步失败站点保持维护模式，报告在 `<runtime>/backups/restore-<站>.json`。升级到更新的 tag 是随后显式的 `release`。
 
 **保留与用户数据删除（裁决 #10）**：备份是个人数据的副本。删除只作用于在线数据；已生成的集不改写，按上面的保留规则随运行淘汰；`kind=retire` 的集是否最终清除，与审计保留切片一起裁决。`delete-user-data` 只影响其后产生的集。
 
@@ -343,7 +343,8 @@ DSHERP_ENV=prod ./bin/dsherp-admin delete-user-data acme.tenant.example.com some
 运行、提案与执行；**里面是个人内容，按交付流程转交，不要留在共享目录**。删除先导出，再让该用户的在途
 运行停下来：排队中的直接取消，运行中的标为 Cancelling，命令等执行者放手（`--wait`，默认 120 秒）；到时
 仍有在途就拒绝，不清任何内容，报告写成 `delete-blocked` 并列出那些运行（先停 worker 或等它们结束再重跑）。
-清除范围逐 DocType 声明在 `dsherp/user_data.py`：本人内容（提问、页面快照、回答、错误正文、会话标题）
+整个确认路径在站点保持之下进行（写宿主保持文件并置 `dsherp_hold`，服务端不再交出领取），从结算到目录删除完成才归还；
+只删除计划时枚举的会话目录，其后出现的目录不在本次范围内。清除范围逐 DocType 声明在 `dsherp/user_data.py`：本人内容（提问、页面快照、回答、错误正文、会话标题）
 清除，追责事实（谁、何时、读了哪些记录、提案与执行结果）保留，并删除 `track_changes` 为这些列留下的
 Version 行、按会话删除该用户的原生会话目录；清除脚本在与 `send_message` 相同的 User 行锁下再查一次
 在途，有就回滚拒绝。报告里的 `residue` 逐条列出**知道留下了什么以及唯一的移除方式**：运行事件不改写

@@ -393,11 +393,22 @@ def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.ru
             set_doc, data_root, expected, config = verify_fetched(bench, site, row['set_id'],
                                                                   base=bases['data'], secrets_base=bases['secrets'])
             report['image_tag'] = set_doc['image_tag']
-            # 2. the Site, by the normal path, so this host's own configuration is derived here.
-            # From here on it exists on a host that serves, and it stays closed until the end.
-            provision = provision or (lambda: admin.provision_tenant(resolved, site.split('.')[0], root=root, runner=runner)
-                                      if kind == 'tenant' else admin.provision_platform(resolved, root=root, runner=runner))
-            provision()
+            # 2. the Site, by the normal path in its closed form: it goes into maintenance the
+            # moment it exists, the enterprise stays Provisioning, and nothing is published
+            # (R4). The ordinary call at the end is what opens it.
+            provision = provision or (lambda **options: admin.provision_tenant(resolved, site.split('.')[0], root=root,
+                                                                                 runner=runner, **options)
+                                      if kind == 'tenant' else admin.provision_platform(resolved, root=root, runner=runner,
+                                                                                         **options))
+            try:
+                provision(closed=True)
+            except TypeError as error:
+                if 'closed' not in str(error):
+                    raise
+                # A provisioner that cannot run closed would publish an empty Site first;
+                # that is the window this step exists to close, so it is refused, not worked
+                # around by calling it open and closing afterwards.
+                raise Fault('恢复用的开通函数必须支持 closed=True（建站即维护、企业保持 Provisioning、不发布入口）') from error
             admin._set_flag(bench, site, 'maintenance_mode', 1)
             root_password = admin.read_secret(resolved, 'db_root_password', root)
             admin_password = admin.read_secret(resolved, 'tenant_admin_password' if kind == 'tenant'

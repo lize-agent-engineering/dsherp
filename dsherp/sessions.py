@@ -43,6 +43,25 @@ def of_conversations(root, site, conversations):
     return found
 
 
+def remove_scopes(root, site, paths):
+    """Delete exactly these scope directories - the ones a plan enumerated - and the
+    conversation folder only once it is empty. A scope that appeared after the plan was made
+    belongs to a newer executor and is not this deletion's to take."""
+    root = Path(root).resolve()
+    removed = []
+    for path in paths:
+        path = Path(path).resolve()
+        if root not in path.parents or path.parent.parent.parent != root or path.parent.parent.name != site:
+            raise ValueError(f'session scope outside {site}: {path}')
+        if path.is_dir():
+            shutil.rmtree(path)
+            removed.append(str(path))
+        folder = path.parent
+        if folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+    return removed
+
+
 def remove(root, site, conversations):
     """Delete these conversations' sessions whole. Returns the conversations actually removed."""
     removed = []

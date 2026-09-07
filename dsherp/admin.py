@@ -347,16 +347,22 @@ def ensure_runtime_identity(bench, site, user, rotate=False):
     return json.loads(bench.python(site, body).strip().splitlines()[-1])
 
 
-def ensure_enterprise(bench, resolved, slug, site):
-    """One platform record per tenant; an existing one is corrected, never duplicated."""
+def ensure_enterprise(bench, resolved, slug, site, status='Ready'):
+    """One platform record per tenant; an existing one is corrected, never duplicated.
+
+    `status='Provisioning'` is the recovery form: the record exists so the platform knows the
+    tenant, but members cannot enter until a later call says Ready. An operator's own
+    Disabled or Failed is left alone either way."""
     values = {'enterprise_id': slug, 'title': slug, 'site': site,
-              'base_url': resolved['tenant_internal_url'], 'status': 'Ready'}
+              'base_url': resolved['tenant_internal_url'], 'status': status}
     body = (f"values=json.loads({json.dumps(json.dumps(values))})\n"
             "if not frappe.db.exists('DS Enterprise',values['enterprise_id']):\n"
             "    frappe.get_doc({'doctype':'DS Enterprise',**values}).insert();state='created'\n"
             "else:\n"
             "    doc=frappe.get_doc('DS Enterprise',values['enterprise_id'])\n"
             "    drift=[key for key in ('site','base_url') if doc.get(key)!=values[key]]\n"
+            "    if values['status']=='Provisioning' and doc.status!='Provisioning':drift.append('status')\n"
+            "    if values['status']=='Ready' and doc.status=='Provisioning':drift.append('status')\n"
             "    state='kept'\n"
             "    if drift:\n"
             "        for key in drift:doc.set(key,values[key])\n"
@@ -431,8 +437,10 @@ def ensure_social_login_key(bench, resolved, slug, site, credentials):
     return json.loads(bench.python(site, body).strip().splitlines()[-1])
 
 
-def provision_platform(resolved, *, root=ROOT, runner=subprocess.run, bench_factory=None):
-    """The control-plane Site. Separate bench and separate volume from every tenant."""
+def provision_platform(resolved, *, root=ROOT, runner=subprocess.run, bench_factory=None, closed=False):
+    """The control-plane Site. Separate bench and separate volume from every tenant.
+
+    `closed=True` (recovery, R4): maintenance from the moment the Site exists."""
     site = resolved['platform_site']
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     platform = factory('platform')
@@ -442,6 +450,9 @@ def provision_platform(resolved, *, root=ROOT, runner=subprocess.run, bench_fact
     db_root = read_secret(resolved, 'db_root_password', root)
     steps.append(('bench', ' '.join(ensure_bench(platform, resolved, 'platform'))))
     steps.append(('site', ensure_site(platform, resolved, site, admin_password, db_root, apps=())))
+    if closed:
+        _set_flag(platform, site, 'maintenance_mode', 1)
+        steps.append(('maintenance', 'kept closed'))
     steps.append(('app', ensure_app(platform, site, 'dsherp_platform')))
     steps.append(('scheduler', ensure_scheduler_enabled(platform, site)))
     # OAuth Clients for tenants are restricted to this role; the platform must own it.
@@ -464,8 +475,13 @@ def ensure_healthy(bench, site):
 
 
 def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_factory=None,
-                     rotate_runtime_key=False):
-    """Bring one tenant from nothing to reachable; every step is resumable."""
+                     rotate_runtime_key=False, closed=False):
+    """Bring one tenant from nothing to reachable; every step is resumable.
+
+    `closed=True` is the recovery form (R4): the Site goes into maintenance the moment it
+    exists, the enterprise is recorded as Provisioning rather than Ready, and nothing is
+    published - no tenant-list entry, no platform endpoint, no ingress. A later ordinary call
+    opens it once the restored data has been judged."""
     site = deploy_env.site_name(resolved, slug)
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     tenant = factory('tenant')
@@ -474,6 +490,9 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
     db_root = read_secret(resolved, 'db_root_password', root)
     steps.append(('bench', ' '.join(ensure_bench(tenant, resolved, 'tenant'))))
     steps.append(('site', ensure_site(tenant, resolved, site, admin, db_root)))
+    if closed:
+        _set_flag(tenant, site, 'maintenance_mode', 1)
+        steps.append(('maintenance', 'kept closed'))
     steps.append(('app', ensure_app(tenant, site, 'dsherp_bridge')))
     steps.append(('scheduler', ensure_scheduler_enabled(tenant, site)))
     runtime_user = f'runtime@{site}'
@@ -498,7 +517,8 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
     steps.append(('system-settings', 'bootstrapped:' + ','.join(sorted(set(hardened) - {'disable_user_pass_login'}))
                   if set(hardened) - {'disable_user_pass_login'} else 'kept'))
     platform = factory('platform')
-    steps.append(('enterprise', ensure_enterprise(platform, resolved, slug, site)))
+    steps.append(('enterprise', ensure_enterprise(platform, resolved, slug, site,
+                                                  status='Provisioning' if closed else 'Ready')))
     credentials = ensure_oauth_client(platform, resolved, slug)
     steps.append(('oauth-client', credentials['state']))
     steps.append(('social-login-key',
@@ -506,13 +526,18 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
     changed = ensure_site_config(tenant, site, {'dsherp_platform_oauth': {
         'provider': 'dsherp_platform', 'enterprise': slug, 'platform_site': resolved['platform_site']}})
     steps.append(('platform-oauth', 'changed' if changed else 'kept'))
-    rows = [row for row in load_tenants(resolved, root) if row['slug'] != slug]
-    rows.append({'slug': slug, 'site': site, 'origin': deploy_env.public_origin(resolved, slug)})
-    save_tenants(resolved, rows, root)
-    steps.append(('tenant-list', 'saved'))
-    steps.append(('platform-endpoints',
-                  'changed' if ensure_platform_endpoints(platform, resolved, rows) else 'kept'))
-    steps.append(('ingress', str(render_ingress(resolved, rows, root))))
+    if closed:
+        # Nothing that lets a member in: the list, the endpoints and the ingress come with
+        # the ordinary call that follows a clean judgement.
+        steps.append(('published', 'not yet'))
+    else:
+        rows = [row for row in load_tenants(resolved, root) if row['slug'] != slug]
+        rows.append({'slug': slug, 'site': site, 'origin': deploy_env.public_origin(resolved, slug)})
+        save_tenants(resolved, rows, root)
+        steps.append(('tenant-list', 'saved'))
+        steps.append(('platform-endpoints',
+                      'changed' if ensure_platform_endpoints(platform, resolved, rows) else 'kept'))
+        steps.append(('ingress', str(render_ingress(resolved, rows, root))))
     steps.append(('healthcheck', ensure_healthy(tenant, site)['site']))
     result = {'site': site, 'steps': steps}
     if 'api_secret' in identity:
@@ -1528,26 +1553,44 @@ def delete_user_data(resolved, site, user, *, root=ROOT, runner=subprocess.run, 
         report['next'] = f'确认后重跑：dsherp-admin delete-user-data {site} {user} --confirm'
         report['path'] = str(_write_json(_user_file(resolved, root, 'delete-plan', site, user), report))
         return report
-    settled, remaining = _settle_user(bench, site, user, wait=wait, clock=clock, sleep=sleep)
-    report['settled'] = settled
-    if remaining:
-        report['inflight'] = remaining
-        report['path'] = str(_write_json(_user_file(resolved, root, 'delete-blocked', site, user), report))
-        raise Fault(f'{user} 在 {site} 仍有 {len(remaining)} 个运行未结束（已请求取消，等了 {wait} 秒）；'
-                    '执行者放手后再重跑，或先停 worker。本次未清除任何内容，导出文件已在 ' + report['export']['path'])
-    instructions = {doctype: {'columns': user_data_module.cleared(doctype), 'names': names[doctype]}
-                    for doctype in names if names[doctype]}
-    if instructions:
-        line = _last_line(bench.python(site, _user_clear_script(instructions, user), timeout=900))
-        marker = 'DSHERP_USER_DELETE '
-        if not line.startswith(marker):
-            raise Fault(f'{site} 没有确认清除结果；请核对该站现状后再重跑')
-        report['cleared'] = json.loads(line[len(marker):])
-        if report['cleared'].get('refused'):
-            report['inflight'] = report['cleared']['refused']
-            report['path'] = str(_write_json(_user_file(resolved, root, 'delete-blocked', site, user), report))
-            raise Fault(f'{user} 在清除前一刻又有运行进入在途（{len(report["inflight"])} 个）；本次未清除任何内容，请重跑')
-    report['sessions_removed'] = sessions_module.remove(state_root, site, names['DS Conversation'])
+    from dsherp import backup as backup_module, site_holds
+    # The database clear commits and releases the User row lock; the directories are removed
+    # after that. Without a hold, a run the person starts in between would be claimed, its
+    # executor would write a new scope directory under the same conversation, and the removal
+    # would take it (R6). So the Site is held - the same hold a backup window uses: the server
+    # refuses claims and the worker claims nothing - from before the settling until the last
+    # directory is gone, and only the directories the plan enumerated are removed.
+    runtime = runtime_dir(resolved, root)
+    with backup_module.operations_lock(resolved, root, 'delete-user-data'):
+        flags = _site_flags(bench, site)
+        site_holds.hold(runtime, site, 'delete-user-data')
+        try:
+            _set_flag(bench, site, 'dsherp_hold', 1)
+            report['hold'] = 'held'
+            settled, remaining = _settle_user(bench, site, user, wait=wait, clock=clock, sleep=sleep)
+            report['settled'] = settled
+            if remaining:
+                report['inflight'] = remaining
+                report['path'] = str(_write_json(_user_file(resolved, root, 'delete-blocked', site, user), report))
+                raise Fault(f'{user} 在 {site} 仍有 {len(remaining)} 个运行未结束（已请求取消，等了 {wait} 秒）；'
+                            '执行者放手后再重跑，或先停 worker。本次未清除任何内容，导出文件已在 ' + report['export']['path'])
+            instructions = {doctype: {'columns': user_data_module.cleared(doctype), 'names': names[doctype]}
+                            for doctype in names if names[doctype]}
+            if instructions:
+                line = _last_line(bench.python(site, _user_clear_script(instructions, user), timeout=900))
+                marker = 'DSHERP_USER_DELETE '
+                if not line.startswith(marker):
+                    raise Fault(f'{site} 没有确认清除结果；请核对该站现状后再重跑')
+                report['cleared'] = json.loads(line[len(marker):])
+                if report['cleared'].get('refused'):
+                    report['inflight'] = report['cleared']['refused']
+                    report['path'] = str(_write_json(_user_file(resolved, root, 'delete-blocked', site, user), report))
+                    raise Fault(f'{user} 在清除前一刻又有运行进入在途（{len(report["inflight"])} 个）；本次未清除任何内容，请重跑')
+            report['sessions_removed'] = sessions_module.remove_scopes(state_root, site, sessions)
+        finally:
+            _set_flag(bench, site, 'dsherp_hold', flags.get('dsherp_hold', 0))
+            site_holds.release(runtime, site)
+            report['hold'] = 'released'
     report['applied'] = True
     report['path'] = str(_write_json(_user_file(resolved, root, 'delete', site, user), report))
     return report
@@ -1774,14 +1817,34 @@ def rotate(resolved, kind, *, target=None, value=None, file=None, profile=None, 
                         '否则新密钥无人持有，而旧密钥已经作废')
         for path in paths:
             _profile_rows(path, site)
+        # The recovery copy is opened - directory made, file created privately - before the
+        # key changes. A destination that cannot be written is discovered while the old key
+        # still works, not after it is dead (R3).
+        try:
+            keep = _secret_fallback(resolved, root, site, at)
+            descriptor = os.open(keep, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except OSError as error:
+            raise Fault(f'无法准备密钥恢复副本 {runtime_dir(resolved, root) / "rotations"}：{error}；'
+                        '未签发新密钥，旧密钥仍然有效') from error
         issued = ensure_runtime_identity(bench, site, user, rotate=True)
         if 'api_secret' not in issued:
+            os.close(descriptor)
+            keep.unlink(missing_ok=True)
             raise Fault(f'{site} 没有返回新的运行身份凭据')
-        # The pair is on disk, privately, before any profile is touched: a write that fails
-        # halfway leaves a credential that can still be recovered from here.
-        keep = _write_private_json(_secret_fallback(resolved, root, site, at),
-                                   {'site': site, 'user': user, 'api_key': issued['api_key'],
-                                    'api_secret': issued['api_secret'], 'issued_at': at.strftime('%Y-%m-%d %H:%M:%S')})
+        record_text = json.dumps({'site': site, 'user': user, 'api_key': issued['api_key'],
+                                  'api_secret': issued['api_secret'],
+                                  'issued_at': at.strftime('%Y-%m-%d %H:%M:%S')}, ensure_ascii=False, indent=1)
+        try:
+            with os.fdopen(descriptor, 'w') as handle:
+                handle.write(record_text + '\n')
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            # The disk failed between the check and the write. The secret is not lost: it is
+            # handed to the operator here, once, because nowhere else can take it.
+            raise Fault(f'新密钥已签发，但恢复副本 {keep} 写入失败（{error}）。'
+                        f'请立即记下并写入 worker profile：api_key={issued["api_key"]} '
+                        f'api_secret={issued["api_secret"]}') from error
         updated = []
         try:
             for path in paths:

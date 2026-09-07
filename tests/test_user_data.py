@@ -269,3 +269,42 @@ def test_a_run_that_slips_in_between_settling_and_clearing_is_caught_under_the_l
     with pytest.raises(admin.Fault, match="清除前一刻"):
         admin.delete_user_data(RELEASE, "acme.tenant.example.com", "alice@example.invalid",
                                bench_factory=lambda kind: bench, confirm=True, clock=clock, sleep=sleep)
+
+
+def test_a_run_started_between_the_database_clear_and_the_directory_removal_keeps_its_directory(host_runtime):
+    """The reviewer's probe: the clear script has committed and released the User lock; a new
+    executor writes a fresh scope under the same conversation before the removal runs. The
+    Site is held for the whole window so that cannot happen for real, and even if a directory
+    appears, only the scopes the plan enumerated are removed (R6)."""
+    from dsherp import admin, sessions, site_holds
+
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    root = Path(admin.runtime_dir(RELEASE)) / admin.SESSION_ROOT
+    older = sessions.directory(root, site="acme.tenant.example.com", conversation="conv1", scope="a" * 64)
+    older.mkdir(parents=True)
+    (older / "state").write_text("old")
+    newer = sessions.directory(root, site="acme.tenant.example.com", conversation="conv1", scope="b" * 64)
+    seen = {}
+
+    class RaceBench(UserBench):
+        def python(self, site, body, timeout=900):
+            answer = super().python(site, body, timeout=timeout)
+            if "DSHERP_USER_SETTLE" in body:
+                seen["hold_flag_at_settle"] = self.site_config.get((site, "dsherp_hold"))
+                seen["hold_file_at_settle"] = site in site_holds.held(admin.runtime_dir(RELEASE))
+            if "DSHERP_USER_DELETE" in body:
+                newer.mkdir(parents=True)
+                (newer / "new-executor-state").write_text("new run after clearing commit")
+            return answer
+
+    bench = RaceBench([])
+    result = admin.delete_user_data(RELEASE, "acme.tenant.example.com", "alice@example.invalid",
+                                    bench_factory=lambda kind: bench, confirm=True, wait=0)
+    assert result["applied"] is True and result["hold"] == "released"
+    assert seen == {"hold_flag_at_settle": "1", "hold_file_at_settle": True}, "held before anything is settled"
+    assert not older.exists(), "the planned scope is gone"
+    assert newer.exists(), "a scope that appeared after the plan is not this deletion's to take"
+    assert bench.site_config.get(("acme.tenant.example.com", "dsherp_hold")) == "0", "the hold is given back"
+    assert "acme.tenant.example.com" not in site_holds.held(admin.runtime_dir(RELEASE))
+    assert result["sessions_removed"] == [str(older.resolve())]
