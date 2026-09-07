@@ -307,7 +307,10 @@ def fixture_counts(abbreviation):
         ),
         'boms': frappe.db.count('BOM', {'name': BOM}),
         'reconciliations': frappe.db.count('Stock Reconciliation', {'name': RECONCILIATION}),
-        'stock_ledger_entries': frappe.db.count('Stock Ledger Entry', {'item_code': RAW_MATERIAL}),
+        # Live rows only: ERPNext keeps a cancelled entry and its reversal forever, and the
+        # operation tests cancel the stock entries they make. Counting those would make the
+        # baseline depend on how many times the suite has already run on this Site.
+        'stock_ledger_entries': frappe.db.count('Stock Ledger Entry', {'item_code': RAW_MATERIAL, 'is_cancelled': 0}),
     }
 
 
