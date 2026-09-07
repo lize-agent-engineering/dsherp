@@ -1,0 +1,680 @@
+{
+ "version": 1,
+ "actors": {
+  "guest": {
+   "user": "Guest"
+  },
+  "member": {
+   "roles": []
+  },
+  "manager": {
+   "roles": [
+    "System Manager"
+   ]
+  },
+  "administrator": {
+   "user": "Administrator"
+  }
+ },
+ "doctypes": [
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Model Run",
+   "permissions": [
+    {
+     "role": "System Manager",
+     "permlevel": 0,
+     "read": 1,
+     "report": 1
+    }
+   ],
+   "track_changes": true,
+   "controller_refuses_delete": "always",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": true,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": "refused_by_controller"
+    }
+   },
+   "why": "运行是助手做过什么的凭据：只有操作员可读可报表；终态不可改写、任何人不可删（validate + on_trash）"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Run Event",
+   "permissions": [],
+   "track_changes": true,
+   "controller_refuses_delete": "always",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": "refused_by_controller"
+    }
+   },
+   "why": "事件只由服务端写入，通过 list_run_events 读；Document API 上无人有权，改写与删除一律拒绝"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Operation Proposal",
+   "permissions": [],
+   "track_changes": true,
+   "controller_refuses_delete": "always",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": "refused_by_controller"
+    }
+   },
+   "why": "确认与执行都以提案为准；冻结字段，不可删"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Execution Record",
+   "permissions": [],
+   "track_changes": true,
+   "controller_refuses_delete": "always",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": "refused_by_controller"
+    }
+   },
+   "why": "对外可追责的执行事实；只有 target_state 可在事后标注"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Configuration Bundle",
+   "permissions": [],
+   "track_changes": true,
+   "controller_refuses_delete": "always",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": "refused_by_controller"
+    }
+   },
+   "why": "预览与发布都以配置包为准"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Configuration Confirmation",
+   "permissions": [],
+   "track_changes": true,
+   "controller_refuses_delete": "always",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": "refused_by_controller"
+    }
+   },
+   "why": "人做过确认的凭据"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Configuration Execution",
+   "permissions": [],
+   "track_changes": true,
+   "controller_refuses_delete": "always",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": "refused_by_controller"
+    }
+   },
+   "why": "配置执行结果不可改写不可删"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Configuration Transfer",
+   "permissions": [],
+   "track_changes": true,
+   "controller_refuses_delete": "always",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": "refused_by_controller"
+    }
+   },
+   "why": "两站交接的绑定记录；不可改不可删"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Conversation",
+   "permissions": [],
+   "track_changes": false,
+   "controller_refuses_delete": "while_referenced",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": true
+    }
+   },
+   "why": "会话是用户自己的线程，只经 context_api 读写（ignore_permissions，服务端校验 owner）；不开 track_changes：标题是提问前 100 字，是个人内容，delete-user-data 已要顺带清 Version 行，再复制一份进 tabVersion 只增加要清的东西；有运行引用时 on_trash 拒绝，无引用时 Administrator 可删"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Doctype Policy",
+   "permissions": [
+    {
+     "role": "System Manager",
+     "permlevel": 0,
+     "read": 1,
+     "write": 1,
+     "create": 1,
+     "delete": 1
+    }
+   ],
+   "track_changes": true,
+   "controller_refuses_delete": "never",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": true
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": true
+    }
+   },
+   "why": "治理数据：操作员可改可删，每次改动要新的 change_reason 且留版本；删除等于收回助手对该 DocType 的写权限，是关闭式的"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Doctype Policy Route",
+   "parent_doctype": "DS Doctype Policy",
+   "permissions": [],
+   "track_changes": false,
+   "controller_refuses_delete": "never",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": true
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": true
+    }
+   },
+   "why": "子表：权限随父表 DS Doctype Policy"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Business Credential",
+   "permissions": [],
+   "track_changes": true,
+   "controller_refuses_delete": "never",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": true
+    }
+   },
+   "why": "凭据窗口记录只由 credentials 模块写；没有记录的密钥会被站点拒绝（S2），删除是关闭式的"
+  },
+  {
+   "app": "dsherp_bridge",
+   "doctype": "DS Ops Snapshot",
+   "permissions": [],
+   "track_changes": false,
+   "controller_refuses_delete": "never",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": true
+    }
+   },
+   "why": "运维快照，7 天后由 collect_snapshot 自行修剪；只经 ops_status 读"
+  },
+  {
+   "app": "dsherp_platform",
+   "doctype": "DS Enterprise",
+   "permissions": [
+    {
+     "role": "System Manager",
+     "permlevel": 0,
+     "read": 1,
+     "write": 1,
+     "create": 1,
+     "delete": 1
+    },
+    {
+     "role": "System Manager",
+     "permlevel": 1,
+     "read": 1,
+     "write": 1
+    }
+   ],
+   "permlevel_1": {
+    "manager": [
+     "read",
+     "write"
+    ],
+    "member": []
+   },
+   "track_changes": true,
+   "controller_refuses_delete": "never",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": true
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": true
+    }
+   },
+   "why": "平台操作员管理企业；成员经 api.context 只看到自己有绑定的企业"
+  },
+  {
+   "app": "dsherp_platform",
+   "doctype": "DS Membership",
+   "permissions": [
+    {
+     "role": "System Manager",
+     "permlevel": 0,
+     "read": 1,
+     "write": 1,
+     "create": 1,
+     "delete": 1
+    },
+    {
+     "role": "System Manager",
+     "permlevel": 1,
+     "read": 1,
+     "write": 1
+    }
+   ],
+   "permlevel_1": {
+    "manager": [
+     "read",
+     "write"
+    ],
+    "member": []
+   },
+   "track_changes": true,
+   "controller_refuses_delete": "while_enabled",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": true
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": "refused_by_controller"
+    }
+   },
+   "why": "api_key/api_secret 在 permlevel 1，只有操作员可见；启用中的绑定不能删（先停用，否则借出的凭据不会被吊销）"
+  },
+  {
+   "app": "dsherp_platform",
+   "doctype": "DS Agent Task",
+   "permissions": [
+    {
+     "role": "System Manager",
+     "permlevel": 0,
+     "read": 1,
+     "write": 1
+    }
+   ],
+   "track_changes": false,
+   "controller_refuses_delete": "never",
+   "actions": {
+    "guest": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "member": {
+     "read": false,
+     "create": false,
+     "write": false,
+     "delete": false
+    },
+    "manager": {
+     "read": true,
+     "create": false,
+     "write": true,
+     "delete": false
+    },
+    "administrator": {
+     "read": true,
+     "create": true,
+     "write": true,
+     "delete": true
+    }
+   },
+   "why": "退役的任务历史只读保留（README）：去掉 delete；write 维持既有授权并由本矩阵钉住；无 on_trash，Administrator 绕过角色权限"
+  }
+ ],
+ "guest_endpoints": [
+  {
+   "method": "dsherp_bridge.sso.start",
+   "guard": "oauth_state"
+  },
+  {
+   "method": "dsherp_bridge.sso.callback",
+   "guard": "oauth_state"
+  },
+  {
+   "method": "dsherp_bridge.context_execution.run_status",
+   "guard": "run_capability"
+  },
+  {
+   "method": "dsherp_bridge.context_execution.reserve_model_call",
+   "guard": "run_capability"
+  },
+  {
+   "method": "dsherp_bridge.context_execution.run_tool",
+   "guard": "run_capability"
+  },
+  {
+   "method": "dsherp_bridge.context_execution.record_run_event",
+   "guard": "run_capability"
+  },
+  {
+   "method": "dsherp_bridge.context_execution.finish_run",
+   "guard": "run_capability"
+  },
+  {
+   "method": "dsherp_bridge.configuration_transfer.export_transfer",
+   "guard": "hmac_envelope"
+  },
+  {
+   "method": "dsherp_bridge.configuration_transfer.receipt_transfer",
+   "guard": "hmac_envelope"
+  }
+ ],
+ "reports": [
+  {
+   "name": "DS Agent Audit",
+   "path": "dsherp_bridge/dsherp_bridge/report/ds_agent_audit/ds_agent_audit.json",
+   "roles": [
+    "System Manager"
+   ]
+  }
+ ]
+}
