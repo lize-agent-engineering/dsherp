@@ -8,6 +8,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 import pytest
 
+import residue as residue_module
 from credentials_check import UNAUTHENTICATED, UNREACHABLE, classify
 from infra.v16_integration_queue import purge_validation_jobs, purge_validation_jobs_if_backlogged
 
@@ -91,13 +92,47 @@ def fixture_credentials_agree_with_the_sites():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def validation_queue_hygiene():
+def residue_ledger_swept(request):
+    """A session that was killed left its registrations in the ledger; take them away first,
+    and say what went. Anything that cannot be swept stops the session here rather than
+    letting the next run inherit somebody else's rows."""
+    report = residue_module.sweep_previous()
+    if report.get("entries"):
+        reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+        if reporter is not None:
+            reporter.write_line("[residue] 清扫了上一会话遗留的登记：" + json.dumps(
+                {key: report[key] for key in ("removed", "restored", "containers", "backup_sets")},
+                ensure_ascii=False))
+    yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def validation_queue_hygiene(residue_ledger_swept):
     purge_validation_jobs()
     seed_validation_worker_heartbeat()
     try:
         yield
     finally:
         purge_validation_jobs()
+
+
+@pytest.fixture
+def residue(request):
+    """Register what this test is about to create, before creating it; it is swept and
+    verified at teardown, and anything left over errors the test."""
+    registry = residue_module.Registry(request.node.nodeid, "function")
+    with registry.active():
+        yield registry
+    registry.sweep()
+
+
+@pytest.fixture(scope="module")
+def module_residue(request):
+    """Same, for state a whole module shares (a probe container, a staged backup set)."""
+    registry = residue_module.Registry(request.node.nodeid, "module")
+    with registry.active():
+        yield registry
+    registry.sweep()
 
 
 @pytest.fixture(autouse=True)
