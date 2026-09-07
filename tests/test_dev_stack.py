@@ -556,3 +556,16 @@ def test_the_driver_runs_as_a_plain_file_path_not_only_as_a_module():
         assert result.returncode == 0, command[1:3] + [result.stderr[-400:]]
         for name in ("secrets", "up", "provision", "status", "native-tests", "down", "scan-artifacts"):
             assert name in result.stdout, (command[1:3], name)
+
+
+def test_scan_artifacts_says_which_files_were_missing_instead_of_crashing(stack, tmp_path, capsys, monkeypatch):
+    """nightly calls this with `if: always()`, so a step that failed before writing its
+    artifact leaves an unexpanded glob behind. Say so; never hide it behind a traceback."""
+    dev_stack.up(stack, provision_too=True)
+    clean = tmp_path / "junit.xml"
+    clean.write_text("<testsuite tests='1'/>")
+    monkeypatch.setattr(dev_stack.deploy_env, "settings", lambda *a, **k: stack.resolved)
+    monkeypatch.setattr(dev_stack, "Stack", lambda resolved: stack)
+    code = dev_stack.main(["scan-artifacts", str(tmp_path / "work/junit-*.xml"), str(clean)])
+    out = capsys.readouterr().out
+    assert code == 0 and "不存在，未扫描" in out and "junit-*.xml" in out

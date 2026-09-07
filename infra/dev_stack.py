@@ -610,7 +610,13 @@ def main(argv=None):
         elif arguments.command == 'down':
             _print(down(stack, volumes=arguments.volumes))
         elif arguments.command == 'scan-artifacts':
-            leaks = leaked_secrets(stack.runtime, arguments.paths)
+            # nightly 用 `if: always()` 调这条，可能有一步没产出它的工件（比如 pytest 没跑到）。
+            # 缺文件如实说出来，不静默跳过，也不用一个 traceback 盖住真正的失败。
+            present = [path for path in arguments.paths if path.exists()]
+            for path in arguments.paths:
+                if not path.exists():
+                    print(f'{path}: 不存在，未扫描')
+            leaks = leaked_secrets(stack.runtime, present)
             for name, path in leaks:
                 print(f'{path}: 含 {name} 的值')
             return 1 if leaks else 0
