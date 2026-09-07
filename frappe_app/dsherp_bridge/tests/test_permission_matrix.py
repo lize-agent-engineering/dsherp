@@ -82,7 +82,8 @@ class TestPermissionMatrix(IntegrationTestCase):
                                                   'request_id': cls.tag, 'status': 'Running', 'steps': '[]'})
         f['DS Configuration Transfer'] = insert({'doctype': 'DS Configuration Transfer',
                                                  'request_id': cls.tag,
-                                                 'bundle': f['DS Configuration Bundle'], 'payload': '{}'})
+                                                 'bundle': f['DS Configuration Bundle'], 'payload': '{}',
+                                                 'expires_at': later})
         f['DS Doctype Policy'] = insert({'doctype': 'DS Doctype Policy', 'target_doctype': 'ToDo',
                                          'change_reason': 'matrix ' + cls.tag, 'enabled': 1, 'allow_read': 1})
         f['DS Business Credential'] = insert({'doctype': 'DS Business Credential',

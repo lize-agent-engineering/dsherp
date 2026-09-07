@@ -9,7 +9,7 @@ from dsherp_bridge.configuration import check_bundle,get_bundle,check_authorizat
 from dsherp_bridge.configuration_bundle import freeze_bundle
 from dsherp_bridge.context_api import _user,_json
 from dsherp_bridge.configuration_locks import acquire,release
-from dsherp_bridge.configuration_transfer import read_receipt
+from dsherp_bridge.configuration_transfer import read_receipt,check_window
 
 
 @frappe.whitelist(methods=['POST'])
@@ -32,6 +32,7 @@ def prepare_publish(transfer_id,digest):
     if frappe.conf.get('dsherp_preview'):frappe.throw('发布确认必须在目标业务站点创建')
     transfer=frappe.get_doc('DS Configuration Transfer',transfer_id)
     if transfer.owner!=user:raise frappe.PermissionError('无权读取此配置交接')
+    check_window(transfer)
     bundle=check_bundle(transfer.bundle,digest)
     if not bundle['execution_ready']:frappe.throw('来源运行尚未成功完成，不能发布')
     receipt=read_receipt(transfer)
@@ -199,7 +200,11 @@ def _confirm(proposal_id,digest,request_id,purpose):
     if purpose=='publish':
         if frappe.conf.get('dsherp_preview'):frappe.throw('隔离预览站点不能执行目标发布')
         transfer=frappe.get_doc('DS Configuration Transfer',payload['transfer_id'])
-        if transfer.owner!=frappe.session.user or read_receipt(transfer)!=payload['preview_receipt']:
+        # Three separate refusals: whose transfer it is, whether it is still usable, and only
+        # then the receipt - which costs a call to the peer and used to absorb the other two.
+        if transfer.owner!=frappe.session.user:raise frappe.PermissionError('无权发布此配置交接')
+        check_window(transfer)
+        if read_receipt(transfer)!=payload['preview_receipt']:
             frappe.throw('隔离预览回执已变化，请重新确认发布')
     package=get_bundle(confirmation.bundle)['package']
     targets=[doc['name'] for doc in package['doctypes']]+[doc['doctype'] for doc in package['extensions']]
