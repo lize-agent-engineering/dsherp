@@ -55,3 +55,11 @@
 | R4 · 第一次 provision 先公开空站 | `provision_tenant`/`provision_platform` 增加 `closed=True`：`bench new-site` 返回后立即置维护模式，企业记为 `Provisioning`（平台 `_binding` 只放行 Ready），不写租户清单、不更新平台端点、不渲染入口；冷启动的第一次开通用它，第二次用普通路径开站；注入的开通函数若不支持 `closed` 直接拒绝而不是先开后关 | 以真实 `provision_tenant` 接入真实 `restore_site` 的单元测试：首次企业记录为 Provisioning 且此时维护模式已为 1，Ready 之前没有任何 ingress/endpoints/tenant-list 调用。审查方探针里的 `provision=lambda: ...` 需改为 `lambda **options: admin.provision_tenant(..., **options)` 才能观察到关闭形态；`bench new-site` 命令本身返回到 `set-config maintenance_mode 1` 之间的窗口是 Frappe 建站方式固有的，期间无入口、无企业 Ready |
 
 非集成 `664 passed`。
+
+## 第三轮复核（[third](plan4-pr9-review-third-2026-09-07.md)）的一项回归
+
+| 项 | 处置 | 复验 |
+|---|---|---|
+| R4 · 关闭式开通把 Disabled/Failed 改成 Provisioning，随后普通开通再改成 Ready，等于恢复把管理员停用的企业重新启用 | `ensure_enterprise(status='Provisioning')` 只把 **Ready** 转入 Provisioning（新企业仍以 Provisioning 创建），`status='Ready'` 只把 **Provisioning** 转为 Ready；Disabled/Failed 两个方向都不碰，与函数约定一致 | 审查方探针（真实平台、只回滚事务、跑实际生成的脚本）：`Disabled→Disabled→Disabled`、`Failed→Failed→Failed`、`Ready→Provisioning→Ready`，回滚确认；新增 `tests/integration/test_enterprise_recovery_state.py` 覆盖新企业/Ready/Disabled/Failed 四种起点，单元测试钉住两个转换条件 |
+
+非集成 `665 passed`。

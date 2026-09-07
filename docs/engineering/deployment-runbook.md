@@ -327,7 +327,7 @@ DSHERP_ENV=prod .venv/bin/python -c "from dsherp import backup, deploy_env; impo
 DSHERP_ENV=prod ./bin/dsherp-admin restore-site acme.tenant.example.com     # 也可 --set <备份集 id>
 ```
 
-`restore-site` 的契约：目标站在本机**必须不存在**（不覆盖、不自动清理）；先读回并核对两侧清单与全部摘要；本机运行的镜像 tag 与 id 必须等于该集记录的那次构建（不符即拒绝，先把 `prod.env` 改到那个 tag 再 `compose up -d`）；随后以关闭形态建站（建站即维护模式、企业记为 Provisioning、不发布入口）、恢复、注入 `encryption_key`、与集内快照比对、抽样解密，再以常规 `provision-*` 让主机相关配置按**这台**主机重算并把企业标为 Ready、发布入口；只有比对干净才解除维护。任一步失败站点保持维护模式，报告在 `<runtime>/backups/restore-<站>.json`。升级到更新的 tag 是随后显式的 `release`。
+`restore-site` 的契约：目标站在本机**必须不存在**（不覆盖、不自动清理）；先读回并核对两侧清单与全部摘要；本机运行的镜像 tag 与 id 必须等于该集记录的那次构建（不符即拒绝，先把 `prod.env` 改到那个 tag 再 `compose up -d`）；随后以关闭形态建站（建站即维护模式、企业由 Ready 转为 Provisioning、不发布入口；管理员停用或标为失败的企业保持原状）、恢复、注入 `encryption_key`、与集内快照比对、抽样解密，再以常规 `provision-*` 让主机相关配置按**这台**主机重算并把企业标为 Ready、发布入口；只有比对干净才解除维护。任一步失败站点保持维护模式，报告在 `<runtime>/backups/restore-<站>.json`。升级到更新的 tag 是随后显式的 `release`。
 
 **保留与用户数据删除（裁决 #10）**：备份是个人数据的副本。删除只作用于在线数据；已生成的集不改写，按上面的保留规则随运行淘汰；`kind=retire` 的集是否最终清除，与审计保留切片一起裁决。`delete-user-data` 只影响其后产生的集。
 

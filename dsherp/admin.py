@@ -351,8 +351,9 @@ def ensure_enterprise(bench, resolved, slug, site, status='Ready'):
     """One platform record per tenant; an existing one is corrected, never duplicated.
 
     `status='Provisioning'` is the recovery form: the record exists so the platform knows the
-    tenant, but members cannot enter until a later call says Ready. An operator's own
-    Disabled or Failed is left alone either way."""
+    tenant, but members cannot enter until a later call says Ready. Only a Ready enterprise
+    is taken into Provisioning, and only a Provisioning one is taken to Ready: an operator's
+    Disabled or Failed is a decision of its own, and a recovery must not undo it."""
     values = {'enterprise_id': slug, 'title': slug, 'site': site,
               'base_url': resolved['tenant_internal_url'], 'status': status}
     body = (f"values=json.loads({json.dumps(json.dumps(values))})\n"
@@ -361,7 +362,7 @@ def ensure_enterprise(bench, resolved, slug, site, status='Ready'):
             "else:\n"
             "    doc=frappe.get_doc('DS Enterprise',values['enterprise_id'])\n"
             "    drift=[key for key in ('site','base_url') if doc.get(key)!=values[key]]\n"
-            "    if values['status']=='Provisioning' and doc.status!='Provisioning':drift.append('status')\n"
+            "    if values['status']=='Provisioning' and doc.status=='Ready':drift.append('status')\n"
             "    if values['status']=='Ready' and doc.status=='Provisioning':drift.append('status')\n"
             "    state='kept'\n"
             "    if drift:\n"

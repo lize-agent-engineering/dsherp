@@ -544,3 +544,14 @@ def test_a_provisioner_that_cannot_run_closed_is_refused_rather_than_run_open(ho
                                    provision=lambda: None)
     flags = [value for key, value in cold.flag_history if key == "maintenance_mode"]
     assert "0" not in flags
+
+
+def test_closed_provisioning_moves_only_a_ready_enterprise_and_ordinary_provisioning_only_a_provisioning_one():
+    """An operator's Disabled or Failed is a decision of its own; a recovery must not undo it
+    (third-round R4). The real transitions run in tests/integration/test_enterprise_recovery_state.py;
+    this pins the two conditions the generated script carries."""
+    import inspect
+    source = inspect.getsource(admin.ensure_enterprise)
+    assert "values['status']=='Provisioning' and doc.status=='Ready'" in source
+    assert "values['status']=='Ready' and doc.status=='Provisioning'" in source
+    assert "doc.status!='Provisioning'" not in source, "anything but Ready must be left alone"
