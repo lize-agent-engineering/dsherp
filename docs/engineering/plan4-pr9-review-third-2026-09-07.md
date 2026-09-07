@@ -1,5 +1,7 @@
 # PR #9 第三轮复核：1cdb9f8
 
+**收口更新：`5d97a4c` 已通过本轮代码复核，建议合并，详见文末。以下保留 `1cdb9f8` 时的审查记录。**
+
 日期：2026-09-07。本地与远端 HEAD 均为 `1cdb9f8a49704964b33798bf1de202b28fdd157d`，45 个提交，[PR #9](https://github.com/lize-agent-engineering/dsherp/pull/9) 仍 OPEN。
 
 结论：**第二轮三个原反例已通过复验；R4 的新增状态处理引入一处停用状态回归，尚不建议合并。** 本次仅审查、运行探针和记录结果，没有修改业务代码或提交、推送、合并。
@@ -45,3 +47,14 @@
 - 真实平台探针已 rollback 并确认清理。保留审查文档和可复现脚本，没有留下临时合成企业。
 
 R1、R2、R5、R7、R8、R9 保留上一轮关闭结论，R3/R6 的原残余可关闭。R4 原窗口问题已修，但本轮状态回归未关闭。继续停在阶段 5；G3 异机、真实 RPO/RTO、systemd 实际触发、真机 restore-site 与数据库直接访问边界，均不因本次代码复核自动转为通过。
+
+## 收口复核：5d97a4c
+
+2026-09-07，独立核对本地和 PR #9 HEAD 均为 `5d97a4c25fa77bacb5911db115473616248ca989`，46 个提交。上述 R4 状态回归已关闭，**本轮代码审查通过，建议合并 PR #9**。
+
+- 原真实平台探针原样重跑：Disabled 全程 Disabled，Failed 全程 Failed，Ready 经 Provisioning 回到 Ready，rollback 确认无残留。
+- 直接执行新增企业状态集成测试函数，验证新企业、Ready、Disabled、Failed 四种起点及回滚；全部断言通过。该测试自带事务隔离，本轮没有启动无关的全局集成夹具。
+- 定向单元回归：`pytest tests/test_admin_cli.py tests/test_restore_drill.py -q -k 'provision or enterprise or cold'`，`12 passed, 59 deselected`。
+- 本轮没有重跑完整 665 项非集成或 210 项集成；原报告与此前独立验证按其版本和范围保留。本次仅修改状态转换条件，未扩大审查范围，也未暂停 dev 服务。
+
+阶段 5 的此次代码复核收口；实际合并按用户已有授权另行执行。G3 异机与 RPO/RTO、systemd 实际触发、restore-site 真机全流程和数据库直连的既有边界，仍保持原验收状态。
