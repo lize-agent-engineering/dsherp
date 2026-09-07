@@ -1,15 +1,32 @@
-"""Unknown action stock effects must fail before any durable intent exists."""
-import subprocess
+"""Unknown action stock effects must fail before any durable intent exists.
+
+The last two tests leave real durable state on the Site: a synthetic submittable DocType created
+by DDL (with its policy row, its rows and its table), a temporary actor, a conversation, a draft
+Stock Entry, and permlevel Property Setters that change the cached meta of two shipped DocTypes.
+A host-side timeout kills the docker client, not the interpreter inside the container, so the
+in-script `finally` may never run and an orphan `tab...` table would survive every other sweep.
+So the identifiers are minted here on the host and registered with the residue registry BEFORE
+the script runs; the in-script cleanup stays exactly as it was, as the happy path.
+"""
+import uuid
+
+from site_exec import run_site_script
+
+SITE = 'dsherp-validation.localhost'
+# Idempotent: the sweep deletes the permlevel Property Setter rows, this drops the meta those rows
+# poisoned so the next reader of Stock Entry sees the shipped permissions again.
+CLEAR_STOCK_META = r'''
+frappe.clear_cache(doctype='Stock Entry')
+frappe.clear_cache(doctype='Stock Entry Detail')
+print('cleared')
+'''
 
 
 def test_action_impact_uses_exact_stock_and_no_stock_registries():
-    script = r'''
-import os,frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost');frappe.connect()
+    # Rollback-only: this body commits nothing, so there is nothing to register.
+    run_site_script(SITE, r'''
 from dsherp_bridge.stock_impact import action_impact,validate_impact_read_access
 try:
-    frappe.set_user('Administrator')
     canonical={'kind':'none','entries':[]}
     for doctype in (
         'Sales Order','Work Order','Purchase Order','Subcontracting Order',
@@ -22,23 +39,23 @@ try:
     except frappe.ValidationError as error:
         assert 'ToDo' in str(error) and '库存影响尚未实现' in str(error),error
 finally:
-    frappe.db.rollback();frappe.destroy()
-'''
-    result = subprocess.run([
-        'docker','exec','-i','dsherp-validation-backend-1',
-        '/home/frappe/frappe-bench/env/bin/python','-',
-    ], input=script, text=True, capture_output=True, timeout=30)
-    assert result.returncode == 0, result.stderr
+    frappe.db.rollback()
+''', timeout=30)
 
 
-def test_unknown_submittable_doctype_cannot_propose_an_unverified_stock_impact():
-    script = r'''
-import os,uuid,frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost');frappe.connect()
+def test_unknown_submittable_doctype_cannot_propose_an_unverified_stock_impact(residue):
+    # The tag is minted on the host, not in the script, because the registry has to know the
+    # DocType name, the actor and the conversation title before the script can create them.
+    tag = uuid.uuid4().hex
+    doctype = 'DS Unknown Impact ' + tag[:10]
+    actor = 'unknown-impact-' + tag + '@example.invalid'
+    residue.doctype(SITE, doctype)  # its rows, its DS Doctype Policy row, the DocType, then DROP TABLE
+    residue.user(SITE, actor)
+    residue.doc(SITE, 'DS Conversation', {'title': 'Unknown stock impact ' + tag})
+    run_site_script(SITE, r'''
 from dsherp_bridge.operations import propose_action
 
-tag=uuid.uuid4().hex
+tag=TAG
 doctype='DS Unknown Impact '+tag[:10]
 actor='unknown-impact-'+tag+'@example.invalid'
 conversation=None
@@ -47,7 +64,6 @@ policy=None
 proposal_names=[]
 execution_names=[]
 try:
-    frappe.set_user('Administrator')
     assert not frappe.db.exists('DocType',doctype)
     assert not frappe.db.table_exists(doctype)
     frappe.get_doc({
@@ -130,25 +146,27 @@ finally:
         assert frappe.db.count('DS Model Run',{'conversation':conversation})==0
     assert all(not frappe.db.exists('DS Operation Proposal',name) for name in proposal_names)
     assert all(not frappe.db.exists('DS Execution Record',name) for name in execution_names)
-    frappe.destroy()
-'''
-    result = subprocess.run([
-        'docker','exec','-i','dsherp-validation-backend-1',
-        '/home/frappe/frappe-bench/env/bin/python','-',
-    ], input=script, text=True, capture_output=True, timeout=60)
-    assert result.returncode == 0, result.stderr
+'''.replace('TAG', repr(tag)), timeout=60)
 
 
-def test_registered_stock_impact_checks_parent_and_child_field_access_before_values():
-    script = r'''
-import os,uuid,frappe
+def test_registered_stock_impact_checks_parent_and_child_field_access_before_values(residue):
+    tag = uuid.uuid4().hex
+    actor = 'impact-permission-' + tag + '@example.invalid'
+    # The setters carry no tag of their own; the script asserts none of them exist before it
+    # starts, so "every permlevel setter on these two fields" is this test's own residue.
+    residue.doc(SITE, 'Property Setter', {'doc_type': ['in', ['Stock Entry', 'Stock Entry Detail']],
+                                          'field_name': ['in', ['items', 's_warehouse']],
+                                          'property': 'permlevel'})
+    residue.restore(SITE, 'stock entry meta cache', CLEAR_STOCK_META)
+    residue.doc(SITE, 'DS Conversation', {'title': 'Impact field permission ' + tag})
+    residue.doc(SITE, 'Stock Entry', {'owner': actor})
+    residue.user(SITE, actor)
+    run_site_script(SITE, r'''
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 from frappe.utils import nowdate
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost');frappe.connect()
 from dsherp_bridge.operations import propose_action
 
-tag=uuid.uuid4().hex
+tag=TAG
 actor='impact-permission-'+tag+'@example.invalid'
 conversation=None
 stock_entry=None
@@ -171,7 +189,6 @@ def remove_setter(setter_name):
     frappe.db.commit();clear_impact_meta()
 
 try:
-    frappe.set_user('Administrator')
     assert not frappe.get_all('Property Setter',filters={
         'doc_type':['in',['Stock Entry','Stock Entry Detail']],
         'field_name':['in',['items','s_warehouse']],'property':'permlevel',
@@ -276,10 +293,4 @@ finally:
     assert not frappe.db.exists('User',actor)
     assert all(not frappe.db.exists('DS Operation Proposal',name) for name in proposal_names)
     assert all(not frappe.db.exists('DS Execution Record',name) for name in execution_names)
-    frappe.destroy()
-'''
-    result = subprocess.run([
-        'docker','exec','-i','dsherp-validation-backend-1',
-        '/home/frappe/frappe-bench/env/bin/python','-',
-    ], input=script, text=True, capture_output=True, timeout=80)
-    assert result.returncode == 0, result.stderr
+'''.replace('TAG', repr(tag)), timeout=80)

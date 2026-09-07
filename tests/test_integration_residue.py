@@ -262,3 +262,32 @@ def test_the_session_sweep_runs_before_queue_hygiene():
     assert [arg.arg for arg in hygiene.args.args] == ['residue_ledger_swept']
     names = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
     assert {'residue', 'module_residue', 'residue_ledger_swept'} <= names
+
+
+def test_every_link_the_sweep_cascades_on_exists_in_the_doctype_it_names():
+    """The sweep walks the audit chain by link fieldname. Renaming one of those fields would
+    not break any assertion here - it would just make the sweep quietly stop cascading, and
+    the leftovers would be discovered as a polluted Site much later."""
+    import ast
+    import json as json_module
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / 'frappe_app'
+    fields = {}
+    for path in root.glob('*/*/doctype/*/*.json'):
+        try:
+            definition = json_module.loads(path.read_text())
+        except ValueError:
+            continue
+        if definition.get('doctype') == 'DocType':
+            fields[definition['name']] = {row.get('fieldname') for row in definition.get('fields', [])}
+
+    chain_source = residue.SWEEP_TEMPLATE.split('CHAIN = ', 1)[1].split('\n}\n', 1)[0] + '\n}'
+    chain = ast.literal_eval(chain_source)
+    assert chain, 'the sweep must have a cascade table'
+    missing = [(parent, child, link) for parent, children in chain.items() for child, link in children
+               if link not in fields.get(child, set())]
+    assert missing == [], missing
+    assert set(chain) <= set(residue.DS_CHAIN)
+    for children in chain.values():
+        assert all(child in residue.DS_CHAIN for child, _ in children)

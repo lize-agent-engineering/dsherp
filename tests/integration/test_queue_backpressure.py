@@ -1,22 +1,35 @@
 """send_message applies queue expiry and rejects unavailable workers."""
 
 import json
-import subprocess
 import uuid
 from pathlib import Path
 
 import httpx
 
+from site_exec import run_site_json, run_site_script
 
-def test_send_message_rejects_unavailable_worker_and_sets_queue_expiry():
-    script = r'''
-import os,uuid,frappe
+SITE = 'dsherp-validation.localhost'
+ACTOR = 'dsherp-reader@example.invalid'
+# Both tests take the shared `dsherp_worker_heartbeat` key away on purpose - that absence is
+# exactly what makes send_message answer 503. Each puts it back itself, but a host-side timeout
+# kills the docker client and not the interpreter, so the script's `finally` may never run and
+# every later test on this Site would see an unavailable worker. Registered before the deletion,
+# this idempotent body seeds a fresh beat of the same shape conftest.seed_validation_worker_heartbeat
+# writes, whatever state the script left the key in.
+HEARTBEAT_RESTORE = r'''
+from frappe.utils import now_datetime
+value=now_datetime().isoformat()
+frappe.cache().set_value('dsherp_worker_heartbeat',value,expires_in_sec=3600)
+written=frappe.cache().get_value('dsherp_worker_heartbeat')
+if written!=value:raise RuntimeError('dsherp_worker_heartbeat was not written')
+print(json.dumps({'heartbeat':value}))
+'''
+
+SCRIPT = r'''
 from frappe.utils import add_to_date,get_datetime,now_datetime
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost');frappe.connect()
 from dsherp_bridge import context_api as api
 from dsherp_bridge.run_budget import budget
-actor='dsherp-reader@example.invalid'
+actor=ACTOR
 context={'schema_version':1,'page_type':'unknown','route':[]}
 conversations=[];runs=[]
 cache=frappe.cache()
@@ -47,7 +60,7 @@ try:
 
     cache.set_value('dsherp_worker_heartbeat',now_datetime().isoformat(),expires_in_sec=3600)
     started=now_datetime()
-    session=send('fresh heartbeat')
+    session=send(FRESH_QUESTION)
     conversations.append(session['id']);runs.append(session['active_run'])
     frappe.db.commit()
     assert session['active_run'] and session['messages'][-1]['status']=='Queued',session
@@ -64,63 +77,46 @@ finally:
         if frappe.db.exists('DS Model Run',name):frappe.db.delete('DS Model Run',{'name':name})
     for name in conversations:
         if frappe.db.exists('DS Conversation',name):frappe.delete_doc('DS Conversation',name,ignore_permissions=True)
-    frappe.db.commit();frappe.destroy()
+    frappe.db.commit()
 '''
-    result = subprocess.run(
-        [
-            "docker",
-            "exec",
-            "-i",
-            "dsherp-validation-backend-1",
-            "/home/frappe/frappe-bench/env/bin/python",
-            "-",
-        ],
-        input=script,
-        text=True,
-        capture_output=True,
-        timeout=90,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "QUEUE_BACKPRESSURE_OK" in result.stdout, result.stdout
 
-
-def _exec(script):
-    result = subprocess.run(
-        [
-            "docker",
-            "exec",
-            "-i",
-            "dsherp-validation-backend-1",
-            "/home/frappe/frappe-bench/env/bin/python",
-            "-",
-        ],
-        input=script,
-        text=True,
-        capture_output=True,
-        timeout=90,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return result.stdout
-
-
-def test_send_message_http_rejects_unavailable_worker_with_503():
-    reader = json.loads(Path(".runtime/erp-users.json").read_text())["reader"]
-    request_id = uuid.uuid4().hex
-    setup = _exec(
-        r"""
-import os,json,frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost');frappe.connect()
+# The setup is its own script: the HTTP call it prepares for happens on the host, between two
+# visits to the Site, so the deletion cannot live in the same interpreter as the check after it.
+HTTP_SETUP = r'''
 cache=frappe.cache()
 previous=cache.get_value('dsherp_worker_heartbeat')
 cache.delete_value('dsherp_worker_heartbeat')
 if isinstance(previous,(bytes,bytearray)):previous=previous.decode()
 elif previous is not None:previous=str(previous)
 print(json.dumps({'previous':previous,'runs':frappe.get_all('DS Model Run',pluck='name')}))
-frappe.destroy()
-"""
-    )
-    state = json.loads(setup.strip().splitlines()[-1])
+'''
+
+HTTP_TEARDOWN = ("cache=frappe.cache()\nprevious=%r\n"
+                 "if previous is None:cache.delete_value('dsherp_worker_heartbeat')\n"
+                 "else:cache.set_value('dsherp_worker_heartbeat',previous,expires_in_sec=3600)\n")
+
+
+def test_send_message_rejects_unavailable_worker_and_sets_queue_expiry(residue):
+    # The question is the conversation's title (context_api.send_message keeps its first 100
+    # chars), so a unique tag is what lets the sweep find this run's conversation and nothing else.
+    question = f'fresh heartbeat {uuid.uuid4().hex}'
+    residue.restore(SITE, 'worker heartbeat', HEARTBEAT_RESTORE)
+    residue.doc(SITE, 'DS Conversation', {'owner': ACTOR, 'title': question})
+    output = run_site_script(SITE, SCRIPT.replace('ACTOR', repr(ACTOR)).replace(
+        'FRESH_QUESTION', repr(question)), timeout=90)
+    assert 'QUEUE_BACKPRESSURE_OK' in output, output
+
+
+def test_send_message_http_rejects_unavailable_worker_with_503(residue):
+    reader = json.loads(Path('.runtime/erp-users.json').read_text())['reader']
+    question = f'missing heartbeat http {uuid.uuid4().hex}'
+    request_id = uuid.uuid4().hex
+    residue.restore(SITE, 'worker heartbeat', HEARTBEAT_RESTORE)
+    # Nothing is expected to be created - that is the assertion below. Registering the
+    # conversation anyway means a regression that lets the request through is reported as a
+    # failure rather than left on the shared Site.
+    residue.doc(SITE, 'DS Conversation', {'owner': ACTOR, 'title': question})
+    state = run_site_json(SITE, HTTP_SETUP)
     try:
         with httpx.Client(
             base_url=reader["base_url"],
@@ -134,7 +130,7 @@ frappe.destroy()
             response = client.post(
                 "/api/method/dsherp_bridge.context_api.send_message",
                 json={
-                    "question": "missing heartbeat http",
+                    "question": question,
                     "context": {"schema_version": 1, "page_type": "unknown", "route": []},
                     "request_id": request_id,
                     "domain": "query",
@@ -142,27 +138,7 @@ frappe.destroy()
             )
         assert response.status_code == 503, response.text
         assert "助手服务暂不可用，请稍后再试" in response.text, response.text
-        after = _exec(
-            r"""
-import os,json,frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost');frappe.connect()
-print(json.dumps(frappe.get_all('DS Model Run',pluck='name')))
-frappe.destroy()
-"""
-        )
-        assert set(json.loads(after.strip().splitlines()[-1])) == set(state["runs"])
+        after = run_site_json(SITE, "print(json.dumps(frappe.get_all('DS Model Run',pluck='name')))")
+        assert set(after) == set(state['runs'])
     finally:
-        _exec(
-            """
-import os,frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost');frappe.connect()
-cache=frappe.cache()
-previous=%r
-if previous is None:cache.delete_value('dsherp_worker_heartbeat')
-else:cache.set_value('dsherp_worker_heartbeat',previous,expires_in_sec=3600)
-frappe.destroy()
-"""
-            % (state["previous"],)
-        )
+        run_site_script(SITE, HTTP_TEARDOWN % (state['previous'],))
