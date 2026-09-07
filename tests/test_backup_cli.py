@@ -681,7 +681,7 @@ def test_a_set_rediscovered_after_the_host_lost_its_record_carries_the_build_tha
     must carry it - a record without it cannot be checked against the running image (B2)."""
     _prepare()
     bench = StagingBench([SAME, SAME])
-    report = _backup(bench)
+    _backup(bench)
     restic = _restic(bench)
     backup.backup_sync(RELEASE, runner=restic, clock=lambda: 1_788_660_100.0)
     before = backup_status.load(backup.status_path(RELEASE, admin.ROOT))

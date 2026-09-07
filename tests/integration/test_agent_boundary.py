@@ -45,7 +45,11 @@ print("DSHERP_PROBE " + json.dumps(report))
 
 
 @pytest.fixture(scope="module")
-def boundary(tmp_path_factory):
+def boundary(tmp_path_factory, module_residue):
+    # `docker run --rm` removes the container when the probe exits; it stays when the docker
+    # client is killed by the timeout below while the probe still runs, and a same-name
+    # leftover makes the next `docker run --name` fail outright. Register before running.
+    module_residue.container(NAME)
     directory = tmp_path_factory.mktemp("boundary")
     secret = directory / "run.json"
     secret.write_text(json.dumps({"run_id": "probe", "capability": "probe"}))

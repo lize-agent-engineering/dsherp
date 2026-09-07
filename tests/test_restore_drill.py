@@ -5,7 +5,7 @@ import json
 import pytest
 
 from dsherp import admin, backup, backup_status, restore_drill
-from tests.test_admin_cli import DRIFTED, RELEASE, SAME, _restic, _tenant_row
+from tests.test_admin_cli import DRIFTED, RELEASE, SAME, _restic
 from tests.test_admin_cli import host  # noqa: F401
 from tests.test_backup_cli import StagingBench, _backup, _prepare
 

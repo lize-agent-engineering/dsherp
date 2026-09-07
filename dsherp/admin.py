@@ -25,7 +25,8 @@ CONTROL_SECRETS_BY_ENV = {
     'prod': ('db_root_password', 'platform_admin_password', 'tenant_admin_password',
              'backup_repository_password', 'backup_secrets_repository_password'),
     'dev': ('db_root_password', 'admin_password', 'daily_admin_password',
-            'backup_repository_password', 'backup_secrets_repository_password'),
+            'backup_repository_password', 'backup_secrets_repository_password',
+            'test_admin_password'),
 }
 # Identities the operator obtains from the object storage provider; `secrets init` cannot
 # invent them, so doctor only checks that they are present and private once repositories are
@@ -1485,8 +1486,6 @@ def export_user_data(resolved, site, user, *, root=ROOT, runner=subprocess.run, 
 
     Reading only: an export never writes to the Site, so a person asking what is held about
     them cannot, by asking, change it."""
-    from dsherp import sessions as sessions_module
-    from dsherp import user_data as user_data_module
     _user_checked(user)
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     bench = _user_site_bench(resolved, root, factory, site)

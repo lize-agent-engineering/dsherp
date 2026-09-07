@@ -1,21 +1,26 @@
 """Real concurrent MariaDB transactions; ERP HTTP is a synchronization stub."""
-import subprocess
-from pathlib import Path
+from site_exec import run_site_script
 
+PLATFORM = 'dsherp-platform.localhost'
+MEMBER = 'member@example.invalid'
+# Idempotent. Re-enabling bumps binding_version (enabled is a binding field): that is the same
+# behaviour the script's own finally already relied on, so this adds no new effect on the Site.
+MEMBERSHIP_RESTORE = r'''
+name = frappe.db.get_value('DS Membership', {'enterprise':'alpha', 'platform_user':'member@example.invalid'}, 'name')
+assert name, 'alpha membership for member@example.invalid is missing'
+doc = frappe.get_doc('DS Membership', name)
+if not doc.enabled:
+    doc.enabled = 1
+    doc.save()
+    frappe.db.commit()
+print(json.dumps({'enabled': frappe.db.get_value('DS Membership', name, 'enabled')}))
+'''
 
-ROOT = Path(__file__).resolve().parents[2]
 CONCURRENT_REVOCATION = r'''
-import os
 import subprocess
 import sys
 from unittest.mock import patch
 
-import frappe
-
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-platform.localhost')
-frappe.connect()
-frappe.set_user('member@example.invalid')
 from dsherp_platform.api import read_record
 
 # A separate process has an independent connection and commits while the first
@@ -67,14 +72,13 @@ try:
 finally:
     frappe.db.rollback()
     set_enabled(original)
-    frappe.destroy()
 '''
 
 
-def test_revocation_committed_during_identity_check_stops_business_read():
-    result = subprocess.run(
-        ['docker', 'compose', '-f', 'infra/compose.validation.yml', 'exec', '-T',
-         'platform-backend', '/home/frappe/frappe-bench/env/bin/python', '-'],
-        input=CONCURRENT_REVOCATION, text=True, capture_output=True, cwd=ROOT, timeout=90,
-    )
-    assert result.returncode == 0, result.stderr
+def test_revocation_committed_during_identity_check_stops_business_read(residue):
+    # The script disables the membership mid-request and re-enables it in its own finally. A host
+    # timeout kills the docker client, not the container interpreter, so that finally may never run
+    # and the shared alpha binding would stay disabled for every later test: register the restore
+    # before the script gets the chance to disable anything.
+    residue.restore(PLATFORM, 'alpha membership of member@example.invalid enabled', MEMBERSHIP_RESTORE)
+    run_site_script(PLATFORM, CONCURRENT_REVOCATION, user=MEMBER, timeout=90)

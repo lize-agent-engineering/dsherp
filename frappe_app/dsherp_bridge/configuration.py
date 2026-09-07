@@ -123,10 +123,16 @@ def get_bundle(bundle_id):
     origin=_origin(payload['model_run'],doc.conversation,user) if payload.get('model_run') else None
     from dsherp_bridge.configuration_execution import _changes
     transfer=None
-    transfer_id=frappe.db.get_value('DS Configuration Transfer',{'bundle':doc.name,'owner':user},'name',order_by='creation desc')
-    if transfer_id:
+    # An expired transfer is not offered again: the page would link to a preview the source
+    # Site will refuse to export to.
+    from frappe.utils import now_datetime
+    row=frappe.db.get_value('DS Configuration Transfer',
+        {'bundle':doc.name,'owner':user,'expires_at':['>',now_datetime()]},
+        ['name','expires_at'],order_by='creation desc',as_dict=True)
+    if row:
         peer=frappe.conf.get('dsherp_configuration_preview') or {};public=peer.get('public_url','').rstrip('/')
-        transfer={'id':transfer_id,'preview_url':public+'/desk/dsherp-configuration-preview/'+transfer_id}
+        transfer={'id':row.name,'preview_url':public+'/desk/dsherp-configuration-preview/'+row.name,
+            'expires_at':str(row.expires_at)}
     return {'id':doc.name,'digest':doc.digest,'baseline':doc.baseline,'site':payload['site'],'package':payload['package'],
         'model_run':payload.get('model_run'),
         'execution_ready':not origin or origin.status=='Succeeded','changes':_changes(payload['package']),

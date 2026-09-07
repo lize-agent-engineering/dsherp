@@ -7,7 +7,15 @@ import frappe
 from dsherp_bridge.context_api import _user,_json
 from dsherp_bridge.configuration import check_bundle,check_authorization,get_bundle,_propose_bundle
 from dsherp_bridge.configuration_bundle import freeze_bundle
-from dsherp_bridge.configuration_transport import seal,open_envelope
+from dsherp_bridge.configuration_transport import seal,open_envelope,peer_reason
+from dsherp_bridge import grants
+from frappe.utils import add_to_date,get_datetime,now_datetime
+
+# How long one transfer may be used: from prepare on the source Site, through accept and
+# preview on the preview Site, to publish back on the source. Its platform authorization is
+# cached for exactly this long (grants.stash_transfer) and the row records the same moment as
+# expires_at. A ruling point (user, 2026-09-07: 2 hours); a different value changes only this line.
+TRANSFER_WINDOW_SECONDS=7200
 
 
 def _peer(direction):
@@ -26,13 +34,32 @@ def _decode(envelope,peer,purpose):
     except ValueError:raise frappe.PermissionError('配置交接签名或时效无效')
 
 
+def check_window(transfer):
+    """A transfer is usable only inside its window; a row without one (written before the
+    migration) is closed. This is a frappe.throw, not a PermissionError: the person who
+    started the transfer should read the reason and start a new one."""
+    if not transfer.expires_at or get_datetime(transfer.expires_at)<=now_datetime():
+        frappe.throw('配置交接已过期，请重新发起交接')
+
+
+def _public(transfer,public):
+    return {'id':transfer.name,'preview_url':public.rstrip('/')+'/desk/dsherp-configuration-preview/'+transfer.name,
+        'expires_at':str(transfer.expires_at)}
+
+
 def _request(peer,purpose,payload):
     with requests.Session() as client:
         client.trust_env=False
         response=client.post(peer['url'].rstrip('/')+'/api/method/dsherp_bridge.configuration_transfer.'+purpose+'_transfer',
             headers={'X-Frappe-Site-Name':peer['site']},json={'envelope':seal(payload,peer['secret'],purpose+'-request')},
             timeout=15,allow_redirects=False)
-    if response.status_code!=200:raise frappe.PermissionError('配置交接源站未授权或不可用')
+    if response.status_code!=200:
+        # The peer's own words (frappe.throw, 417) are the only thing relayed, so a person on
+        # this side learns that the transfer expired instead of a bare "unavailable".
+        try:reason=peer_reason(response.json())
+        except ValueError:reason=''
+        if reason:frappe.throw('配置交接对端站点拒绝：'+reason)
+        raise frappe.PermissionError('配置交接源站未授权或不可用')
     body=response.json()
     if 'message' not in body:frappe.throw('配置交接响应不完整')
     return _decode(body['message'],peer,purpose+'-response')
@@ -55,10 +82,14 @@ def prepare_transfer(bundle_id,digest,request_id):
     if existing:
         transfer=frappe.get_doc('DS Configuration Transfer',existing)
         if transfer.owner!=user or transfer.bundle!=bundle_id:frappe.throw('请求标识已用于其他配置交接')
-        return {'id':transfer.name,'preview_url':public.rstrip('/')+'/desk/dsherp-configuration-preview/'+transfer.name}
-    transfer=frappe.get_doc({'doctype':'DS Configuration Transfer','request_id':request_key,'bundle':bundle_id,'payload':_json(payload),
-        'platform_grant':frappe.session.data.get('dsherp_platform_grant')}).insert(ignore_permissions=True)
-    return {'id':transfer.name,'preview_url':public.rstrip('/')+'/desk/dsherp-configuration-preview/'+transfer.name}
+        check_window(transfer)
+        return _public(transfer,public)
+    transfer=frappe.get_doc({'doctype':'DS Configuration Transfer','request_id':request_key,'bundle':bundle_id,
+        'payload':_json(payload),'expires_at':add_to_date(now_datetime(),seconds=TRANSFER_WINDOW_SECONDS)}
+        ).insert(ignore_permissions=True)
+    # The authorization the export will act under lives beside the transfer, not in it (R7).
+    grants.stash_transfer(transfer.name,frappe.session.data.get('dsherp_platform_grant'),TRANSFER_WINDOW_SECONDS)
+    return _public(transfer,public)
 
 
 def read_receipt(transfer):
@@ -84,10 +115,13 @@ def export_transfer(envelope):
     if (request['source_site']!=frappe.local.site or request['preview_site']!=peer['site']
         or request['actor']!=transfer.owner or any(request[key]!=payload[key] for key in keys-{'transfer_id'})):
         raise frappe.PermissionError('配置交接身份或站点不匹配')
+    check_window(transfer)
+    held=grants.of_transfer(transfer.name)
+    if held is None:frappe.throw('配置交接授权已失效，请重新发起交接')
     original=frappe.session.user
     try:
         frappe.set_user(transfer.owner)
-        bundle=check_authorization(transfer.bundle,grant=transfer.platform_grant)
+        bundle=check_authorization(transfer.bundle,grant=held['grant'])
         if not bundle['execution_ready']:frappe.throw('来源运行尚未成功完成')
         if bundle['digest']!=payload['bundle_digest']:frappe.throw('配置交接内容已变化')
         return seal({**payload,'transfer_id':transfer.name,'package':bundle['package']},peer['secret'],'export-response')

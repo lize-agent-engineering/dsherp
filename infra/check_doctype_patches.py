@@ -6,6 +6,7 @@ that App's patches.txt, or say "no-patch: <reason>" in its message. A change to 
 stored payload's schema_version has no such escape: it always needs a backfill.
 """
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -53,6 +54,19 @@ def review(changed_files, patch_diffs, message, schema_version_changed=False):
     return problems
 
 
+def base_revision(environ=None, runner=subprocess.run, root=ROOT):
+    """The revision a change is judged against. CI names it (DSHERP_GUARD_BASE: the PR's base
+    or the commit that was pushed over); a developer's checkout falls back to the merge-base
+    with origin/main; None when there is nothing to compare with."""
+    environ = os.environ if environ is None else environ
+    explicit = (environ.get('DSHERP_GUARD_BASE') or '').strip()
+    if explicit:
+        return explicit
+    found = runner(['git', 'merge-base', 'origin/main', 'HEAD'], cwd=root, text=True,
+                   capture_output=True, timeout=60)
+    return found.stdout.strip() if found.returncode == 0 and found.stdout.strip() else None
+
+
 def _git(*arguments, root=ROOT):
     result = subprocess.run(['git', *arguments], cwd=root, text=True, capture_output=True, timeout=120)
     if result.returncode:
@@ -62,19 +76,30 @@ def _git(*arguments, root=ROOT):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='DocType 变更必须带迁移路径')
-    parser.add_argument('base', nargs='?', default='origin/main')
+    parser.add_argument('base', nargs='?', default=None,
+                        help='缺省：$DSHERP_GUARD_BASE，否则 merge-base origin/main HEAD')
     parser.add_argument('head', nargs='?', default='HEAD')
     arguments = parser.parse_args(argv)
-    span = f'{arguments.base}..{arguments.head}'
+    base = arguments.base or base_revision()
+    if not base:
+        raise SystemExit('没有可比较的基线：设置 DSHERP_GUARD_BASE，或先 git fetch origin main')
+    span = f'{base}..{arguments.head}'
     changed = [name for name in _git('diff', '--name-only', span).splitlines() if name]
     patch_diffs = {}
     for name in changed:
         match = PATCHES.match(name)
         if match:
             patch_diffs[match.group('app')] = _git('diff', span, '--', name)
+    # The built Desk bundles are committed and esbuild puts the whole application on a few
+    # enormous lines, two of which carry the page-context snapshot's own `schema_version`. Every
+    # frontend change therefore added such a line, and the branch below has no escape hatch: it
+    # refused every commit that ever rebuilt them, each time naming a stored-payload migration
+    # that had not happened. A build artefact is not a stored payload.
     schema_version_changed = any(
-        '+' in line and 'schema_version' in line
-        for line in _git('diff', span, '--', 'frappe_app').splitlines() if line.startswith('+'))
+        'schema_version' in line
+        for line in _git('diff', span, '--', 'frappe_app',
+                         ':(exclude)frappe_app/*/public/dist/**').splitlines()
+        if line.startswith('+') and not line.startswith('+++'))
     problems = review(changed, patch_diffs, _git('log', '--format=%B', span), schema_version_changed)
     for problem in problems:
         print(problem, file=sys.stderr)

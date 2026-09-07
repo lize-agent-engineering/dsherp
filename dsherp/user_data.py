@@ -14,7 +14,6 @@ Two consequences are stated rather than hidden:
     cleared here, so those versions are removed with the columns.
 
 Masking in the interface is not deletion, and nothing here masks."""
-import json
 import time
 
 FORMAT = 1
@@ -35,7 +34,8 @@ BOUNDARY = {
                  'request_digest', 'model_calls', 'model_input_bytes', 'model', 'actual_input_tokens',
                  'actual_output_tokens', 'duration_ms', 'creation', 'modified'),
         'why': '运行本身是"助手替谁做了什么"的凭据：谁、何时、读了哪些记录、结果如何都保留；'
-               '提问、页面快照、回答与错误正文是本人内容，清除。平台授权令牌不在行里（它只在运行期间存于缓存）。',
+               '提问、页面快照、回答与错误正文是本人内容，清除。平台授权令牌不在任何行里：'
+               '运行期间只存于缓存（R7），配置交接期间也只存于缓存、随交接窗口到期（计划 5）。',
     },
     'DS Conversation': {
         'clear': {'title': ''},
@@ -56,6 +56,12 @@ BOUNDARY = {
         'clear': {},
         'keep': ('run', 'seq', 'kind', 'source', 'error_class', 'payload', 'recorded_at'),
         'why': '已有事件禁止改写（裁决 #10）；事件里的个人信息只能走登记的受控脱敏迁移。',
+    },
+    'DS Configuration Transfer': {
+        'clear': {},
+        'keep': ('name', 'owner', 'request_id', 'bundle', 'payload', 'expires_at', 'creation'),
+        'why': '交接是"把哪个冻结配置包、以谁的身份交给了哪个隔离站"的事实，逐字保留，有效期是它的一部分；'
+               '平台授权令牌不在行里（只在交接窗口内存于缓存，到期即失效），删除时无需处理。',
     },
 }
 

@@ -4,11 +4,18 @@ services:
   db:
     image: mariadb@sha256:2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3
     pull_policy: never
-    mem_limit: 1g
-    memswap_limit: 1g
+    # One MariaDB serves every Site, and its memory grows with the tables it keeps open:
+    # six schemas hold 3516 tables and table_open_cache saturates at 2000 (measured 2026-09-07).
+    # The two throwaway native-test Sites added 1003 of those tables to a limit chosen for four
+    # Sites, and the container was killed twice with 137. Every buffer with a large image
+    # default is named here rather than allocated behind the limit's back: the MyISAM key cache
+    # and the Aria page cache default to 128M each and this workload measured 21 KiB and 208 KiB
+    # of use against 18 MyISAM tables holding 2.5 MB.
+    mem_limit: 2g
+    memswap_limit: 2g
     cpus: 0.4
     restart: "no"
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--skip-character-set-client-handshake", "--innodb-buffer-pool-size=256M"]
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--skip-character-set-client-handshake", "--innodb-buffer-pool-size=256M", "--key-buffer-size=32M", "--aria-pagecache-buffer-size=32M"]
     environment:
       MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
     secrets: [db_root_password]
@@ -170,6 +177,103 @@ services:
       - v16-logs:/home/frappe/frappe-bench/logs
       - ../frappe_app:/opt/dsherp-frappe:ro
       - ./provision_validation_site.py:/opt/provision_validation_site.py:ro
+    depends_on: [db, redis]
+    networks: [validation]
+    logging: *logging
+
+  # bench run-tests truncates tables, so the Frappe-native tests get their own throwaway Sites
+  # on the benches that already serve the development ones. Each provisioner sees only its own
+  # bench's sites volume and only the two passwords it needs.
+  test-provision:
+    profiles: [control]
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+    pull_policy: never
+    mem_limit: 640m
+    memswap_limit: 640m
+    cpus: 0.5
+    restart: "no"
+    entrypoint: []
+    command: ["/home/frappe/frappe-bench/env/bin/python", "/opt/provision_test_site.py", "bridge"]
+    environment: {PYTHONPATH: /opt/dsherp-frappe}
+    secrets: [db_root_password, test_admin_password]
+    volumes:
+      - v16-sites:/home/frappe/frappe-bench/sites
+      - v16-logs:/home/frappe/frappe-bench/logs
+      - ../frappe_app:/opt/dsherp-frappe:ro
+      - ./provision_test_site.py:/opt/provision_test_site.py:ro
+    depends_on: [db, redis]
+    networks: [validation]
+    logging: *logging
+
+  platform-test-provision:
+    profiles: [control]
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+    pull_policy: never
+    mem_limit: 640m
+    memswap_limit: 640m
+    cpus: 0.5
+    restart: "no"
+    entrypoint: []
+    command: ["/home/frappe/frappe-bench/env/bin/python", "/opt/provision_test_site.py", "platform"]
+    environment: {PYTHONPATH: /opt/dsherp-frappe}
+    secrets: [db_root_password, test_admin_password]
+    volumes:
+      - v16-platform-sites:/home/frappe/frappe-bench/sites
+      - v16-platform-logs:/home/frappe/frappe-bench/logs
+      - ../frappe_app:/opt/dsherp-frappe:ro
+      - ./provision_test_site.py:/opt/provision_test_site.py:ro
+    depends_on: [db, redis]
+    networks: [validation]
+    logging: *logging
+
+  # provision_identity.py 只读 /run/dsherp-control/ 下的两个文件；用密钥的绝对 target 精确给这两个，
+  # 不整目录挂载（那会把 backup/daily/admin 五个口令一并交给一次性容器）。
+  platform-provision:
+    profiles: [control]
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+    pull_policy: never
+    mem_limit: 640m
+    memswap_limit: 640m
+    cpus: 0.5
+    restart: "no"
+    entrypoint: []
+    command: ["/home/frappe/frappe-bench/env/bin/python", "/opt/provision_identity.py", "platform"]
+    environment: {PYTHONPATH: /opt/dsherp-frappe}
+    secrets:
+      - source: db_root_password
+        target: /run/dsherp-control/db_root_password
+      - source: platform_admin_password
+        target: /run/dsherp-control/platform_admin_password
+    volumes:
+      - v16-platform-sites:/home/frappe/frappe-bench/sites
+      - v16-platform-logs:/home/frappe/frappe-bench/logs
+      - ../frappe_app:/opt/dsherp-frappe:ro
+      - ./provision_identity.py:/opt/provision_identity.py:ro
+    depends_on: [db, redis]
+    networks: [validation]
+    logging: *logging
+
+  beta-provision:
+    profiles: [control]
+    image: frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+    pull_policy: never
+    mem_limit: 640m
+    memswap_limit: 640m
+    cpus: 0.5
+    restart: "no"
+    entrypoint: []
+    command: ["/home/frappe/frappe-bench/env/bin/python", "/opt/provision_identity.py", "beta"]
+    environment: {PYTHONPATH: /opt/dsherp-frappe}
+    secrets:
+      - source: db_root_password
+        target: /run/dsherp-control/db_root_password
+      - source: beta_admin_password
+        target: /run/dsherp-control/beta_admin_password
+    volumes:
+      - v16-beta-sites:/home/frappe/frappe-bench/sites
+      - v16-beta-logs:/home/frappe/frappe-bench/logs
+      - ../frappe_app:/opt/dsherp-frappe:ro
+      - ./provision_identity.py:/opt/provision_identity.py:ro
     depends_on: [db, redis]
     networks: [validation]
     logging: *logging
@@ -344,3 +448,9 @@ secrets:
     file: ../.runtime/control/daily_admin_password
   validation_admin_password:
     file: ../.runtime/control/admin_password
+  platform_admin_password:
+    file: ../.runtime/control/platform_admin_password
+  beta_admin_password:
+    file: ../.runtime/control/beta_admin_password
+  test_admin_password:
+    file: ../.runtime/control/test_admin_password

@@ -3,201 +3,23 @@ from pathlib import Path
 import subprocess
 import sys
 
+from site_exec import run_site_json
+
 
 ROOT = Path(__file__).resolve().parents[2]
-COMPOSE = ["docker", "compose", "-f", "infra/compose.validation.yml"]
 PROVISIONER = ROOT / "infra" / "provision_manufacturing_fixture.py"
+ALPHA = "dsherp-validation.localhost"
 
-
-def _invoke_provisioner(*arguments):
-    return subprocess.run(
-        [sys.executable, str(PROVISIONER), *arguments],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        timeout=180,
-    )
-
-
-def _provision(*arguments):
-    result = _invoke_provisioner(*arguments)
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
-
-
-def _read_probe_state():
-    script = r'''
-import json, os, frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost')
-frappe.connect()
+# The persistent alpha fixture is shared state. Three tests below drift it on purpose and put it
+# back in their own `finally`; a host-side timeout kills the docker client without ever running
+# that `finally`, so the same body with mode 'current' is registered as a restore beforehand.
+# Idempotent: mode 'current' only writes the fields that actually differ from the T2.4 baseline.
+TRANSITION = r'''
 try:
-    names = {
-        'warehouses': [
-            'DSHERP 制造测试瞬时合成仓库 - DVT',
-            'DSHERP 制造测试瞬时合成原料仓 - DVT',
-            'DSHERP 制造测试瞬时合成在制仓 - DVT',
-            'DSHERP 制造测试瞬时合成成品仓 - DVT',
-            'DSHERP 制造测试瞬时合成委外仓 - DVT',
-        ],
-        'suppliers': ['DSHERP 制造测试瞬时合成供应商', 'DSHERP-MFG-SYN-SUPPLIER-CONFLICT'],
-        'items': [
-            'DSHERP-MFG-FRESH-FG', 'DSHERP-MFG-FRESH-RM',
-            'DSHERP-MFG-FRESH-SERVICE',
-        ],
-        'boms': ['BOM-DSHERP-MFG-FRESH-FG-001', 'BOM-DSHERP-MFG-SYN-FG-CONFLICT'],
-        'reconciliations': ['DSHERP-MFG-FRESH-OPENING-STOCK'],
-    }
-    print(json.dumps({
-        'warehouses': frappe.db.count('Warehouse', {'name': ['in', names['warehouses']]}),
-        'suppliers': frappe.db.count('Supplier', {'name': ['in', names['suppliers']]}),
-        'items': frappe.db.count('Item', {'name': ['in', names['items']]}),
-        'boms': frappe.db.count('BOM', {'name': ['in', names['boms']]}),
-        'reconciliations': frappe.db.count(
-            'Stock Reconciliation', {'name': ['in', names['reconciliations']]}
-        ),
-        'stock_ledger_entries': frappe.db.count(
-            'Stock Ledger Entry', {'item_code': 'DSHERP-MFG-FRESH-RM'}
-        ),
-    }, sort_keys=True))
-finally:
-    frappe.destroy()
-'''
-    result = subprocess.run(
-        [*COMPOSE, "exec", "-T", "backend", "/home/frappe/frappe-bench/env/bin/python", "-"],
-        cwd=ROOT,
-        input=script,
-        text=True,
-        capture_output=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
-
-
-def _read_fixture_state():
-    script = r'''
-import json, os, frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost')
-frappe.connect()
-try:
-    frappe.set_user('Administrator')
-    warehouse_names = [
-        'DSHERP 制造测试合成仓库 - DVT',
-        'DSHERP 制造测试合成原料仓 - DVT',
-        'DSHERP 制造测试合成在制仓 - DVT',
-        'DSHERP 制造测试合成成品仓 - DVT',
-        'DSHERP 制造测试合成委外仓 - DVT',
-    ]
-    bom = frappe.get_doc('BOM', 'BOM-DSHERP-MFG-SYN-FG-001')
-    reconciliation = frappe.get_doc('Stock Reconciliation', 'DSHERP-MFG-SYN-OPENING-STOCK')
-    stock_ledger_entries = frappe.get_all(
-        'Stock Ledger Entry',
-        filters={
-            'item_code': 'DSHERP-MFG-SYN-RM',
-            'warehouse': 'DSHERP 制造测试合成原料仓 - DVT',
-            'voucher_type': 'Stock Reconciliation',
-        },
-        fields=['name', 'voucher_no', 'actual_qty', 'qty_after_transaction'],
-        order_by='name',
-    )
-    bin_state = frappe.db.get_value(
-        'Bin',
-        {'item_code': 'DSHERP-MFG-SYN-RM', 'warehouse': 'DSHERP 制造测试合成原料仓 - DVT'},
-        ['name', 'actual_qty'],
-        as_dict=True,
-    )
-    state = {
-        'warehouses': frappe.get_all(
-            'Warehouse', filters={'name': ['in', warehouse_names]},
-            fields=['name', 'warehouse_name', 'parent_warehouse', 'is_group', 'company'], order_by='name'
-        ),
-        'suppliers': frappe.get_all(
-            'Supplier', filters={'supplier_name': 'DSHERP 制造测试合成供应商'},
-            fields=['name', 'supplier_name', 'supplier_group', 'supplier_type'], order_by='name'
-        ),
-        'items': frappe.get_all(
-            'Item', filters={'name': ['in', [
-                'DSHERP-MFG-SYN-FG', 'DSHERP-MFG-SYN-RM', 'DSHERP-MFG-SYN-SERVICE',
-            ]]},
-            fields=[
-                'name', 'item_name', 'item_group', 'stock_uom', 'is_stock_item',
-                'is_purchase_item', 'is_sub_contracted_item', 'disabled',
-            ], order_by='name'
-        ),
-        'bom': {
-            'name': bom.name, 'item': bom.item, 'company': bom.company,
-            'docstatus': bom.docstatus, 'is_active': bom.is_active,
-            'is_default': bom.is_default, 'quantity': float(bom.quantity),
-            'items': [
-                {'item_code': row.item_code, 'qty': float(row.qty), 'uom': row.uom}
-                for row in bom.items
-            ],
-        },
-        'reconciliation': {
-            'name': reconciliation.name, 'company': reconciliation.company,
-            'purpose': reconciliation.purpose, 'docstatus': reconciliation.docstatus,
-            'posting_date': str(reconciliation.posting_date),
-            'items': [
-                {
-                    'item_code': row.item_code, 'warehouse': row.warehouse,
-                    'qty': float(row.qty), 'valuation_rate': float(row.valuation_rate),
-                }
-                for row in reconciliation.items
-            ],
-        },
-        'bin_actual_qty': float(bin_state.actual_qty) if bin_state else None,
-        'stock_ledger_entries': [
-            {
-                'name': row.name, 'voucher_no': row.voucher_no,
-                'actual_qty': float(row.actual_qty),
-                'qty_after_transaction': float(row.qty_after_transaction),
-            }
-            for row in stock_ledger_entries
-        ],
-        'owned_counts': {
-            'warehouses': frappe.db.count('Warehouse', {'name': ['in', warehouse_names]}),
-            'suppliers': frappe.db.count('Supplier', {'supplier_name': 'DSHERP 制造测试合成供应商'}),
-            'items': frappe.db.count('Item', {'name': ['in', [
-                'DSHERP-MFG-SYN-FG', 'DSHERP-MFG-SYN-RM', 'DSHERP-MFG-SYN-SERVICE',
-            ]]}),
-            'boms': frappe.db.count('BOM', {'item': 'DSHERP-MFG-SYN-FG'}),
-            'reconciliations': frappe.db.count(
-                'Stock Reconciliation Item',
-                {'item_code': 'DSHERP-MFG-SYN-RM', 'warehouse': 'DSHERP 制造测试合成原料仓 - DVT'},
-            ),
-            'stock_ledger_entries': len(stock_ledger_entries),
-        },
-    }
-    print(json.dumps(state, ensure_ascii=False, sort_keys=True))
-finally:
-    frappe.destroy()
-'''
-    result = subprocess.run(
-        [*COMPOSE, "exec", "-T", "backend", "/home/frappe/frappe-bench/env/bin/python", "-"],
-        cwd=ROOT,
-        input=script,
-        text=True,
-        capture_output=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
-
-
-def _transition_persistent_fixture(mode):
-    script = rf'''
-import json, os, frappe
-os.chdir('/home/frappe/frappe-bench/sites')
-frappe.init(site='dsherp-validation.localhost')
-frappe.connect()
-try:
-    frappe.set_user('Administrator')
-    mode = {mode!r}
+    mode = __MODE__
     finished_good = 'DSHERP-MFG-SYN-FG'
     service_item = 'DSHERP-MFG-SYN-SERVICE'
-    finished_expected = {{
+    finished_expected = {
         'item_code': finished_good,
         'item_name': 'DSHERP 制造测试合成成品',
         'item_group': 'Products',
@@ -205,8 +27,8 @@ try:
         'is_stock_item': 1,
         'is_purchase_item': 1,
         'disabled': 0,
-    }}
-    service_expected = {{
+    }
+    service_expected = {
         'item_code': service_item,
         'item_name': 'DSHERP 制造测试合成委外加工服务',
         'item_group': 'Services',
@@ -215,14 +37,14 @@ try:
         'is_purchase_item': 1,
         'is_sub_contracted_item': 0,
         'disabled': 0,
-    }}
+    }
 
     def require_values(doc, expected, label):
         for fieldname, value in expected.items():
             actual = doc.get(fieldname)
             if actual != value:
                 raise RuntimeError(
-                    f'{{label}}.{{fieldname}} is {{actual!r}}; expected {{value!r}}'
+                    f'{label}.{fieldname} is {actual!r}; expected {value!r}'
                 )
 
     finished = frappe.get_doc('Item', finished_good)
@@ -251,43 +73,183 @@ try:
             service = frappe.get_doc('Item', service_item)
             require_values(service, service_expected, service_item)
         else:
-            frappe.get_doc({{
+            frappe.get_doc({
                 'doctype': 'Item',
                 **service_expected,
                 'valuation_rate': 10.0,
                 'description': 'DSHERP 制造测试合成委外加工服务；仅用于隔离 alpha 验收。',
-            }}).insert(ignore_permissions=True, set_name=service_item)
+            }).insert(ignore_permissions=True, set_name=service_item)
     else:
-        raise RuntimeError(f'Unsupported fixture transition mode: {{mode}}')
+        raise RuntimeError(f'Unsupported fixture transition mode: {mode}')
     frappe.db.commit()
-    print(json.dumps({{
+    print(json.dumps({
         'mode': mode,
         'finished_good_flag': frappe.db.get_value(
             'Item', finished_good, 'is_sub_contracted_item'
         ),
         'service_item_exists': bool(frappe.db.exists('Item', service_item)),
-    }}, sort_keys=True))
+    }, sort_keys=True))
 except Exception:
     frappe.db.rollback()
     raise
-finally:
-    frappe.destroy()
 '''
-    result = subprocess.run(
-        [*COMPOSE, "exec", "-T", "backend", "/home/frappe/frappe-bench/env/bin/python", "-"],
+CURRENT_RESTORE = TRANSITION.replace('__MODE__', repr('current'))
+
+PROBE_STATE = r'''
+names = {
+    'warehouses': [
+        'DSHERP 制造测试瞬时合成仓库 - DVT',
+        'DSHERP 制造测试瞬时合成原料仓 - DVT',
+        'DSHERP 制造测试瞬时合成在制仓 - DVT',
+        'DSHERP 制造测试瞬时合成成品仓 - DVT',
+        'DSHERP 制造测试瞬时合成委外仓 - DVT',
+    ],
+    'suppliers': ['DSHERP 制造测试瞬时合成供应商', 'DSHERP-MFG-SYN-SUPPLIER-CONFLICT'],
+    'items': [
+        'DSHERP-MFG-FRESH-FG', 'DSHERP-MFG-FRESH-RM',
+        'DSHERP-MFG-FRESH-SERVICE',
+    ],
+    'boms': ['BOM-DSHERP-MFG-FRESH-FG-001', 'BOM-DSHERP-MFG-SYN-FG-CONFLICT'],
+    'reconciliations': ['DSHERP-MFG-FRESH-OPENING-STOCK'],
+}
+print(json.dumps({
+    'warehouses': frappe.db.count('Warehouse', {'name': ['in', names['warehouses']]}),
+    'suppliers': frappe.db.count('Supplier', {'name': ['in', names['suppliers']]}),
+    'items': frappe.db.count('Item', {'name': ['in', names['items']]}),
+    'boms': frappe.db.count('BOM', {'name': ['in', names['boms']]}),
+    'reconciliations': frappe.db.count(
+        'Stock Reconciliation', {'name': ['in', names['reconciliations']]}
+    ),
+    'stock_ledger_entries': frappe.db.count(
+        'Stock Ledger Entry', {'item_code': 'DSHERP-MFG-FRESH-RM'}
+    ),
+}, sort_keys=True))
+'''
+
+FIXTURE_STATE = r'''
+warehouse_names = [
+    'DSHERP 制造测试合成仓库 - DVT',
+    'DSHERP 制造测试合成原料仓 - DVT',
+    'DSHERP 制造测试合成在制仓 - DVT',
+    'DSHERP 制造测试合成成品仓 - DVT',
+    'DSHERP 制造测试合成委外仓 - DVT',
+]
+bom = frappe.get_doc('BOM', 'BOM-DSHERP-MFG-SYN-FG-001')
+reconciliation = frappe.get_doc('Stock Reconciliation', 'DSHERP-MFG-SYN-OPENING-STOCK')
+stock_ledger_entries = frappe.get_all(
+    'Stock Ledger Entry',
+    filters={
+        'item_code': 'DSHERP-MFG-SYN-RM',
+        'warehouse': 'DSHERP 制造测试合成原料仓 - DVT',
+        'voucher_type': 'Stock Reconciliation',
+    },
+    fields=['name', 'voucher_no', 'actual_qty', 'qty_after_transaction'],
+    order_by='name',
+)
+bin_state = frappe.db.get_value(
+    'Bin',
+    {'item_code': 'DSHERP-MFG-SYN-RM', 'warehouse': 'DSHERP 制造测试合成原料仓 - DVT'},
+    ['name', 'actual_qty'],
+    as_dict=True,
+)
+state = {
+    'warehouses': frappe.get_all(
+        'Warehouse', filters={'name': ['in', warehouse_names]},
+        fields=['name', 'warehouse_name', 'parent_warehouse', 'is_group', 'company'], order_by='name'
+    ),
+    'suppliers': frappe.get_all(
+        'Supplier', filters={'supplier_name': 'DSHERP 制造测试合成供应商'},
+        fields=['name', 'supplier_name', 'supplier_group', 'supplier_type'], order_by='name'
+    ),
+    'items': frappe.get_all(
+        'Item', filters={'name': ['in', [
+            'DSHERP-MFG-SYN-FG', 'DSHERP-MFG-SYN-RM', 'DSHERP-MFG-SYN-SERVICE',
+        ]]},
+        fields=[
+            'name', 'item_name', 'item_group', 'stock_uom', 'is_stock_item',
+            'is_purchase_item', 'is_sub_contracted_item', 'disabled',
+        ], order_by='name'
+    ),
+    'bom': {
+        'name': bom.name, 'item': bom.item, 'company': bom.company,
+        'docstatus': bom.docstatus, 'is_active': bom.is_active,
+        'is_default': bom.is_default, 'quantity': float(bom.quantity),
+        'items': [
+            {'item_code': row.item_code, 'qty': float(row.qty), 'uom': row.uom}
+            for row in bom.items
+        ],
+    },
+    'reconciliation': {
+        'name': reconciliation.name, 'company': reconciliation.company,
+        'purpose': reconciliation.purpose, 'docstatus': reconciliation.docstatus,
+        'posting_date': str(reconciliation.posting_date),
+        'items': [
+            {
+                'item_code': row.item_code, 'warehouse': row.warehouse,
+                'qty': float(row.qty), 'valuation_rate': float(row.valuation_rate),
+            }
+            for row in reconciliation.items
+        ],
+    },
+    'bin_actual_qty': float(bin_state.actual_qty) if bin_state else None,
+    'stock_ledger_entries': [
+        {
+            'name': row.name, 'voucher_no': row.voucher_no,
+            'actual_qty': float(row.actual_qty),
+            'qty_after_transaction': float(row.qty_after_transaction),
+        }
+        for row in stock_ledger_entries
+    ],
+    'owned_counts': {
+        'warehouses': frappe.db.count('Warehouse', {'name': ['in', warehouse_names]}),
+        'suppliers': frappe.db.count('Supplier', {'supplier_name': 'DSHERP 制造测试合成供应商'}),
+        'items': frappe.db.count('Item', {'name': ['in', [
+            'DSHERP-MFG-SYN-FG', 'DSHERP-MFG-SYN-RM', 'DSHERP-MFG-SYN-SERVICE',
+        ]]}),
+        'boms': frappe.db.count('BOM', {'item': 'DSHERP-MFG-SYN-FG'}),
+        'reconciliations': frappe.db.count(
+            'Stock Reconciliation Item',
+            {'item_code': 'DSHERP-MFG-SYN-RM', 'warehouse': 'DSHERP 制造测试合成原料仓 - DVT'},
+        ),
+        'stock_ledger_entries': len(stock_ledger_entries),
+    },
+}
+print(json.dumps(state, ensure_ascii=False, sort_keys=True))
+'''
+
+
+def _invoke_provisioner(*arguments):
+    return subprocess.run(
+        [sys.executable, str(PROVISIONER), *arguments],
         cwd=ROOT,
-        input=script,
         text=True,
         capture_output=True,
-        timeout=30,
+        timeout=180,
     )
+
+
+def _provision(*arguments):
+    result = _invoke_provisioner(*arguments)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
 
+def _read_probe_state():
+    return run_site_json(ALPHA, PROBE_STATE, timeout=30)
+
+
+def _read_fixture_state():
+    return run_site_json(ALPHA, FIXTURE_STATE, timeout=30)
+
+
+def _transition_persistent_fixture(mode):
+    return run_site_json(ALPHA, TRANSITION.replace('__MODE__', repr(mode)), timeout=30)
+
+
 # Production break caught: a valid T0.3 fixture cannot be replayed after T2.4 extends its Item contract.
-def test_provisioner_migrates_the_exact_legacy_fixture_then_remains_idempotent():
+def test_provisioner_migrates_the_exact_legacy_fixture_then_remains_idempotent(residue):
     before = _read_fixture_state()
+    residue.restore(ALPHA, 'manufacturing fixture current', CURRENT_RESTORE)
     assert [item["name"] for item in before["items"]] == [
         "DSHERP-MFG-SYN-FG",
         "DSHERP-MFG-SYN-RM",
@@ -321,8 +283,9 @@ def test_provisioner_migrates_the_exact_legacy_fixture_then_remains_idempotent()
 
 
 # Production break caught: a T2.4 fixture with only its finished-good flag reverted is drift, not legacy.
-def test_provisioner_rejects_flag_drift_when_the_service_item_already_exists():
+def test_provisioner_rejects_flag_drift_when_the_service_item_already_exists(residue):
     before = _read_fixture_state()
+    residue.restore(ALPHA, 'manufacturing fixture current', CURRENT_RESTORE)
     transition = _transition_persistent_fixture("flag-drift")
     assert transition == {
         "finished_good_flag": 0,
@@ -344,8 +307,9 @@ def test_provisioner_rejects_flag_drift_when_the_service_item_already_exists():
 
 
 # Production break caught: migration must not claim an unrelated same-name Item with field drift.
-def test_provisioner_rejects_a_legacy_fixture_with_any_other_owned_field_conflict():
+def test_provisioner_rejects_a_legacy_fixture_with_any_other_owned_field_conflict(residue):
     before = _read_fixture_state()
+    residue.restore(ALPHA, 'manufacturing fixture current', CURRENT_RESTORE)
     transition = _transition_persistent_fixture("legacy-conflict")
     assert transition == {
         "finished_good_flag": 0,

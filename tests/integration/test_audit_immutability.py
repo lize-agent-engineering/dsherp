@@ -3,7 +3,6 @@ with permissions ignored, and a policy change without a reason is refused."""
 import json
 import subprocess
 
-import pytest
 
 
 def _run(script, timeout=120):

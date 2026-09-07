@@ -11,11 +11,22 @@ from dsherp import backup, backup_sets, backup_status, deploy_env
 COMPOSE = ["docker", "compose", "-p", "dsherp-validation", "-f", "infra/compose.validation.yml"]
 
 
+# This file is the one exception to `site_exec.run_site_script`: what it proves lives in the bench
+# volumes, not in a Site's database, so every read below is a plain `sh` command (ls, stat, sha256sum,
+# cat) and never a body for the Site's interpreter. site_exec only speaks python-on-stdin.
 def _exec(service, *command, timeout=120):
     result = subprocess.run([*COMPOSE, "exec", "-T", service, *command], capture_output=True, text=True, timeout=timeout)
     if result.returncode:
         pytest.fail(f"{' '.join(command)[:80]} failed: {result.stderr[-400:]}")
     return result.stdout
+
+
+@pytest.fixture(scope="module", autouse=True)
+def staged_sets_are_taken_away(module_residue):
+    """Both tests read the one set the first one stages, so the set lives for the module;
+    every set that appears from now on is removed (both halves) and, being never synced,
+    forgotten from the status file at the end of the module."""
+    module_residue.backup_sets_after(deploy_env.settings({"DSHERP_ENV": "dev"})["platform_site"])
 
 
 def test_a_real_backup_stages_one_set_with_matching_digests_and_split_permissions():

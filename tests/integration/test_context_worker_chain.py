@@ -8,7 +8,7 @@ import pytest
 import dsherp.context_worker as worker
 from dsherp.context_mcp import post
 from dsherp.runtime_host import ROOT
-from test_context_sessions import clients,created,API
+from test_context_sessions import clients,created,API  # noqa: F401  # clients/created are pytest fixtures
 from test_context_mcp_chain import CONTAINER_TEST
 
 

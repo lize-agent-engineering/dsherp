@@ -1,6 +1,9 @@
 deepseek-harness-sdk==0.1.1rc1
 pytest==8.4.2
+pytest-timeout==2.4.0
 mcp==1.26.0
 httpx==0.28.1
 # MCP v1.26.0 upstream lock baseline; newer 2.15 emits unresolved lifespan warnings.
 pydantic-settings==2.10.1
+# 门禁工具；与运行时共用一份 lock（已知取舍：会一并进入 agent 运行时 venv，惰性无害）。
+ruff==0.14.14

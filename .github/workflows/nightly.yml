@@ -1,0 +1,143 @@
+# 每夜从零：拉起四站 → 全部集成测试 → 工件 → 拆栈。
+# （Frappe 原生测试在计划 5 的原生测试切片接线后加入本流程。）
+# 没有任何重试。红了就是当天要处理的事：一天内修掉或删掉那条用例，见 AGENTS.md。
+name: nightly
+
+on:
+  schedule:
+    - cron: "0 18 * * *" # 18:00 UTC = 02:00 Asia/Shanghai
+  workflow_dispatch:
+
+# 两个每夜永不重叠：compose 项目名 dsherp-validation 与宿主端口 1808x 都是固定的。
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DSHERP_ENV: dev
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest # 公开仓库标准 runner；首跑必须把实际时长/内存/磁盘记进证据文档
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 宿主名解析（测试用 preview/daily/platform.localhost 连回环）
+        run: echo "127.0.0.1 preview.localhost daily.localhost platform.localhost dsherp-validation.localhost" | sudo tee -a /etc/hosts
+
+      - name: "预拉三个固定 digest 镜像（compose 是 pull_policy: never）"
+        run: |
+          set -eu
+          pull() {
+            for attempt in 1 2 3 4 5; do
+              docker pull --quiet "$1" && return 0
+              echo "第 ${attempt} 次拉取失败：$1（Docker Hub 匿名限额或网络）"; sleep $((attempt * 30))
+            done
+            return 1
+          }
+          pull frappe/erpnext@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+          pull mariadb@sha256:2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3
+          pull redis@sha256:d0c875bdacfb5c4d2c2d9124de3f53cee1dc9ceff8936bd459fabc135cb33015
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.9.27"
+          enable-cache: true
+          cache-dependency-glob: requirements.lock
+
+      - name: 与 README 完全相同的环境
+        run: |
+          uv python install 3.12.11
+          uv venv --python 3.12.11 .venv
+          uv pip sync --python .venv/bin/python --require-hashes requirements.lock
+
+      - name: Agent 容器身份 = 运行本作业的用户（runner，非 root）
+        run: |
+          echo "DSHERP_AGENT_UID=$(id -u)" >> "$GITHUB_ENV"
+          echo "DSHERP_AGENT_GID=$(id -g)" >> "$GITHUB_ENV"
+
+      - name: 生成控制面密钥（只生成缺失项，不打印）
+        run: .venv/bin/python infra/dev_stack.py secrets
+
+      - name: 容器内的 frappe（uid 1000）要能读密钥文件
+        # compose 以 bind mount 提供文件密钥，归属沿用宿主；runner 的用户不是 1000。
+        run: sudo chown 1000 .runtime/control/*
+
+      - name: 从零拉起并开通四站
+        run: .venv/bin/python infra/dev_stack.py up --provision
+
+      # docker stats 只是瞬时值，跑完再看已经回落；而被 OOM 杀掉的容器压根不在列表里，
+      # 那份文件会读成「内存没问题」。峰值必须在运行期间采。
+      - name: 后台采样数据库内存
+        run: |
+          mkdir -p work
+          nohup sh -c 'while true; do
+            printf "%s\t%s\n" "$(date -u +%H:%M:%S)" \
+              "$(docker stats --no-stream --format "{{.MemUsage}}" dsherp-validation-db-1 2>/dev/null || echo GONE)" \
+              >> work/db-mem.tsv
+            sleep 15
+          done' >/dev/null 2>&1 &
+          echo "采样器已启动"
+
+      - name: 集成测试（约 214 条；每条 600 秒安全网，无重试）
+        run: |
+          mkdir -p work
+          .venv/bin/python -m pytest tests/integration -m integration -q \
+            --junitxml work/junit-integration.xml --timeout 600 --durations=40
+
+      # up --provision 的最后一步已经建好两个测试站。判定不看 junit：镜像里没有 xmlrunner，
+      # --junit-xml-output 不写文件；看退出码与 runner 自报的 Running N ... tests for <app>。
+      - name: Frappe 原生测试（两个测试站）
+        run: .venv/bin/python infra/dev_stack.py native-tests --out work/native
+
+      - name: 现场快照（总是）
+        if: always()
+        run: |
+          mkdir -p work
+          .venv/bin/python infra/dev_stack.py status > work/dev-stack-status.json || true
+          docker compose -f infra/compose.validation.yml logs --no-color --timestamps > work/compose.log 2>&1 || true
+          cp .runtime/dev-stack.json work/dev-stack-ledger.json 2>/dev/null || true
+          docker stats --no-stream > work/docker-stats.txt 2>&1 || true
+          # 谁死了、是不是被内存杀的——这是 docker stats 读不出来的那一半。
+          docker ps -a --filter name=dsherp-validation- --format '{{.Names}}\t{{.Status}}' > work/container-states.txt 2>&1 || true
+          for c in $(docker ps -aq --filter name=dsherp-validation-); do
+            docker inspect "$c" --format '{{.Name}} OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}' \
+              >> work/container-states.txt 2>&1 || true
+          done
+          sort -t'\t' -k2 work/db-mem.tsv 2>/dev/null | tail -1 > work/db-mem-peak.txt || true
+          df -h / > work/disk.txt 2>&1 || true
+
+      - name: 泄漏自检：工件里不能出现 .runtime 中任何密钥值（否则不上传）
+        id: leak-scan
+        if: always()
+        # .runtime/control 上一步交给了 uid 1000，root 才读得到。
+        run: sudo -E .venv/bin/python infra/dev_stack.py scan-artifacts work/junit-*.xml work/native/*.log
+          work/native/*.json work/compose.log work/dev-stack-ledger.json work/dev-stack-status.json
+
+      # 仓库是公开的，工件保留 30 天：上传必须以泄漏自检通过为前提，否则那一步只是在报告而不是在阻止。
+      # always() 保证测试红了工件照样上传，outcome 的判断只把「扫出密钥」这一种情况挡在外面。
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.leak-scan.outcome == 'success'
+        with:
+          name: nightly-${{ github.run_number }}
+          path: |
+            work/junit-*.xml
+            work/native/
+            work/compose.log
+            work/dev-stack-ledger.json
+            work/dev-stack-status.json
+            work/docker-stats.txt
+            work/container-states.txt
+            work/db-mem.tsv
+            work/db-mem-peak.txt
+            work/disk.txt
+          retention-days: 30
+
+      - name: 拆栈（总是；拆不掉也算本夜失败，因为本机重建靠同一条路径）
+        if: always()
+        run: .venv/bin/python infra/dev_stack.py down --volumes

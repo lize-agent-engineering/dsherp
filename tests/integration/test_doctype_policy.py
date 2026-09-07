@@ -3,10 +3,55 @@ import asyncio
 import json
 import subprocess
 
+from site_exec import run_site_json
+
 from dsherp import context_mcp
 
 
 GOVERNANCE_TARGETS = ('DS Doctype Policy', 'DS Doctype Policy Route')
+SITE = 'dsherp-validation.localhost'
+POLICY_FIELDS = ('enabled', 'allow_read', 'allow_create', 'allow_update', 'allow_submit',
+                 'allow_cancel', 'allow_fill', 'company_scope')
+ROUTE_FIELDS = ('route_name', 'method_path', 'target_doctype')
+READ_ITEM_POLICY = """
+doc=frappe.get_doc('DS Doctype Policy','Item')
+out={field:doc.get(field) for field in %r}
+out['routes']=[{key:row.get(key) for key in %r} for row in doc.routes]
+print(json.dumps(out,default=str))
+""" % (POLICY_FIELDS, ROUTE_FIELDS)
+# Idempotent, and it writes only when the row actually differs: a policy save demands a NEW
+# change_reason every time, so an unconditional write would churn the governance history.
+RESTORE_ITEM_POLICY = """
+snapshot=json.loads(SNAPSHOT)
+doc=frappe.get_doc('DS Doctype Policy','Item')
+current={field:doc.get(field) for field in snapshot if field!='routes'}
+current['routes']=[{key:row.get(key) for key in %r} for row in doc.routes]
+if current!=snapshot:
+    for field,value in snapshot.items():
+        if field!='routes':doc.set(field,value)
+    doc.set('routes',[dict(route) for route in snapshot['routes']])
+    doc.change_reason='集成测试恢复 '+frappe.generate_hash(length=8)
+    doc.save();frappe.db.commit()
+print(json.dumps({'restored':current!=snapshot}))
+""" % (ROUTE_FIELDS,)
+
+
+def item_policy_restore():
+    """A script that puts the alpha Item policy back the way it is right now.
+
+    This test rewrites that shared row and puts it back in the injected script's own `finally`.
+    On 2026-09-07 the database container was killed by its memory limit mid-test, that `finally`
+    stopped part-way through, and the row was left with allow_create=0, allow_fill=0 and a
+    leftover route. The next run of this same test snapshotted the damaged row as its own
+    "original" and wrote it straight back, so the damage outlived the incident and 14 tests in
+    four other files failed on a policy nobody had deliberately changed. Registering the restore
+    on the host is what survives that: it is re-run at teardown, and a teardown that cannot
+    reach the Site leaves the entry in the ledger for the next session to sweep.
+
+    It restores what was there when the test started, so it prevents new drift; it is not a
+    repair for drift that was already on the row."""
+    snapshot = run_site_json(SITE, READ_ITEM_POLICY)
+    return RESTORE_ITEM_POLICY.replace('SNAPSHOT', repr(json.dumps(snapshot)), 1)
 
 
 def _governance_tool_cases():
@@ -449,7 +494,8 @@ finally:
     assert result.returncode == 0, result.stderr
 
 
-def test_policy_change_rotates_revision():
+def test_policy_change_rotates_revision(residue):
+    residue.restore(SITE, 'alpha Item policy', item_policy_restore())
     script = r'''
 import os,uuid,frappe
 os.chdir('/home/frappe/frappe-bench/sites');frappe.init(site='dsherp-validation.localhost');frappe.connect()

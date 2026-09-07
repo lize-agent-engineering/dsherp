@@ -12,6 +12,8 @@ frontend/dist
 evals/runs
 docs
 tests
+# 原生测试包是测试数据（权限矩阵与合成夹具），发布镜像不需要；应用目录本身仍然 COPY。
+frappe_app/*/tests
 .superpowers
 .agents
 .pytest_cache

@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / "frappe_app/dsherp_bridge/dsherp_bridge/doctype"
-PLATFORM = ROOT / "frappe_app/dsherp_platform/dsherp_platform/doctype"
+PLATFORM = ROOT / "frappe_app/dsherp_platform/platform/doctype"
 # Every record that answers "what did the assistant do, on whose behalf, and with what
 # result". Deleting one of these destroys the ability to replay or to hold anyone to account.
 AUDIT_DOCTYPES = (

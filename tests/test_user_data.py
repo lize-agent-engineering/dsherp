@@ -304,3 +304,21 @@ def test_a_run_started_between_the_database_clear_and_the_directory_removal_keep
     assert bench.site_config.get(("acme.tenant.example.com", "dsherp_hold_until")) == "0", "the hold is given back"
     assert "acme.tenant.example.com" not in site_holds.held(admin.runtime_dir(RELEASE))
     assert result["sessions_removed"] == [str(older.resolve())]
+
+
+def test_no_row_of_either_app_holds_the_platform_token_and_the_boundary_says_where_it_lives():
+    """The boundary claims the platform OAuth token is in no row. That used to be false for
+    DS Configuration Transfer, which kept it for as long as the row existed - forever, because
+    the row is an audit record nobody may delete. Plan 5 moved it to the Site cache for the
+    transfer's window, so the claim is checked against every DocType definition of both Apps
+    rather than asserted in prose."""
+    definitions = sorted((ROOT / 'frappe_app').glob('*/*/doctype/*/*.json'))
+    assert definitions, 'no DocType definitions found'
+    for path in definitions:
+        fields = {field.get('fieldname') for field in json.loads(path.read_text()).get('fields', [])}
+        assert 'platform_grant' not in fields, path
+    transfer = user_data.BOUNDARY['DS Configuration Transfer']
+    assert transfer['clear'] == {} and 'expires_at' in transfer['keep'] and '缓存' in transfer['why']
+    assert '缓存' in user_data.BOUNDARY['DS Model Run']['why']
+    assert 'DS Configuration Transfer' in user_data.plan(
+        user='a@example.invalid', conversations=[], runs=[], proposals=[], executions=[], sessions=0)['untouched']

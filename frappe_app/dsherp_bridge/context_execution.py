@@ -22,7 +22,7 @@ TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
        'erp_search_records':(erp.search_records,{'doctype','query','filters','fields'})}
 # 判据是"provider 是否不可用"，不是"是否 5xx"；词表与判定在 provider_failures.py（纯 Python，
 # 单元测试直接按行为验证），这里只负责取出该运行的 model_error 事件逐条计数。
-from dsherp_bridge.provider_failures import PROVIDER_FAILURE_ERROR_CLASSES,count_provider_failures
+from dsherp_bridge.provider_failures import count_provider_failures
 
 
 def _provider_failures(run_name):

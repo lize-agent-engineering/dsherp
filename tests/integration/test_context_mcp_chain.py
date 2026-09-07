@@ -9,7 +9,7 @@ from dsherp.runtime_revision import configuration_revision
 
 from dsherp.context_runner import run_business
 from dsherp.context_mcp import post
-from test_context_sessions import created
+from test_context_sessions import created  # noqa: F401  # pytest fixture, injected by parameter name
 
 
 CONTAINER_TEST=r'''
