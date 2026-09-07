@@ -16,7 +16,11 @@ def test_revision_tracks_provider_settings_and_exact_runtime_files(tmp_path):
     assert len(first)==64 and configuration_revision(dict(reversed(list(settings.items()))),tmp_path)==first
     assert configuration_revision({**settings,'DSH_MODEL':'model'},tmp_path)==first
     assert configuration_revision({**settings,'DSH_MODEL':'changed'},tmp_path)==first
-    assert configuration_revision({**settings,'DEEPSEEK_API_KEY':'other'},tmp_path)!=first
+    # Rotating the provider key must not change the revision: the revision decides whether a
+    # conversation keeps its native session, and a routine rotation would end every one of
+    # them (S9). The endpoint still counts - talking to a different provider is a different
+    # runtime - and the key is still required to be present.
+    assert configuration_revision({**settings,'DEEPSEEK_API_KEY':'other'},tmp_path)==first
     assert configuration_revision({**settings,'DEEPSEEK_BASE_URL':'https://other.invalid'},tmp_path)!=first
     (tmp_path/FILES[0]).write_text('version-two')
     assert configuration_revision(settings,tmp_path)!=first

@@ -158,16 +158,25 @@ def _summary(doc):
 
 
 def _summaries(*, archived, query='', limit=None, offset=0):
+    """一页会话摘要。每条仍然完整重新授权后才暴露标题与时间（`_summary` 走 `_public`），
+    但只对这一页做：以前是把该用户的全部会话都读一遍再切片（T8 的读放大）。"""
+    from dsherp_bridge import paging
     filters={'owner':_user(),'archived':1 if archived else 0}
     if query:
         filters['title']=['like',f'%{query}%']
-    names=frappe.get_all('DS Conversation',filters=filters,pluck='name',order_by='modified desc')
-    visible=[]
-    for name in names:
-        try:visible.append(_summary(_conversation(name)))
-        except frappe.PermissionError:continue
-    page=visible[offset:offset+limit] if limit is not None else visible[offset:]
-    return page,len(visible)>offset+len(page)
+    def fetch(size,cursor):
+        return frappe.get_all('DS Conversation',filters=filters,pluck='name',
+            order_by='modified desc, name desc',limit_page_length=size,limit_start=cursor)
+    def authorize(name):
+        return _summary(_conversation(name))
+    if limit is None:
+        names=fetch(0,0)
+        rows=[]
+        for name in names[offset:]:
+            try:rows.append(authorize(name))
+            except frappe.PermissionError:continue
+        return rows,False
+    return paging.page(fetch,authorize,limit=limit,offset=offset)
 
 
 @frappe.whitelist(methods=['GET'])
@@ -341,11 +350,13 @@ def send_message(question, context, request_id, session_id=None, domain='query')
     else:
         doc=frappe.get_doc({'doctype':'DS Conversation','title':question.strip()[:100],
                             'runtime_session':uuid.uuid4().hex}).insert(ignore_permissions=True)
-    frappe.get_doc({'doctype':'DS Model Run','name':run_id,'conversation':doc.name,
-        'platform_grant':grant,'domain':domain,
+    frappe.get_doc({'doctype':'DS Model Run','name':run_id,'conversation':doc.name,'domain':domain,
         'request_id':request_id,'request_digest':digest,'question':question.strip(),
         'page_context':_json(snapshot),'status':'Queued','sources':'[]',
         'queue_expires_at':add_to_date(now,seconds=limits['queue_expires_seconds'])}).insert(ignore_permissions=True,set_name=run_id)
+    # The authorization the executor will act under lives beside the run, not in it (R7).
+    from dsherp_bridge import grants
+    grants.stash(run_id,grant,domain)
     from dsherp_bridge import context_events as events
     events.record_safely(run_id,'queued',{'domain':domain,'question_chars':len(question.strip()),'page_type':snapshot.get('page_type')})
     return _public(doc)
@@ -368,6 +379,8 @@ def cancel_run(session_id,run_id,request_id):
         events.record_safely(run.name,'cancel_requested',{'to_status':run.status})
         if run.status=='Cancelled':
             events.record_safely(run.name,'finished',{'status':'Cancelled'})
+            from dsherp_bridge import grants
+            grants.drop(run.name)
     return _public(doc)
 
 

@@ -1,6 +1,6 @@
 {
   "doctype":"DocType","name":"DS Configuration Bundle","module":"DSHERP Bridge",
-  "custom":0,"engine":"InnoDB","autoname":"hash","sort_field":"creation","sort_order":"DESC",
+  "custom":0,"engine":"InnoDB","autoname":"hash","sort_field":"creation","sort_order":"DESC","track_changes":1,
   "field_order":["conversation","source_transfer","payload","digest","baseline"],
   "fields":[
     {"fieldname":"conversation","label":"Conversation","fieldtype":"Link","options":"DS Conversation","reqd":1},

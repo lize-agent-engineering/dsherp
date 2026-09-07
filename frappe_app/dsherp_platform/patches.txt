@@ -2,5 +2,8 @@
 # Rule (checked by infra/check_doctype_patches.py): a commit that changes a DocType
 # JSON adds a line here, or states "no-patch:" with the reason in its message.
 [pre_model_sync]
+dsherp_platform.patches.v1.binding_uniqueness
 
 [post_model_sync]
+dsherp_platform.patches.v1.business_credentials
+dsherp_platform.patches.v1.binding_version

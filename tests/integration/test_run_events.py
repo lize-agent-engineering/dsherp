@@ -38,7 +38,7 @@ try:
         stored.kind='changed';stored.save(ignore_permissions=True);raise AssertionError('event was rewritten')
     except frappe.ValidationError:pass
     try:
-        frappe.delete_doc('DS Run Event',first,ignore_permissions=True);raise AssertionError('event was deleted')
+        frappe.delete_doc('DS Run Event',first,force=True,ignore_permissions=True);raise AssertionError('event was deleted')
     except frappe.ValidationError:pass
     try:
         ev.record(run.name,'not-a-kind',{});raise AssertionError('unknown kind accepted')
@@ -59,7 +59,7 @@ finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     if run:
         frappe.db.delete('DS Run Event',{'run':run.name})
-        frappe.delete_doc('DS Model Run',run.name,ignore_permissions=True)
+        frappe.db.delete('DS Model Run',{'name':run.name})
     if conversation:frappe.delete_doc('DS Conversation',conversation.name,ignore_permissions=True)
     if actor and frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
@@ -153,7 +153,7 @@ finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     for name in runs:
         frappe.db.delete('DS Run Event',{'run':name})
-        frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
+        frappe.db.delete('DS Model Run',{'name':name})
     if conversation:frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     if actor and frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
@@ -225,7 +225,7 @@ finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     if run_id:
         frappe.db.delete('DS Run Event',{'run':run_id})
-        if frappe.db.exists('DS Model Run',run_id):frappe.delete_doc('DS Model Run',run_id,ignore_permissions=True)
+        if frappe.db.exists('DS Model Run',run_id):frappe.db.delete('DS Model Run',{'name':run_id})
     if conversation and frappe.db.exists('DS Conversation',conversation):frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     if actor and frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)
     for name in created_logs:frappe.db.delete('Error Log',{'name':name})
@@ -283,7 +283,7 @@ try:
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     if run:
-        frappe.db.delete('DS Run Event',{'run':run.name});frappe.delete_doc('DS Model Run',run.name,ignore_permissions=True)
+        frappe.db.delete('DS Run Event',{'run':run.name});frappe.db.delete('DS Model Run',{'name':run.name})
     if conversation:frappe.delete_doc('DS Conversation',conversation.name,ignore_permissions=True)
     if actor and frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
@@ -349,7 +349,7 @@ try:
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     if run:
-        frappe.db.delete('DS Run Event',{'run':run.name});frappe.delete_doc('DS Model Run',run.name,ignore_permissions=True)
+        frappe.db.delete('DS Run Event',{'run':run.name});frappe.db.delete('DS Model Run',{'name':run.name})
     if conversation:frappe.delete_doc('DS Conversation',conversation.name,ignore_permissions=True)
     for email in (actor,other):
         if email and frappe.db.exists('User',email):frappe.delete_doc('User',email,ignore_permissions=True)
@@ -407,7 +407,7 @@ finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     if run:
         frappe.db.delete('DS Run Event',{'run':run.name})
-        if frappe.db.exists('DS Model Run',run.name):frappe.delete_doc('DS Model Run',run.name,ignore_permissions=True)
+        if frappe.db.exists('DS Model Run',run.name):frappe.db.delete('DS Model Run',{'name':run.name})
     if conversation and frappe.db.exists('DS Conversation',conversation.name):
         frappe.delete_doc('DS Conversation',conversation.name,ignore_permissions=True)
     frappe.db.commit();frappe.destroy()

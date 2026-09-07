@@ -53,3 +53,20 @@ def test_both_apps_are_reported_separately():
     problems = review([DOCTYPE, "frappe_app/dsherp_platform/platform/doctype/ds_enterprise/ds_enterprise.json"],
                       {}, "feat: 两个 App 都改了")
     assert len(problems) == 2
+
+
+def test_the_guard_runs_over_this_branch_and_finds_it_shippable():
+    """The unit tests above check the rule; this one checks that the branch obeys it, which is
+    what the rule is for. It runs the guard the way an operator would."""
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    base = subprocess.run(["git", "merge-base", "origin/main", "HEAD"], cwd=root,
+                          capture_output=True, text=True, timeout=60)
+    if base.returncode:
+        import pytest
+        pytest.skip("no origin/main to compare against")
+    result = subprocess.run([str(root / ".venv/bin/python"), "-m", "infra.check_doctype_patches",
+                             base.stdout.strip(), "HEAD"], cwd=root, capture_output=True, text=True, timeout=180)
+    assert result.returncode == 0, result.stderr[-500:]

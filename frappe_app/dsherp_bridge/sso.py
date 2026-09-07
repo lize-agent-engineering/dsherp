@@ -5,6 +5,7 @@ import hmac
 import json
 import requests
 from frappe.utils.password import encrypt,decrypt
+from dsherp_bridge import credentials
 from frappe.utils.oauth import get_oauth2_flow,get_oauth2_providers,get_redirect_uri,get_oauth2_authorize_url,consume_oauth_state
 from urllib.parse import urlsplit,urlunsplit
 
@@ -85,8 +86,37 @@ def callback(code: str,state: str):
     frappe.local.login_manager.login_as(user)
     frappe.session.data.dsherp_platform_grant=encrypt(json.dumps({'identity':info,'token':token}))
     frappe.local.session_obj.update(force=True)
+    # The platform borrows a credential with an end, and gets it on every login: this Site
+    # renews it only when it is near its window, so a second login never kills the first.
+    pair=credentials.current(user,issued_for=info['enterprise'])
     frappe.db.commit()
+    deliver_credential(info,token,pair)
     frappe.response.update(type='redirect',location='/desk/dsherp-agent')
+
+
+def deliver_credential(info,token,pair):
+    """Hand the platform the pair it must use, over the member's own platform token.
+
+    A failure here is not cosmetic: without a live credential the platform cannot read this
+    Site for that member, so it is reported instead of leaving a login that half works."""
+    config=configuration()
+    provider=get_oauth2_providers().get(config['provider'])
+    if not provider or not provider.get('api_endpoint'):
+        raise frappe.PermissionError('平台登录配置不完整，无法交付业务凭据')
+    parts=urlsplit(provider['api_endpoint'])
+    endpoint=urlunsplit((parts.scheme,parts.netloc,'/api/method/dsherp_platform.api.accept_credential','',''))
+    try:
+        with requests.Session() as client:
+            client.trust_env=False
+            response=client.post(endpoint,json={'enterprise':config['enterprise'],'site':frappe.local.site,
+                'api_key':pair['api_key'],'api_secret':pair['api_secret'],
+                'expires_at':pair['expires_at'],'version':pair['version']},
+                headers={'Authorization':'Bearer '+token,'X-Frappe-Site-Name':config['platform_site']},
+                timeout=15,allow_redirects=False)
+    except requests.RequestException:
+        raise frappe.PermissionError('企业平台暂时不可达，业务凭据未能交付，请稍后重新登录')
+    if response.status_code!=200:
+        raise frappe.PermissionError('企业平台拒绝了本次业务凭据交付，请联系企业管理员')
 
 
 # The business interface; neither Administrator nor the runtime identity may hold one.
@@ -126,6 +156,23 @@ def _machine_authenticated():
     from frappe.utils.password import get_decrypted_password
     stored_secret=get_decrypted_password('User',user,'api_secret',raise_exception=False) or ''
     return bool(stored_secret) and hmac.compare_digest(stored_secret,secret)
+
+
+@frappe.whitelist(methods=['POST'])
+def revoke_credential(user=None):
+    """Kill the caller's own business credential (S2).
+
+    The platform calls this with the very credential it is giving up, so the request
+    authenticates as the business user whose key is about to die. No caller may revoke
+    somebody else's: a revocation is the last act of a credential, not a weapon."""
+    session_user=frappe.session.user
+    if user and user!=session_user:
+        raise frappe.PermissionError('只能吊销自身的业务凭据')
+    if session_user in _service_identities():
+        raise frappe.PermissionError('运维身份的凭据由轮换命令管理')
+    outcome=credentials.revoke(session_user,reason='platform revoked')
+    frappe.db.commit()
+    return outcome
 
 
 def _service_identities():
@@ -174,5 +221,13 @@ def validate_session():
         validate_grant(grant,user)
         return
     # A browser session without a platform grant is exactly what SSO enforcement forbids.
-    if _machine_authenticated():return
+    if _machine_authenticated():
+        # An API key is only as good as the window it was issued in; past that, the holder
+        # goes back through the platform for a new one (S2). The window is a rule about
+        # credentials the platform borrows, which exist only where every session comes from
+        # the platform: a Site that still allows password login (development) records the
+        # windows but does not refuse on them, the same line _actor draws for grants.
+        if _password_login_disabled():
+            credentials.require(user)
+        return
     raise frappe.PermissionError('需要通过企业平台登录后再访问')

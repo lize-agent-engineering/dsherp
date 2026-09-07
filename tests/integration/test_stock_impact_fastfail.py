@@ -59,7 +59,7 @@ try:
         }],
     }).insert()
     policy=frappe.get_doc({
-        'doctype':'DS Doctype Policy','target_doctype':doctype,'enabled':1,
+        'doctype':'DS Doctype Policy','change_reason':'集成测试 '+frappe.generate_hash(length=8),'target_doctype':doctype,'enabled':1,
         'allow_read':1,'allow_create':0,'allow_update':0,'allow_submit':1,
         'allow_cancel':1,'allow_fill':0,
     }).insert().name
@@ -100,13 +100,13 @@ finally:
                 'DS Execution Record',filters={'proposal':proposal_name},pluck='name'
             ):
                 execution_names.append(execution_name)
-                frappe.delete_doc('DS Execution Record',execution_name,force=True)
-            frappe.delete_doc('DS Operation Proposal',proposal_name,force=True)
+                frappe.db.delete('DS Execution Record',{'name':execution_name})
+            frappe.db.delete('DS Operation Proposal',{'name':proposal_name})
         for run_name in frappe.get_all(
             'DS Model Run',filters={'conversation':conversation},pluck='name'
         ):
             frappe.db.delete('DS Run Event',{'run':run_name})
-            frappe.delete_doc('DS Model Run',run_name,force=True)
+            frappe.db.delete('DS Model Run',{'name':run_name})
     if record and frappe.db.exists(doctype,record):
         document=frappe.get_doc(doctype,record)
         if document.docstatus==1:document.cancel()
@@ -250,13 +250,13 @@ finally:
                 'DS Execution Record',filters={'proposal':proposal_name},pluck='name'
             ):
                 execution_names.append(execution_name)
-                frappe.delete_doc('DS Execution Record',execution_name,force=True)
-            frappe.delete_doc('DS Operation Proposal',proposal_name,force=True)
+                frappe.db.delete('DS Execution Record',{'name':execution_name})
+            frappe.db.delete('DS Operation Proposal',{'name':proposal_name})
         for run_name in frappe.get_all(
             'DS Model Run',filters={'conversation':conversation},pluck='name'
         ):
             frappe.db.delete('DS Run Event',{'run':run_name})
-            frappe.delete_doc('DS Model Run',run_name,force=True)
+            frappe.db.delete('DS Model Run',{'name':run_name})
     if stock_entry and frappe.db.exists('Stock Entry',stock_entry):
         document=frappe.get_doc('Stock Entry',stock_entry)
         if document.docstatus==1:document.cancel()

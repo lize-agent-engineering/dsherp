@@ -10,6 +10,8 @@
 
 当前隔离合成环境运行 ERPNext `16.33.0` / Frappe `16.31.0`，容器 Python `3.14.7`；固定 DSH SDK/Runtime 仍为 `0.1.1rc1`。计划 2 的终审阻断项已于 2026-09-05 逐项关闭，四套门在 backend 重载后的最终数字为非集成 `284 passed`、集成 `191 passed`（17 分 18 秒）、前端 22 个文件 `201 passed`、Node Runtime `10 passed`；本轮无 DocType/Report/hooks 变更，因此不需要 migrate。计划 2 于 2026-09-06 由架构方派 12 个互不知情的代理做放行前独立复核：13 项终审关闭中 7 项成立、6 项被推翻（1 项为计划 3 引入的熔断探针地址回归，已随计划 3 收口修复；5 项 major 残余按用户裁决在收尾切片修复并经全量集成门，见[计划 2 证据](docs/engineering/runtime-reliability-evidence.md)「收尾切片」节），放行以该切片合入 main 为准。计划 3（部署制品与安全边界）于 2026-09-05 由 Claude 直接实施：自建两个镜像、生产 compose、`dsherp-admin` 开站/发布/回滚 CLI、systemd 守护、internal 的 agent 网络与唯一出口代理、非 root 容器、业务站 SSO 强制、运行凭据限源限频、CSP 与渲染限制；G4 判据在 dev、本机生产形态与 x86_64 服务器的真实容器上实测（独立审计发现并修复三处缺陷），runbook 在本机 Docker 与 x86_64 服务器各完整执行一次并修掉 22 个断点；2026-09-06 按[项目状态审查](docs/engineering/project-state-review-2026-09-05.md)收口：租户归档落持久卷、发布来源可核实、宿主防火墙随开机恢复并在 x86_64 服务器上经重启/网络重建演练，本机以生产形态跑通「下线 → 重建容器 → 从归档恢复」。状态为「主体实现完成、验收未闭合」：G1 的字面判据（干净专用主机、≤60 分钟）与 ACME 仍待合规主机由审计方执行，按已裁决 #9 不再阻塞计划 4 开工，见[计划 3 证据](docs/engineering/deployment-security-evidence.md)与[部署 runbook](docs/engineering/deployment-runbook.md)。自动化中的工具链使用本地模型替身；仅混沌演练在熔断打开且零活动运行期间按授权调用过一次真实 provider 的免费 `GET /models` 探针，没有调用真实 chat/completions。真实 ERP、浏览器与部署证据分别记录，不能相互替代。
 
+计划 4（数据治理与容灾）在 2026-09-06 完成两片：G2「升级与恢复结果的可靠核验」经三轮独立复审后合入 main（`30cf6fb`）；备份切片（定时生成 → 异地同步 → 失败可见 → 异机恢复验证）在分支 `plan4/backup` 实现，本机以 dev 栈 + 自建对象存储真实跑通生成、双仓库配对、保留淘汰、隔离恢复（50 表 1311 行 0 处未声明差异、加密字段解密通过）与故障注入，证据见[数据治理与容灾证据](docs/engineering/data-governance-evidence.md)与 [runbook 第 12 节](docs/engineering/deployment-runbook.md)。它证明工具链与契约，不证明物理异机容灾与正式 RTO；G3 的正式验收仍未闭合。
+
 运行事件流、Prometheus 指标与规则化告警已在隔离合成站落地，计划 1 于 2026-09-03 通过 C4；计划 2 的运行底座、G5、混沌、前端截图与终审阻断项的逐项关闭见[运行底座可靠性证据](docs/engineering/runtime-reliability-evidence.md)。失败回放与告警时延见[可观测与失败回放证据](docs/engineering/observability-evidence.md)。这仍不代表生产租户部署或生产可用。
 
 **v15 时期历史证据**：ERPNext `15.119.3` / Frappe `15.118.0` 本地合成环境曾完成原生初始化、普通用户读取/拒绝、alpha 分段与 daily 制造闭环；详见[阶段 2/3 制造闭环与技能升版证据](docs/engineering/stage-2-3-manufacturing-evidence.md)和[原生侧栏 HITL 真实验收](docs/engineering/context-agent-hitl-acceptance.md)。**当前 v16 证据**：四站 fresh provision、制造行为重验、原生浏览器矩阵与经授权真实 DeepSeek 只读矩阵已落档；C4 24 小时冷静期、三次分时备份恢复和当前 HEAD 最终独立审计均已通过，`main` 已切换到 v16，v15 九卷已归档并按精确清单逐名删除（v15 镜像在用户决定废弃 AgenERP 后一并删除）。全部证据来自本机隔离合成四站，不含生产租户数据，因此仍不得宣称可上线或生产可用。详见 [v16 迁移证据](docs/engineering/v16-migration-evidence.md)。
@@ -55,6 +57,7 @@
 - [计划 2：运行底座可靠性](docs/superpowers/plans/2026-09-04-runtime-reliability.md)
 - [计划 3：部署制品与安全边界 证据](docs/engineering/deployment-security-evidence.md)
 - [部署 runbook（单 Linux 主机 + Compose + 自建镜像）](docs/engineering/deployment-runbook.md)
+- [外部参考：PenguinHarness 对 dsherp 的可借鉴之处](docs/engineering/penguin-harness-reference-2026-09-07.md)
 
 ## 最小验证
 

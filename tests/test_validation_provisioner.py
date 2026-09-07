@@ -158,7 +158,8 @@ def test_reissuing_one_actor_rotates_its_secret_on_the_site_and_rewrites_only_it
     command, script = calls[0]
     assert command[:4] == ["docker", "compose", "-f", "infra/compose.validation.yml"]
     assert "exec" in command and "backend" in command
-    assert "generate_keys" in script and "dsherp-reader@example.invalid" in script
+    # Through the Site's credential module: a key the Site has no window for is refused (S2).
+    assert "credentials.issue" in script and "dsherp-reader@example.invalid" in script
     users = json.loads((tmp_path / "erp-users.json").read_text())
     assert users["reader"]["api_secret"] == "fresh-secret" and users["reader"]["api_key"] == "reader-key"
     assert users["reader"]["base_url"] == "http://127.0.0.1:18081" and users["reader"]["site"] == "dsherp-validation.localhost"

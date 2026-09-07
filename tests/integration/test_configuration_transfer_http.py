@@ -44,16 +44,16 @@ frappe.destroy()
         if imported:
             preview("""
 frappe.set_user('Administrator')
-frappe.delete_doc('DS Configuration Confirmation',CONFIRMATION,force=True)
-frappe.delete_doc('DS Configuration Bundle',BUNDLE,force=True)
+frappe.db.delete('DS Configuration Confirmation',{'name':CONFIRMATION})
+frappe.db.delete('DS Configuration Bundle',{'name':BUNDLE})
 frappe.delete_doc('DS Conversation',SESSION,force=True)
 frappe.db.commit();frappe.destroy()
 """.replace('CONFIRMATION',repr(imported['confirmation'])).replace('BUNDLE',repr(imported['bundle'])).replace('SESSION',repr(imported['session'])))
         if prepared:
             source("""
 frappe.set_user('Administrator')
-frappe.delete_doc('DS Configuration Transfer',TRANSFER,force=True)
-frappe.delete_doc('DS Configuration Bundle',BUNDLE,force=True)
+frappe.db.delete('DS Configuration Transfer',{'name':TRANSFER})
+frappe.db.delete('DS Configuration Bundle',{'name':BUNDLE})
 frappe.delete_doc('DS Conversation',SESSION,force=True)
 frappe.db.commit();frappe.destroy()
 """.replace('TRANSFER',repr(prepared['transfer'])).replace('BUNDLE',repr(prepared['bundle'])).replace('SESSION',repr(prepared['session'])))

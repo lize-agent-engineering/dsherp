@@ -1,0 +1,36 @@
+# Drill only. A local object store with a private certificate authority, so the off-site
+# chain (restic over TLS, two buckets, two identities) can be exercised end to end on one
+# machine. It proves the tooling and the contracts; it is not an off-site copy, and the
+# evidence says so.
+services:
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    command: ["server", "/data", "--console-address", ":9001", "--certs-dir", "/certs"]
+    environment:
+      MINIO_ROOT_USER: ${DRILL_MINIO_ROOT_USER:-drilladmin}
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--cacert", "/certs/CAs/minio.crt", "https://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    secrets: [minio_root_password]
+    volumes:
+      - drill-minio-data:/data
+      - ${DRILL_CERTS_DIR}:/certs:ro
+    networks:
+      validation:
+        aliases: [minio.drill.internal, minio.drill.localhost]
+    restart: "no"
+
+volumes:
+  drill-minio-data:
+
+secrets:
+  minio_root_password:
+    file: ${DRILL_SECRETS_DIR}/minio_root_password
+
+networks:
+  validation:
+    name: ${DRILL_NETWORK:-dsherp-validation_validation}
+    external: true

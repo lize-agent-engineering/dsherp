@@ -4,6 +4,7 @@
   "module": "DSHERP Bridge",
   "custom": 0,
   "engine": "InnoDB",
+  "track_changes": 1,
   "autoname": "field:target_doctype",
   "sort_field": "creation",
   "sort_order": "DESC",
@@ -18,8 +19,15 @@
     "allow_fill",
     "company_scope",
     "routes"
-  ],
+  ,
+    "change_reason"],
   "fields": [
+    {
+      "fieldname": "change_reason",
+      "label": "Why this policy changed",
+      "fieldtype": "Small Text",
+      "reqd": 1
+    },
     {"fieldname":"target_doctype","label":"Target DocType","fieldtype":"Data","reqd":1,"unique":1},
     {"fieldname":"enabled","label":"Enabled","fieldtype":"Check"},
     {"fieldname":"allow_read","label":"Allow Read","fieldtype":"Check"},

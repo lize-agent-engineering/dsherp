@@ -14,7 +14,13 @@
     "enabled",
     "erp_user",
     "api_key",
-    "api_secret"
+    "api_secret",
+    "credential_issued_at",
+    "credential_expires_at",
+    "credential_version",
+    "credential_erp_user",
+    "active_binding",
+    "binding_version"
   ],
   "fields": [
     {
@@ -56,6 +62,44 @@
       "fieldtype": "Password",
       "reqd": 1,
       "permlevel": 1
+    },
+    {
+      "fieldname": "credential_issued_at",
+      "label": "凭据签发时间",
+      "fieldtype": "Datetime",
+      "read_only": 1
+    },
+    {
+      "fieldname": "credential_expires_at",
+      "label": "凭据失效时间",
+      "fieldtype": "Datetime",
+      "read_only": 1
+    },
+    {
+      "fieldname": "credential_version",
+      "label": "凭据第几次签发",
+      "fieldtype": "Int",
+      "read_only": 1
+    },
+    {
+      "fieldname": "credential_erp_user",
+      "label": "凭据已证明属于的业务用户",
+      "fieldtype": "Data",
+      "read_only": 1
+    },
+    {
+      "fieldname": "active_binding",
+      "label": "启用中的绑定键（企业+业务用户，唯一）",
+      "fieldtype": "Data",
+      "unique": 1,
+      "hidden": 1,
+      "read_only": 1
+    },
+    {
+      "fieldname": "binding_version",
+      "label": "绑定版本",
+      "fieldtype": "Int",
+      "read_only": 1
     }
   ],
   "permissions": [

@@ -90,11 +90,11 @@ finally:
     if conversation:
         for proposal_id in frappe.get_all('DS Operation Proposal',filters={'conversation':conversation},pluck='name'):
             for execution_id in frappe.get_all('DS Execution Record',filters={'proposal':proposal_id},pluck='name'):
-                frappe.delete_doc('DS Execution Record',execution_id,ignore_permissions=True)
-            frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
+                frappe.db.delete('DS Execution Record',{'name':execution_id})
+            frappe.db.delete('DS Operation Proposal',{'name':proposal_id})
         for run_id in frappe.get_all('DS Model Run',filters={'conversation':conversation},pluck='name'):
             frappe.db.delete('DS Run Event',{'run':run_id})
-            frappe.delete_doc('DS Model Run',run_id,ignore_permissions=True)
+            frappe.db.delete('DS Model Run',{'name':run_id})
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     for user in (actor,other):
         if frappe.db.exists('User',user):frappe.delete_doc('User',user,ignore_permissions=True)

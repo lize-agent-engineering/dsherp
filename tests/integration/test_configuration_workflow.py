@@ -81,9 +81,9 @@ finally:
     for value in states:
         if frappe.db.exists('Workflow State',value):frappe.delete_doc('Workflow State',value,force=True)
     if proposal:
-        for row in frappe.get_all('DS Configuration Execution',filters={'confirmation':proposal['id']},pluck='name'):frappe.delete_doc('DS Configuration Execution',row,force=True)
-        frappe.delete_doc('DS Configuration Confirmation',proposal['id'],force=True)
-    if bundle:frappe.delete_doc('DS Configuration Bundle',bundle['id'],force=True)
+        for row in frappe.get_all('DS Configuration Execution',filters={'confirmation':proposal['id']},pluck='name'):frappe.db.delete('DS Configuration Execution',{'name':row})
+        frappe.db.delete('DS Configuration Confirmation',{'name':proposal['id']})
+    if bundle:frappe.db.delete('DS Configuration Bundle',{'name':bundle['id']})
     if conversation:frappe.delete_doc('DS Conversation',conversation.name,force=True)
     frappe.db.commit()
     if frappe.db.table_exists(name):frappe.db.sql_ddl('DROP TABLE `tabDS Preview Workflow Test`')

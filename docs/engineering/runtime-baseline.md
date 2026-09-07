@@ -2,6 +2,8 @@
 
 首次核验日期：2026-08-28；当前 ERP 运行基线核验日期：2026-09-02。本文区分源码核验、安装和运行；不代表 SaaS、生产部署或 v16 迁移整体完成。
 
+| 异地备份客户端 | `restic/restic:0.18.0@sha256:4cf4a61ef9786f4de53e9de8c8f5c040f33830eb0a10bf3d614410ee2fcb6120` | 多架构索引，含 linux/amd64 与 linux/arm64；只在 `compose --profile ops run --rm` 时起，读取备份卷（只读）并把加密仓库推到对象存储 |
+
 ## 本机只读盘点
 
 - macOS arm64，32 GiB RAM；盘点时 swap 使用约 3.83 GiB，压缩页约 9 GiB，可用磁盘 112 GiB。

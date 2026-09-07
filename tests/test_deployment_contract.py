@@ -23,6 +23,8 @@ ERP_V15 = "cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341"
 ERP_V16 = "493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd"
 DB_V15 = "92e50059ea0a5965a33ef751970eab37d421b91ebbd01ac909039cffe159e574"
 DB_V16 = "2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3"
+# Only used to ask a real systemd whether our calendar expressions parse.
+DEBIAN_DIGEST = "abc9cb88a5587630d7f915f47b23b0668fe250fbfc6457aa4d52b534c1bbf73f"
 # Every file that can name a base image. A new one must be added here on purpose.
 IMAGE_SOURCES = (
     "infra/compose.validation.yml",
@@ -30,6 +32,7 @@ IMAGE_SOURCES = (
     "infra/docker/frappe/Dockerfile",
     "infra/docker/worker/Dockerfile",
     "infra/probe_v16/compose.yml",
+    "infra/compose.restore.yml",
     "dsherp/deploy_env.py",
     "dsherp/runtime_host.py",
 )
@@ -117,16 +120,51 @@ def test_production_front_ends_serve_a_read_only_sites_volume_without_the_image_
         assert "entrypoint: []" in block and 'command: ["nginx-entrypoint.sh"]' in block, service
 
 
+def test_the_two_sync_services_are_one_shot_pinned_capability_free_and_see_only_their_own_half():
+    """Each repository has its own container, its own password and its own storage identity:
+    whoever can read the dumps still cannot decrypt the site_config copies."""
+    body = PROD_COMPOSE.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+    for name, mounts, password, credentials in (
+            ("backup-sync-data", ("tenant-backups:/backups/tenant:ro", "platform-backups:/backups/platform:ro"),
+             "backup_repository_password", "backup_storage_credentials"),
+            ("backup-sync-secrets", ("tenant-backup-secrets:/backups/tenant:ro", "platform-backup-secrets:/backups/platform:ro"),
+             "backup_secrets_repository_password", "backup_secrets_storage_credentials")):
+        block = _block(body, name)
+        assert re.search(r"image: restic/restic:[\w.-]+@sha256:[0-9a-f]{64}", block), name
+        assert "profiles: [ops]" in block, name
+        assert "cap_drop: [ALL]" in block and "no-new-privileges:true" in block and "read_only: true" in block, name
+        for mount in mounts:
+            assert mount in block, (name, mount)
+        assert "backup-cache:/cache" in block and "networks: [provider]" in block, name
+        assert "ports:" not in block, name
+        assert f"/run/secrets/{password}" in block, name
+        assert re.search(rf"secrets:.*\b{password}\b", block), name
+        assert credentials in block, name
+    data, secrets_block = _block(body, "backup-sync-data"), _block(body, "backup-sync-secrets")
+    assert "backup-secrets:" not in data and "backup_secrets_repository_password" not in data
+    assert "tenant-backups:" not in secrets_block and "backup_storage_credentials" not in secrets_block
+    volumes = PROD_COMPOSE.split("\nvolumes:\n", 1)[1].split("\n\n", 1)[0]
+    assert "  backup-cache:" in volumes
+    secrets_section = PROD_COMPOSE.split("\nsecrets:\n", 1)[1]
+    for name in ("backup_repository_password", "backup_secrets_repository_password"):
+        assert f"  {name}:" in secrets_section and "${DSHERP_SECRETS_DIR" in secrets_section
+    baseline = (ROOT / "docs/engineering/runtime-baseline.md").read_text()
+    assert re.search(r"restic/restic:[\w.-]+@sha256:[0-9a-f]{64}", baseline), "the pinned digest is recorded"
+
+
 def test_production_keeps_every_long_lived_service_supervised_and_probed():
     body = PROD_COMPOSE.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
     services = re.findall(r"^  ([a-z0-9-]+):$", body, re.MULTILINE)
     assert {"db", "redis-cache", "redis-queue", "backend", "frontend",
             "platform-backend", "platform-frontend", "agent-egress", "caddy"} <= set(services)
-    assert body.count("restart: unless-stopped") + body.count("<<: *frappe") >= len(services)
-    # Every service, including the four bench supervisors the spec topology names explicitly.
-    for service in services:
+    # A service with `profiles:` is a one-shot an operator command runs (`compose run --rm`),
+    # not something the stack keeps alive; it is supervised by the command, not by compose.
+    resident = [service for service in services if "profiles:" not in _block(body, service)]
+    assert body.count("restart: unless-stopped") + body.count("<<: *frappe") >= len(resident)
+    for service in resident:
         assert "healthcheck:" in _block(body, service), service
-    assert len(services) == 13
+    for service in set(services) - set(resident):
+        assert 'restart: "no"' in _block(body, service), service
 
 
 def test_the_agent_network_has_no_route_out_in_either_environment():
@@ -162,6 +200,26 @@ def test_the_browser_gets_a_content_security_policy_from_a_versioned_file():
     assert "/etc/nginx/snippets/security_headers.conf" in DEV_COMPOSE
     dockerfile = (ROOT / "infra/docker/frappe/Dockerfile").read_text()
     assert "COPY infra/nginx/security-headers.conf /etc/nginx/snippets/security_headers.conf" in dockerfile
+
+
+def test_the_benches_can_stage_backup_sets_in_a_data_volume_and_a_separate_secrets_volume():
+    """A backup set's data half and secret half never share a volume, so a sync container for
+    one half cannot even see the other."""
+    body = PROD_COMPOSE.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+    for service, prefix in (("backend", "tenant"), ("platform-backend", "platform")):
+        block = _block(body, service)
+        assert f"{prefix}-backups:/home/frappe/backups" in block, service
+        assert f"{prefix}-backup-secrets:/home/frappe/backup-secrets" in block, service
+    volumes = PROD_COMPOSE.split("\nvolumes:\n", 1)[1].split("\n\n", 1)[0]
+    for name in ("tenant-backup-secrets", "platform-backup-secrets"):
+        assert f"  {name}:" in volumes, name
+    # The two benches never share either kind of staging volume.
+    assert "tenant-backup-secrets" not in _block(body, "platform-backend")
+    assert "platform-backups" not in _block(body, "backend")
+    dockerfile = (ROOT / "infra/docker/frappe/Dockerfile").read_text()
+    assert "/home/frappe/backups" in dockerfile and "/home/frappe/backup-secrets" in dockerfile
+    for name in ("v16-backups", "v16-backup-secrets", "v16-platform-backups", "v16-platform-backup-secrets"):
+        assert f"  {name}:" in DEV_COMPOSE, name
 
 
 def test_production_keeps_the_two_benches_apart_and_caddy_without_capabilities():
@@ -228,6 +286,8 @@ def test_compose_uses_only_fresh_v16_named_volumes():
     expected = {
         "v16-sites", "v16-logs", "v16-db-data", "v16-redis-data",
         "v16-platform-sites", "v16-platform-logs", "v16-beta-sites", "v16-beta-logs",
+        # Backup sets are staged here in development too, so a drill exercises the real layout.
+        "v16-backups", "v16-backup-secrets", "v16-platform-backups", "v16-platform-backup-secrets", "v16-backup-cache",
     }
     volumes_section = DEV_COMPOSE.split("\nvolumes:\n", 1)[1].split("\nsecrets:\n", 1)[0]
     declared = set(re.findall(r"^  ([a-z0-9-]+):$", volumes_section, re.MULTILINE))
@@ -462,3 +522,97 @@ def test_merge_context_worker_profiles_fast_fails_on_missing_or_invalid_input(tm
     daily.write_text(json.dumps({"site": "alpha.localhost"}))
     with pytest.raises(ValueError):
         merge_context_worker_profiles(tmp_path)
+
+
+def test_the_restore_stack_is_isolated_from_users_from_production_and_from_the_network():
+    """A restored copy must not answer a user, claim a run, send mail or reach anything; only
+    the two fetch containers get a route out, and each sees one half of a set."""
+    text = (ROOT / "infra/compose.restore.yml").read_text()
+    body = text.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+    services = set(re.findall(r"^  ([a-z0-9-]+):$", body, re.MULTILINE))
+    assert "ports:" not in text, "a restored copy has no way in"
+    assert not services & {"caddy", "frontend", "scheduler", "queue", "agent-egress", "worker"}
+    assert re.search(r"^  restore: \{internal: true\}$", text, re.MULTILINE)
+    for service in services:
+        block = _block(body, service)
+        route = "provider" in block
+        assert route == service.startswith("restore-fetch-"), service
+    data, secrets_block = _block(body, "restore-fetch-data"), _block(body, "restore-fetch-secrets")
+    assert "restore-fetched-data:/fetched" in data and "restore-fetched-secrets" not in data
+    assert "restore-fetched-secrets:/fetched" in secrets_block and "restore-fetched-data" not in secrets_block
+    for block in (data, secrets_block):
+        assert "profiles: [fetch]" in block and "cap_drop: [ALL]" in block and "read_only: true" in block
+        assert "no-new-privileges:true" in block
+        # Everything is dropped; restoring file ownership is the only privilege handed back.
+        granted = re.search(r"cap_add: \[([^\]]*)\]", block)
+        assert granted and set(granted.group(1).replace(" ", "").split(",")) <= {"CHOWN", "FOWNER"}, \
+            "only what restoring a file's own metadata needs; never DAC_OVERRIDE"
+    bench = _block(body, "backend")
+    assert "restore-fetched-data:/home/frappe/fetched/data:ro" in bench
+    assert "restore-fetched-secrets:/home/frappe/fetched/secrets:ro" in bench
+    assert re.search(r"image: \$\{DSHERP_RESTORE_IMAGE:\?[^}]+\}", bench), \
+        "the image is whatever the backup set recorded, supplied by the drill"
+    volumes = text.split("\nvolumes:\n", 1)[1].split("\nsecrets:\n", 1)[0]
+    declared = set(re.findall(r"^  ([a-z0-9-]+):$", volumes, re.MULTILINE))
+    assert all(name.startswith("restore-") for name in declared), declared
+    assert not re.search(r"^      - [$./]", body, re.MULTILINE), "named volumes only; no host paths"
+    assert f"@sha256:{DB_V16}" in _block(body, "db"), "the same database build production runs"
+
+
+def test_the_backup_timers_run_the_cli_twice_a_day_and_weekly_in_the_deployment_time_zone(tmp_path):
+    from infra.render_worker_units import render_backup_units
+
+    units = render_backup_units(ROOT, user="dsherp", group="dsherp", target_dir=tmp_path)
+    service = units["backup.service"].read_text()
+    assert "Type=oneshot" in service
+    assert f"ExecStart={ROOT}/bin/dsherp-admin backup --sync" in service
+    assert "User=dsherp" in service and "SupplementaryGroups=docker" in service
+    assert "Environment=DSHERP_ENV=prod" in service
+    assert re.search(r"^OnFailure=dsherp-backup-failure@%n\.service$", service, re.MULTILINE)
+    assert "ProtectSystem=strict" in service and f"ReadWritePaths={ROOT}/.runtime" in service
+    assert re.search(r"^TimeoutStartSec=3h$", service, re.MULTILINE)
+
+    timer = units["backup.timer"].read_text()
+    # systemd's hour-list syntax with an explicit zone; the stamps stay UTC.
+    assert re.search(r"^OnCalendar=\*-\*-\* 02,14:00:00 Asia/Shanghai$", timer, re.MULTILINE)
+    assert "Persistent=true" in timer and re.search(r"^RandomizedDelaySec=", timer, re.MULTILINE)
+    assert "WantedBy=timers.target" in timer
+
+    drill = units["drill.service"].read_text()
+    assert f"ExecStart={ROOT}/bin/dsherp-admin restore-drill" in drill
+    assert re.search(r"^TimeoutStartSec=6h$", drill, re.MULTILINE)
+    assert re.search(r"^OnCalendar=Sun \*-\*-\* 04:00:00 Asia/Shanghai$", units["drill.timer"].read_text(), re.MULTILINE)
+
+    failure = units["failure.service"].read_text()
+    assert units["failure.service"].name == "dsherp-backup-failure@.service"
+    assert f"ExecStart={ROOT}/bin/dsherp-admin notify-failure %i" in failure and "User=dsherp" in failure
+    for bad in ("bad user", "", "root;rm"):
+        with pytest.raises(ValueError):
+            render_backup_units(ROOT, user=bad, target_dir=tmp_path)
+
+
+def test_every_calendar_expression_the_units_carry_is_one_systemd_accepts():
+    """Checked against the parser, not against a regular expression of our own."""
+    import shlex
+    import shutil
+    import subprocess
+    from infra.render_worker_units import BACKUP_TIMER, DRILL_TIMER
+
+    expressions = re.findall(r"^OnCalendar=(.+)$", BACKUP_TIMER + DRILL_TIMER, re.MULTILINE)
+    assert len(expressions) == 2
+    def analyse(expression):
+        analyzer = shutil.which("systemd-analyze")
+        if analyzer is not None:
+            return subprocess.run([analyzer, "calendar", expression], capture_output=True, text=True, timeout=60)
+        image = "debian@sha256:" + DEBIAN_DIGEST
+        return subprocess.run(["docker", "run", "--rm", image, "sh", "-c",
+                               "apt-get -qq update >/dev/null 2>&1 && apt-get -qq install -y systemd >/dev/null 2>&1; "
+                               "systemd-analyze calendar " + shlex.quote(expression)],
+                              capture_output=True, text=True, timeout=900)
+
+    for expression in expressions:
+        result = analyse(expression)
+        if result.returncode != 0 and "not found" in (result.stderr or "") + (result.stdout or ""):
+            pytest.skip("no systemd-analyze available to check the calendar expressions")
+        assert result.returncode == 0, (expression, (result.stderr or result.stdout)[-300:])
+        assert "Next elapse" in result.stdout, result.stdout

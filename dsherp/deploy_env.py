@@ -40,6 +40,11 @@ DEFAULTS = {
     # Host directories compose and the CLI must agree on; empty means <repo>/.runtime.
     'DSHERP_RUNTIME_DIR': '',
     'DSHERP_SECRETS_DIR': '',
+    # Off-site backup repositories (restic). Empty means not configured; production refuses
+    # every destructive operator action until both are set, because a retired tenant's final
+    # state has to leave the host.
+    'DSHERP_BACKUP_REPOSITORY': '',
+    'DSHERP_BACKUP_SECRETS_REPOSITORY': '',
     # Bootstrap values for a fresh Site's System Settings; Frappe refuses to save without them.
     'DSHERP_SITE_LANGUAGE': 'zh',
     'DSHERP_SITE_TIME_ZONE': 'Asia/Shanghai',
@@ -164,6 +169,22 @@ def settings(environ=None, root=ROOT):
     resolved['site_time_zone'] = _match(re.compile('[A-Za-z_]+(/[A-Za-z_+-]+)*'), _text(values, 'DSHERP_SITE_TIME_ZONE'), 'Invalid site time zone')
     if not resolved['agent_provider_base_url'].startswith(('http://', 'https://')):
         raise ValueError('Invalid agent provider base URL')
+    data_repository = _text(values, 'DSHERP_BACKUP_REPOSITORY')
+    secrets_repository = _text(values, 'DSHERP_BACKUP_SECRETS_REPOSITORY')
+    if bool(data_repository) != bool(secrets_repository):
+        raise ValueError('Configure both backup repositories (data and secrets) or neither')
+    if data_repository and data_repository == secrets_repository:
+        raise ValueError('The data and the secrets repository must not be the same')
+    for key, value in (('DSHERP_BACKUP_REPOSITORY', data_repository), ('DSHERP_BACKUP_SECRETS_REPOSITORY', secrets_repository)):
+        if not value:
+            continue
+        if not value.startswith('s3:http'):
+            raise ValueError(key + ' must be an s3: restic repository URL')
+        # Ruling #8: anything that leaves the host travels over TLS.
+        if name == 'prod' and not value.startswith('s3:https://'):
+            raise ValueError(key + ' must use TLS in production')
+    resolved['backup_repository'] = data_repository
+    resolved['backup_secrets_repository'] = secrets_repository
     return resolved
 
 

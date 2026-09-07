@@ -75,7 +75,7 @@ finally:
     if doc:
         for name in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):
             frappe.db.delete('DS Run Event',{'run':name})
-            frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
+            frappe.db.delete('DS Model Run',{'name':name})
         if frappe.db.exists('DS Conversation',doc['id']):frappe.delete_doc('DS Conversation',doc['id'],ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
 '''
@@ -141,7 +141,7 @@ finally:
         if not doc:continue
         for name in frappe.get_all('DS Model Run',filters={'conversation':doc['id']},pluck='name'):
             frappe.db.delete('DS Run Event',{'run':name})
-            frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
+            frappe.db.delete('DS Model Run',{'name':name})
         frappe.delete_doc('DS Conversation',doc['id'],ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
 '''

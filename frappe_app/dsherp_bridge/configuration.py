@@ -90,7 +90,11 @@ def _propose_bundle(session_id,package,model_run=None,origin=None,source_transfe
     except ValueError as error:frappe.throw(str(error))
     package=frozen['package'];authorize(package)
     baseline=inspect_baseline(package)
-    grant=source_run.platform_grant if source_run else frappe.session.data.get('dsherp_platform_grant')
+    if source_run:
+        from dsherp_bridge import grants
+        grant=grants.of(source_run.name)
+    else:
+        grant=frappe.session.data.get('dsherp_platform_grant')
     payload={'site':frappe.local.site,'actor':user,'package':package,
         'authorization_revision':_authorization_revision(user,grant),'baseline':baseline}
     if model_run:payload['model_run']=model_run

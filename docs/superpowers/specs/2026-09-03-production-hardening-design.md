@@ -132,7 +132,7 @@ Internet ──TLS──▶ 反向代理（Caddy，自动证书，*.tenant.examp
 **目标**：数据不会因单机损毁而丢失，schema 可演进，审计不可篡改，租户数据可导出可删除。
 
 设计：
-- **备份全站化与异地化（T1、T7）**。scheduler 每日对 platform 与全部租户站执行四件套备份（原生 `scheduled_backup`，强制未压缩以维持验证不变量），`dsherp-admin backup-sync` 把备份加密后推到对象存储（restic 或 rclone + age），`site_config_backup.json` 单独进密钥桶，与库转储永不同目录同权限；保留策略 7 日 + 4 周 + 3 月；RPO 24h、RTO 8h（已裁决 #2）写入 runbook。恢复演练脚本泛化 `verify_daily_backup.py`：接受任意站名与从对象存储拉取，不再硬编码合成夹具。
+- **备份全站化与异地化（T1、T7）**。宿主 systemd timer 每 12 小时对 platform 与全部租户站执行 `dsherp-admin backup --sync`：逐站在稳定窗口（保持 + 服务端闸门 + 等在途执行者 + 维护标志 + 排空写入者）内做原生 `bench backup --with-files`（不压缩，tar 保持 `.tar`）与 G2 口径快照，暂存为一个备份集（数据三件 + 快照 + `set.json`；`site_config_backup.json` 与 `pair.json` 在另一个卷、另一套权限），再用两个各自口令与各自存储身份的 restic 仓库异地保存，读回两份清单核对后才算完整。保留按站点 7 日 + 4 周 + 3 月（另外永远保留每站最新完整集与最新已验证集）；RPO 24h（20h 预警，按数据时点计）、RTO 8h（已裁决 #2）写入 runbook 第 12 节。恢复验证改为每周 `dsherp-admin restore-drill`：在隔离 compose 项目里按备份集记录的构建恢复、比对窗口内快照、抽样解密，成功即删该栈；`restore-site` 是异机冷启动路径。实施细节见[备份切片设计 2.1](2026-09-06-backup-offsite-design.md)。
 - **schema 演进（D4）**。两个 App 建立 `patches.txt`；CI 规则：DocType JSON 变更必须伴随 patch 或 `no-patch:` 说明；每个 JSON payload 字段的 `schema_version` 变更必须附回填 patch；迁移测试在 CI 中对"上一 tag 的备份"执行 `bench migrate` 并做逐字段比对（即 G2 的自动化形态）。
 - **审计不可篡改（T2）**。DS Model Run、DS Operation Proposal、DS Execution Record、DS Configuration * 全部加 `on_trash` 守卫（无条件拒绝，含 Administrator）、`track_changes: 1`（DS Run Event 已自计划 1 起无条件拒绝改写与删除）；DS Doctype Policy 加 `track_changes` 与变更原因字段。租户下线时整站归档而非删记录（计划 3 收口后归档落在 backend 的 `tenant-archive` 卷，命令回读归档路径）。
 - **业务单据关联（T3）**。执行记录增加 `Dynamic Link`（target_doctype/target_name）指向产生的单据，单据侧通过原生 Connections 反查；单据取消/删除时执行记录保留并标注。

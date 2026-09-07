@@ -66,8 +66,8 @@ finally:
             for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal},pluck='name'):
                 outcome=json.loads(frappe.get_doc('DS Execution Record',execution).result or '{}')
                 if outcome.get('status')=='Succeeded':order_name=outcome.get('name',order_name)
-                frappe.delete_doc('DS Execution Record',execution,ignore_permissions=True)
-            frappe.delete_doc('DS Operation Proposal',proposal,ignore_permissions=True)
+                frappe.db.delete('DS Execution Record',{'name':execution})
+            frappe.db.delete('DS Operation Proposal',{'name':proposal})
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     if order_name and frappe.db.exists('Sales Order',order_name):
         doc=frappe.get_doc('Sales Order',order_name)

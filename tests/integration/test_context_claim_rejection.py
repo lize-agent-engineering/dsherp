@@ -23,7 +23,7 @@ try:
 finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     frappe.db.delete('DS Run Event',{'run':run})
-    frappe.delete_doc('DS Model Run',run,ignore_permissions=True)
+    frappe.db.delete('DS Model Run',{'name':run})
     frappe.delete_doc('DS Conversation',doc['id'],ignore_permissions=True)
     frappe.db.commit();frappe.destroy()
 '''

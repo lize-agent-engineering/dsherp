@@ -105,7 +105,7 @@ try:
                     'send_welcome_email':0,'roles':[{'role':'System Manager'}]}).insert()
     policy=frappe.get_doc('DS Doctype Policy',governance_name)
     policy.append('routes',probe_route)
-    policy.save()
+    policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save()
     frappe.set_user(control)
     policy=frappe.get_doc('DS Doctype Policy',governance_name)
     policy.check_permission('read')
@@ -250,7 +250,7 @@ try:
         assert '缺少 DS DocType 策略' in str(error),error
 
     frappe.set_user('Administrator')
-    policy=frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':'Supplier','enabled':0,
+    policy=frappe.get_doc({'doctype':'DS Doctype Policy','change_reason':'集成测试 '+frappe.generate_hash(length=8),'target_doctype':'Supplier','enabled':0,
         'allow_read':1,'allow_create':1,'allow_update':0,'allow_submit':0,'allow_cancel':0,
         'allow_fill':0,'company_scope':None,'routes':[]}).insert()
     frappe.set_user(actor);disabled=new_run();frappe.set_user('Guest')
@@ -260,7 +260,7 @@ try:
     except frappe.PermissionError as error:
         assert 'DS DocType 策略未启用' in str(error),error
 
-    frappe.set_user('Administrator');policy.enabled=1;policy.allow_create=0;policy.save()
+    frappe.set_user('Administrator');policy.enabled=1;policy.allow_create=0;policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save()
     frappe.set_user(actor);denied=new_run();frappe.set_user('Guest')
     record=run_tool(**denied,tool='erp_read_record',arguments={'doctype':'Supplier','name':supplier.name})
     assert record['name']==supplier.name and record['doctype']=='Supplier'
@@ -274,7 +274,7 @@ try:
     except frappe.PermissionError as error:
         assert '未允许 Supplier 的 create 操作' in str(error),error
 
-    frappe.set_user('Administrator');policy.allow_create=1;policy.save()
+    frappe.set_user('Administrator');policy.allow_create=1;policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save()
     frappe.set_user(actor);allowed=new_run();frappe.set_user('Guest')
     schema=run_tool(**allowed,tool='erp_read_schema',arguments={'doctype':'Supplier'})
     create['version']=str(schema['modified'])
@@ -313,7 +313,7 @@ try:
     assert 'Custom Field' not in before.dsherp_context_doctypes
 
     frappe.set_user('Administrator')
-    policy=frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':'Supplier','enabled':1,
+    policy=frappe.get_doc({'doctype':'DS Doctype Policy','change_reason':'集成测试 '+frappe.generate_hash(length=8),'target_doctype':'Supplier','enabled':1,
         'allow_read':1,'allow_create':0,'allow_update':0,'allow_submit':0,'allow_cancel':0,
         'allow_fill':0,'routes':[]}).insert()
     frappe.set_user(actor);enabled=frappe._dict();boot_session(enabled)
@@ -321,7 +321,7 @@ try:
     assert 'Custom Field' not in enabled.dsherp_context_doctypes
     stale=list(enabled.dsherp_context_doctypes)
 
-    frappe.set_user('Administrator');policy.enabled=0;policy.save();frappe.set_user(actor)
+    frappe.set_user('Administrator');policy.enabled=0;policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save();frappe.set_user(actor)
     disabled=frappe._dict();boot_session(disabled)
     assert 'Supplier' not in disabled.dsherp_context_doctypes
     assert 'Supplier' in stale
@@ -404,9 +404,9 @@ try:
     frappe.set_user('Administrator')
     policy_name=frappe.db.get_value('DS Doctype Policy',{'target_doctype':'Item'},'name')
     policy=(frappe.get_doc('DS Doctype Policy',policy_name) if policy_name else
-        frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':'Item'}).insert())
+        frappe.get_doc({'doctype':'DS Doctype Policy','change_reason':'集成测试 '+frappe.generate_hash(length=8),'target_doctype':'Item'}).insert())
     policy.enabled=0;policy.allow_read=0;policy.allow_create=0;policy.allow_update=0
-    policy.allow_submit=0;policy.allow_cancel=0;policy.allow_fill=0;policy.save()
+    policy.allow_submit=0;policy.allow_cancel=0;policy.allow_fill=0;policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save()
     frappe.set_user(actor)
     try:
         frappe.get_doc('DS Doctype Policy',policy.name).check_permission('read')
@@ -421,7 +421,7 @@ try:
         assert '策略' in str(error),error
 
     frappe.set_user('Administrator');policy=frappe.get_doc('DS Doctype Policy',policy.name)
-    policy.enabled=1;policy.allow_read=1;policy.save();frappe.set_user(actor)
+    policy.enabled=1;policy.allow_read=1;policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save();frappe.set_user(actor)
     read_only=new_run()
     item=context_execution.run_tool(**read_only,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'})
     arguments={'doctype':'Item','name':item['name'],'values':{'item_name':'Policy proposal only'},'version':str(item['modified'])}
@@ -432,7 +432,7 @@ try:
         assert '策略' in str(error),error
 
     frappe.set_user('Administrator');policy=frappe.get_doc('DS Doctype Policy',policy.name)
-    policy.allow_update=1;policy.save();frappe.set_user(actor)
+    policy.allow_update=1;policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save();frappe.set_user(actor)
     allowed=new_run()
     item=context_execution.run_tool(**allowed,tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'})
     arguments={'doctype':'Item','name':item['name'],'values':{'item_name':'Policy proposal only'},'version':str(item['modified'])}
@@ -470,12 +470,12 @@ try:
             'allow_submit','allow_cancel','allow_fill','company_scope')}
         original_policy['routes']=[{key:row.get(key) for key in ('route_name','method_path','target_doctype')} for row in policy.routes]
     else:
-        policy=frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':'Item'}).insert();policy_name=policy.name
+        policy=frappe.get_doc({'doctype':'DS Doctype Policy','change_reason':'集成测试 '+frappe.generate_hash(length=8),'target_doctype':'Item'}).insert();policy_name=policy.name
     policy.enabled=1;policy.allow_read=1;policy.allow_create=0;policy.allow_update=1
     policy.allow_submit=0;policy.allow_cancel=0;policy.allow_fill=0;policy.company_scope=None
     policy.set('routes',[{'route_name':'delivery_note',
         'method_path':'erpnext.selling.doctype.sales_order.sales_order.make_delivery_note',
-        'target_doctype':'Delivery Note'}]);policy.save()
+        'target_doctype':'Delivery Note'}]);policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save()
     frappe.set_user(actor)
     conversation=frappe.get_doc({'doctype':'DS Conversation','title':'Synthetic policy revision'}).insert(ignore_permissions=True).name
     item=frappe.get_doc('Item',item_name);before_name=item.item_name
@@ -484,7 +484,7 @@ try:
     proposal_id=proposal['id'];frappe.db.commit()
 
     frappe.set_user('Administrator');policy=frappe.get_doc('DS Doctype Policy',policy.name)
-    policy.routes[0].route_name='delivery_note_changed';policy.save();frappe.db.commit()
+    policy.routes[0].route_name='delivery_note_changed';policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save();frappe.db.commit()
     frappe.set_user(actor)
     assert revision(actor)!=before_revision
     result=confirm(proposal_id,proposal['digest'],uuid.uuid4().hex)
@@ -494,9 +494,9 @@ finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     if proposal_id:
         for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal_id},pluck='name'):
-            frappe.delete_doc('DS Execution Record',execution,ignore_permissions=True)
+            frappe.db.delete('DS Execution Record',{'name':execution})
         if frappe.db.exists('DS Operation Proposal',proposal_id):
-            frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
+            frappe.db.delete('DS Operation Proposal',{'name':proposal_id})
     if conversation and frappe.db.exists('DS Conversation',conversation):
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     if policy_name and frappe.db.exists('DS Doctype Policy',policy_name):
@@ -504,7 +504,7 @@ finally:
             policy=frappe.get_doc('DS Doctype Policy',policy_name)
             for field,value in original_policy.items():
                 if field!='routes':policy.set(field,value)
-            policy.set('routes',original_policy['routes']);policy.save()
+            policy.set('routes',original_policy['routes']);policy.change_reason='集成测试 '+frappe.generate_hash(length=8);policy.save()
         else:frappe.delete_doc('DS Doctype Policy',policy_name)
     if frappe.db.exists('User',actor):frappe.delete_doc('User',actor)
     frappe.db.commit();frappe.destroy()
@@ -543,7 +543,7 @@ try:
     proposal_id=proposal['id'];frappe.db.commit()
 
     frappe.set_user('Administrator')
-    policy=frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':disabled_target,'enabled':0,
+    policy=frappe.get_doc({'doctype':'DS Doctype Policy','change_reason':'集成测试 '+frappe.generate_hash(length=8),'target_doctype':disabled_target,'enabled':0,
         'allow_read':0,'allow_create':0,'allow_update':0,'allow_submit':0,'allow_cancel':0,'allow_fill':0}).insert()
     frappe.db.commit();frappe.set_user(actor)
     after_revision=revision(actor)
@@ -556,9 +556,9 @@ finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     if proposal_id:
         for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal_id},pluck='name'):
-            frappe.delete_doc('DS Execution Record',execution,ignore_permissions=True)
+            frappe.db.delete('DS Execution Record',{'name':execution})
         if frappe.db.exists('DS Operation Proposal',proposal_id):
-            frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
+            frappe.db.delete('DS Operation Proposal',{'name':proposal_id})
     if conversation and frappe.db.exists('DS Conversation',conversation):
         frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     if frappe.db.exists('DS Doctype Policy',disabled_target):

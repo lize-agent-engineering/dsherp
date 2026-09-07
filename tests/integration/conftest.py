@@ -52,6 +52,37 @@ def validation_queue_backlog():
     yield
 
 
+def _key_answers_as(profile):
+    """Whether the secret in this profile still authenticates as its user."""
+    opener = build_opener(ProxyHandler({}))
+    headers = {"X-Frappe-Site-Name": profile["site"],
+               "Authorization": "token " + profile["api_key"] + ":" + profile["api_secret"]}
+    try:
+        with opener.open(Request(profile["base_url"] + "/api/method/frappe.auth.get_logged_user",
+                                 headers=headers), timeout=15) as response:
+            return json.load(response).get("message") == profile["user"]
+    except (HTTPError, OSError, ValueError):
+        return False
+
+
+@pytest.fixture(autouse=True)
+def fixture_credentials_agree_with_the_sites():
+    """The synthetic actors' API secrets live in .runtime/erp-*.json. A business credential is
+    short-lived now (S2): a platform login can renew it and a membership revocation kills it -
+    both legitimately, both inside this very suite - and the files are left behind. Before each
+    test the profiles are tried, and one that no longer answers is reissued through the
+    provisioner, the one path that puts the Site, the files and the platform binding back on
+    one secret."""
+    from infra.run_validation_provision import reissue
+    path = Path(__file__).resolve().parents[2] / ".runtime" / "erp-users.json"
+    if path.is_file():
+        profiles = json.loads(path.read_text())
+        for actor in ("reader", "denied"):
+            if actor in profiles and not _key_answers_as(profiles[actor]):
+                reissue(actor)
+    yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def validation_queue_hygiene():
     purge_validation_jobs()

@@ -106,10 +106,10 @@ finally:
     frappe.db.rollback();frappe.set_user('Administrator')
     for name in snapshots:frappe.db.delete('DS Ops Snapshot',{'name':name})
     for name in proposals:
-        if frappe.db.exists('DS Operation Proposal',name):frappe.delete_doc('DS Operation Proposal',name,ignore_permissions=True)
+        if frappe.db.exists('DS Operation Proposal',name):frappe.db.delete('DS Operation Proposal',{'name':name})
     for name in runs:
         frappe.db.delete('DS Run Event',{'run':name})
-        if frappe.db.exists('DS Model Run',name):frappe.delete_doc('DS Model Run',name,ignore_permissions=True)
+        if frappe.db.exists('DS Model Run',name):frappe.db.delete('DS Model Run',{'name':name})
     if conversation and frappe.db.exists('DS Conversation',conversation.name):frappe.delete_doc('DS Conversation',conversation.name,ignore_permissions=True)
     if actor and frappe.db.exists('User',actor):frappe.delete_doc('User',actor,ignore_permissions=True)
     frappe.db.commit();frappe.destroy()

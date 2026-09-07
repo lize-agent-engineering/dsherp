@@ -353,13 +353,13 @@ finally:
             frappe.delete_doc('Delivery Note',name,ignore_permissions=True)
     for proposal_id in sorted(set(proposal_names + (frappe.get_all('DS Operation Proposal',filters={'conversation':['in',conversation_names]},pluck='name') if conversation_names else []))):
         for execution in frappe.get_all('DS Execution Record',filters={'proposal':proposal_id},pluck='name'):
-            frappe.delete_doc('DS Execution Record',execution,ignore_permissions=True)
+            frappe.db.delete('DS Execution Record',{'name':execution})
         if frappe.db.exists('DS Operation Proposal',proposal_id):
-            frappe.delete_doc('DS Operation Proposal',proposal_id,ignore_permissions=True)
+            frappe.db.delete('DS Operation Proposal',{'name':proposal_id})
     for run_id in run_names:
         if frappe.db.exists('DS Model Run',run_id):
             frappe.db.delete('DS Run Event',{'run':run_id})
-            frappe.delete_doc('DS Model Run',run_id,ignore_permissions=True)
+            frappe.db.delete('DS Model Run',{'name':run_id})
     for conversation in conversation_names:
         if frappe.db.exists('DS Conversation',conversation):frappe.delete_doc('DS Conversation',conversation,ignore_permissions=True)
     if order_name and frappe.db.exists('Sales Order',order_name):

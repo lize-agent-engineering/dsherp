@@ -4,12 +4,12 @@
   "module": "DSHERP Bridge",
   "custom": 0,
   "engine": "InnoDB",
+  "track_changes": 1,
   "autoname": "hash",
   "sort_field": "creation",
   "sort_order": "DESC",
   "field_order": [
     "domain",
-    "platform_grant",
     "conversation",
     "request_id",
     "request_digest",
@@ -30,27 +30,92 @@
     "model_output_tokens_reserved",
     "needs_input",
     "provider_failures",
-    "answer_flagged"
+    "answer_flagged",
+    "model",
+    "provider_request_ids",
+    "actual_input_tokens",
+    "actual_output_tokens",
+    "duration_ms",
+    "skill_versions",
+    "usage_unknown_calls"
   ],
   "fields": [
-    {"fieldname":"domain","label":"Domain","fieldtype":"Select","options":"query\noperation\nconfiguration","default":"query","reqd":1},
-    {"fieldname":"platform_grant","label":"Encrypted platform authorization","fieldtype":"Long Text","hidden":1},
-    {"fieldname":"runtime_revision","label":"Runtime revision","fieldtype":"Data"},
-    {"fieldname":"permission_revision","label":"Permission revision","fieldtype":"Data"},
-    {"fieldname":"model_calls","label":"Model calls","fieldtype":"Int","default":"0"},
-    {"fieldname":"model_input_bytes","label":"Model input bytes","fieldtype":"Int","default":"0"},
-    {"fieldname":"model_output_tokens_reserved","label":"Reserved output tokens","fieldtype":"Int","default":"0"},
-    {"fieldname":"capability_hash","label":"Capability hash","fieldtype":"Data"},
-    {"fieldname":"expires_at","label":"Expires at","fieldtype":"Datetime"},
-    {"fieldname":"queue_expires_at","label":"Queue expires at","fieldtype":"Datetime"},
-    {"fieldname":"needs_input","label":"Needs input","fieldtype":"Long Text"},
-    {"fieldname":"provider_failures","label":"Provider failures","fieldtype":"Int","default":"0"},
-    {"fieldname":"answer_flagged","label":"Answer flagged","fieldtype":"Check","default":"0"},
+    {
+      "fieldname": "domain",
+      "label": "Domain",
+      "fieldtype": "Select",
+      "options": "query\noperation\nconfiguration",
+      "default": "query",
+      "reqd": 1
+    },
+    {
+      "fieldname": "runtime_revision",
+      "label": "Runtime revision",
+      "fieldtype": "Data"
+    },
+    {
+      "fieldname": "permission_revision",
+      "label": "Permission revision",
+      "fieldtype": "Data"
+    },
+    {
+      "fieldname": "model_calls",
+      "label": "Model calls",
+      "fieldtype": "Int",
+      "default": "0"
+    },
+    {
+      "fieldname": "model_input_bytes",
+      "label": "Model input bytes",
+      "fieldtype": "Int",
+      "default": "0"
+    },
+    {
+      "fieldname": "model_output_tokens_reserved",
+      "label": "Reserved output tokens",
+      "fieldtype": "Int",
+      "default": "0"
+    },
+    {
+      "fieldname": "capability_hash",
+      "label": "Capability hash",
+      "fieldtype": "Data"
+    },
+    {
+      "fieldname": "expires_at",
+      "label": "Expires at",
+      "fieldtype": "Datetime",
+      "search_index": 1
+    },
+    {
+      "fieldname": "queue_expires_at",
+      "label": "Queue expires at",
+      "fieldtype": "Datetime",
+      "search_index": 1
+    },
+    {
+      "fieldname": "needs_input",
+      "label": "Needs input",
+      "fieldtype": "Long Text"
+    },
+    {
+      "fieldname": "provider_failures",
+      "label": "Provider failures",
+      "fieldtype": "Int",
+      "default": "0"
+    },
+    {
+      "fieldname": "answer_flagged",
+      "label": "Answer flagged",
+      "fieldtype": "Check",
+      "default": "0"
+    },
     {
       "fieldname": "conversation",
       "label": "conversation",
       "fieldtype": "Link",
-      "options": "DS Conversation"
+      "options": "DS Conversation",
+      "search_index": 1
     },
     {
       "fieldname": "request_id",
@@ -76,7 +141,8 @@
       "fieldname": "status",
       "label": "status",
       "fieldtype": "Select",
-      "options": "Queued\nRunning\nCancelling\nCancelled\nSucceeded\nFailed\nNeedsInput"
+      "options": "Queued\nRunning\nCancelling\nCancelled\nSucceeded\nFailed\nNeedsInput",
+      "search_index": 1
     },
     {
       "fieldname": "answer",
@@ -97,6 +163,48 @@
       "fieldname": "cancel_request_id",
       "label": "cancel_request_id",
       "fieldtype": "Data"
+    },
+    {
+      "fieldname": "model",
+      "label": "Model actually used",
+      "fieldtype": "Data",
+      "read_only": 1
+    },
+    {
+      "fieldname": "provider_request_ids",
+      "label": "Provider request ids",
+      "fieldtype": "Long Text",
+      "read_only": 1
+    },
+    {
+      "fieldname": "actual_input_tokens",
+      "label": "Input tokens the provider reported",
+      "fieldtype": "Int",
+      "read_only": 1
+    },
+    {
+      "fieldname": "actual_output_tokens",
+      "label": "Output tokens the provider reported",
+      "fieldtype": "Int",
+      "read_only": 1
+    },
+    {
+      "fieldname": "duration_ms",
+      "label": "Milliseconds from claim to finish",
+      "fieldtype": "Int",
+      "read_only": 1
+    },
+    {
+      "fieldname": "skill_versions",
+      "label": "Skill versions this run loaded",
+      "fieldtype": "Long Text",
+      "read_only": 1
+    },
+    {
+      "fieldname": "usage_unknown_calls",
+      "label": "Model calls whose usage the provider did not report",
+      "fieldtype": "Int",
+      "read_only": 1
     }
   ],
   "permissions": [

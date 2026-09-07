@@ -1,5 +1,5 @@
 {
- "doctype":"DocType","name":"DS Configuration Confirmation","module":"DSHERP Bridge","custom":0,"engine":"InnoDB","autoname":"hash","sort_field":"creation","sort_order":"DESC",
+ "doctype":"DocType","name":"DS Configuration Confirmation","module":"DSHERP Bridge","custom":0,"engine":"InnoDB","autoname":"hash","sort_field":"creation","sort_order":"DESC","track_changes":1,
  "field_order":["bundle","payload","digest","expires_at","status"],
  "fields":[
   {"fieldname":"bundle","label":"Configuration bundle","fieldtype":"Link","options":"DS Configuration Bundle","reqd":1},
