@@ -57,6 +57,7 @@
 - [计划 2：运行底座可靠性](docs/superpowers/plans/2026-09-04-runtime-reliability.md)
 - [计划 3：部署制品与安全边界 证据](docs/engineering/deployment-security-evidence.md)
 - [部署 runbook（单 Linux 主机 + Compose + 自建镜像）](docs/engineering/deployment-runbook.md)
+- [外部参考：PenguinHarness 对 dsherp 的可借鉴之处](docs/engineering/penguin-harness-reference-2026-09-07.md)
 
 ## 最小验证
 
