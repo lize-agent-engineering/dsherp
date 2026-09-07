@@ -1,5 +1,4 @@
 """Real NeedsInput state, event, capability finalization, and public transcript."""
-import json
 import os
 from pathlib import Path
 import subprocess

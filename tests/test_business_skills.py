@@ -1,7 +1,5 @@
 import shutil
 import json
-import hashlib
-from pathlib import Path
 import pytest
 from dsherp.runtime_revision import verify_business_skills,ROOT
 

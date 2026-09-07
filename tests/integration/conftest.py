@@ -10,6 +10,16 @@ import pytest
 
 from infra.v16_integration_queue import purge_validation_jobs, purge_validation_jobs_if_backlogged
 
+INTEGRATION_DIR = Path(__file__).resolve().parent
+
+
+def pytest_collection_modifyitems(items):
+    """Every item under this directory is an integration test; the marker is what
+    `-m integration` selects and what the junit report groups by."""
+    for item in items:
+        if INTEGRATION_DIR in Path(item.path).resolve().parents:
+            item.add_marker(pytest.mark.integration)
+
 _SEED_WORKER_HEARTBEAT = """
 import os,frappe
 from frappe.utils import now_datetime

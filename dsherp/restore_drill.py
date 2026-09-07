@@ -16,7 +16,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from dsherp import admin, backup, backup_sets, backup_status, deploy_env, release_snapshot
+from dsherp import admin, backup, backup_sets, backup_status, deploy_env
 from dsherp.admin import Fault, ROOT
 
 DRILL_PROJECT = 'dsherp-restore'

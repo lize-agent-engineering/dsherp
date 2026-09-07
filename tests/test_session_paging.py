@@ -3,7 +3,6 @@
 Every conversation the list shows is still authorized exactly as before (provenance is
 re-checked before a title or a timestamp is exposed); what changed is that conversations
 outside the page are no longer loaded to produce it."""
-import pytest
 
 from frappe_app.dsherp_bridge import paging
 

@@ -11,7 +11,8 @@ import sys
 import frappe
 from frappe.utils.password import update_password
 
-kind = seed_input['kind']
+# seed_input is injected into globals by run_identity_seed.py before this script runs.
+kind = seed_input['kind']  # noqa: F821
 if kind not in ('platform', 'beta'):
     raise RuntimeError('Unexpected validation target')
 site = f'dsherp-{kind}.localhost'

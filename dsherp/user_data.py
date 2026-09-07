@@ -14,7 +14,6 @@ Two consequences are stated rather than hidden:
     cleared here, so those versions are removed with the columns.
 
 Masking in the interface is not deletion, and nothing here masks."""
-import json
 import time
 
 FORMAT = 1

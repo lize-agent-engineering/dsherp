@@ -7,7 +7,6 @@ import datetime
 import json
 from pathlib import Path
 
-import pytest
 
 from dsherp import business_credentials as policy
 

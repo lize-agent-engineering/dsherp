@@ -1,7 +1,6 @@
 """Operating one deployment: every step asks what exists before it changes anything."""
 import hashlib
 import json
-import os
 from pathlib import Path
 
 import pytest

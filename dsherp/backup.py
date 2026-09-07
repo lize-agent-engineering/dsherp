@@ -202,7 +202,6 @@ class _Window:
             try:
                 action()
             except Exception as error:  # a cleanup failure must not hide the original one
-                admin_log = getattr(admin, 'Fault', Exception)
                 print(f'清理步骤失败：{type(error).__name__}: {error}', file=__import__('sys').stderr)
 
 

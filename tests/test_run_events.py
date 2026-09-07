@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 from dsherp.context_mcp import post
 from dsherp import run_events as re_

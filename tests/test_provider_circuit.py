@@ -53,7 +53,6 @@ def test_breaker_fastfails_illegal_outcome_and_params():
 
 
 def test_breaker_does_not_read_clock():
-    import dsherp.provider_circuit as circuit
     import time
     monkey=time.time
     time.time=lambda:(_ for _ in ()).throw(AssertionError('clock'))
