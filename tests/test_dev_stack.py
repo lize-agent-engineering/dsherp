@@ -145,7 +145,9 @@ class FakeHost:
                              "readable\n" if self.secrets_readable else "", "Permission denied")
             self.sites.add({"platform-provision": "dsherp-platform.localhost",
                             "beta-provision": "dsherp-beta.localhost",
-                            "daily-provision": "dsherp-daily.localhost"}[tail[-1]])
+                            "daily-provision": "dsherp-daily.localhost",
+                            "test-provision": "dsherp-test.localhost",
+                            "platform-test-provision": "dsherp-platform-test.localhost"}[tail[-1]])
             return _done(argv)
         if "down" in argv:
             self.sites.clear()
@@ -243,6 +245,7 @@ EXPECTED_ORDER = [
     "bench --site dsherp-daily.localhost clear-cache",
     "bench --site dsherp-beta.localhost clear-cache",
     "bench --site dsherp-daily.localhost backup --with-files",
+    "compose run test-provision", "compose run platform-test-provision",
 ]
 
 
@@ -532,11 +535,24 @@ def test_scan_artifacts_names_the_leaking_secret_and_the_file_but_never_the_valu
     assert dev_stack.main(["scan-artifacts", str(clean)]) == 0
 
 
-def test_native_tests_is_an_explicit_stub_until_the_frappe_slice_wires_it(stack, tmp_path):
-    with pytest.raises(dev_stack.Fault) as error:
-        dev_stack.run_native_tests(stack.resolved, junit=tmp_path / "junit-native", runner=stack.host)
-    assert "尚未接线" in str(error.value)
-    assert not (tmp_path / "junit-native").exists()
+def test_native_tests_hands_the_run_to_the_shared_driver_with_this_stack_s_runner(stack, tmp_path, monkeypatch):
+    """The driver owns how a native run is judged (dsherp/native_tests.py); dev_stack only
+    supplies the resolved environment, the output directory and the runner."""
+    seen = {}
+    monkeypatch.setattr(dev_stack.native_tests, "run_native_tests",
+                        lambda resolved, **options: seen.update(resolved=resolved, **options) or {"ok": True})
+    assert dev_stack.run_native_tests(stack.resolved, out=tmp_path / "native", runner=stack.host) == {"ok": True}
+    assert seen["resolved"] is stack.resolved and seen["out"] == tmp_path / "native" and seen["runner"] is stack.host
+
+
+def test_provisioning_the_two_test_sites_is_a_recorded_rerun_safe_step(stack):
+    """`bench run-tests` truncates tables, so it may never touch the four development Sites.
+    The throwaway Sites are made by the same driver that makes the stack, last."""
+    step = dev_stack.STEPS[-1]
+    assert step.name == "test-sites" and step.rerun_safe
+    dev_stack.provision(stack)
+    assert _mutations(stack.host)[-2:] == ["compose run test-provision", "compose run platform-test-provision"]
+    assert "test-sites" in json.loads(stack.ledger_path.read_text())["steps"]
 
 
 def test_the_cli_maps_a_fault_to_exit_code_2_and_prints_it_on_stderr(monkeypatch, capsys):

@@ -25,7 +25,8 @@ CONTROL_SECRETS_BY_ENV = {
     'prod': ('db_root_password', 'platform_admin_password', 'tenant_admin_password',
              'backup_repository_password', 'backup_secrets_repository_password'),
     'dev': ('db_root_password', 'admin_password', 'daily_admin_password',
-            'backup_repository_password', 'backup_secrets_repository_password'),
+            'backup_repository_password', 'backup_secrets_repository_password',
+            'test_admin_password'),
 }
 # Identities the operator obtains from the object storage provider; `secrets init` cannot
 # invent them, so doctor only checks that they are present and private once repositories are

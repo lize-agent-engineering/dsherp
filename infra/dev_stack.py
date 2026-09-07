@@ -31,7 +31,7 @@ _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from dsherp import admin, deploy_env  # noqa: E402  # after the sys.path bootstrap above
+from dsherp import admin, deploy_env, native_tests  # noqa: E402  # after the sys.path bootstrap above
 
 
 ROOT = deploy_env.ROOT
@@ -342,6 +342,12 @@ STEPS = [
          lambda s: s.bench('daily').run('bench', '--site', 'dsherp-daily.localhost', 'backup', '--with-files',
                                         timeout=900),
          probe=_backup, inspect='backend 里 sites/dsherp-daily.localhost/private/backups'),
+    # Last, and only once every development Site exists: `bench run-tests` truncates tables,
+    # so the native tests get their own throwaway Sites and are never pointed at the four above.
+    Step('test-sites',
+         lambda s: native_tests.provision_test_sites(s.resolved, root=s.root, runner=s.runner),
+         rerun_safe=True,
+         inspect='backend 与 platform-backend 里的 dsherp-test.localhost / dsherp-platform-test.localhost'),
 ]
 
 
@@ -562,12 +568,10 @@ def leaked_secrets(runtime_dir, paths, *, as_text=False):
     return leaks
 
 
-def run_native_tests(resolved, *, junit, runner=subprocess.run):
-    """Frappe's own test runner inside the containers, writing one junit file per app. Wired by
-    the Frappe-native-tests slice of plan 5; until then this is a loud stub, never a green one."""
-    raise Fault('native-tests 尚未接线：由计划 5 的原生测试切片实现'
-                '（dsherp-test.localhost 上 bench run-tests --app dsherp_bridge --junit-xml-output …，'
-                f'平台测试站同理）；junit 应写到 {junit}')
+def run_native_tests(resolved, *, out, runner=subprocess.run):
+    """Frappe's own test runner on the two throwaway test Sites. How a run is judged lives in
+    dsherp/native_tests.py, next to the facts about the pinned image that decide it."""
+    return native_tests.run_native_tests(resolved, out=out, runner=runner)
 
 
 def _print(payload):
@@ -584,8 +588,8 @@ def main(argv=None):
     provision_parser = sub.add_parser('provision', help='栈已 up 时只做开通步骤')
     provision_parser.add_argument('--skip-runtime-volume', action='store_true')
     sub.add_parser('status', help='台账、运行中的服务、四站 ping、主机名解析；不含任何密钥')
-    native = sub.add_parser('native-tests', help='容器内跑 Frappe 原生测试并写 junit')
-    native.add_argument('--junit', required=True, type=Path)
+    native = sub.add_parser('native-tests', help='两个测试站上跑 Frappe 原生测试，输出与解析结果写到 --out')
+    native.add_argument('--out', required=True, type=Path)
     down_parser = sub.add_parser('down', help='停栈；--volumes 连数据卷、agent 运行时卷、台账与开通产出的凭据文件'
                                               '一起删（控制面密钥保留）')
     down_parser.add_argument('--volumes', action='store_true')
@@ -606,7 +610,7 @@ def main(argv=None):
         elif arguments.command == 'status':
             _print(status(stack))
         elif arguments.command == 'native-tests':
-            _print(run_native_tests(stack.resolved, junit=arguments.junit))
+            _print(run_native_tests(stack.resolved, out=arguments.out))
         elif arguments.command == 'down':
             _print(down(stack, volumes=arguments.volumes))
         elif arguments.command == 'scan-artifacts':

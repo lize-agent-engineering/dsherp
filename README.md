@@ -91,6 +91,29 @@ docker compose -f infra/compose.validation.yml up -d
 
 开发参考 skills 位于 `.agents/skills/dsh-sdk-development/` 和 `.agents/skills/erpnext-integration/`；不作为业务运行时 skills。
 
+### 原生测试（Frappe 内）
+
+两个专用测试站只给 `frappe_app/*/tests` 下的测试用，nginx 不暴露它们（对两站都回 421）：
+`dsherp-test.localhost`（backend，frappe/erpnext/dsherp_bridge，合成公司 DNT）与
+`dsherp-platform-test.localhost`（platform-backend，frappe/dsherp_platform）。
+`dev_stack.py up --provision` 的最后一步会建它们。
+
+```sh
+.venv/bin/python infra/dev_stack.py native-tests --out work/junit-native
+docker compose -f infra/compose.validation.yml exec -T backend \
+  bench --site dsherp-test.localhost run-tests --app dsherp_bridge --module dsherp_bridge.tests.test_harness
+```
+
+改了 `frappe_app/` 之后先 `docker restart dsherp-validation-backend-1 dsherp-validation-platform-backend-1`
+（gunicorn 缓存模块；`bench run-tests` 是另一个进程，本身不缓存）。
+
+成败不由 `bench` 的退出码单独判定：站点没开 `allow_tests` 时它打印
+「Testing is disabled for the site!」并返回 0，什么也没跑。判据是退出码非零即失败，
+**且**必须出现 runner 自己的 `Running N <category> tests for <app>` 且 N>0
+（`dsherp/native_tests.py`）。镜像里没有 `xmlrunner`，`--junit-xml-output` 不写文件，
+所以产出是每个 App 一份 `.log` 和一份解析后的 `.json`。
+
+
 ## 技术方向
 
 原生 Frappe Desk 承载业务页面与基础管理；自定义 App 通过扩展入口加载 React + Ant Design 的 Agent、构建及发布页面；Python 应用服务通过 DSH SDK 驱动独立 Runtime；Frappe 自定义 App 封装业务操作；ERPNext 承载业务规则和单据。版本需经过首次验证后固定，不把上游 master 当作稳定依赖。

@@ -71,11 +71,16 @@ jobs:
       - name: 从零拉起并开通四站
         run: .venv/bin/python infra/dev_stack.py up --provision
 
-      - name: 集成测试（约 212 条；每条 600 秒安全网，无重试）
+      - name: 集成测试（约 214 条；每条 600 秒安全网，无重试）
         run: |
           mkdir -p work
           .venv/bin/python -m pytest tests/integration -m integration -q \
             --junitxml work/junit-integration.xml --timeout 600 --durations=40
+
+      # up --provision 的最后一步已经建好两个测试站。判定不看 junit：镜像里没有 xmlrunner，
+      # --junit-xml-output 不写文件；看退出码与 runner 自报的 Running N ... tests for <app>。
+      - name: Frappe 原生测试（两个测试站）
+        run: .venv/bin/python infra/dev_stack.py native-tests --out work/native
 
       - name: 现场快照（总是）
         if: always()
@@ -90,7 +95,8 @@ jobs:
       - name: 泄漏自检：工件里不能出现 .runtime 中任何密钥值（否则不上传）
         if: always()
         # .runtime/control 上一步交给了 uid 1000，root 才读得到。
-        run: sudo -E .venv/bin/python infra/dev_stack.py scan-artifacts work/junit-*.xml work/compose.log work/dev-stack-ledger.json work/dev-stack-status.json
+        run: sudo -E .venv/bin/python infra/dev_stack.py scan-artifacts work/junit-*.xml work/native/*.log
+          work/native/*.json work/compose.log work/dev-stack-ledger.json work/dev-stack-status.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -98,6 +104,7 @@ jobs:
           name: nightly-${{ github.run_number }}
           path: |
             work/junit-*.xml
+            work/native/
             work/compose.log
             work/dev-stack-ledger.json
             work/dev-stack-status.json
