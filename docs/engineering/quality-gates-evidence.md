@@ -144,7 +144,7 @@ Linux 上的读数与本机不同，且更多：python job 是 **812 passed**（
 |---|---|---|---|
 | 1 | [34119113299](https://github.com/lize-agent-engineering/dsherp/actions/runs/34119113299) | 第 11 分钟失败于 `up --provision`，14/27 步 | 报告只有 8 行、且被 JSONDecodeError 的 traceback 占满，无法定位 |
 | 2 | [34145246685](https://github.com/lize-agent-engineering/dsherp/actions/runs/34145246685) | 同一步失败 | 报告可读了，但它指出的是**修复本身引入的误报** |
-| 3 | 进行中 | — | — |
+| 3 | [34157621873](https://github.com/lize-agent-engineering/dsherp/actions/runs/34157621873) | **开通成功（28/28 步）**，集成 `3 failed, 198 passed, 14 errors / 21:30` | 驱动在真实 Linux 上从零跑通了；暴露出一条只在全新栈上出现的 SSO 回调 403 |
 
 第一跑的其它读数（都来自这一轮新加的工件，本机拿不到）：
 - **没有任何容器被 OOM 杀掉**（`container-states.txt` 里八个容器全是 `OOMKilled=false ExitCode=0`）。
@@ -282,8 +282,15 @@ GitHub runner 16 GiB、本机 Docker VM 8.3 GiB 都容得下。
 `memswap_limit` 必须等于 `mem_limit`（否则上限形同虚设）、默认值很大的缓冲区必须写在命令行上、
 它们的合计要给数据字典与打开表留出至少三分之二的空间。
 
-**2g 这个数字目前来自推算，不是实测。** 从零重建（B.7）会给出六个站建完加一轮集成加原生测试
-之后的真实峰值，届时按数据修正。
+**2g 这个数字后来拿到了实测。** nightly 第三次
+（[run 34157621873](https://github.com/lize-agent-engineering/dsherp/actions/runs/34157621873)）
+在专用 runner 上从零建了六个站（台账 28/28 步）再跑完一轮全量集成，
+数据库内存峰值 **625.5 MiB / 2 GiB（30.5%）**，采样每 15 秒一次、覆盖开通与其后每一步。
+
+这个读数比本机的 521.7 MiB 高约 100 MiB，差额正是六站建站（含两次 ERPNext 安装）的 DDL 开销——
+也就是我第一次判断时漏算的那一段。按它回看：旧的 1 GiB 上限在这条路径上会到 61%，
+单跑不至于死，但没有余量；而 25 小时跨多次运行的累积正是本机两次撞顶的原因。
+2 GiB 留出 3.3 倍余量，同时常驻合计 4064 MiB 在 16 GiB 的 runner 上仍然宽松。
 
 ## 切片 D：原生测试站与 G7 权限矩阵
 
