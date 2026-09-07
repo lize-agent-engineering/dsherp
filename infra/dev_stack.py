@@ -80,6 +80,21 @@ SECRET_KEYS = ('api_secret', 'password', 'client_secret', 'secret')
 Fault = admin.Fault
 
 
+def _stream(name, text, lines=40):
+    """The tail of one stream, said to be that stream and no other.
+
+    The first nightly died eleven minutes into provisioning and the report was eight lines of
+    the json module's own frames: no command, no script, no way to tell which call had returned
+    nothing. Two streams sharing one small quota means the one that matters can be crowded out
+    entirely, and on CI nobody gets to look again."""
+    body = (text or '').strip()
+    if not body:
+        return f'--- {name}：空 ---\n'
+    rows = body.splitlines()
+    elided = f'（省略前 {len(rows) - lines} 行）\n' if len(rows) > lines else ''
+    return f'--- {name}（最后 {min(len(rows), lines)} 行）---\n' + elided + '\n'.join(rows[-lines:]) + '\n'
+
+
 def now_iso():
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
 
@@ -119,8 +134,8 @@ class Stack:
         io = {'input': stdin} if stdin is not None else {'stdin': subprocess.DEVNULL}
         result = self.runner(command, cwd=str(self.root), text=True, capture_output=True, timeout=timeout, **io)
         if result.returncode:
-            tail = '\n'.join(((result.stderr or '') + '\n' + (result.stdout or '')).strip().splitlines()[-8:])
-            raise Fault(f'命令失败：{" ".join(command[:5])} …\n{tail}')
+            raise Fault(f'命令失败（退出码 {result.returncode}）：{" ".join(command)}\n'
+                        + _stream('stderr', result.stderr) + _stream('stdout', result.stdout))
         return result.stdout or ''
 
     def succeeds(self, command, *, timeout=120):

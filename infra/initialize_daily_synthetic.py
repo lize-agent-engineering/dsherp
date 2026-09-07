@@ -16,7 +16,16 @@ def execute(container, site, body, timeout=180):
     result = subprocess.run(['docker', 'exec', '-i', container, PYTHON, '-'], input=script,
                             text=True, capture_output=True, timeout=timeout)
     if result.returncode:
-        raise RuntimeError(f'Synthetic daily initialization failed in {container}; inspect exact state before retrying')
+        raise RuntimeError(f'Synthetic daily initialization failed in {container} (exit {result.returncode}); '
+                           f'inspect exact state before retrying\n{(result.stderr or "").strip()[-2000:]}')
+    # Exit 0 proves nothing ran badly; it does not prove anything ran. Every body here ends in a
+    # print whose value the caller parses, so silence is a failure - and one that has to name
+    # itself, or it surfaces several frames away as json complaining about column 1, which is
+    # exactly how the first nightly reported it.
+    if not (result.stdout or '').strip():
+        raise RuntimeError(f'Synthetic daily initialization printed nothing in {container} for {site} '
+                           f'although it exited 0; the step did not run to its end\n'
+                           f'{(result.stderr or "").strip()[-2000:]}')
     return result.stdout
 
 
