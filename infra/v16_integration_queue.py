@@ -10,6 +10,10 @@ PURGE_TARGETS = (
     ("dsherp-validation-backend-1", "dsherp-daily.localhost"),
     ("dsherp-validation-beta-backend-1", "dsherp-beta.localhost"),
     ("dsherp-validation-platform-backend-1", "dsherp-platform.localhost"),
+    # The throwaway native-test Sites sit on the same two benches, so their jobs land in the
+    # same redis queues as the development ones and count against the same insert cap.
+    ("dsherp-validation-backend-1", "dsherp-test.localhost"),
+    ("dsherp-validation-platform-backend-1", "dsherp-platform-test.localhost"),
 )
 INSPECT_COMMAND = [
     "docker","exec","dsherp-validation-backend-1","bench","--site",
@@ -21,6 +25,21 @@ _PURGEABLE_METHODS = {
     "frappe.core.doctype.user.user.create_contact",
     "frappe.model.delete_doc.delete_dynamic_links",
 }
+# `bench migrate` enqueues the website route-index rebuild and the setup wizard enqueues the
+# timezone write, both as bare function objects, so the queue reports repr(f) rather than a
+# dotted path. Both are idempotent housekeeping on a synthetic Site, and the timezone is
+# already written synchronously (checked on dsherp-test.localhost: Asia/Shanghai was set
+# before this job ever ran). Only these two names are accepted - anything else is still an
+# unexpected job, because this module refuses to purge what it cannot name.
+_PURGEABLE_FUNCTIONS = {"build_index_for_all_routes", "set_timezone"}
+_FUNCTION_REPR = re.compile(r"^<function (?P<name>[A-Za-z_][A-Za-z0-9_]*) at 0x[0-9a-f]+>$")
+
+
+def _purgeable(method):
+    if method in _PURGEABLE_METHODS:
+        return True
+    match = _FUNCTION_REPR.match(method) if isinstance(method, str) else None
+    return bool(match) and match.group("name") in _PURGEABLE_FUNCTIONS
 
 
 
@@ -66,7 +85,7 @@ def purge_validation_jobs(*, run=subprocess.run):
     jobs=_inspect(run)
     sites={site for _,site in PURGE_TARGETS}
     if (not isinstance(jobs,dict) or not set(jobs)<=sites
-            or any(not isinstance(methods,list) or not set(methods)<=_PURGEABLE_METHODS
+            or any(not isinstance(methods,list) or not all(_purgeable(method) for method in methods)
                    for methods in jobs.values())):
         raise RuntimeError("Unexpected validation queue jobs")
     purged={}
