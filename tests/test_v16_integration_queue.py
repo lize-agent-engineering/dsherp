@@ -66,9 +66,9 @@ def test_empty_bench_output_means_the_shared_queue_is_empty():
 def test_a_stack_that_cannot_answer_names_itself_instead_of_raising_a_bare_subprocess_error():
     """Every module in the integration suite touches the shared queue before its first test.
     When the stack is gone the old code raised CalledProcessError from `check=True`, so one
-    dead container produced a hundred-odd identical tracebacks and named nothing. The four-Site
-    database has a 1 GiB mem_limit and `restart: no`: it is killed with 137 and stays dead, and
-    that is the case this message has to make findable."""
+    dead container produced a hundred-odd identical tracebacks and named nothing. The one
+    database that serves every Site runs with `restart: "no"`: once its memory limit kills it
+    with 137 it stays dead, and that is the case this message has to make findable."""
     def run(command, **_options):
         return CompletedProcess(command, 1, "",
                                 "Error response from daemon: container dsherp-validation-db-1 is not running")

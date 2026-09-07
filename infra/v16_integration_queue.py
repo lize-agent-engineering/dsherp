@@ -49,8 +49,8 @@ def _inspect(run):
     Every module in the integration suite asks this before its first test, so a stack that
     cannot answer used to surface as one `CalledProcessError` per remaining test - a hundred
     identical tracebacks naming nothing. The most common cause by far is that a container is
-    simply gone: the four-Site database runs with `mem_limit: 1g` and `restart: "no"`, so the
-    kernel kills it with 137 under a long run and it stays dead until someone starts it."""
+    simply gone: the one database that serves every Site runs with `restart: "no"`, so once the
+    kernel kills it at its memory limit with 137 it stays dead until someone starts it."""
     inspection=run(INSPECT_COMMAND,check=False,capture_output=True,text=True,timeout=60)
     if inspection.returncode:
         tail="\n".join(((inspection.stderr or "")+"\n"+(inspection.stdout or "")).strip().splitlines()[-6:])

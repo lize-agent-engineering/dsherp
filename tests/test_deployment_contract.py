@@ -634,3 +634,38 @@ def test_the_native_test_packages_never_reach_a_release_image():
     patterns = _ignore_patterns()
     assert "frappe_app/*/tests" in patterns
     assert not any(pattern in ("frappe_app", "frappe_app/", "**/frappe_app") for pattern in patterns)
+
+
+def _mib(size):
+    """A compose size or a MariaDB size suffix, in MiB."""
+    size = size.strip().lower().rstrip('b')
+    return int(size[:-1]) * 1024 if size.endswith('g') else int(size[:-1])
+
+
+def test_the_database_limit_accounts_for_the_buffers_mariadb_allocates_whatever_we_ask():
+    """One MariaDB serves every Site, and its memory grows with the tables it keeps open.
+
+    The four-Site stack became a six-Site stack when the throwaway native-test Sites arrived:
+    3516 tables across six schemas, with `table_open_cache` saturated at 2000 (measured
+    2026-09-07). The container was killed twice with 137 under a limit that had been chosen
+    for four Sites, and 256 MiB of that limit was going to two caches this workload barely
+    touches - the image's defaults for the MyISAM key cache and the Aria page cache are
+    128 MiB each, and the measured use was 21 KiB and 208 KiB against 18 MyISAM tables
+    holding 2.5 MB.
+
+    So: swap stays off, or the limit stops meaning anything; every buffer with a large default
+    is named on the command line rather than left to be allocated behind the limit's back; and
+    what they add up to has to leave the server room for the dictionary and the open tables,
+    which is the part that actually grows with the Sites."""
+    db = _dev_service("db")
+    limit = _mib(re.search(r"mem_limit:\s*(\S+)", db).group(1))
+    assert _mib(re.search(r"memswap_limit:\s*(\S+)", db).group(1)) == limit, \
+        "memswap_limit 必须等于 mem_limit，否则容器可以悄悄越过自己的上限"
+    command = re.search(r"command:\s*\[(.*?)\]", db, re.S).group(1)
+    named = dict(re.findall(r'--([a-z-]+-size)=(\d+[MG])', command))
+    for buffer in ("innodb-buffer-pool-size", "key-buffer-size", "aria-pagecache-buffer-size"):
+        assert buffer in named, f"{buffer} 的镜像默认值很大，必须写在命令行上，不能留给它在上限背后分配"
+    fixed = sum(_mib(value) for value in named.values())
+    assert fixed * 3 <= limit, (
+        f"固定缓冲区合计 {fixed} MiB，上限只有 {limit} MiB；"
+        "打开表与数据字典才是随站点增长的部分，要给它们留出空间")

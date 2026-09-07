@@ -4,11 +4,18 @@ services:
   db:
     image: mariadb@sha256:2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3
     pull_policy: never
-    mem_limit: 1g
-    memswap_limit: 1g
+    # One MariaDB serves every Site, and its memory grows with the tables it keeps open:
+    # six schemas hold 3516 tables and table_open_cache saturates at 2000 (measured 2026-09-07).
+    # The two throwaway native-test Sites added 1003 of those tables to a limit chosen for four
+    # Sites, and the container was killed twice with 137. Every buffer with a large image
+    # default is named here rather than allocated behind the limit's back: the MyISAM key cache
+    # and the Aria page cache default to 128M each and this workload measured 21 KiB and 208 KiB
+    # of use against 18 MyISAM tables holding 2.5 MB.
+    mem_limit: 2g
+    memswap_limit: 2g
     cpus: 0.4
     restart: "no"
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--skip-character-set-client-handshake", "--innodb-buffer-pool-size=256M"]
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--skip-character-set-client-handshake", "--innodb-buffer-pool-size=256M", "--key-buffer-size=32M", "--aria-pagecache-buffer-size=32M"]
     environment:
       MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
     secrets: [db_root_password]
