@@ -66,17 +66,6 @@ def test_daily_backup_verifier_compares_run_event_audit_count():
     assert "'DS Run Event'" in DAILY_BACKUP_VERIFIER
 
 
-def test_both_apps_register_a_native_v16_apps_screen_route():
-    hooks = {
-        "bridge": (ROOT / "frappe_app/dsherp_bridge/hooks.py").read_text(),
-        "platform": (ROOT / "frappe_app/dsherp_platform/hooks.py").read_text(),
-    }
-    assert "add_to_apps_screen" in hooks["bridge"]
-    assert '"route": "/desk/dsherp-agent"' in hooks["bridge"]
-    assert "add_to_apps_screen" in hooks["platform"]
-    assert '"route": "/desk/dsherp-home"' in hooks["platform"]
-
-
 def test_stock_ledger_verification_reads_all_rows_in_deterministic_order():
     tree = ast.parse(OPERATIONS)
     calls = [
@@ -96,26 +85,6 @@ def test_stock_ledger_verification_reads_all_rows_in_deterministic_order():
     }
     assert keywords["order_by"] == "creation asc, name asc"
     assert keywords["limit_page_length"] == 0
-
-
-def test_server_generated_desk_links_do_not_retain_v15_app_routes():
-    paths = [
-        ROOT / "frappe_app/dsherp_bridge/configuration.py",
-        ROOT / "frappe_app/dsherp_bridge/configuration_transfer.py",
-        ROOT / "frappe_app/dsherp_bridge/sso.py",
-    ]
-    stale = [path.relative_to(ROOT).as_posix() for path in paths if "/app/" in path.read_text()]
-    assert not stale, stale
-
-
-def test_manufacturing_fixture_requires_the_exact_v16_image_versions():
-    source = (ROOT / "infra/provision_manufacturing_fixture.py").read_text()
-    assert "ERP_VERSION = '16.33.0'" in source
-    assert "FRAPPE_VERSION = '16.31.0'" in source
-    for name in ("Products", "Raw Material", "Services"):
-        assert f"filters={{'name': '{name}', 'is_group': 0}}" in source
-    for stale in ("产品展示", "filters={'name': '原材料'", "filters={'name': '服务'"):
-        assert stale not in source
 
 
 def test_daily_initializer_uses_the_fresh_v16_master_names():

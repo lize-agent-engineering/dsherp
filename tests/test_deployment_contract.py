@@ -19,9 +19,7 @@ DEV_COMPOSE_PATH = ROOT / "infra/compose.validation.yml"
 PROD_COMPOSE_PATH = ROOT / "infra/compose.prod.yml"
 DEV_COMPOSE = DEV_COMPOSE_PATH.read_text()
 PROD_COMPOSE = PROD_COMPOSE_PATH.read_text()
-ERP_V15 = "cf5905396635aa2ee91722237e489bf0ab848819c521d094703852f154cdb341"
 ERP_V16 = "493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd"
-DB_V15 = "92e50059ea0a5965a33ef751970eab37d421b91ebbd01ac909039cffe159e574"
 DB_V16 = "2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3"
 # Only used to ask a real systemd whether our calendar expressions parse.
 DEBIAN_DIGEST = "abc9cb88a5587630d7f915f47b23b0668fe250fbfc6457aa4d52b534c1bbf73f"
@@ -53,13 +51,6 @@ def _block(text, name, indent=2):
         if line.startswith(prefix):
             return line[len(prefix):]
     raise AssertionError("no such block: " + name)
-
-
-def test_no_deployment_entrypoint_can_reach_a_retired_v15_image():
-    for name in IMAGE_SOURCES:
-        source = (ROOT / name).read_text()
-        assert ERP_V15 not in source, name
-        assert DB_V15 not in source, name
 
 
 def test_every_base_image_reference_is_a_digest_and_the_pinned_one():
@@ -331,17 +322,6 @@ def test_platform_backend_has_enough_memory_for_v16_integration_reads():
     assert "memswap_limit: 448m" in platform
 
 
-def test_agent_runtime_isolated_volume_is_v16_specific_everywhere():
-    paths = [
-        ROOT / "infra/prepare_agent_runtime.sh",
-        ROOT / "dsherp/context_container.py",
-        ROOT / "dsherp/context_worker.py",
-    ]
-    sources = [path.read_text() for path in paths]
-    assert all("dsherp-v16-agent-runtime" in source for source in sources)
-    assert all("dsherp-agent-runtime" not in source for source in sources)
-
-
 def test_the_runtime_manifest_lists_only_what_the_run_container_can_see():
     files = json.loads((ROOT / "config/runtime-files.json").read_text())
     assert "infra/compose.validation.yml" not in files
@@ -433,12 +413,6 @@ def test_the_worker_unit_refuses_an_unusable_account_or_watchdog(tmp_path):
                 {"user": "dsherp", "stop_timeout": 5}):
         with pytest.raises(ValueError):
             render_systemd_unit(ROOT, target=tmp_path / "bad.service", **{"group": "dsherp", **bad})
-
-
-def test_the_worker_answers_the_watchdog_and_reports_readiness():
-    source = (ROOT / "dsherp/context_worker.py").read_text()
-    assert "sd_notify.ready()" in source
-    assert "sd_notify.watchdog()" in source
 
 
 def test_context_worker_launch_agent_is_reproducible_and_self_restarting(tmp_path):

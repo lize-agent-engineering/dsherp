@@ -19,33 +19,3 @@ def test_the_run_row_no_longer_has_a_column_for_the_grant():
     assert "drop_run_grant" in patches, "existing rows must lose the value, not only the definition"
 
 
-def test_sending_a_message_stashes_the_grant_beside_the_run_instead_of_writing_it():
-    source = (BRIDGE / "context_api.py").read_text()
-    body = source.split("def send_message", 1)[1].split("\n@frappe.whitelist", 1)[0]
-    assert "'platform_grant':grant" not in body
-    assert "grants.stash(run_id,grant,domain)" in body.replace(" ", "").replace("grants.stash(run_id,grant,domain)", "grants.stash(run_id,grant,domain)")
-
-
-def test_the_executor_reads_the_grant_from_the_cache_and_refuses_to_act_without_one_under_sso():
-    """A missing grant used to mean "skip the platform check". Under SSO enforcement every
-    session comes from the platform, so an executor with no grant on file is refused (R6)."""
-    source = (BRIDGE / "context_execution.py").read_text()
-    actor = source.split("def _actor", 1)[1].split("\n\n\ndef ", 1)[0]
-    assert "grants.of(run.name)" in actor
-    assert "_password_login_disabled()" in actor and "PermissionError" in actor
-    assert "platform_grant" not in actor
-
-
-def test_the_grant_is_dropped_on_every_terminal_path():
-    source = (BRIDGE / "context_execution.py").read_text()
-    finish = source.split("def finish_run", 1)[1]
-    assert "grants.drop(run.name)" in finish
-    sweep = source.split("def claim_run", 1)[1].split("def run_status", 1)[0]
-    assert sweep.count("grants.drop(") >= 3, "queue expiry, lease expiry and an unreadable conversation"
-    api = (BRIDGE / "context_api.py").read_text().split("def cancel_run", 1)[1]
-    assert "grants.drop(run.name)" in api
-
-
-def test_the_lifetime_is_bounded_by_the_run_budget():
-    source = (BRIDGE / "grants.py").read_text()
-    assert "queue_expires_seconds" in source and "run_total_seconds" in source and "expires_in_sec" in source

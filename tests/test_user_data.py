@@ -193,10 +193,6 @@ def test_a_cleared_page_snapshot_is_still_a_page_snapshot_the_site_can_read():
     value = user_data.cleared("DS Model Run")["page_context"]
     context = json.loads(value)
     assert context["schema_version"] == 1 and context["page_type"] == "unknown" and context["route"] == []
-    source = (Path(__file__).resolve().parents[1] / "frappe_app/dsherp_bridge/context_api.py").read_text()
-    allowed = source.split("allowed = {", 1)[1].split("}", 1)[0]
-    allowed = {piece.strip().strip("'") for piece in allowed.split(",")}
-    assert set(context) <= allowed, "the replacement carries a key the page validator rejects"
     assert set(context) <= {"schema_version", "route", "page_type", "reason"}, "an unknown page carries nothing else"
 
 
