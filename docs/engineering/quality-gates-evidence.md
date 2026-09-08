@@ -18,9 +18,18 @@ Frappe `16.31.0`，容器 Python `3.14.7`，DSH SDK/Runtime `0.1.1rc1`。
 **G9 尚未通过**，也不该由本文宣称通过：它要的是 30 天的运行历史，只能由 workflow 自己证明。
 本文只负责把起点钉死，并说明这个起点凭什么算数。
 
-代码与文档已全部合入 `main`：[PR #11](https://github.com/lize-agent-engineering/dsherp/pull/11)
-（六个切片）、[#13](https://github.com/lize-agent-engineering/dsherp/pull/13)、
-[#14](https://github.com/lize-agent-engineering/dsherp/pull/14)（每夜可诊断性的两轮修正）。
+代码与文档已全部合入 `main`：
+
+| PR | 内容 | 是否改代码 |
+|---|---|---|
+| [#11](https://github.com/lize-agent-engineering/dsherp/pull/11) | 六个切片 | 是 |
+| [#13](https://github.com/lize-agent-engineering/dsherp/pull/13)、[#14](https://github.com/lize-agent-engineering/dsherp/pull/14) | 每夜可诊断性的两轮修正 | 是 |
+| [#16](https://github.com/lize-agent-engineering/dsherp/pull/16) | 开通发出的业务凭据必须带登记窗口——**改变每个新建站的业务行为** | 是 |
+| [#18](https://github.com/lize-agent-engineering/dsherp/pull/18) | `down` 激活全部 profile——**改变拆栈路径** | 是 |
+| [#15](https://github.com/lize-agent-engineering/dsherp/pull/15)、[#17](https://github.com/lize-agent-engineering/dsherp/pull/17) | 对本文的证据回填与 G9 起算点 | 否 |
+
+[#12](https://github.com/lize-agent-engineering/dsherp/pull/12) 是故意让 `dist` 一致性门变红的
+演练 PR，按设计关闭、未合入（见切片 A）。
 
 门禁要保证的三件事，与它不保证的：
 - 学过的失败不能悄悄回来 —— 每个 PR 与每次合入 main 自动跑 ruff、非集成 pytest、vitest、
@@ -149,7 +158,8 @@ Linux 上的读数与本机不同，且更多：python job 是 **812 passed**（
 **所谓「从零」会悄悄接着旧数据跑**。nightly 第 17 步之所以一直是绿的，
 只是因为 runner 上从未启动过那个 profile；这条路径只有在本机才暴露得出来，
 而计划正是这么写的：「拆不掉也算本夜失败，因为本机重建靠同一条路径」。
-修法：`down` 激活 compose 声明的全部三个 profile（`control`/`scheduled`/`ops`），并补行为测试。
+修法：`down` 激活 compose 声明的全部三个 profile（`control`/`scheduled`/`ops`），并补行为测试
+（[PR #18](https://github.com/lize-agent-engineering/dsherp/pull/18)）。
 
 修完之后的实测：
 
@@ -168,14 +178,14 @@ nightly 证明的是 Linux runner，这里证明的是 macOS 本机，两条路�
 
 三次从零的内存峰值高度一致：runner 上 625.5 / 642.5 MiB，本机 646.1 MiB，都在 2 GiB 的 32% 以内。
 
-### nightly 的三次尝试：每一次都换来一个只有真实 runner 才给得出的事实
+### nightly 的五次尝试：每一次都换来一个只有真实 runner 才给得出的事实
 
 | 次 | run | 结果 | 学到什么 |
 |---|---|---|---|
 | 1 | [34119113299](https://github.com/lize-agent-engineering/dsherp/actions/runs/34119113299) | 第 11 分钟失败于 `up --provision`，14/27 步 | 报告只有 8 行、且被 JSONDecodeError 的 traceback 占满，无法定位 |
 | 2 | [34145246685](https://github.com/lize-agent-engineering/dsherp/actions/runs/34145246685) | 同一步失败 | 报告可读了，但它指出的是**修复本身引入的误报** |
-| 3 | [34157621873](https://github.com/lize-agent-engineering/dsherp/actions/runs/34157621873) | **开通成功（28/28 步）**，集成 `3 failed, 198 passed, 14 errors / 21:30` | 驱动在真实 Linux 上从零跑通了；暴露出一条只在全新栈上出现的 SSO 回调 403 |
-| 4 | [34150819690](https://github.com/lize-agent-engineering/dsherp/actions/runs/34150819690) | 同一根因 | 确认第 3 次不是偶发 |
+| 3 | [34150819690](https://github.com/lize-agent-engineering/dsherp/actions/runs/34150819690) | 同第 2 次失败于 `up --provision` 的误报，台账 14 步，**集成未执行** | 确认第 2 条的误报是稳定复现，不是偶发 |
+| 4 | [34157621873](https://github.com/lize-agent-engineering/dsherp/actions/runs/34157621873) | **开通成功（28/28 步）**，集成 `3 failed, 198 passed, 14 errors / 21:30` | 驱动在真实 Linux 上从零跑通了；暴露出一条只在全新栈上出现的 SSO 回调 403 |
 | 5 | **[34172880426](https://github.com/lize-agent-engineering/dsherp/actions/runs/34172880426)** | **17/17 步全绿** | **G9 起算点** |
 
 ### 第五次：绿夜的读数（2026-09-08，00:18:15 → 01:03:47，共 45 分 32 秒）
@@ -201,22 +211,29 @@ nightly 证明的是 Linux runner，这里证明的是 macOS 本机，两条路�
 |---|---|---|
 | 1 | 失败报告只有 8 行且被 traceback 占满，无法定位 | [PR #13](https://github.com/lize-agent-engineering/dsherp/pull/13) |
 | 2 | 上一条的修复过宽，对不打印的断言块误报 | [PR #14](https://github.com/lize-agent-engineering/dsherp/pull/14) |
-| 3 | **从零建站发出的业务凭据没有登记窗口**，SSO 回调必然 403 | [PR #16](https://github.com/lize-agent-engineering/dsherp/pull/16) |
-| 3 | 数据库内存的权威峰值（让 `2g` 由推算变实测） | 已回填本文 |
-| 4 | 确认第 3 条不是偶发 | — |
+| 3 | 确认第 2 条的误报稳定复现 | 同 PR #14 |
+| 4 | **从零建站发出的业务凭据没有登记窗口**，SSO 回调必然 403 | [PR #16](https://github.com/lize-agent-engineering/dsherp/pull/16) |
+| 4 | 数据库内存的权威峰值（让 `2g` 由推算变实测） | 已回填本文 |
+
+**如实说明**：SSO 403 只被观测到**一次**（第 4 次）。修法的有效性由第 5 次绿夜的
+215 passed 证明，没有做第二次复现。本文此前把第 3 次写成「同一根因、确认不是偶发」，
+那是错的——它比第 4 次早 1 小时 44 分、跑在更早的提交上，且集成步是 skipped，
+一条集成用例都没执行过，不可能复现集成里的 403。这条更正本身就是这道门要防的东西：
+一句读起来像证明了什么、实际拿不出证据的话。
 
 第 3 条是真正的产品级缺陷，本机永远发现不了：本机的成员行是 09-01 建的，
 补丁 09-07 作为真实 migrate 跑过把字段补上了；而 `bench install-app` 会
 `set_all_patches_as_completed()`——新站的补丁被标记为已执行**但从不执行**，
 且那时成员表还是空的。这正是「每夜从零」这道门存在的理由。
 
-第一跑的其它读数（都来自这一轮新加的工件，本机拿不到）：
+第 1 次的其它读数（都来自这一轮新加的工件，本机拿不到）：
 - **没有任何容器被 OOM 杀掉**（`container-states.txt` 里八个容器全是 `OOMKilled=false ExitCode=0`）。
 - 磁盘 `/dev/root 145G，已用 63G，可用 82G`——预检时担心的「ubuntu-latest 只有约 14GB」不成立。
 - 台账停在 `daily-agent`，下一步 `daily-synthetic` 未完成。
 
-两跑合起来定位到的真实缺陷有三个，都已修（[PR #13](https://github.com/lize-agent-engineering/dsherp/pull/13)、
-[PR #14](https://github.com/lize-agent-engineering/dsherp/pull/14)）：
+前四次合起来定位到的真实缺陷有三个，都已修（[PR #13](https://github.com/lize-agent-engineering/dsherp/pull/13)、
+[PR #14](https://github.com/lize-agent-engineering/dsherp/pull/14)、
+[PR #16](https://github.com/lize-agent-engineering/dsherp/pull/16)）：
 
 1. **失败报告不足以诊断**。驱动只回显 stdout 与 stderr 合并后的最后 8 行，而 traceback 尾巴
    刚好占满，报告里全是 json 模块自己的栈帧：没有命令、没有脚本、看不出哪个流为空。
@@ -534,9 +551,11 @@ bench 的 sites 卷与它需要的两个密钥，看不到另一台 bench 的卷
 - **Redis 不可达时租约静默未写成**：`stash_transfer` 走 `frappe.cache()`，连接失败被 Frappe 吞掉；
   导出时会以「授权已失效」拒绝（fail-closed），但 `prepare_transfer` 当时不会暴露这一点。
 - **存量交接行迁移后全部过期**：见切片 E。
-- **数据库长期运行会累积内存**：见切片 C，决定不改上限而是让失败可查。
-- **本机开发栈上仍有早期中断留下的合成用户**（`policy-revision-*`、`impact-*`、`execute-*`、
-  `delivery-*` 等 `@example.invalid`），是登记式清理落地之前的遗留；新写的测试不会再产生它们。
+- **数据库长期运行会累积内存**：上限已按实测提到 2g（见切片 C，那里记着我第一次
+  「不改上限」的判断怎么被第二次事故推翻）。长期运行的本机开发栈仍需定期 `down`/`up`。
+- ~~本机开发栈上仍有早期中断留下的合成用户~~：**已随 B.7 的从零重建消失**
+  （`down --volumes` 之后四站数据卷全部重建）。它们本是登记式清理落地之前的遗留，
+  新写的测试不会再产生。
 
 ## 偏离表
 
