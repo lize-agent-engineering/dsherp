@@ -77,6 +77,18 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
                 assert '业务操作提案' in str(requests[1]['messages'])
                 assert '工具错误与做不了的出口' in str(requests[1]['messages'])
                 assert 'erp-query' not in str(requests[0]['messages'])
+            # A3：技能摘要与信封规则都在 **system** 段里，压缩掉不了、模型也不必先去取。
+            system=requests[0]['messages'][0]
+            assert system['role']=='system'
+            text=system['content']
+            expected_skill=('业务技能：erp-operation v2.2.0' if mode=='operation'
+                            else '业务技能：erp-query v1.4.0')
+            assert expected_skill in text
+            assert 'untrusted' in text
+            for label in ('"erp"','"erp-server"','"page"'):
+                assert label in text, label
+            # 只放摘要：正文仍然只在模型主动调 skill 之后才出现（既有断言保持不变）。
+            assert '工具错误与做不了的出口' not in text
         else:
             assert result.finish_reason!='completed'
             assert second.finish_reason!='completed'
@@ -93,3 +105,38 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
         assert 'Do not transmit' not in json.dumps(metadata)
     finally:
         config.unlink();server.shutdown();server.server_close();thread.join()
+
+
+def test_the_guard_and_the_prompt_plugin_derive_the_same_pinned_marker():
+    """A3 / spec:163. The property that matters — "the summary did not load" costs zero
+    provider requests — is asserted in `runtime/model-guard.test.cjs`, where the guard can be
+    handed a system prompt without the marker directly. It is deliberately **not** simulated
+    here: doing so from Python would need a test-only switch in the plugin that turns the
+    section off, and a guard with a documented way to disable it is not a guard.
+
+    What this asserts instead is the other half, which only a real assembly can show: the two
+    derivations of the pinned marker — model-guard.cjs from the manifest, prompt-sections.cjs
+    from the manifest plus the SKILL.md frontmatter — agree for every domain. If they ever
+    drift, every run of that domain stops, so the agreement is the thing to keep tested.
+    """
+    import subprocess
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    script = (
+        "const s=require('./runtime/prompt-sections.cjs');"
+        "const out={};"
+        "for (const d of ['query','operation','configuration']){"
+        "  out[d]={marker:s.skillMarker('.',d), section:s.skillSection('.',d)};"
+        "}"
+        "console.log(JSON.stringify(out));")
+    done = subprocess.run(['node', '-e', script], cwd=root, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    derived = json.loads(done.stdout)
+    manifest = json.loads((root / 'config/business-skills.json').read_text(encoding='utf-8'))
+    versions = {row['name']: row['version'] for row in manifest['skills']}
+    for domain, values in derived.items():
+        expected = f'业务技能：erp-{domain} v{versions["erp-" + domain]}'
+        assert values['marker'] == expected, domain
+        assert values['section'].startswith(expected), domain
+        # A summary, never the body: the body is what the `skill` tool is for (spec:154).
+        assert '工具错误与做不了的出口' not in values['section'], domain

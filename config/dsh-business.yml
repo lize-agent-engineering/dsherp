@@ -11,6 +11,9 @@
     auto: true
 - id: model-authorization
   name: '../runtime/model-guard.cjs'
+# Before context-base, so the sections exist by the time the agent assembles its prompt.
+- id: prompt-sections
+  name: '../runtime/prompt-sections.cjs'
 - id: context-base
   name: 'cordis:include'
   config:

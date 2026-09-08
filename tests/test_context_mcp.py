@@ -120,7 +120,8 @@ def test_http_rejections_are_not_retried_or_replaced_by_empty_results(status,err
             context_mcp.post(client,'run_tool',run_id='RUN',capability='CAP')
         payload=json.loads(str(error.value))
         expected='业务请求失败' if error_class!='transient' else context_mcp.TRANSIENT_MESSAGE
-        assert payload=={'error_class':error_class,'message':expected,'retryable':retryable}
+        assert payload=={'source':'erp-server','untrusted':True,
+                         'error_class':error_class,'message':expected,'retryable':retryable}
         assert 'sensitive-provider-detail' not in str(error.value)
         assert set(error.value.classification)=={'error_class','message','retryable','http_status'}
         assert error.value.classification['http_status']==status
@@ -150,7 +151,8 @@ def test_tool_failures_are_classified_and_serialized():
     with httpx.Client(base_url='http://x',transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(ToolFailure) as caught:post(client,'run_tool',run_id='r',capability='c',tool='erp_read_record',arguments={})
     payload=json.loads(str(caught.value))
-    assert payload=={'error_class':'validation','message':'仓库不存在','retryable':False} and caught.value.status_code==417
+    assert payload=={'source':'erp-server','untrusted':True,'error_class':'validation',
+                     'message':'仓库不存在','retryable':False} and caught.value.status_code==417
     assert 'http_status' not in payload
     assert caught.value.classification=={'error_class':'validation','message':'仓库不存在','retryable':False,'http_status':417}
     assert isinstance(caught.value,context_mcp.BusinessRuntimeError)
@@ -187,7 +189,8 @@ def test_model_facing_failures_are_transient_and_never_leak_internal_text():
     with httpx.Client(base_url='http://synthetic',transport=httpx.MockTransport(offline)) as client:
         with pytest.raises(context_mcp.ToolFailure) as caught:
             context_mcp.post(client,'run_tool',run_id='RUN',capability='CAP',tool='erp_read_record',arguments={})
-    assert json.loads(str(caught.value))=={'error_class':'transient','message':context_mcp.TRANSIENT_MESSAGE,'retryable':True}
+    assert json.loads(str(caught.value))=={'source':'erp-server','untrusted':True,
+        'error_class':'transient','message':context_mcp.TRANSIENT_MESSAGE,'retryable':True}
     assert caught.value.classification['http_status'] is None and caught.value.status_code is None
     assert isinstance(caught.value,context_mcp.BusinessRuntimeError)
     assert isinstance(caught.value.__cause__,httpx.ConnectError)
@@ -199,7 +202,8 @@ def test_model_facing_failures_are_transient_and_never_leak_internal_text():
         with pytest.raises(context_mcp.ToolFailure) as failed:
             context_mcp.post(client,'run_tool',run_id='RUN',capability='CAP',tool='erp_read_record',arguments={})
     serialized=str(failed.value)
-    assert json.loads(serialized)=={'error_class':'transient','message':context_mcp.TRANSIENT_MESSAGE,'retryable':True}
+    assert json.loads(serialized)=={'source':'erp-server','untrusted':True,
+        'error_class':'transient','message':context_mcp.TRANSIENT_MESSAGE,'retryable':True}
     assert 'ds_secret_ref' not in serialized and 'Unknown column' not in serialized and '1054' not in serialized
     assert failed.value.status_code==500
     assert context_mcp.classify_failure(503,{'exception':'frappe.exceptions.SiteExpiredError: /home/frappe/sites'},None)['message']==context_mcp.TRANSIENT_MESSAGE
@@ -209,7 +213,8 @@ def test_model_facing_failures_are_transient_and_never_leak_internal_text():
     with httpx.Client(base_url='http://synthetic',transport=httpx.MockTransport(rejected)) as client:
         with pytest.raises(context_mcp.ToolFailure) as invalid:
             context_mcp.post(client,'run_tool',run_id='RUN',capability='CAP',tool='erp_read_record',arguments={})
-    assert json.loads(str(invalid.value))=={'error_class':'validation','message':'仓库 WH-01 已停用','retryable':False}
+    assert json.loads(str(invalid.value))=={'source':'erp-server','untrusted':True,
+        'error_class':'validation','message':'仓库 WH-01 已停用','retryable':False}
 
 
 def test_every_business_domain_exposes_strict_request_input_tool():
@@ -219,3 +224,102 @@ def test_every_business_domain_exposes_strict_request_input_tool():
         assert tool.inputSchema['properties']=={'question':{'title':'Question','type':'string'}}
         assert tool.inputSchema['required']==['question']
         assert tool.inputSchema['additionalProperties'] is False
+
+
+# --- the untrusted envelope ---------------------------------------------------------------
+def _envelope_of(server, tool, arguments):
+    """What the model actually receives: FastMCP renders the returned dict to one text block."""
+    result = asyncio.run(server.call_tool(tool, arguments))
+    blocks = result[0] if isinstance(result, tuple) else result
+    text = next(block.text for block in blocks if getattr(block, 'type', '') == 'text')
+    return json.loads(text)
+
+
+def _server(domain, payload=None):
+    def handler(request):
+        return httpx.Response(200, json={'message': payload if payload is not None else {'ok': 1}})
+    client = httpx.Client(base_url='http://synthetic', transport=httpx.MockTransport(handler))
+    return client, context_mcp.create_server(client, 'R', 'C', domain=domain)
+
+
+CALLS = {
+    'query': [
+        ('erp_read_schema', {'doctype': 'Item'}, 'erp', 'Item'),
+        ('erp_read_record', {'doctype': 'Item', 'name': 'I-1'}, 'erp', 'Item'),
+        ('erp_search_records', {'doctype': 'Item', 'query': 'x', 'filters': None, 'fields': None}, 'erp', 'Item'),
+        ('erp_request_input', {'question': '哪个供应商？'}, 'erp-server', None),
+    ],
+    'operation': [
+        ('erp_propose_update', {'doctype': 'Item', 'name': 'I-1', 'values': {'a': 1}, 'version': 'v'}, 'erp-server', 'Item'),
+        ('erp_propose_create', {'doctype': 'Item', 'values': {'a': 1}, 'version': 'v'}, 'erp-server', 'Item'),
+        ('erp_propose_action', {'doctype': 'Sales Order', 'name': 'S-1', 'action': 'submit', 'version': 'v'}, 'erp-server', 'Sales Order'),
+        ('erp_propose_fill', {'doctype': 'Item', 'name': 'I-1', 'values': {'a': 1}, 'version': 'v'}, 'erp-server', 'Item'),
+        ('erp_propose_make', {'source_doctype': 'Sales Order', 'source_name': 'S-1',
+                              'source_version': 'v', 'route': 'sales_order_to_delivery_note'}, 'erp-server', 'Sales Order'),
+    ],
+    'configuration': [
+        ('erp_read_configuration', {'doctype': 'Item'}, 'erp', 'Item'),
+        ('erp_propose_configuration', {'package': {'v': 1}}, 'erp-server', None),
+        ('erp_request_input', {'question': '哪个 DocType？'}, 'erp-server', None),
+    ],
+}
+
+
+@pytest.mark.parametrize('domain', sorted(CALLS))
+def test_every_tool_result_reaches_the_model_inside_an_untrusted_envelope(domain):
+    """spec:93 的不变量：模型可见的一切外部数据都带 untrusted 标签。这里逐工具核对，
+    因为漏一个工具就等于留了一条绕过信封的通道。"""
+    client, server = _server(domain, payload={'doctype': 'Item', 'fields': {'x': 1}})
+    with client:
+        for tool, arguments, source, doctype in CALLS[domain]:
+            envelope = _envelope_of(server, tool, arguments)
+            assert envelope['untrusted'] is True, tool
+            assert envelope['source'] == source, tool
+            assert envelope['tool'] == tool
+            assert envelope['data'] == {'doctype': 'Item', 'fields': {'x': 1}}
+
+
+def test_read_tools_label_the_doctype_from_the_arguments():
+    client, server = _server('query', payload={'fields': {}})
+    with client:
+        assert _envelope_of(server, 'erp_read_record',
+                            {'doctype': 'Sales Order', 'name': 'S-1'})['doctype'] == 'Sales Order'
+
+
+def test_make_proposal_labels_the_source_doctype():
+    client, server = _server('operation', payload={'target': {}})
+    with client:
+        envelope = _envelope_of(server, 'erp_propose_make',
+                                {'source_doctype': 'Sales Order', 'source_name': 'S-1',
+                                 'source_version': 'v', 'route': 'sales_order_to_delivery_note'})
+        assert envelope['doctype'] == 'Sales Order'
+
+
+def test_request_input_has_no_doctype_key_but_is_still_labelled():
+    """An empty doctype would tell the model there is an object whose name is the empty string."""
+    client, server = _server('query', payload={'status': 'NeedsInput'})
+    with client:
+        envelope = _envelope_of(server, 'erp_request_input', {'question': '哪个供应商？'})
+        assert 'doctype' not in envelope
+        assert envelope['untrusted'] is True and envelope['source'] == 'erp-server'
+
+
+def test_the_doctype_can_come_from_the_result_when_the_arguments_have_none():
+    client, server = _server('configuration', payload={'doctype': 'Item', 'exists': True})
+    with client:
+        envelope = _envelope_of(server, 'erp_propose_configuration', {'package': {'v': 1}})
+        assert envelope['doctype'] == 'Item'
+
+
+def test_failure_text_the_model_sees_is_also_labelled_untrusted():
+    """`message` echoes the server's own wording — doctype names, field names, ERP validation
+    text — and from slice 5 it will carry more of it. Leaving it bare is a channel around
+    the envelope."""
+    for status, error_class in ((417, 'validation'), (403, 'permission'), (500, 'transient')):
+        failure = context_mcp.ToolFailure(context_mcp.classify_failure(
+            status, {'_server_messages': json.dumps([json.dumps({'message': '仓库 X 是分组仓库'})])}, None))
+        payload = json.loads(str(failure))
+        assert payload['untrusted'] is True
+        assert payload['source'] == 'erp-server'
+        assert payload['error_class'] == error_class
+        assert set(payload) == {'source', 'untrusted', 'error_class', 'message', 'retryable'}

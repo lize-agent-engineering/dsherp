@@ -18,12 +18,17 @@ function thrownErrorClass(error){
 }
 exports.thrownErrorClass=thrownErrorClass;
 
-function createGuard(authorize,check=()=>{},report=async()=>{}){
+function createGuard(authorize,check=()=>{},report=async()=>{},requireSystem=null){
   let disabled=false;
   const safeReport=async record=>{try{await report(record);}catch{}};
   return async function*(options,next){
     if(disabled)throw new Error('Model access disabled after failed authorization');
     try{
+      // Before authorize, so that "the skill summary did not load" costs zero provider
+      // requests rather than one that is answered badly. Treated as a failed authorization:
+      // it poisons the rest of the run the same way, because a run whose system prompt does
+      // not say what it is operating under must not continue under a different assumption.
+      if(requireSystem)requireSystem(options.system);
       const input_bytes=Buffer.byteLength(JSON.stringify({system:options.system,messages:options.messages,tools:options.tools}),'utf8');
       await authorize({input_bytes,max_output_tokens:options.maxTokens,
         provider:options.provider,model:options.model,purpose:options.purpose??'conversation'});
@@ -106,6 +111,20 @@ exports.apply=function(ctx){
       headers:{'Content-Type':'application/json','X-Frappe-Site-Name':config.site},
       body:JSON.stringify({run_id:config.run_id,capability:config.capability,events:[{...record,source:'runner'}]})});
   };
+  // Derived here from the manifest, independently of runtime/prompt-sections.cjs which
+  // builds the text: two derivations of one pinned fact, the same discipline the repository
+  // already uses for the host and bridge copies of the metering rules. If they ever disagree,
+  // the run stops instead of quietly running without its skill.
+  const skillMarker=(()=>{
+    const manifest=JSON.parse(readFileSync(path.join(root,'config/business-skills.json'),'utf8'));
+    const name='erp-'+config.domain;
+    const listed=(manifest.skills||[]).find(row=>row&&row.name===name);
+    if(!listed?.version)throw new Error('Business skill not in manifest: '+name);
+    return '业务技能：'+name+' v'+listed.version;
+  })();
+  const requireSystem=system=>{
+    if(!String(system??'').includes(skillMarker))throw new Error('System prompt is missing the pinned business skill summary');
+  };
   ctx.on('llm/stream',createGuard(async metadata=>{
     check();
     const response=await fetch(endpoint,{method:'POST',redirect:'error',signal:AbortSignal.timeout(20000),
@@ -115,5 +134,5 @@ exports.apply=function(ctx){
     const body=await response.json();
     if(body.message?.allowed!==true)throw new Error('Invalid model authorization response');
     check();
-  },check,report));
+  },check,report,requireSystem));
 };

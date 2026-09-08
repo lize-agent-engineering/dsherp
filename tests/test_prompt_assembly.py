@@ -26,7 +26,9 @@ def _bundle(tmp_path):
 
 
 def test_prompt_version_is_declared():
-    assert prompt_assembly.PROMPT_VERSION == '1'
+    """A number, not a hash: it is for a person reading the audit. Exact reproduction is
+    runtime_revision's job, and this file is inside that fingerprint."""
+    assert prompt_assembly.PROMPT_VERSION.isdigit()
 
 
 def test_skill_summary_matches_the_manifest_version_for_each_domain():
