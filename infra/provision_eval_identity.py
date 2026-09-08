@@ -31,6 +31,12 @@ from infra.site_exec import BENCH_PYTHON, COMPOSE, service_of  # noqa: E402
 
 DEFAULT_SITE = 'dsherp-daily.localhost'
 OPERATOR = 'daily-operator@example.invalid'
+# The configuration domain reads DocType definitions, which an ordinary business user cannot
+# see (`read_configuration` calls `frappe.has_permission('DocType','read')`). Giving the
+# business operator that permission would quietly widen what every *other* case can reach, so
+# the configuration cases get their own identity — which is also how it works in production:
+# a different domain is a different person.
+CONFIGURATOR = 'daily-configurator@example.invalid'
 DEFAULT_OUT = '.runtime/eval-users.json'
 
 SCRIPT = r"""
@@ -38,8 +44,13 @@ import json, os, frappe
 os.chdir('/home/frappe/frappe-bench/sites')
 frappe.init(site=__SITE__);frappe.connect();frappe.set_user('Administrator')
 user = __USER__
+configurator = __CONFIGURATOR__
 if not frappe.db.exists('User', user):
     raise SystemExit('评估业务用户不存在：' + user + '；先跑 initialize_daily_synthetic.py')
+if not frappe.db.exists('User', configurator):
+    frappe.get_doc({'doctype': 'User', 'email': configurator, 'first_name': '日常合成配置员',
+                    'enabled': 1, 'user_type': 'System User', 'send_welcome_email': 0,
+                    'roles': [{'role': 'System Manager'}]}).insert(ignore_permissions=True)
 # Through the Site's own credential module, never generate_keys: a key with no recorded
 # window is refused by the Site (S2). `current` is the idempotent door - a pair that is
 # still comfortably inside its window is handed back unchanged, so re-provisioning never
@@ -47,21 +58,30 @@ if not frappe.db.exists('User', user):
 from dsherp_bridge import credentials
 before = credentials.record(user)
 keys = credentials.current(user, 'eval')
+config_keys = credentials.current(configurator, 'eval')
 frappe.db.commit()
 frappe.set_user(user)
 for doctype, action in (('Item', 'read'), ('Sales Order', 'read'), ('Purchase Order', 'read')):
     if not frappe.has_permission(doctype, action):
         raise SystemExit('评估用户缺少 ' + doctype + ' 的 ' + action + ' 权限')
+if frappe.has_permission('DocType', 'read'):
+    raise SystemExit('业务评估用户不该能读 DocType 定义；配置域必须用另一个身份')
+frappe.set_user(configurator)
+if not frappe.has_permission('DocType', 'read'):
+    raise SystemExit('配置评估用户读不到 DocType 定义')
 frappe.set_user('Administrator')
 print(json.dumps({'user': user, 'api_key': keys['api_key'], 'api_secret': keys['api_secret'],
                   'version': keys['version'],
+                  'configurator': {'user': configurator, 'api_key': config_keys['api_key'],
+                                   'api_secret': config_keys['api_secret']},
                   'reused': bool(before) and int(before['version']) == int(keys['version'])},
                  ensure_ascii=False))
 """
 
 
-def _script(site, user):
-    return SCRIPT.replace('__SITE__', repr(site)).replace('__USER__', repr(user))
+def _script(site, user, configurator=CONFIGURATOR):
+    return (SCRIPT.replace('__SITE__', repr(site)).replace('__USER__', repr(user))
+            .replace('__CONFIGURATOR__', repr(configurator)))
 
 
 def main(argv=None, run=subprocess.run):
@@ -74,7 +94,8 @@ def main(argv=None, run=subprocess.run):
     target = ROOT / args.out
     if target.is_file():
         profile = json.loads(target.read_text())
-        if profile.get('site') == args.site and profile.get('operator', {}).get('api_key'):
+        if profile.get('site') == args.site and profile.get('operator', {}).get('api_key') \
+                and profile.get('configurator', {}).get('api_key'):
             print(f'评估身份已存在，复用 {args.out}（不轮换密钥）')
             return profile
 
@@ -89,7 +110,11 @@ def main(argv=None, run=subprocess.run):
     profile = {'site': args.site, 'business_url': service['business_url'],
                'operator': {'user': issued['user'], 'api_key': issued['api_key'],
                             'api_secret': issued['api_secret'],
-                            'site': args.site, 'base_url': service['base_url']}}
+                            'site': args.site, 'base_url': service['base_url']},
+               'configurator': {'user': issued['configurator']['user'],
+                                'api_key': issued['configurator']['api_key'],
+                                'api_secret': issued['configurator']['api_secret'],
+                                'site': args.site, 'base_url': service['base_url']}}
     target.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(target, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     with os.fdopen(fd, 'w') as handle:

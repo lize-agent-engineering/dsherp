@@ -179,6 +179,15 @@ def _run_setup(site, case):
             raise EvaluatorError(f'夹具 {fixture} 失败：{done.stderr.strip()[-400:]}')
 
 
+def identity_for(case, identities):
+    """Which person asks. The configuration domain reads DocType definitions, which an
+    ordinary business user cannot see; giving the business user that permission would widen
+    what every other case can reach."""
+    if case['domain'] == 'configuration' and identities.get('configurator'):
+        return identities['configurator']
+    return identities['operator']
+
+
 def run_case(case, *, mode, site, operator, service, settings, state_root, script_path=None):
     """send_message → claim_run → the container → finish_run → read the record back."""
     _run_setup(site, case)
@@ -356,10 +365,9 @@ def main(argv=None):
         for path, case in cases:
             print(f'  - {case["case_id"]} ({case["domain"]})')
 
-    operator = json.loads(Path(ROOT / args.identity).read_text())['operator'] \
-        if (ROOT / args.identity).is_file() else None
-    if operator is None:
+    if not (ROOT / args.identity).is_file():
         raise EvaluatorError(f'读不到评估身份 {args.identity}；先跑 infra/provision_eval_identity.py')
+    identities = json.loads((ROOT / args.identity).read_text())
     service = json.loads(Path(ROOT / args.service).read_text())
     resolved = deploy_env.settings({'DSHERP_ENV': 'dev'})
     digest = deploy_env.deployment_digest(resolved)
@@ -390,7 +398,8 @@ def main(argv=None):
             continue
         script_path = _script_for(case, args.variant) if args.mode == 'replay' else None
         try:
-            seen = run_case(case, mode=args.mode, site=args.site, operator=operator,
+            seen = run_case(case, mode=args.mode, site=args.site,
+                            operator=identity_for(case, identities),
                             service=service, settings=settings, state_root=state_root,
                             script_path=script_path)
         except EvaluatorError as error:

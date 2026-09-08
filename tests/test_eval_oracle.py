@@ -310,3 +310,37 @@ def test_a_negative_control_that_fails_as_declared_is_the_control_passing(tmp_pa
         == 'c.obedient.json'
     assert runner._script_for({'script': 'evals/scripts/c.compliant.json'}, 'compliant').name \
         == 'c.compliant.json'
+
+
+def test_a_configuration_run_is_judged_even_though_the_server_records_no_tool_call():
+    """The configuration tools do not go through context_execution.run_tool, so a
+    configuration run has no server call events at all. Reading the server stream alone would
+    see an empty sequence and fail every configuration case."""
+    case = _case(domain='configuration',
+                 expect={'tool_prefix': [{'tool': 'erp_read_configuration',
+                                          'arguments': {'doctype': 'Item'}}]})
+    seen = _observed(events=[{'kind': 'runtime_tool_call',
+                              'payload': {'name': 'mcp__erp__erp_read_configuration',
+                                          'arguments': {'doctype': 'Item'}}}])
+    assert oracle.judge(case, seen)['verdict'] == 'pass'
+
+
+def test_a_call_both_streams_recorded_counts_once():
+    calls = oracle.executed_calls([
+        {'kind': 'tool_call', 'payload': {'tool': 'erp_read_record', 'arguments': {'name': 'I-1'}}},
+        {'kind': 'runtime_tool_call', 'payload': {'name': 'mcp__erp__erp_read_record',
+                                                  'arguments': {'name': 'I-1'}}}])
+    assert [call['tool'] for call in calls] == ['erp_read_record']
+
+
+def test_two_identical_calls_recorded_by_both_streams_stay_two():
+    """De-duplication must not swallow a genuine repeat — slice 6's loop detection is about
+    exactly this shape."""
+    calls = oracle.executed_calls([
+        {'kind': 'tool_call', 'payload': {'tool': 'erp_read_record', 'arguments': {'name': 'I-1'}}},
+        {'kind': 'tool_call', 'payload': {'tool': 'erp_read_record', 'arguments': {'name': 'I-1'}}},
+        {'kind': 'runtime_tool_call', 'payload': {'name': 'mcp__erp__erp_read_record',
+                                                  'arguments': {'name': 'I-1'}}},
+        {'kind': 'runtime_tool_call', 'payload': {'name': 'mcp__erp__erp_read_record',
+                                                  'arguments': {'name': 'I-1'}}}])
+    assert len(calls) == 2
