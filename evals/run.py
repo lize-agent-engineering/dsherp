@@ -287,6 +287,27 @@ def junit(results, path):
     ET.ElementTree(suite).write(path, encoding='utf-8', xml_declaration=True)
 
 
+def metering_health(results, *, mode):
+    """Whether the provider's own token counts actually reached the run rows.
+
+    In replay the scripted provider **always** reports a usage, so a case whose every call
+    came back unaccounted means the metering chain is broken, not that the provider was
+    quiet. That chain has silently broken twice already — once because the guard read usage
+    off the terminal chunk when it arrives on its own chunk, once because the summariser did
+    not know the camelCase names the runtime normalises to — and neither showed up as a red
+    anywhere: the runs passed, the rows just said zero. So it is checked here, by name.
+    """
+    scored = [r for r in results if r['verdict'] in ('pass', 'fail') and r.get('model_calls')]
+    unaccounted = [r['case_id'] for r in scored
+                   if (r.get('usage_unknown_calls') or 0) >= (r.get('model_calls') or 0)]
+    tokens = sum((r.get('actual_input_tokens') or 0) + (r.get('actual_output_tokens') or 0)
+                 for r in scored)
+    return {'cases_with_calls': len(scored), 'fully_unaccounted': unaccounted,
+            'total_tokens': tokens,
+            # Only replay can assert this: a live provider may genuinely fail to report.
+            'ok': (not unaccounted and tokens > 0) if mode == 'replay' and scored else True}
+
+
 def report(results, *, mode, site, started):
     scored = [r for r in results if r['verdict'] in ('pass', 'fail')]
     passed = [r for r in scored if r['verdict'] == 'pass']
@@ -439,6 +460,7 @@ def main(argv=None):
                         'runtime_revision': run.get('runtime_revision')})
 
     summary = report(results, mode=args.mode, site=args.site, started=args.started)
+    summary['metering'] = metering_health(results, mode=args.mode)
     out = ROOT / args.out
     out.mkdir(parents=True, exist_ok=True)
     (out / 'report.json').write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding='utf-8')
@@ -458,6 +480,10 @@ def main(argv=None):
             bad = True
     if args.mode == 'replay' and summary['pass_rate'] not in (None, 1.0):
         print('回放层不是 100%：脚本化的模型是确定的，任何低于 100% 都是真实回归')
+        bad = True
+    if not summary['metering']['ok']:
+        print('用量没有落库：回放的替身总会报 usage，所以这说明计量链断了，而不是 provider 没报。'
+              f'完全无计量的用例：{summary["metering"]["fully_unaccounted"]}')
         bad = True
     if failed['failed']:
         bad = True

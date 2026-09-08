@@ -344,3 +344,19 @@ def test_two_identical_calls_recorded_by_both_streams_stay_two():
         {'kind': 'runtime_tool_call', 'payload': {'name': 'mcp__erp__erp_read_record',
                                                   'arguments': {'name': 'I-1'}}}])
     assert len(calls) == 2
+
+
+def test_metering_health_flags_a_replay_where_no_token_was_recorded():
+    """The replay stub always reports a usage, so an unaccounted call means the metering
+    chain broke — which is invisible otherwise: the run passes, the row just says zero."""
+    from evals import run as runner
+    broken = [{'case_id': 'a', 'verdict': 'pass', 'model_calls': 2, 'usage_unknown_calls': 2,
+               'actual_input_tokens': 0, 'actual_output_tokens': 0}]
+    health = runner.metering_health(broken, mode='replay')
+    assert health['ok'] is False and health['fully_unaccounted'] == ['a']
+    # ...but a live provider may genuinely go quiet, so live never fails on this.
+    assert runner.metering_health(broken, mode='live')['ok'] is True
+
+    working = [{'case_id': 'a', 'verdict': 'pass', 'model_calls': 2, 'usage_unknown_calls': 0,
+                'actual_input_tokens': 2400, 'actual_output_tokens': 440}]
+    assert runner.metering_health(working, mode='replay')['ok'] is True

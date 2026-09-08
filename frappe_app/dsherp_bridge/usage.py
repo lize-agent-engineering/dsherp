@@ -12,8 +12,12 @@ aggregates across Sites with the very rules each Site applied to itself.
 """
 import json
 
-INPUT_KEYS = ('input_tokens', 'prompt_tokens', 'input', 'prompt')
-OUTPUT_KEYS = ('output_tokens', 'completion_tokens', 'output', 'completion')
+# Both spellings, because both really occur: the provider's own wire uses
+# `prompt_tokens`/`completion_tokens`, and the runtime's `mapUsage` normalises them to
+# camelCase before the guard ever sees them. Knowing only one of the two records every
+# call as "the provider did not account for this one".
+INPUT_KEYS = ('input_tokens', 'inputTokens', 'prompt_tokens', 'promptTokens', 'input', 'prompt')
+OUTPUT_KEYS = ('output_tokens', 'outputTokens', 'completion_tokens', 'completionTokens', 'output', 'completion')
 REQUEST_KEYS = ('request_id', 'id', 'provider_request_id')
 FINISHED_STATUSES = ('Succeeded', 'Failed', 'Cancelled')
 

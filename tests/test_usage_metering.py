@@ -306,3 +306,34 @@ def test_missing_prompt_version_is_absent_not_empty_string():
     assert summary["prompt_version"] is None and summary["sampling"] is None
     stored = storable(summary)
     assert "prompt_version" not in stored and "sampling" not in stored
+
+
+def test_the_key_names_the_runtime_actually_sends_are_counted():
+    """Two independent breaks used to make `actual_*_tokens` unreachable on every run:
+    the guard read usage off the finish chunk (it arrives on its own chunk), and the
+    summariser did not know the camelCase names the SDK normalises to. Either one alone is
+    enough to record every call as "the provider did not account for this one"."""
+    from dsherp.usage import summarise
+    rows = [
+        {"kind": "model_call_reserved", "recorded_at": "2026-09-08 10:00:00", "payload": {}},
+        {"kind": "model_response", "recorded_at": "2026-09-08 10:00:01", "source": "runner",
+         "payload": {"model": "deepseek-v4-flash",
+                     "usage": {"inputTokens": 1200, "outputTokens": 220}}},
+        {"kind": "finished", "recorded_at": "2026-09-08 10:00:02", "payload": {}},
+    ]
+    summary = summarise(rows)
+    assert summary["actual_input_tokens"] == 1200
+    assert summary["actual_output_tokens"] == 220
+    assert summary["usage_unknown_calls"] == 0
+
+
+def test_the_openai_names_are_still_counted():
+    from dsherp.usage import summarise
+    for keys in ({"input_tokens": 5, "output_tokens": 2},
+                 {"prompt_tokens": 5, "completion_tokens": 2},
+                 {"inputTokens": 5, "outputTokens": 2},
+                 {"promptTokens": 5, "completionTokens": 2}):
+        summary = summarise([{"kind": "model_response", "recorded_at": "2026-09-08 10:00:00",
+                              "payload": {"usage": keys}}])
+        assert (summary["actual_input_tokens"], summary["actual_output_tokens"]) == (5, 2), keys
+        assert summary["usage_unknown_calls"] == 0, keys
