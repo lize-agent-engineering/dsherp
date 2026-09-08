@@ -9,7 +9,12 @@
 ## 总判定（随切片推进更新）
 
 - 切片 0：**完成**。四项收口、外链域名白名单、两项只读探路。
-- 切片 1–6：见下。
+- 切片 1：**完成**。七个可复现字段 + 三个用量字段落库；`BudgetExceeded` 进 schema 与 `TERMINAL`。
+- 切片 2：**完成**。31 条用例、脚本化 provider、预言机与负对照；回放层 100%。
+- 切片 3：**完成**。注入信封与 skill 摘要进系统提示；装载失败即零 provider 请求。
+- 切片 4：**完成**。读工具上限、游标与精简默认；模型看到的字节大幅下降。
+- 切片 5：**完成**。五类业务前置校验、制造链依赖表进代码、`routes[]` 按记录评估。
+- 切片 6：见下。
 
 ---
 
@@ -550,3 +555,105 @@ SKILL.md `2.2.0 → 2.3.0`：删掉七条 route token 词表与四个进度字�
 `frappe.throw` 的消息在异常上，但 `has_permission(throw=True)` 这类原生拒绝抛的是不带消息的
 `PermissionError`，措辞只在 `message_log` 里——此前这类事件的 `reason` 是空的，
 人和评估器都看不出是哪一道检查拒的。`arguments` 同时是切片 6 循环检测的前提。
+
+---
+
+## 切片 6：预算明确终态、循环检测与额度
+
+### 判定：待填（全量集成 / 原生 / 回放 / live）
+
+### 超预算从「又一次 Failed」变成一个能看见的终态
+
+在此之前，超预算抛的是一条普通校验错误，运行落 `Failed`——与工具坏掉、provider 掉线、
+容器崩溃在**账上、报表上、熔断器上都长得一模一样**。这一片把它变成 `BudgetExceeded`，
+并且只允许由服务端裁定。
+
+三条路径，每条都要求至少一条**服务端自己写下的事实**：
+
+| 路径 | 服务端写下的事实 | 落地文案 |
+|---|---|---|
+| 单次/累计输入输出、调用数超限 | `reserve_model_call` 写 `budget_exceeded{limit,used,allowed}` | 本轮模型调用预算已用尽，运行已停止；请把问题拆小后重试 |
+| 同一工具同参数连续 3 次 | `run_tool` 写 `loop_detected{tool,repeats}` | 本轮因同一工具同参数连续 3 次调用被停止；请换一个问法或补充信息 |
+| 运行时长超限 | runner 报 `runtime_failed{reason:'run_total_exceeded'}` **且** 服务端自算 `claimed → now` ≥ `run_total_seconds - 5` | 本轮已达运行时长上限并停止 |
+
+第三条为什么要两个条件：时长是唯一只有 runner 观察得到的限额。只认 runner 的话，
+一个报了它其实没到的超时的运行时，就能把任何普通失败改写成一笔开销。原生用例
+`test_time_budget_path_requires_both_the_runner_event_and_the_server_clock` 两个方向都验：
+时钟不同意时仍是 `Failed`，把 `claimed` 事件的时间往前拨到预算之外才变 `BudgetExceeded`。
+
+外部调用者也不能直接传：`finish_run` 的入参白名单不含 `BudgetExceeded`，它是裁定不是声称。
+
+### 拒绝时**不写终态**，这不是偷懒
+
+`_over_budget` 走 `_refuse`：记事实、保持 `Running`、抛拒绝。在拒绝路径里写终态会同时踩三样：
+HTTP 请求会在拒绝冒泡时回滚这次写入；即便写成了，`_run` 的状态白名单会让 worker 随后的
+`finish_run` 抛「运行凭据失效」；而那次 `finish_run` 正在 `context_worker` 的 except 块里，
+`poll_once` 只吞 5xx，一个 403 会掀掉 worker 循环。
+
+所以事实落库、状态留给下一次 `finish_run` 去裁。原生用例
+`test_reserve_over_budget_persists_the_fact_and_keeps_the_run_running` 断言的正是
+「事件在、运行仍是 Running」。
+
+### 两处漏了不会有任何测试变红
+
+计划把消费者列了 10 处，其中两处是静默的：
+
+1. **`finish_run` 的用量结算**原来写死 `status in ('Succeeded','Failed','Cancelled')`。
+   `BudgetExceeded` 不在里面 = 最贵的一类运行按**零**计费，而事件流是唯一记录，事后补不回来。
+   改为读 `usage.FINISHED_STATUSES`（第四份手抄副本不要）。负对照实跑：把它改回三元组，
+   `test_budget_exceeded_runs_are_billed_like_other_finished_runs` 立刻变红，其余 11 条全绿——
+   这正说明它是这一片唯一挡得住这个洞的用例。
+2. **worker 读回服务端裁定**。失败路径原来硬编码 `completed='Failed'`，服务端的裁定根本没被读回。
+   漏了它，`_note_run` 会把每次预算停止计成一次连续失败，把熔断器推向一个工作正常的站点；
+   `_record_outcome` 也会把它记成 `other` 而不是 `ok`——在 half-open 状态下，`other` 会把
+   熔断器重新打开。宿主用例因此不只断言状态，还监听真正喂给熔断器的那个 outcome。
+
+### 循环检测：怎么停、以及为什么宁可漏判
+
+判定本身是纯函数（`loop_guard.repeats`），站点侧只负责取事件：该 run 最近 2 条
+kind ∈ (`tool_call`, `tool_refused`) 的事件。**两类都取**——被拒绝的调用只写 `tool_refused`，
+只看 `tool_call` 会放过最典型的那种循环：模型把刚被拒的那条原样再发一次。原生用例
+`test_a_refused_call_counts_toward_the_streak` 就是这条。
+
+比较键 = `_json([tool, context_events.sanitize(arguments)])`，用的是**站点自己那份 sanitize**，
+因为被比较的载荷正是它写出来的。任一侧含 `…[truncated]` 即判**不可比、不判循环**：
+这是一个会终止用户运行的判定，宁可漏判不可误判；漏掉的那种（参数极长且只在被截掉的部分不同）
+由预算兜底。
+
+停止的方式是偏离原文的：`run_tool` 在 HTTP 请求里，杀不掉仍在跑的容器。第 3 次调用被拒并写下
+`loop_detected`，此后每次 `reserve_model_call` 一律拒绝 → model-guard 置 disabled → 容器自己退出
+→ `finish_run` 落 `BudgetExceeded`。`tests/test_model_guard.py::mode='loop'` 用真实 Runtime 走完
+这条路：第一回合拿到授权、正常结束，第二回合**一次 provider 请求都没有**。那个空档就是这条
+机制的全部意义——不会再有第 4 次付费调用。
+
+拒绝这一次**不再另写事件**：`loop_detected` 已经在流上，再写一条 `budget_exceeded` 只会在它旁边
+放一句措辞不同的理由，并给这条运行最重要的事件贴上一个不是限额名的 `limit`。
+
+### 额度：能力做完，值默认全关
+
+`run_budget.quota()` 与 `budget(domain)` **并列而不在其中**——plan 会整体下发进容器并被
+`set(claimed_budget)!=set(plan)` 逐键比对，多两个键要同步改三份手抄副本，而容器根本用不到租户额度。
+
+`QUOTA_DEFAULTS = {'user_daily_model_calls': 0, 'site_monthly_tokens': 0}`，**0 = 不限**。
+校验方式同 `dsherp_run_budget`，但阈值放宽到 `>= 0`：这里 0 不是「没设」而是「不限」本身，
+站点把额度关回去必须写得出默认值。
+
+两个计数刻意不同源：
+
+- **日调用**读 `model_calls`（`reserve_model_call` 先扣不退款），因此**在飞运行也算得进**——
+  限流需要的正是这个，用户不能靠挂着运行绕过。
+- **月 token** 读已结算的 `actual_*_tokens`，因此是**下界**，文案明说「在飞运行尚未计入」。
+  一个被告知「你已用 1.2M/1M」的人，需要知道这个数字不是全月实际。
+
+判定放在 `send_message` 里、页面上下文校验之后建 run 之前，429 而不是 503：服务是好的、
+请求是对的，是这个租户用完了额度。前端据此归为 `quota` 而不是可重试的网络故障。
+
+### 原生用例为什么把「计数」和「位置」分开验
+
+`send_message` 开头就是 `frappe.db.rollback()`（拿 `tabUser` 的行锁做提交串行化），
+它会丢掉测试写了但没提交的行——包括 `setUp` 里建的那个用户。于是：计数直接验 `_check_quota`
+的真实查询与真实行；位置用打桩验「拒绝时一行 run 都没建」。负对照实跑：把
+`send_message` 里那一行调用注释掉，只有 `test_quota_refusal_creates_no_run_row` 变红。
+
+另外，同一个测试类里前一个方法写的行对后一个方法**可见**（回滚是按类做的），所以每个计数方法
+要么自带一个新用户，要么把限额设成它自己刚种下的量。
