@@ -625,6 +625,71 @@ def test_run_once_finishes_needs_input_and_clears_consecutive_failures(tmp_path,
     assert failures==[0]
 
 
+def test_worker_reads_back_the_server_ruling_instead_of_assuming_failed(tmp_path,monkeypatch):
+    """A container that exits is written back as Failed; the server may rule otherwise.
+
+    `finish_run` turns that Failed into `BudgetExceeded` when its own events say the run ran
+    out of budget or went in circles. The worker used to hardcode `completed='Failed'` on
+    this path, so the server's ruling was never read and every budget stop was metered,
+    counted and breaker-scored as a failure.
+    """
+    failures=[];noted=[]
+    monkeypatch.setattr(worker,'set_consecutive_failures',lambda value:failures.append(value))
+    monkeypatch.setattr(worker,'_note_run',lambda status,duration:noted.append(status))
+    claim={'run_id':'r','session_id':'conv1','scope_id':'a'*64,'capability':'cap','domain':'query',
+           'budget':{'run_total_seconds':300}}
+    sent=[]
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1];sent.append((method,json.loads(request.content)))
+        if method=='finish_run':
+            return httpx.Response(200,json={'message':{'status':'BudgetExceeded','provider_failures':0}})
+        return httpx.Response(200,json={'message':claim if method=='claim_run' else {'recorded':1,'last_seq':1}})
+    def exits(*args,**kwargs):raise RuntimeError('container exited')
+    with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
+        assert run_once(client,SETTINGS,tmp_path,execute=exits)
+    assert [method for method,_ in sent][-1]=='finish_run'
+    assert dict(sent)['finish_run']['status']=='Failed'
+    assert noted==['BudgetExceeded']
+
+
+def test_budget_exceeded_is_not_a_consecutive_failure_nor_a_provider_failure(tmp_path,monkeypatch):
+    """The breaker must not open on a Site whose provider answered every single call.
+
+    Two separate accountings have to agree: `_note_run` resets the streak instead of
+    extending it, and the run's outcome is `ok` rather than `provider_failure`, which is what
+    the circuit breaker scores.
+    """
+    from dsherp.context_worker import Coordinator
+    from dsherp.provider_circuit import CircuitBreaker
+    failures=[]
+    monkeypatch.setattr(worker,'set_consecutive_failures',lambda value:failures.append(value))
+    worker._note_run('BudgetExceeded',1000)
+    assert failures==[0],'a budget stop must break the failure streak, not extend it'
+    def handler(request):
+        method=request.url.path.rsplit('.',1)[-1]
+        if method=='claim_run':
+            return httpx.Response(200,json={'message':{'run_id':'r','session_id':'conv1','scope_id':'a'*64,
+                'capability':'c','domain':'query','budget':{'run_total_seconds':300}}})
+        if method=='finish_run':
+            return httpx.Response(200,json={'message':{'status':'BudgetExceeded','provider_failures':0}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1}})
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as client:
+        breaker=CircuitBreaker();scored=[]
+        record=breaker.record
+        breaker.record=lambda outcome,now:(scored.append(outcome),record(outcome,now))[1]
+        def exits(*args,**kwargs):raise RuntimeError('container exited on a poisoned reservation')
+        coordinator=Coordinator([{'site':'a','client':client,
+            'business':{'business_url':'http://x','site':'a'}}],lambda:SETTINGS,slots=1,
+            execute=exits,breaker=breaker,probe=lambda:False,state_root=tmp_path)
+        for current in range(0,5):
+            coordinator.tick(now=current);coordinator.wait_idle()
+        # 'ok', not 'other': a run the server stopped on purpose is a completed run. 'other'
+        # would also leave a closed breaker closed, which is why the outcome is asserted
+        # rather than only the state - half-open, 'other' reopens the circuit.
+        assert set(scored)=={'ok'},scored
+        assert breaker.state=='closed' and breaker.consecutive_failures==0
+
+
 def test_run_claimed_contains_malformed_claim_errors(tmp_path,monkeypatch):
     from dsherp.context_worker import Coordinator
 

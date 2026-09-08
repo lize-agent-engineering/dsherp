@@ -79,7 +79,7 @@ export const pendingCount = (session) =>
   (session?.proposals ?? []).filter((item) => item.status === 'Pending').length +
     (session?.configuration_confirmations ?? []).filter((item) => item.status === 'Pending').length;
 
-const eventTones = new Set(['model_error', 'tool_error', 'tool_refused', 'runtime_failed', 'worker_error', 'unverified_completion_claim']);
+const eventTones = new Set(['model_error', 'tool_error', 'tool_refused', 'runtime_failed', 'worker_error', 'unverified_completion_claim', 'budget_exceeded', 'loop_detected']);
 
 // Server-side reason codes are rendered as business text; the raw payload is never
 // dumped at a business user, who reads this stream through list_run_events.
@@ -90,6 +90,8 @@ const reasonLabels = {
   lease_expired: '运行租约过期',
   queue_expired: '排队超时',
   claim_unacked: '领取未确认，运行未开始，请重试',
+  budget_exceeded: '已达本轮模型调用预算',
+  loop_detected: '同一工具同参数连续调用，已停止重复',
 };
 
 const reasonText = (reason) => reasonLabels[reason] ?? reason;

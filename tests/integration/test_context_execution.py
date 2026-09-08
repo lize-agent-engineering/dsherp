@@ -79,7 +79,7 @@ try:
     assert frappe.db.get_value('DS Model Run',claim['run_id'],'model_calls')==8
     try:execution.reserve_model_call(**cap,**model_call);raise AssertionError('model budget exceeded')
     except frappe.ValidationError as error:
-        assert str(error)=='本轮模型调用预算已用尽',error
+        assert str(error)==execution.BUDGET_MESSAGE,error
     try:execution.run_tool(**{**cap,'capability':'wrong'},tool='erp_read_record',arguments={'doctype':'Item','name':'DSHERP-TEST-ITEM'});raise AssertionError('bad cap allowed')
     except frappe.PermissionError:pass
     try:execution.finish_run(**cap,status='Succeeded',answer='fake');raise AssertionError('fake success allowed')
@@ -154,17 +154,17 @@ try:
         assert execution.reserve_model_call(**limited_cap,**limited_call)['allowed']
         try:execution.reserve_model_call(**limited_cap,**{**limited_call,'input_bytes':51,'max_output_tokens':512});raise AssertionError('cumulative input budget exceeded')
         except frappe.ValidationError as error:
-            assert str(error)=='本轮模型调用预算已用尽',error
+            assert str(error)==execution.BUDGET_MESSAGE,error
         try:execution.reserve_model_call(**limited_cap,**{**limited_call,'input_bytes':50,'max_output_tokens':513});raise AssertionError('cumulative output budget exceeded')
         except frappe.ValidationError as error:
-            assert str(error)=='本轮模型调用预算已用尽',error
+            assert str(error)==execution.BUDGET_MESSAGE,error
         assert execution.reserve_model_call(**limited_cap,**{**limited_call,'input_bytes':50,'max_output_tokens':512})['allowed']
         assert frappe.db.get_value('DS Model Run',limited_claim['run_id'],'model_calls')==2
         assert frappe.db.get_value('DS Model Run',limited_claim['run_id'],'model_input_bytes')==150
         assert frappe.db.get_value('DS Model Run',limited_claim['run_id'],'model_output_tokens_reserved')==1536
         try:execution.reserve_model_call(**limited_cap,**{**limited_call,'input_bytes':1,'max_output_tokens':1});raise AssertionError('limited model call count exceeded')
         except frappe.ValidationError as error:
-            assert str(error)=='本轮模型调用预算已用尽',error
+            assert str(error)==execution.BUDGET_MESSAGE,error
         execution.finish_run(**limited_cap,status='Failed',error='End limited model budget')
         frappe.db.commit();frappe.set_user(actor)
     finally:
@@ -200,7 +200,7 @@ try:
         )
         raise AssertionError('operation output budget exceeded')
     except frappe.ValidationError as error:
-        assert str(error)=='本轮模型调用预算已用尽',error
+        assert str(error)==execution.BUDGET_MESSAGE,error
     execution.finish_run(
         **operation_cap,status='Failed',error='End synthetic operation budget'
     )

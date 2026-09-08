@@ -15,7 +15,8 @@ import json
 INPUT_KEYS = ('input_tokens', 'inputTokens', 'prompt_tokens', 'promptTokens', 'input', 'prompt')
 OUTPUT_KEYS = ('output_tokens', 'outputTokens', 'completion_tokens', 'completionTokens', 'output', 'completion')
 REQUEST_KEYS = ('request_id', 'id', 'provider_request_id')
-FINISHED_STATUSES = ('Succeeded', 'Failed', 'Cancelled')
+# BudgetExceeded is a finished run like any other, and its tokens are just as billable.
+FINISHED_STATUSES = ('Succeeded', 'Failed', 'Cancelled', 'BudgetExceeded')
 
 
 def _payload(event):
@@ -164,7 +165,8 @@ def monthly(rows, month):
         if bucket != month:
             continue
         site = sites.setdefault(row.get('site') or '', {
-            'runs': 0, 'succeeded': 0, 'failed': 0, 'cancelled': 0, 'unfinished': 0,
+            'runs': 0, 'succeeded': 0, 'failed': 0, 'cancelled': 0, 'budget_exceeded': 0,
+            'unfinished': 0,
             'input_tokens': 0, 'output_tokens': 0, 'model_calls': 0, 'duration_ms': 0,
             'unknown_calls': 0, 'runs_with_unknown_usage': 0})
         status = row.get('status')
@@ -172,7 +174,10 @@ def monthly(rows, month):
             site['unfinished'] += 1
             continue
         site['runs'] += 1
-        site[{'Succeeded': 'succeeded', 'Failed': 'failed', 'Cancelled': 'cancelled'}[status]] += 1
+        # A status missing from this map is a KeyError on the first run that uses it —
+        # the monthly bill is where a forgotten terminal state surfaces, loudly and late.
+        site[{'Succeeded': 'succeeded', 'Failed': 'failed', 'Cancelled': 'cancelled',
+              'BudgetExceeded': 'budget_exceeded'}[status]] += 1
         site['input_tokens'] += int(row.get('actual_input_tokens') or 0)
         site['output_tokens'] += int(row.get('actual_output_tokens') or 0)
         site['model_calls'] += int(row.get('model_calls') or 0)
@@ -185,7 +190,7 @@ def monthly(rows, month):
     for site in sites.values():
         site['complete'] = site['unknown_calls'] == 0
     totals = {key: sum(site[key] for site in sites.values())
-              for key in ('runs', 'succeeded', 'failed', 'cancelled', 'unfinished',
+              for key in ('runs', 'succeeded', 'failed', 'cancelled', 'budget_exceeded', 'unfinished',
                           'input_tokens', 'output_tokens', 'model_calls', 'duration_ms',
                           'unknown_calls', 'runs_with_unknown_usage')}
     totals['complete'] = totals['unknown_calls'] == 0

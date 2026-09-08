@@ -21,6 +21,11 @@ SERVER_KINDS = (
     "model_call_reserved",
     "tool_call",
     "tool_refused",
+    # Server-only, both of them: a runner may not manufacture the fact that a run ran out of
+    # budget or went in circles - those are rulings, and finish_run reads them to decide a
+    # terminal status.
+    "budget_exceeded",
+    "loop_detected",
     "finished",
 )
 RUNNER_KINDS = (

@@ -1295,6 +1295,7 @@ def usage_report(resolved, month, *, root=ROOT, runner=subprocess.run, bench_fac
     report = usage_module.monthly(rows, month)
     for site in {site for _, site in _targets(resolved, root, factory)}:
         report['sites'].setdefault(site, {**{key: 0 for key in ('runs', 'succeeded', 'failed', 'cancelled',
+                                                               'budget_exceeded',
                                                                'unfinished', 'input_tokens', 'output_tokens',
                                                                'model_calls', 'duration_ms', 'unknown_calls',
                                                                'runs_with_unknown_usage')}, 'complete': True})

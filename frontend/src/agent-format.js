@@ -16,6 +16,10 @@ const statuses = {
   NeedsInput: ['需要你补充信息', 'warning'],
   Rejected: ['已拒绝', 'default'],
   Failed: ['执行失败', 'danger'],
+  // A warning, not a failure: the run did what it was asked and ran out of the budget for
+  // doing it. Calling it a failure would tell the person something went wrong with their
+  // work rather than with how much of it they asked for at once.
+  BudgetExceeded: ['已达本轮预算上限', 'warning'],
 };
 export const statusText = (status) => statuses[status]?.[0] ?? String(status ?? '');
 export const statusTone = (status) => statuses[status]?.[1] ?? 'neutral';

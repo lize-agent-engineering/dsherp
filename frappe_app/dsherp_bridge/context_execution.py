@@ -341,27 +341,65 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
     plan=run_budget(run.domain)
     if (provider!=plan['provider'] or model!=plan['model']
         or purpose not in ('conversation','compaction','session-title')
-        or type(input_bytes) is not int or not 0<input_bytes<=plan['model_max_input_bytes_per_call']
-        or type(max_output_tokens) is not int or not 0<max_output_tokens<=plan['model_max_output_tokens_per_call']):
+        or type(input_bytes) is not int or input_bytes<=0
+        or type(max_output_tokens) is not int or max_output_tokens<=0):
+        # Still a plain refusal: a mismatched provider or a nonsensical size is a broken
+        # runtime, not a budget that ran out.
         frappe.throw('模型请求配置或输入预算不符')
+    if input_bytes>plan['model_max_input_bytes_per_call']:
+        _over_budget(run,'model_max_input_bytes_per_call',input_bytes,
+                     plan['model_max_input_bytes_per_call'])
+    if max_output_tokens>plan['model_max_output_tokens_per_call']:
+        _over_budget(run,'model_max_output_tokens_per_call',max_output_tokens,
+                     plan['model_max_output_tokens_per_call'])
     with _actor(run):
         context_permissions.require_revision(run)
         conversations._public(conversations._conversation(run.conversation))
     if (not isinstance(claimed_budget,dict) or set(claimed_budget)!=set(plan)
         or any(type(claimed_budget[key]) is not type(plan[key]) or claimed_budget[key]!=plan[key] for key in plan)):
         frappe.throw('领取预算与当前站点配置不一致')
+    if frappe.db.count('DS Run Event',{'run':run.name,'kind':'loop_detected'}):
+        # How a loop actually stops. `run_tool` runs inside an HTTP request and cannot kill a
+        # container that is still going; poisoning the next model authorization is the
+        # mechanism this repository already uses to end a run (model-guard sets disabled and
+        # the container exits). See the deviation table.
+        _over_budget(run,'loop_detected',0,0)
     calls=run.model_calls or 0
     total_input=(run.model_input_bytes or 0)+input_bytes
     total_output=(run.model_output_tokens_reserved or 0)+max_output_tokens
-    if (calls>=plan['model_max_calls'] or total_input>plan['model_max_input_bytes_total']
-        or total_output>plan['model_max_output_tokens_total']):
-        frappe.throw('本轮模型调用预算已用尽')
+    if calls>=plan['model_max_calls']:
+        _over_budget(run,'model_max_calls',calls,plan['model_max_calls'])
+    if total_input>plan['model_max_input_bytes_total']:
+        _over_budget(run,'model_max_input_bytes_total',total_input,plan['model_max_input_bytes_total'])
+    if total_output>plan['model_max_output_tokens_total']:
+        _over_budget(run,'model_max_output_tokens_total',total_output,plan['model_max_output_tokens_total'])
     # Reserve before provider dispatch; uncertain/failed calls are not refunded.
     frappe.db.set_value('DS Model Run',run.name,{'model_calls':calls+1,
         'model_input_bytes':total_input,'model_output_tokens_reserved':total_output})
     events.record_safely(run.name,'model_call_reserved',{'call_index':calls+1,'input_bytes':input_bytes,
         'max_output_tokens':max_output_tokens,'purpose':purpose,'provider':provider,'model':model})
     return {'allowed':True}
+
+
+BUDGET_MESSAGE='本轮模型调用预算已用尽，运行已停止；请把问题拆小后重试'
+LOOP_MESSAGE='本轮因同一工具同参数连续 3 次调用被停止；请换一个问法或补充信息'
+TIME_MESSAGE='本轮已达运行时长上限并停止'
+
+
+def _over_budget(run,limit,used,allowed):
+    """Record that this run hit a limit, then refuse the call.
+
+    Through `_refuse`, and **the run stays `Running`**. Writing a terminal status here would
+    step on three things at once: an HTTP request rolls the write back when the refusal
+    propagates; `_run`'s status whitelist would then make the worker's own `finish_run` throw
+    "运行凭据失效"; and that `finish_run` sits inside `context_worker`'s except block, whose
+    `poll_once` only swallows 5xx - a 403 would take down the worker loop.
+
+    So the fact is persisted and the status decision is left to the next `finish_run`, which
+    reads the facts the server itself wrote. Same shape as every other refusal here.
+    """
+    _refuse(run.name,'budget_exceeded',{'limit':limit,'used':int(used),'allowed':int(allowed)},
+            frappe.ValidationError(LOOP_MESSAGE if limit=='loop_detected' else BUDGET_MESSAGE))
 
 
 class RefusalNotPersisted(Exception):
@@ -396,6 +434,39 @@ def _refuse(run_name,kind,payload,refusal,error_class=None):
     raise refusal
 
 
+def _call_key(tool,arguments):
+    """What makes two calls the same call, in the shape the events already store.
+
+    `context_events.sanitize` and no other: that is the function whose output is in the
+    payloads being compared against, truncation marker included.
+    """
+    return conversations._json([tool,events.sanitize(arguments if isinstance(arguments,dict) else {})])
+
+
+def _loop_guard(run,tool,arguments):
+    """Stop a run that is asking the same thing over and over.
+
+    Reads both `tool_call` **and** `tool_refused`: a refused call writes only the latter, so
+    looking at `tool_call` alone would miss the most typical loop of all - a model resending
+    the very call the server just rejected.
+    """
+    from dsherp_bridge import loop_guard
+    key=_call_key(tool,arguments)
+    if not loop_guard.comparable(key):
+        return
+    rows=frappe.get_all('DS Run Event',
+        filters={'run':run.name,'kind':['in',('tool_call','tool_refused')]},
+        fields=['kind','payload'],order_by='seq desc',limit_page_length=loop_guard.LOOP_LIMIT-1)
+    previous=[]
+    for row in reversed(rows):
+        try:payload=json.loads(row['payload'] or '{}')
+        except ValueError:payload={}
+        previous.append(_call_key(payload.get('tool'),payload.get('arguments') or {}))
+    if loop_guard.repeats(previous,key):
+        _refuse(run.name,'loop_detected',{'tool':tool,'repeats':loop_guard.LOOP_LIMIT},
+                frappe.ValidationError(LOOP_MESSAGE))
+
+
 def _message_reason():
     """The refusal text when the exception itself carries none.
 
@@ -419,6 +490,7 @@ def run_tool(run_id,capability,tool,arguments):
     _capability_guard(run_id,'run_tool')
     run=_run(run_id,capability)
     started=time.perf_counter()
+    _loop_guard(run,tool,arguments)
     try:
         result=_run_tool(run,tool,arguments)
     except (frappe.PermissionError,frappe.ValidationError,frappe.DoesNotExistError) as error:
@@ -590,6 +662,37 @@ def record_run_event(run_id,capability,events):
     return context_events.record_many(run.name,items)
 
 
+def _budget_ruling(run,error):
+    """Turn a generic failure into `BudgetExceeded` when the server's own record says so.
+
+    Each branch requires **a fact the server wrote itself**. The runner's word alone never
+    moves a status: a runtime that reported a timeout it did not actually hit would otherwise
+    relabel an ordinary failure as an expense.
+    """
+    kinds={row['kind'] for row in frappe.get_all('DS Run Event',
+        filters={'run':run.name,'kind':['in',('budget_exceeded','loop_detected')]},
+        fields=['kind'],limit_page_length=0)}
+    if 'loop_detected' in kinds:
+        return 'BudgetExceeded',LOOP_MESSAGE
+    if 'budget_exceeded' in kinds:
+        return 'BudgetExceeded',BUDGET_MESSAGE
+    # The time budget is the one limit only the runner observes. So it is believed only when
+    # the server's own clock agrees: claimed → now must actually have reached the budget.
+    timed_out=frappe.get_all('DS Run Event',
+        filters={'run':run.name,'kind':'runtime_failed'},fields=['payload'],limit_page_length=0)
+    reported=any((json.loads(row['payload'] or '{}') or {}).get('reason')=='run_total_exceeded'
+                 for row in timed_out)
+    if reported:
+        from dsherp_bridge.run_budget import budget as run_budget
+        claimed=frappe.db.get_value('DS Run Event',{'run':run.name,'kind':'claimed'},'recorded_at')
+        if claimed:
+            from frappe.utils import get_datetime,now_datetime,time_diff_in_seconds
+            elapsed=time_diff_in_seconds(now_datetime(),get_datetime(claimed))
+            if elapsed>=run_budget(run.domain)['run_total_seconds']-5:
+                return 'BudgetExceeded',TIME_MESSAGE
+    return 'Failed',error
+
+
 def _usage_of(run):
     """结算这次运行的真实用量：provider 的数字来自它自己在 model_response 里报的 usage，
     时长来自服务端记的 claimed 与 finished。runner 汇总的数字一概不采信。"""
@@ -603,6 +706,9 @@ def _usage_of(run):
 def finish_run(run_id,capability,status,answer='',error=''):
     source=_capability_guard(run_id,'finish_run')
     run=_run(run_id,capability)
+    # BudgetExceeded is a ruling this function makes, never a status a caller may claim:
+    # the run is over budget because the server itself wrote that down, not because the
+    # worker said so.
     if status not in ('Succeeded','Failed','Cancelled','NeedsInput'):frappe.throw('无效运行结束状态')
     requested_success=status=='Succeeded'
     if requested_success:
@@ -619,6 +725,8 @@ def finish_run(run_id,capability,status,answer='',error=''):
         if run.status=='Cancelling':status='Cancelled'
     if status=='Cancelled' and run.status!='Cancelling':frappe.throw('运行未请求取消')
     if status=='NeedsInput' and run.status!='NeedsInput':frappe.throw('运行未请求补充信息')
+    if status=='Failed':
+        status,error=_budget_ruling(run,error)
     provider_failures=_provider_failures(run.name)
     sources=json.loads(run.sources or '[]')
     proposals=frappe.db.count('DS Operation Proposal',{'model_run':run.name})
@@ -630,8 +738,15 @@ def finish_run(run_id,capability,status,answer='',error=''):
         'proposals':proposals,'executions':executions,'sources':len(sources),
         'source':source or '','capability_calls':_capability_calls(run.name)})
     values={'status':status,'answer':answer if requested_success else '',
-        'error':error if status=='Failed' else '','capability_hash':'','provider_failures':provider_failures}
-    if status in ('Succeeded','Failed','Cancelled'):
+        # BudgetExceeded too: without it the carefully worded reason above is dropped and the
+        # person sees an empty error on the most expensive kind of run there is.
+        'error':error if status in ('Failed','BudgetExceeded') else '',
+        'capability_hash':'','provider_failures':provider_failures}
+    # `FINISHED_STATUSES`, not a fourth hand-written tuple: a run stopped by its budget spent
+    # real money before it stopped, and the month's bill reads the same fields as any other
+    # finished run. Leaving it out would bill it as zero — a hole nothing can fill in later.
+    from dsherp_bridge.usage import FINISHED_STATUSES
+    if status in FINISHED_STATUSES:
         # 结算这次运行的真实用量。必须在 finished 事件之后：duration 由「首事件 → finished」算出。
         # 不包 try/except：读本站自己的事件表失败即 500，worker 侧有 finish_outcome_unknown 与租约
         # 清扫兜底；把 run 写成终态却不记用量，会造成永远补不回的计量空洞。
