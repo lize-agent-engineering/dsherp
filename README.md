@@ -106,7 +106,7 @@ docker compose -f infra/compose.validation.yml up -d
 
 生产形态不用这份 compose：镜像由 `infra/release_images.py` 从 tag 构建，栈由 `infra/compose.prod.yml` 加 `infra/env/prod.env` 拉起，开站与发布走 `bin/dsherp-admin`，逐步命令见[部署 runbook](docs/engineering/deployment-runbook.md)。
 
-集成测试需本地 `.runtime/` 普通测试用户配置；缺失会明确失败，不自动跳过。此命令不自动建站或生成资料，首次开通记录和资源边界见 ERP 证据。
+集成测试需本地 `.runtime/` 普通测试用户配置；缺失会明确失败，不自动跳过。测试在创建之前先把要留下的东西登记进 `.runtime/integration-residue.json`，teardown 由宿主按控制器要求的顺序清扫并核验零残留；清不掉的条目留在台账里等人处理，被中断的会话留下的登记在下一次会话开头清（`tests/integration/residue.py`）。此命令不自动建站或生成资料，首次开通记录和资源边界见 ERP 证据。
 
 开发参考 skills 位于 `.agents/skills/dsh-sdk-development/` 和 `.agents/skills/erpnext-integration/`；不作为业务运行时 skills。
 
