@@ -103,3 +103,84 @@ launchctl bootstrap gui/$(id -u) .runtime/com.dsherp.agent-worker-v16.plist
 白名单的三条判据由测试钉住：`javascript:`/`data:` 伪协议不成锚（`new URL` 成功但 protocol 不在白名单）、
 协议相对 `//host` 不成锚（`new URL('//host/x')` 抛错）、同后缀冒名主机（`evil-erp.example.com`、
 `a.erp.example.com`）不成锚（`hostname` 精确相等）。
+
+---
+
+## 切片 1：可复现性与用量落库
+
+### 每 run 落库的七个可复现字段
+
+一次真实链路运行（本机隔离站 `dsherp-validation.localhost`，容器走生产路径，
+模型是 `tests/conftest.py` 的本地替身，**零付费调用**）之后从站上读回：
+
+| 字段 | 值 | 来源 |
+|---|---|---|
+| `model` | `deepseek-v4-flash` | `model_response` 事件里 provider 自报的 model |
+| `prompt_version` | `1` | `dsherp/prompt_assembly.PROMPT_VERSION`，经 `runtime_started` 事件 |
+| `sampling` | `provider-default` | `prompt_assembly.sampling_note()`，同上 |
+| `skill_versions` | `{"erp-query":"1.4.0","erp-operation":"2.2.0","erp-configuration":"1.1.0"}` | `config/business-skills.json`，经 `runtime_started` |
+| `runtime_revision` | `5fdacd4001c4d906…` | worker 侧算好作 `claim_run` 入参 |
+| `permission_revision` | `6c856a0cfa9c4069…` | `context_permissions.run_revision` |
+| `provider_request_ids` | `[]` | `model_response` 的 request id；替身不发，所以为空 |
+
+同一行的用量三字段：`actual_input_tokens=0`、`actual_output_tokens=0`、`duration_ms=44924`、
+`usage_unknown_calls=2`、`model_calls=2`。
+
+**`usage_unknown_calls == model_calls` 正是应该出现的结果**：替身的 SSE chunk 不带 usage
+（`tests/conftest.py:45-88`），所以两次调用的 provider 计量都是**未知**。它没有被记成 0 ——
+`usage.summarise` 对「只有一半」和「一次都没回」都计 unknown，`storable` 把 `None` 整个丢掉
+而不是写空值。回放模式下这条会一直成立；切片 2 的 `evals/model_server.py` 会让 chunk 带 usage，
+好让回放也能验证 token 真的落了库。
+
+### 用这组值复现同一装配的步骤
+
+1. 取该 run 的 `runtime_revision`。它 = `config/runtime-files.json` 里 **20 个文件**的 sha256
+   （切片 1 起含 `dsherp/prompt_assembly.py`）+ `DEEPSEEK_BASE_URL` + `deployment_digest`。
+   在仓库里找出算得出同一个值的提交：`git log` 逐个 checkout 后跑
+   `.venv/bin/python -c 'from dsherp.runtime_revision import configuration_revision; ...'`。
+2. 取 `skill_versions`，核对该提交的 `config/business-skills.json` 三个版本号一致——不一致说明
+   1 找错了提交（sha256 双端同源校验保证清单与正文逐字节对应）。
+3. 取 `prompt_version`，核对 `dsherp/prompt_assembly.PROMPT_VERSION`。它是给人读的编号；
+   **精确复现靠第 1 步**，本文件本身在指纹里。
+4. 取 `sampling`。`provider-default` 的含义是「请求体里没有采样参数」，不是「温度等于某个默认值」。
+5. 取 `permission_revision`，用 `context_permissions.run_revision(user, domain)` 复算：不同则该用户的
+   策略或角色已变，装配相同但**可见的业务对象不同**。
+6. 取 `provider_request_ids`，向 provider 侧对账（替身运行下为空）。
+7. `model` 是 provider 自报的，不是 `dsherp_model_policy` 里配的——两者不一致本身就是一个发现。
+
+### `runtime_revision` 为什么不含密钥，密钥版本去了哪里
+
+`runtime_revision`（`dsherp/runtime_revision.py:35-49`，Node 同源 `runtime/model-guard.cjs:88-93`）
+= 20 个文件的 sha256 + `BOUND=('DEEPSEEK_BASE_URL',)` + `deployment_digest`。
+`DEEPSEEK_API_KEY` 必须存在但**不进摘要**，理由写在 `runtime_revision.py:45-47`（S9）：
+把密钥绑进指纹，会让每次轮换密钥都轮换掉所有会话的 native session，而这不增加任何信息。
+
+spec:159 要的「拆为配置指纹（进 run）与密钥版本（只进 worker）」因此**只差后一半**，
+由 `dsherp/context_worker.provider_key_state(settings, runtime_dir)` 补上：
+用既有的 `rotation.fingerprint` 与 `rotation.latest(…,'provider','host')` 比对，产出
+`{'version','state','effective_at'}` 三态——
+
+- `never`：账簿里从来没有 provider 轮换记录；
+- `registered`：账簿最后一次轮换的指纹与手上这把 key 相同；
+- `unregistered`：**账簿说轮换过，但这个进程手上的 key 是另一个值**——有人轮换了却没重启。
+
+不可见范围：**版本号、状态与生效时间进 worker 日志（`provider_key` 与指纹变化时的
+`provider_key_changed`），指纹值与密钥本身一概不写日志、不进 run、不进事件、不加字段。**
+
+### 本片的其它两处
+
+- `_usage_of` 接进 `finish_run`：它自 T5（`6017911`）起定义于 `context_execution.py:513` 却**零调用**，
+  `ds_model_run.json` 的六个计量字段只被一次性回填 patch 填过，新 run 完成后全空。现在在
+  `finished` 事件之后、`frappe.db.set_value` 之前结算（顺序不可换：`duration_ms` 取「首事件 →
+  finished」的跨度）。**不包 try/except**——把 run 写成终态却不记用量，会造成永远补不回的计量空洞。
+- **唯一一次 schema 变更**（裁决 #6）：`prompt_version`、`sampling` 两个只读列与 status 的
+  `BudgetExceeded` 枚举一次加完、六站一次 migrate。`ds_model_run.py` 的 `TERMINAL` 同步追加
+  `'BudgetExceeded'`——漏掉它，最费钱的那类 run 会成为唯一可经 Document 路径改写的终态，
+  而 `tests/test_audit_immutability.py:84` 只断言源码里存在 `TERMINAL` 与 `frappe.throw`、
+  **不锁元组内容**，所以这是一个不会自动变红的静默漏洞。新原生用例
+  `test_run_lifecycle.py` 按行为逐个终态断言改写被拒。
+- patch `run_reproducibility_fields` **不回填历史行**：这两列的用途正是可复现性，把
+  「我们没记录过」改写成「记录过」是伪造。
+
+六站 migrate 实测：四个装了 `dsherp_bridge` 的站（validation / daily / test / beta）三项全部到位
+（两列 + 枚举）；两个平台站只装 `frappe` + `dsherp_platform`，没有 `DS Model Run`，符合预期。

@@ -14,7 +14,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_to_date, now_datetime
 
-from dsherp_bridge.doctype.ds_model_run.ds_model_run import TERMINAL
+from dsherp_bridge.dsherp_bridge.doctype.ds_model_run.ds_model_run import TERMINAL
 
 PAGE = json.dumps({'schema_version': 1, 'page_type': 'unknown', 'route': []})
 
