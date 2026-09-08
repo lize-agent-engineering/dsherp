@@ -45,6 +45,12 @@ IMAGES = (
     'redis@sha256:d0c875bdacfb5c4d2c2d9124de3f53cee1dc9ceff8936bd459fabc135cb33015',
 )
 AGENT_RUNTIME_VOLUME = 'dsherp-v16-agent-runtime'
+# Every profile the development compose file declares. `docker compose down` only touches
+# services whose profile is active, and an exited container still holds its volumes - so a
+# teardown that forgets one of these leaves the data behind and the next "from zero" rebuild
+# quietly starts from the old data. Found by the local rebuild: v16-sites and v16-logs were
+# still there afterwards, pinned by two long-exited `scheduled` containers.
+PROFILES = ('control', 'scheduled', 'ops')
 # The three imports prepare_agent_runtime.sh itself asserts after building the venv.
 RUNTIME_IMPORTS = 'import deepseek_harness, mcp, httpx'
 HOSTS = ('preview.localhost', 'daily.localhost', 'platform.localhost', 'dsherp-validation.localhost')
@@ -514,7 +520,9 @@ def require_worker_stopped(stack):
 
 def down(stack, *, volumes):
     require_worker_stopped(stack)
-    stack.run(stack.compose('down', '--remove-orphans', *(['-v'] if volumes else [])), timeout=600)
+    profiles = [word for name in PROFILES for word in ('--profile', name)]
+    stack.run(stack.compose(*profiles, 'down', '--remove-orphans', *(['-v'] if volumes else [])),
+              timeout=600)
     removed = []
     if not volumes:
         return {'removed': removed}
