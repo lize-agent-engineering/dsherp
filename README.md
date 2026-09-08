@@ -123,7 +123,8 @@ docker compose -f infra/compose.validation.yml exec -T backend \
   bench --site dsherp-test.localhost run-tests --app dsherp_bridge --module dsherp_bridge.tests.test_harness
 ```
 
-改了 `frappe_app/` 之后先 `docker restart dsherp-validation-backend-1 dsherp-validation-platform-backend-1`
+改了 `frappe_app/` 之后先重启三个后端 —— beta-backend 同样以只读方式挂载 `../frappe_app`，不重启它 `dsherp-beta.localhost` 上还是旧模块：
+`docker restart dsherp-validation-backend-1 dsherp-validation-beta-backend-1 dsherp-validation-platform-backend-1`
 （gunicorn 缓存模块；`bench run-tests` 是另一个进程，本身不缓存）。
 
 成败不由 `bench` 的退出码单独判定：站点没开 `allow_tests` 时它打印

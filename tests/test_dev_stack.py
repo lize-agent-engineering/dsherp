@@ -55,9 +55,11 @@ class FakeHost:
         r = self.runtime
         if script == "run_validation_provision.py":
             self.sites.add("dsherp-validation.localhost")
-            users = {"reader": {"user": "dsherp-reader@example.invalid", "api_key": "rk",
+            # Real api_keys are 15-24 characters; a two-letter stand-in collides with ordinary
+            # words (an "rk" matches inside "worker") and the scan is substring-based.
+            users = {"reader": {"user": "dsherp-reader@example.invalid", "api_key": "READER-KEY-VALUE-0001",
                                 "api_secret": "READER-SECRET-VALUE"},
-                     "denied": {"user": "dsherp-denied@example.invalid", "api_key": "dk",
+                     "denied": {"user": "dsherp-denied@example.invalid", "api_key": "DENIED-KEY-VALUE-0002",
                                 "api_secret": "DENIED-SECRET-VALUE"}}
             _private(r / "erp-users.json", users)
             _private(r / "erp-reader.json", users["reader"])
@@ -519,13 +521,14 @@ def test_the_ledger_never_contains_a_secret_value(stack):
 def test_scan_artifacts_names_the_leaking_secret_and_the_file_but_never_the_value(stack, tmp_path, capsys, monkeypatch):
     dev_stack.up(stack, provision_too=True)
     log = tmp_path / "compose.log"
-    log.write_text("gunicorn ... token rk:READER-SECRET-VALUE ...\n"
+    log.write_text("gunicorn ... token READER-KEY-VALUE-0001:READER-SECRET-VALUE ...\n"
                    + (stack.runtime / "control" / "db_root_password").read_text())
     clean = tmp_path / "junit.xml"
     clean.write_text("<testsuite tests='1'/>")
     found = dev_stack.leaked_secrets(stack.runtime, [log, clean])
     # one name per value: erp-reader.json sorts before erp-users.json and holds the same secret
-    assert found == [("control/db_root_password", str(log)), ("erp-reader.json:api_secret", str(log))]
+    assert found == [("control/db_root_password", str(log)), ("erp-reader.json:api_key", str(log)),
+                     ("erp-reader.json:api_secret", str(log))]
     monkeypatch.setattr(dev_stack.deploy_env, "settings", lambda *a, **k: stack.resolved)
     monkeypatch.setattr(dev_stack, "Stack", lambda resolved: stack)
     code = dev_stack.main(["scan-artifacts", str(log), str(clean)])
@@ -623,3 +626,19 @@ def test_down_activates_every_profile_so_nothing_is_left_pinning_a_volume(stack)
     assert set(named) == set(dev_stack.PROFILES), f"漏掉的 profile 会把容器和卷留下：{named}"
     assert set(dev_stack.PROFILES) >= {"control", "scheduled", "ops"}
     assert "-v" in teardown and "--remove-orphans" in teardown
+
+
+def test_the_leak_scan_treats_api_key_as_a_secret_like_the_rest_of_the_repository(stack, tmp_path):
+    """The repository decides elsewhere that an api_key is a secret: DS Membership keeps
+    api_key at permlevel 1 so an ordinary member cannot read it, and run_events redacts it.
+    The artefact scan disagreed - its key list had api_secret but not api_key - so every
+    api_key value in .runtime could ride out to a public artefact unnoticed. A scan that only
+    catches half of what the repository calls a secret is worse than none: it reads as proof."""
+    assert 'api_key' in dev_stack.SECRET_KEYS
+    dev_stack.up(stack, provision_too=True)
+    leaking = tmp_path / 'compose.log'
+    profiles = json.loads((stack.runtime / 'erp-users.json').read_text())
+    leaking.write_text('gunicorn ... token ' + profiles['reader']['api_key'] + ':x ...\n')
+    found = dev_stack.leaked_secrets(stack.runtime, [leaking])
+    assert found, 'api_key 值出现在工件里却没有被扫出来'
+    assert all(profiles['reader']['api_key'] not in name for name, _ in found), '只报名字，不报值'

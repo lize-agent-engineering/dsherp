@@ -1,5 +1,4 @@
-# 每夜从零：拉起四站 → 全部集成测试 → 工件 → 拆栈。
-# （Frappe 原生测试在计划 5 的原生测试切片接线后加入本流程。）
+# 每夜从零：拉起四站与两个一次性测试站 → 全部集成测试 → Frappe 原生测试 → 工件 → 拆栈。
 # 没有任何重试。红了就是当天要处理的事：一天内修掉或删掉那条用例，见 AGENTS.md。
 name: nightly
 
@@ -110,7 +109,9 @@ jobs:
             docker inspect "$c" --format '{{.Name}} OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}' \
               >> work/container-states.txt 2>&1 || true
           done
-          sort -t'\t' -k2 work/db-mem.tsv 2>/dev/null | tail -1 > work/db-mem-peak.txt || true
+          # 峰值按数值归约，读不到就报错而不是留一个读起来像「没问题」的空文件。
+          .venv/bin/python infra/db_mem_peak.py work/db-mem.tsv > work/db-mem-peak.txt \
+            || echo '峰值计算失败，见上方 stderr' > work/db-mem-peak.txt
           df -h / > work/disk.txt 2>&1 || true
 
       - name: 泄漏自检：工件里不能出现 .runtime 中任何密钥值（否则不上传）

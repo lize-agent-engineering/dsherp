@@ -82,7 +82,13 @@ SECRETS_READABLE = 'cat /run/secrets/db_root_password /run/secrets/validation_ad
 BACKUP_PRESENT = ('cd /home/frappe/frappe-bench/sites/dsherp-daily.localhost/private/backups 2>/dev/null && '
                   'ls *-database.sql.gz *-site_config_backup.json *-files.tar *-private-files.tar >/dev/null 2>&1 '
                   '&& echo yes || echo no')
-SECRET_KEYS = ('api_secret', 'password', 'client_secret', 'secret')
+# What this repository already calls a secret elsewhere: DS Membership keeps api_key at
+# permlevel 1 so an ordinary member cannot read it, and dsherp/run_events.py redacts the same
+# set out of event payloads. The scan had api_secret but not api_key, so every api_key value in
+# .runtime could ride out to a public artefact unnoticed - a scan that catches half of what the
+# repository calls a secret is worse than none, because it reads as proof.
+SECRET_KEYS = ('api_key', 'api_secret', 'password', 'client_secret', 'secret',
+               'token', 'access_token', 'refresh_token')
 Fault = admin.Fault
 
 
