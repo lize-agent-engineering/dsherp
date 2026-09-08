@@ -61,7 +61,7 @@ finally:
         bench_log.write_text(redacted)
 
 import frappe
-from frappe.core.doctype.user.user import generate_keys
+from dsherp_bridge import credentials
 
 
 profiles = {}
@@ -125,7 +125,12 @@ with contextlib.redirect_stdout(sys.stderr):
                 "enabled": 1, "user_type": "System User", "send_welcome_email": 0,
                 "roles": [{"role": role}],
             }).insert()
-            profiles[actor] = {"user": user, **generate_keys(user)}
+            # Through the Site's own credential module, never generate_keys: a key with no
+            # recorded window is refused by the Site (S2), and the platform binding that
+            # borrows it has no window to record either - which is what left a from-zero
+            # stack unable to complete an SSO round trip.
+            issued = credentials.issue(user, issued_for="validation-provision")
+            profiles[actor] = {"user": user, **issued}
         frappe.get_doc({
             "doctype": "User Permission",
             "user": profiles["reader"]["user"],

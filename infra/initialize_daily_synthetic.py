@@ -71,8 +71,10 @@ else:
 user=frappe.get_doc({{'doctype':'User','email':{ERP_USER!r},'first_name':'日常合成操作员','enabled':1,
  'user_type':'System User','send_welcome_email':0,'roles':[{{'role':'Sales User'}},{{'role':'Sales Manager'}},
  {{'role':'Stock Manager'}},{{'role':'Item Manager'}}]}}).insert()
-from frappe.core.doctype.user.user import generate_keys
-keys=generate_keys(user.name)
+# Through the Site's own credential module, never generate_keys: a key with no recorded
+# window is refused by the Site (S2), and the membership below has no window to record either.
+from dsherp_bridge import credentials
+keys=credentials.issue(user.name,issued_for='daily-synthetic')
 frappe.set_user(user.name)
 checks=[('Item','read'),('Item','write'),('Customer','create'),('Customer','write'),
         ('Sales Order','create'),('Sales Order','write'),('Sales Order','submit'),('Sales Order','cancel')]
@@ -83,13 +85,16 @@ customer=frappe.get_doc({{'doctype':'Customer','customer_name':'日常 Agent 合
  'customer_group':'Individual','territory':'China'}}).insert()
 frappe.db.commit()
 print(json.dumps({{'user':user.name,'api_key':keys['api_key'],'api_secret':keys['api_secret'],
+ 'expires_at':str(keys['expires_at']),'version':keys['version'],
  'company':'DSHERP 日常合成企业','item':item.name,'customer':customer.name}}))
 frappe.destroy()
 """)
     execute(PLATFORM, 'dsherp-platform.localhost', f"""
 credentials=json.loads({json.dumps(credentials)!r})
 frappe.get_doc({{'doctype':'DS Membership','enterprise':'daily','platform_user':{PLATFORM_USER!r},'enabled':1,
- 'erp_user':credentials['user'],'api_key':credentials['api_key'],'api_secret':credentials['api_secret']}}).insert()
+ 'erp_user':credentials['user'],'api_key':credentials['api_key'],'api_secret':credentials['api_secret'],
+ 'credential_issued_at':credentials['expires_at'],'credential_expires_at':credentials['expires_at'],
+ 'credential_erp_user':credentials['user'],'credential_version':credentials['version']}}).insert()
 enterprise=frappe.get_doc('DS Enterprise','daily');enterprise.title='日常合成企业';enterprise.status='Ready';enterprise.save()
 frappe.db.commit();frappe.clear_cache();frappe.destroy()
 """)
