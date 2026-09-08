@@ -7,12 +7,16 @@ Frappe `16.31.0`，容器 Python `3.14.7`，DSH SDK/Runtime `0.1.1rc1`。
 ## 总判定
 
 **不宣称 G9 通过。** G9 是「CI 配置存在且历史 30 天绿」，只能由 workflow 的运行历史证明，
-不能由本文证明。本文证明的是：门禁本身建起来了、每一道都在本机真实跑过、并且被验证过有牙齿。
+不能由本文证明。本文证明的是：门禁本身建起来了、每一道都真实跑过（包括在专用 runner 上从零跑）、
+并且被验证过有牙齿——它抓到的第一个真实缺陷是本机永远发现不了的。
 
-**G9 起算**：**尚未起算。** 起点是第一个含原生测试步的绿色 nightly，而 nightly 至今未绿
-（三次尝试的纪实见切片 B）。`ci.yml` 侧已经在跑并且一直是绿的
-（PR #11/#13/#14 与 main 上的 push run），但 G9 要求两者都计入 30 天，所以还没有起点。
-`supply-chain.yml` 不计入。
+**G9 起算点：2026-09-08 ·
+[run 34172880426](https://github.com/lize-agent-engineering/dsherp/actions/runs/34172880426)** ——
+第一个含原生测试步、17/17 步全绿的 nightly。从这一夜开始计 30 天连续绿，
+只对 `ci.yml` 与 `nightly.yml` 计算，`supply-chain.yml` 不计入。
+
+**G9 尚未通过**，也不该由本文宣称通过：它要的是 30 天的运行历史，只能由 workflow 自己证明。
+本文只负责把起点钉死，并说明这个起点凭什么算数。
 
 代码与文档已全部合入 `main`：[PR #11](https://github.com/lize-agent-engineering/dsherp/pull/11)
 （六个切片）、[#13](https://github.com/lize-agent-engineering/dsherp/pull/13)、
@@ -145,6 +149,40 @@ Linux 上的读数与本机不同，且更多：python job 是 **812 passed**（
 | 1 | [34119113299](https://github.com/lize-agent-engineering/dsherp/actions/runs/34119113299) | 第 11 分钟失败于 `up --provision`，14/27 步 | 报告只有 8 行、且被 JSONDecodeError 的 traceback 占满，无法定位 |
 | 2 | [34145246685](https://github.com/lize-agent-engineering/dsherp/actions/runs/34145246685) | 同一步失败 | 报告可读了，但它指出的是**修复本身引入的误报** |
 | 3 | [34157621873](https://github.com/lize-agent-engineering/dsherp/actions/runs/34157621873) | **开通成功（28/28 步）**，集成 `3 failed, 198 passed, 14 errors / 21:30` | 驱动在真实 Linux 上从零跑通了；暴露出一条只在全新栈上出现的 SSO 回调 403 |
+| 4 | [34150819690](https://github.com/lize-agent-engineering/dsherp/actions/runs/34150819690) | 同一根因 | 确认第 3 次不是偶发 |
+| 5 | **[34172880426](https://github.com/lize-agent-engineering/dsherp/actions/runs/34172880426)** | **17/17 步全绿** | **G9 起算点** |
+
+### 第五次：绿夜的读数（2026-09-08，00:18:15 → 01:03:47，共 45 分 32 秒）
+
+| 项 | 值 |
+|---|---|
+| 步骤 | 17/17 全绿，含 `down --volumes` 拆栈 |
+| 从零开通 | 台账 28/28 步 |
+| 全量集成 | **215 passed / 28:27**，无重试 |
+| Frappe 原生测试 | `ok: true`，`dsherp_bridge` 12 条、`dsherp_platform` 5 条，退出码均 0 |
+| 数据库内存峰值 | **642.5 MiB / 2 GiB（31.4%）**，162 个采样点覆盖开通与其后每一步 |
+| 容器 OOM | 八个容器全部 `OOMKilled=false` |
+| 磁盘 | 145G，用 63G，余 82G |
+
+集成在 runner 上是 28:27，本机是 21:37——runner 单核性能更弱，但都远在
+`timeout-minutes: 120` 之内，不需要动任何超时。
+
+### nightly 抓到的真实缺陷（五次尝试的产出）
+
+没有一次是白跑的。每一次都换来一个**只有真实 runner 从零跑才给得出**的事实：
+
+| # | 抓到什么 | 修在哪 |
+|---|---|---|
+| 1 | 失败报告只有 8 行且被 traceback 占满，无法定位 | [PR #13](https://github.com/lize-agent-engineering/dsherp/pull/13) |
+| 2 | 上一条的修复过宽，对不打印的断言块误报 | [PR #14](https://github.com/lize-agent-engineering/dsherp/pull/14) |
+| 3 | **从零建站发出的业务凭据没有登记窗口**，SSO 回调必然 403 | [PR #16](https://github.com/lize-agent-engineering/dsherp/pull/16) |
+| 3 | 数据库内存的权威峰值（让 `2g` 由推算变实测） | 已回填本文 |
+| 4 | 确认第 3 条不是偶发 | — |
+
+第 3 条是真正的产品级缺陷，本机永远发现不了：本机的成员行是 09-01 建的，
+补丁 09-07 作为真实 migrate 跑过把字段补上了；而 `bench install-app` 会
+`set_all_patches_as_completed()`——新站的补丁被标记为已执行**但从不执行**，
+且那时成员表还是空的。这正是「每夜从零」这道门存在的理由。
 
 第一跑的其它读数（都来自这一轮新加的工件，本机拿不到）：
 - **没有任何容器被 OOM 杀掉**（`container-states.txt` 里八个容器全是 `OOMKilled=false ExitCode=0`）。
@@ -454,7 +492,7 @@ bench 的 sites 卷与它需要的两个密钥，看不到另一台 bench 的卷
 
 ## 未闭合与如实说明
 
-- **G9 未起算**：需要第一个含原生测试步的绿色 nightly；三次尝试的纪实见切片 B。
+- **G9 已起算但未通过**：起点 2026-09-08 的绿夜；30 天连续绿只能由 workflow 历史证明。
 - **切片 B 的本机从零重建（Task B.7）未做**：它的前置条件是驱动先在真实 Linux 上跑通，
   而 nightly 尚未跑通。这也意味着 `mem_limit: 2g` 那个数字仍是推算，没有六站从零的实测峰值。
 - **`enforce_admins: false` 使分支保护对仓库所有者是劝告性的**：实测直推 main 会被
