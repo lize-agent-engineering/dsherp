@@ -58,7 +58,8 @@ def test_the_profile_has_a_fixed_key_set_and_no_extra_fields():
     (ROOT / 'work/test-eval-users.json').unlink()
 
 
-def test_an_existing_profile_is_reused_and_no_key_is_rotated():
+def test_an_existing_profile_is_reused_and_no_key_is_rotated(monkeypatch):
+    monkeypatch.setattr(provision, '_authenticates', lambda profile: True)
     target = ROOT / 'work/test-eval-users.json'
     target.parent.mkdir(exist_ok=True)
     existing = {'site': 'dsherp-daily.localhost', 'business_url': 'http://b',
@@ -103,3 +104,40 @@ def test_the_configuration_domain_picks_the_configuration_identity():
     assert runner.identity_for({'domain': 'operation'}, identities)['user'] == 'op'
     assert runner.identity_for({'domain': 'configuration'}, identities)['user'] == 'cfg'
     assert runner.identity_for({'domain': 'configuration'}, {'operator': {'user': 'op'}})['user'] == 'op'
+
+
+def test_a_stored_profile_that_no_longer_authenticates_is_reissued(monkeypatch):
+    """The file existing is not the question — whether the pair still works is. The Site
+    re-issues on renewal, and the integration suite exercises credential issue on this very
+    Site, so a stale profile is ordinary. Trusting the file turns that into 31 cases of
+    `evaluator_failed: 401`, which reads like the Site being down."""
+    target = ROOT / 'work/test-eval-users.json'
+    target.parent.mkdir(exist_ok=True)
+    stale = {'site': 'dsherp-daily.localhost', 'business_url': 'http://b',
+             'operator': {'user': 'u', 'api_key': 'stale', 'api_secret': 'x',
+                          'site': 'dsherp-daily.localhost', 'base_url': 'http://a'},
+             'configurator': {'user': 'c', 'api_key': 'stale-c', 'api_secret': 'y',
+                              'site': 'dsherp-daily.localhost', 'base_url': 'http://a'}}
+    target.write_text(json.dumps(stale))
+    monkeypatch.setattr(provision, '_authenticates', lambda profile: False)
+    run = _Run(ISSUED)
+    profile = provision.main(['--out', 'work/test-eval-users.json'], run=run)
+    assert run.calls, '认证失败时必须重新签发'
+    assert profile['operator']['api_key'] == 'k-synthetic'
+    target.unlink()
+
+
+def test_a_stored_profile_that_still_authenticates_is_reused(monkeypatch):
+    target = ROOT / 'work/test-eval-users.json'
+    target.parent.mkdir(exist_ok=True)
+    good = {'site': 'dsherp-daily.localhost', 'business_url': 'http://b',
+            'operator': {'user': 'u', 'api_key': 'live', 'api_secret': 'x',
+                         'site': 'dsherp-daily.localhost', 'base_url': 'http://a'},
+            'configurator': {'user': 'c', 'api_key': 'live-c', 'api_secret': 'y',
+                             'site': 'dsherp-daily.localhost', 'base_url': 'http://a'}}
+    target.write_text(json.dumps(good))
+    monkeypatch.setattr(provision, '_authenticates', lambda profile: True)
+    run = _Run(ISSUED)
+    assert provision.main(['--out', 'work/test-eval-users.json'], run=run) == good
+    assert run.calls == [], '还能用就不该轮换密钥'
+    target.unlink()
