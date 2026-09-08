@@ -416,3 +416,46 @@ it('模型回答里的图片不渲染、外链退化为纯文本，同站链接�
  expect(document.querySelector('.dsh-agent-answer').textContent).toContain('attacker.example/report');
  expect([...document.querySelectorAll('.dsh-agent-answer a')].some(a=>a.getAttribute('href')?.includes('attacker'))).toBe(false);
 });
+it('白名单内的绝对外链才渲染成锚点，其余仍是纯文本',async()=>{
+ vi.stubGlobal('frappe',{get_route:()=>undefined,boot:{dsherp_link_hosts:['erp.example.com']}});
+ const answer='[允许的报表](https://erp.example.com/report) 与 [别处的报表](https://attacker.example/report) 与 [本站单据](/app/item/DAILY-AGENT-ITEM)';
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{...session,messages:[{...session.messages[0],answer}]};
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ await screen.findByText('允许的报表');
+ const links=[...document.querySelectorAll('.dsh-agent-answer a')].map(a=>a.getAttribute('href'));
+ expect(links).toEqual(['https://erp.example.com/report','/app/item/DAILY-AGENT-ITEM']);
+ expect(document.querySelector('.dsh-agent-answer').textContent).toContain('attacker.example/report');
+});
+it('白名单不放行 javascript: 与 data: 伪协议',async()=>{
+ vi.stubGlobal('frappe',{get_route:()=>undefined,boot:{dsherp_link_hosts:['erp.example.com']}});
+ const answer='[脚本](javascript:alert(1)) 与 [内联](data:text/html,<b>x</b>)';
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{...session,messages:[{...session.messages[0],answer}]};
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ await screen.findByText(/脚本/);
+ expect(document.querySelectorAll('.dsh-agent-answer a').length).toBe(0);
+});
+it('白名单不放行协议相对的 //host 写法',async()=>{
+ vi.stubGlobal('frappe',{get_route:()=>undefined,boot:{dsherp_link_hosts:['erp.example.com']}});
+ const answer='[看似同站](//erp.example.com/report)';
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{...session,messages:[{...session.messages[0],answer}]};
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ await screen.findByText(/看似同站/);
+ expect(document.querySelectorAll('.dsh-agent-answer a').length).toBe(0);
+});
+it('boot 没有下发白名单时与今天的行为完全一致',async()=>{
+ vi.stubGlobal('frappe',{get_route:()=>undefined,boot:{}});
+ const answer='[外部报表](https://erp.example.com/report) 与 [本站单据](/app/item/DAILY-AGENT-ITEM)';
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{...session,messages:[{...session.messages[0],answer}]};
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ await screen.findByText(/外部报表/);
+ const links=[...document.querySelectorAll('.dsh-agent-answer a')].map(a=>a.getAttribute('href'));
+ expect(links).toEqual(['/app/item/DAILY-AGENT-ITEM']);
+});
+it('白名单是精确主机名，不放行同后缀的其它主机',async()=>{
+ vi.stubGlobal('frappe',{get_route:()=>undefined,boot:{dsherp_link_hosts:['erp.example.com']}});
+ const answer='[冒名](https://evil-erp.example.com/report) 与 [子域](https://a.erp.example.com/report)';
+ const api=async method=>method==='list_sessions'?[{id:session.id,title:session.title}]:{...session,messages:[{...session.messages[0],answer}]};
+ render(<ContextSidebar api={api} capture={()=>snapshot}/>);open();
+ await screen.findByText(/冒名/);
+ expect(document.querySelectorAll('.dsh-agent-answer a').length).toBe(0);
+});

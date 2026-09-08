@@ -87,3 +87,10 @@ it('禁止把元字段或未获明确选择的对象整体上传',()=>{
   expect(()=>context.capturePageContext(env,{fields:['items']})).toThrow(/子表/);
   expect(()=>context.capturePageContext(env,{fields:['__unsaved']})).toThrow(/字段/);
 });
+it('外链白名单只接受服务端下发的字符串数组',()=>{
+ expect(context.linkHosts({frappe:{boot:{dsherp_link_hosts:['erp.example.com','b.example.com']}}})).toEqual(['erp.example.com','b.example.com']);
+ expect(context.linkHosts({frappe:{boot:{dsherp_link_hosts:['erp.example.com',7,null]}}})).toEqual(['erp.example.com']);
+ expect(context.linkHosts({frappe:{boot:{dsherp_link_hosts:'erp.example.com'}}})).toEqual([]);
+ expect(context.linkHosts({frappe:{boot:{}}})).toEqual([]);
+ expect(context.linkHosts({})).toEqual([]);
+});

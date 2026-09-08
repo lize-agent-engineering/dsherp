@@ -4,6 +4,12 @@ function businessTypes(env) {
   const values=env.frappe?.boot?.dsherp_context_doctypes;
   return new Set(Array.isArray(values)?values.filter(value=>typeof value==='string'):[]);
 }
+// Hosts the server allows a model answer to link to. Same shape as businessTypes: a
+// server-decided list, never derived from the answer text or from the page's own location.
+export function linkHosts(env=globalThis) {
+  const values=env.frappe?.boot?.dsherp_link_hosts;
+  return Array.isArray(values)?values.filter(value=>typeof value==='string'):[];
+}
 export function contextOptions(env=globalThis) {
   const route=env.frappe?.get_route();const frm=env.cur_frm;
   if(route?.[0]!=='Form'||!businessTypes(env).has(route[1])||frm?.doctype!==route[1]||frm.doc?.name!==route[2]||!frm.is_dirty())return [];
