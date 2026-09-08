@@ -14,6 +14,12 @@ class WorkerUnavailableError(frappe.ValidationError):
     http_status_code = 503
 
 
+class QuotaExceededError(frappe.ValidationError):
+    # 429, not 503: the service is up and the request is well formed — this tenant has used
+    # its allowance. The frontend must not retry it as a transient network failure.
+    http_status_code = 429
+
+
 def _user():
     user = frappe.session.user
     if user in ('Guest', 'Administrator') or not frappe.db.get_value('User', user, 'enabled'):
@@ -305,6 +311,50 @@ def list_configuration_records(page=1):
     return _paged(items,page)
 
 
+
+def _check_quota(user):
+    """Refuse before a run exists when this tenant has used its allowance.
+
+    Both quotas default to 0 = unlimited, so on a Site that has not configured them this
+    function reads two integers from `frappe.conf` and returns.
+
+    The two counts are deliberately different in kind:
+
+    - **Daily calls** are read from `model_calls`, which `reserve_model_call` increments
+      before the provider is called and never refunds. Runs still in flight therefore count,
+      which is what a rate limit needs: a user cannot get around it by keeping runs open.
+    - **Monthly tokens** are read from `actual_input_tokens`/`actual_output_tokens`, which are
+      only written when a run finishes. The number is a **lower bound** — everything in
+      flight is missing from it — and the refusal message says so, because a person told
+      "you have used 1.2M of 1M" needs to know the figure is not the whole month.
+
+    Boundaries are the Site's own local day and month (`frappe.utils.now_datetime`), the same
+    clock the `creation` values were written with.
+    """
+    from dsherp_bridge.run_budget import quota
+    limits=quota()
+    if not any(limits.values()):return
+    from frappe.utils import now_datetime
+    now=now_datetime()
+    daily=limits['user_daily_model_calls']
+    if daily:
+        used=frappe.db.sql("""SELECT COALESCE(SUM(model_calls),0) FROM `tabDS Model Run`
+                              WHERE owner=%s AND creation>=%s""",
+                           (user,now.replace(hour=0,minute=0,second=0,microsecond=0)))[0][0] or 0
+        if int(used)>=daily:
+            frappe.throw(f'今日模型调用已达上限（{int(used)}/{daily} 次），请明天再试或联系管理员调整额度',
+                         exc=QuotaExceededError)
+    monthly=limits['site_monthly_tokens']
+    if monthly:
+        used=frappe.db.sql("""SELECT COALESCE(SUM(COALESCE(actual_input_tokens,0)
+                                                 +COALESCE(actual_output_tokens,0)),0)
+                              FROM `tabDS Model Run` WHERE creation>=%s""",
+                           (now.replace(day=1,hour=0,minute=0,second=0,microsecond=0),))[0][0] or 0
+        if int(used)>=monthly:
+            frappe.throw(f'本站本月 token 已达上限（已结算 {int(used)}/{monthly}，在飞运行尚未计入），'
+                         '请联系管理员调整额度',exc=QuotaExceededError)
+
+
 @frappe.whitelist(methods=['POST'])
 def send_message(question, context, request_id, session_id=None, domain='query'):
     user=_user()
@@ -330,6 +380,7 @@ def send_message(question, context, request_id, session_id=None, domain='query')
         if run.request_digest!=digest:frappe.throw('请求标识已用于其他内容')
         return _public(_conversation(run.conversation))
     snapshot=_context(raw_context)
+    _check_quota(user)
     from dsherp_bridge.run_budget import budget
     from frappe.utils import add_to_date,get_datetime,now_datetime
     limits=budget(domain)

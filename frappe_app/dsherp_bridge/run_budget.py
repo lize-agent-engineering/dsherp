@@ -13,6 +13,14 @@ DEFAULTS={
     'model_max_input_bytes_per_call':131072,
     'model_max_input_bytes_total':524288,
 }
+# Tenant quotas, deliberately **not** part of `budget(domain)`. That dict is handed to the
+# container whole and compared key by key against the plan it claimed; two keys the container
+# has no use for would have to be copied into three hand-written test fixtures as well. These
+# are judged on the Site, before a run exists, and never leave it.
+#
+# 0 means unlimited, and 0 is the default: without a real usage distribution, switching a
+# refusal on for everyone would be a gate against ordinary work rather than against abuse.
+QUOTA_DEFAULTS={'user_daily_model_calls':0,'site_monthly_tokens':0}
 DOMAINS={
     'query':{
         'run_total_seconds':300,
@@ -67,4 +75,19 @@ def budget(domain):
     concurrency=frappe.conf.get('dsherp_site_concurrency',1)
     if type(concurrency) is not int or concurrency<1:frappe.throw('dsherp_site_concurrency 无效')
     values.update({'site_concurrency':concurrency,**_model_policy()})
+    return values
+
+
+def quota():
+    """Tenant quotas from Site configuration. Both default to 0, which means unlimited."""
+    values=dict(QUOTA_DEFAULTS)
+    override=frappe.conf.get('dsherp_quota')
+    if override is None:override={}
+    if not isinstance(override,dict):frappe.throw('dsherp_quota 必须是对象')
+    for key,value in override.items():
+        # `>=0`, unlike `dsherp_run_budget`'s `>0`: there 0 would be a budget that refuses
+        # everything, here it is the documented way to say "no limit" — a Site turning a
+        # quota back off must be able to write the value the default already has.
+        if key not in values or type(value) is not int or value<0:frappe.throw(f'dsherp_quota.{key} 无效')
+        values[key]=value
     return values

@@ -133,6 +133,13 @@ it('503 保留助手不可用原因并标记 unavailable',async()=>{
  vi.stubGlobal('fetch',async()=>jsonError(503,{_server_messages:JSON.stringify([JSON.stringify({message:'助手服务暂不可用'})])}));
  await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'助手服务暂不可用',kind:'unavailable',httpStatus:503});
 });
+it('429 是额度用尽而不是网络故障：保留服务端文案、标 quota、不可重试',async()=>{
+ const message='今日模型调用已达上限（20/20 次），请明天再试或联系管理员调整额度';
+ vi.stubGlobal('fetch',async()=>jsonError(429,{_server_messages:JSON.stringify([JSON.stringify({message})])}));
+ const error=await api.contextApi('list_sessions').catch(item=>item);
+ expect(error).toMatchObject({message,kind:'quota',httpStatus:429});
+ expect(api.describeError(error)).toMatchObject({message,retryable:false});
+});
 it('无 JSON 或 JSON 解析失败的 502 保留安全文案并标记 transient',async()=>{
  const fetch=vi.fn(async()=>({ok:false,status:502}));vi.stubGlobal('fetch',fetch);
  await expect(api.contextApi('list_sessions')).rejects.toMatchObject({message:'请求未完成（HTTP 502），请刷新记录核实，不要重复发送',kind:'transient',httpStatus:502});
