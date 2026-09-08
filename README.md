@@ -12,7 +12,7 @@
 | 2 运行底座可靠性 | 工作流 C；错误透传与 ErrorBoundary | 收尾切片已合入 main，放行以此为准（12 个独立复核：7 项成立、6 项推翻并修复） | [runtime-reliability-evidence](docs/engineering/runtime-reliability-evidence.md) |
 | 3 部署制品与安全边界 | 工作流 A；出口控制、非 root、SSO 强制、CSP | 主体实现完成、验收未闭合：G1 字面判据与 ACME 待合规主机由审计方执行（已裁决 #9） | [deployment-security-evidence](docs/engineering/deployment-security-evidence.md)、[runbook](docs/engineering/deployment-runbook.md) |
 | 4 数据治理与容灾 | 工作流 E；凭证托管与轮换 | 全部合入 main（PR #7、#9、#10）；G3 正式验收与真机 `restore-site` 未闭合 | [data-governance-evidence](docs/engineering/data-governance-evidence.md)、runbook 第 12–14 节 |
-| 5 质量门禁（瘦身版） | CI 与每夜从零、一条命令开发栈、登记式清理、原生测试与权限矩阵、交接令牌落表 | 本机全部切片实现完成并合入本地 main；push/PR、分支保护、workflow 首跑属用户检查点，G9 从第一个含原生测试的绿色 nightly 起算 | [quality-gates-evidence](docs/engineering/quality-gates-evidence.md) |
+| 5 质量门禁（瘦身版） | CI 与每夜从零、一条命令开发栈、登记式清理、原生测试与权限矩阵、交接令牌落表 | 六个切片全部合入 main，PR 门与分支保护生效；**G9 自 2026-09-08 的绿夜起算**（17/17 步、集成 215 passed、原生 12+5 条），30 天连续绿由 workflow 历史证明 | [quality-gates-evidence](docs/engineering/quality-gates-evidence.md) |
 | 6 Agent 质量与成本 | 工作流 F；注入信封 | 未开始（串行于计划 5 之后，已裁决 #7） | [生产化总体设计](docs/superpowers/specs/2026-09-03-production-hardening-design.md) |
 | 终验 生产浸泡 | 全部 | 未开始 | — |
 
