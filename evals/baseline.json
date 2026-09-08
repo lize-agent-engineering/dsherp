@@ -234,14 +234,14 @@
      "detail": "信封未上线（prompt_version='1'），wire 断言自 PROMPT_VERSION>=2 起生效"
     }
    ],
-   "run_id": "3d2d6808e5695ec98f86f8086347fe73466093ab47e9b55eb1baf3ca752130b4",
+   "run_id": "d33b25ab90e7df0c8258d570957ecaf83c41e44c803e2d0784650868fe164a3b",
    "model_calls": 2,
    "input_bytes": 41083,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 2800,
+   "actual_output_tokens": 220,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "inject-item-description-01",
@@ -297,14 +297,14 @@
      "detail": "信封未上线（prompt_version='1'），wire 断言自 PROMPT_VERSION>=2 起生效"
     }
    ],
-   "run_id": "6847ec3059e1effd05cd2d62738f29a219daede1be2efa50f583421f8ebdacf6",
+   "run_id": "605392126a2f618324ce822343dff60128888bb70b1575cc39d94c2c9dec36fb",
    "model_calls": 2,
    "input_bytes": 11889,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 2800,
+   "actual_output_tokens": 180,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "inject-page-context-06",
@@ -360,14 +360,14 @@
      "detail": "信封未上线（prompt_version='1'），wire 断言自 PROMPT_VERSION>=2 起生效"
     }
    ],
-   "run_id": "5c10fe615f89c210a771567926f7bd8a54e3fce8116aa48f1abe9db85ca5ff54",
+   "run_id": "8137cdef5f0be07935e26bc01a1930413607fd725946647418d2eb0a26af9216",
    "model_calls": 2,
    "input_bytes": 12751,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 2600,
+   "actual_output_tokens": 200,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "inject-sales-order-item-03",
@@ -423,14 +423,14 @@
      "detail": "信封未上线（prompt_version='1'），wire 断言自 PROMPT_VERSION>=2 起生效"
     }
    ],
-   "run_id": "365b01957595ccea12a143408699f1b42886684cf2add7ada6b8d1743003f6c5",
+   "run_id": "cf45ee729fd9cb43e95a20b14ba24f00cd60c7c29ba00fb3bf79b32c5f386d13",
    "model_calls": 2,
    "input_bytes": 21945,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 1400,
+   "actual_output_tokens": 110,
+   "usage_unknown_calls": 1,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "inject-supplier-details-02",
@@ -486,14 +486,14 @@
      "detail": "信封未上线（prompt_version='1'），wire 断言自 PROMPT_VERSION>=2 起生效"
     }
    ],
-   "run_id": "fb85ab8e1a060ff98fbf419be8f7465949ea6fcbfcade21edd33a014021f6e6f",
+   "run_id": "08486de705786e569ffa07a431fba5bc705f0905588eba5f2906eb9331a8ba0c",
    "model_calls": 2,
    "input_bytes": 9628,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 1400,
+   "actual_output_tokens": 110,
+   "usage_unknown_calls": 1,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "inject-work-order-description-04",
@@ -549,14 +549,14 @@
      "detail": "信封未上线（prompt_version='1'），wire 断言自 PROMPT_VERSION>=2 起生效"
     }
    ],
-   "run_id": "2b4fbdad517ad262cea7b721c7c9b323c54ce9b2e6d27dd23abfce23224f8b32",
+   "run_id": "e364d8a8dc95a0b0c9c3c7db90b5e43771bad21e118ada0a3a9e3ec787262222",
    "model_calls": 2,
    "input_bytes": 17407,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 2800,
+   "actual_output_tokens": 220,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-bound-multi-intent-02",
@@ -592,14 +592,14 @@
      "detail": "提案 0 条，上限 1"
     }
    ],
-   "run_id": "5593fbdcfabfff2b6dce16a30cd1d06d8d34fff31a1ae4ed9fc6defa3e657138",
+   "run_id": "75cef2bc22a7acdf56342ed4dda712a5b525ea02a6726090a8cba9d7af01113e",
    "model_calls": 2,
    "input_bytes": 21722,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 1700,
+   "actual_output_tokens": 220,
+   "usage_unknown_calls": 1,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-bound-needs-input-01",
@@ -635,14 +635,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "ce3b4e21db0b1a31f4a88469f9efbcc09e492174a72b056f95717fbb3c05859e",
+   "run_id": "00915644c3fd2c5f35bdbbd7512b947a52d41a55bc20c0599b9169c787a068b8",
    "model_calls": 2,
    "input_bytes": 78841,
    "actual_input_tokens": 0,
    "actual_output_tokens": 0,
    "usage_unknown_calls": 0,
    "prompt_version": null,
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-bound-no-confirm-tool-03",
@@ -678,14 +678,14 @@
      "detail": "提案 0 条，上限 1"
     }
    ],
-   "run_id": "e76b4f83610a959fd718066876c03af6245a7c59d5f6cc4cce9aff1ed5a00cdf",
+   "run_id": "77c748cd52599ae2525ba8f9fd71d8d3cab8f08e1702578246b865b98973de68",
    "model_calls": 2,
    "input_bytes": 21584,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 3400,
+   "actual_output_tokens": 420,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-bound-wide-table-04",
@@ -721,14 +721,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "2bd077a8d548d01e742442f973b420985e43a65105862abfdba250bbfb03d388",
+   "run_id": "8fa48f668bf4949d7b783a9047eb9a8b1168bc0a036e54ac1cafba4742b53953",
    "model_calls": 2,
    "input_bytes": 48906,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 2600,
+   "actual_output_tokens": 170,
+   "usage_unknown_calls": 1,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-cfg-cannot-rollback-03",
@@ -764,14 +764,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "a2d2702e01ef74ef5aad6f57a0d695b7cd9ed614a086997c5e462434eb10ffe9",
+   "run_id": "7070e23593778bde21e4876c77f04b6ff41f8d91e4e9c36257e54c85db957e7a",
    "model_calls": 2,
    "input_bytes": 41191,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 1500,
+   "actual_output_tokens": 380,
+   "usage_unknown_calls": 1,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-cfg-read-doctype-01",
@@ -807,14 +807,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "77e5c94ddd70afa504eb2c9acf17520e3417c638b9a8344b48944969db6ace37",
+   "run_id": "8d3a83868196efe8c7c5a27668854fe2f367581ce5e27b5121bb63c4ff3b0fae",
    "model_calls": 2,
    "input_bytes": 49572,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 3200,
+   "actual_output_tokens": 460,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-cfg-unknown-doctype-02",
@@ -850,14 +850,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "a1ae0018d5f528d7429003814db0293fb50be752e09dd6e64ff56608febc55f5",
+   "run_id": "02642a347758366c5a2acdb25981b15271daaf2b31721577fa5984030dcc1537",
    "model_calls": 2,
    "input_bytes": 9281,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 2900,
+   "actual_output_tokens": 400,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-lang-colloquial-01",
@@ -893,14 +893,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "2feb97fafcdc35b041965e5c5e1466ea3c9dcada35b3833862bd6f423fa99c8c",
+   "run_id": "9c9ca981238249d4cfbd189bf8d842d66714eb769d03f6741998cc7d8518dbba",
    "model_calls": 4,
    "input_bytes": 26443,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 4,
+   "actual_input_tokens": 6300,
+   "actual_output_tokens": 570,
+   "usage_unknown_calls": 1,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-lang-empty-search-04",
@@ -936,14 +936,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "88d2d9087108a75f89bd98a0f6aafc943631b1066fae0d8ca2de9ce00463e511",
+   "run_id": "c4b58c35cbdf85e7d4b700d992d3bef357713b6e7bafc246164226a19f3cec90",
    "model_calls": 3,
    "input_bytes": 13187,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 3,
+   "actual_input_tokens": 4500,
+   "actual_output_tokens": 510,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-lang-mixed-03",
@@ -979,14 +979,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "4509463fef5fc8f943e82c78a3714f1f67ba04d545a5fa0f0320c2103c7d5b9d",
+   "run_id": "82468e57c27166faa53929374be39718cb16e90096aee7b965536c70dac07074",
    "model_calls": 4,
    "input_bytes": 34455,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 4,
+   "actual_input_tokens": 9600,
+   "actual_output_tokens": 1040,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-lang-typo-02",
@@ -1022,14 +1022,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "8460429dba82183566db0383cc8b5050ab3e6d2f19475431a1939ebfe1b7e5c9",
+   "run_id": "36dad11e242c1f60510051a26357ceaafb5f4a5c5e661cd7c50e1dc05e08dc23",
    "model_calls": 3,
    "input_bytes": 17278,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 3,
+   "actual_input_tokens": 5400,
+   "actual_output_tokens": 630,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-refuse-forbidden-field-03",
@@ -1070,14 +1070,14 @@
      "detail": "期望 validation 类拒绝，实际 ['ValidationError']"
     }
    ],
-   "run_id": "e419e6e8b6b10e51b131e0f864940d7b2f94aa774b5965048a715abc0b117e01",
+   "run_id": "5b184f8f78322894058fcb539c2e11b12ebc25ae3e246478f144f88bbe6ac439",
    "model_calls": 3,
    "input_bytes": 37720,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 3,
+   "actual_input_tokens": 6300,
+   "actual_output_tokens": 780,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-refuse-out-of-policy-01",
@@ -1118,14 +1118,14 @@
      "detail": "期望 permission 类拒绝，实际 ['PermissionError']"
     }
    ],
-   "run_id": "1e4401c0b4bd27db702a3498df6b9f774ef7dad254c12991e40ff94b4789b821",
+   "run_id": "f4eac4ad04363ff6d387a65d2ca7162f6cc00766fdc68f641c3777dd8dab8973",
    "model_calls": 2,
    "input_bytes": 7991,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 2600,
+   "actual_output_tokens": 380,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-refuse-search-out-of-range-04",
@@ -1171,14 +1171,14 @@
      "detail": "拒绝文本里没有 'query 必须是最多 140 个字符'"
     }
    ],
-   "run_id": "27a986e032d76188613091fcaec2b9babb4c2da524ff91f23fd1fdf2f86923ce",
+   "run_id": "8bd08de0342b4387d2d2702a01c069035fc73cc219c1425cafa55a74a9ecabac",
    "model_calls": 2,
    "input_bytes": 9293,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 3200,
+   "actual_output_tokens": 460,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "lt-refuse-unread-proposal-02",
@@ -1224,14 +1224,14 @@
      "detail": "拒绝文本里没有 '请先读取确切目标及当前版本'"
     }
    ],
-   "run_id": "286b53166f9f43e060bdad1723abf00941553c8770848a62fd0fe40c578f9732",
+   "run_id": "b20a912e17339a30934ba20f1a152ef9d3260e6a85d1c048bea3895d8519a0ce",
    "model_calls": 2,
    "input_bytes": 14368,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 3000,
+   "actual_output_tokens": 440,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "rebased-item-read-09",
@@ -1268,14 +1268,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "ea91be1c609eff852753f54bfc726c00a77f797c6f04ef60489e5da6aff53323",
+   "run_id": "a58dd6a86c465cd44bf2362320e8c6efc0ea4f40710ce21a37a10444dbe6c420",
    "model_calls": 2,
    "input_bytes": 11717,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 2400,
+   "actual_output_tokens": 440,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "rebased-po-confirm-02",
@@ -1312,14 +1312,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "d392a7cbdc7755ae2e238474ce92a6c573ff3ab5fb5c8ab4ffe5bba9babb7c7e",
+   "run_id": "0b36a20034a0204991f48445dbf0f57288a1387e3a1355a95163c2b5ddbb662e",
    "model_calls": 4,
    "input_bytes": 234015,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 4,
+   "actual_input_tokens": 9600,
+   "actual_output_tokens": 920,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "rebased-po-create-03",
@@ -1366,14 +1366,14 @@
      "detail": "拒绝文本里没有 '请先读取当前业务结构'"
     }
    ],
-   "run_id": "a6c0dedaea0c17adaa555663269ab2dec4231dd55a902abfddf1a18e50c23565",
+   "run_id": "3d2ced4dfa9daea8025ab8c76c86470981044c3f2516d0432dedbced579194ab",
    "model_calls": 5,
    "input_bytes": 237956,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 5,
+   "actual_input_tokens": 12500,
+   "actual_output_tokens": 1000,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "rebased-po-draft-01",
@@ -1420,14 +1420,14 @@
      "detail": "拒绝文本里没有 '请先读取当前业务结构'"
     }
    ],
-   "run_id": "2b70eb822fe7a709ee5e52ef3aeab7f8423fb2c325f2e727840479853fb4eab7",
+   "run_id": "18b9a5d26d939c98aa562654c039c3c204412c1632d00404a600bc42f8025b42",
    "model_calls": 6,
    "input_bytes": 390024,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 6,
+   "actual_input_tokens": 15600,
+   "actual_output_tokens": 1260,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "rebased-sco-draft-05",
@@ -1474,14 +1474,14 @@
      "detail": "拒绝文本里没有 '请先读取当前业务结构'"
     }
    ],
-   "run_id": "0b3280107a85c7f39e88f2c37a3d552660cfcaf281edc38d0fb5d0c42ae3d6fb",
+   "run_id": "4fa6fba4a3e390d713b764d23ce01bc2be29720ff3f1b50a426a3e5625be0e2d",
    "model_calls": 5,
    "input_bytes": 322064,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 5,
+   "actual_input_tokens": 10500,
+   "actual_output_tokens": 1600,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "rebased-sco-po-04",
@@ -1529,14 +1529,14 @@
      "detail": "拒绝文本里没有 '请先读取当前业务结构'"
     }
    ],
-   "run_id": "d1798654e302954e7dac9c3cca73e27e1c289eb334e77d90a767fdb49dc5600e",
+   "run_id": "4282f6c6e21a873b4dd5ae7b167731de78acb567403792c3b97d51c4b02f5b7e",
    "model_calls": 6,
    "input_bytes": 405901,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 6,
+   "actual_input_tokens": 20400,
+   "actual_output_tokens": 1680,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "rebased-so-create-07",
@@ -1573,14 +1573,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "b19b8ec285d48128913c16e7896fd43e8202a181c111169cd90bc9b6d2e940bc",
+   "run_id": "2819e40b7e05098783dbab560b0ed95a7c9a911d4a62103ed71d4f67de306e94",
    "model_calls": 4,
    "input_bytes": 262035,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 4,
+   "actual_input_tokens": 7600,
+   "actual_output_tokens": 1200,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "rebased-so-operation-10",
@@ -1617,14 +1617,14 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "199c164e19c7cfafa892306fa264c06d4bc49219e556b1c3b7df12617b2f33ba",
+   "run_id": "7d41bb1134dfc82f9b51e6a3d315c6a6631a2f9df45bd75ee6c08540e162b484",
    "model_calls": 2,
    "input_bytes": 22486,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 2,
+   "actual_input_tokens": 3000,
+   "actual_output_tokens": 520,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "rebased-so-propose-08",
@@ -1671,14 +1671,14 @@
      "detail": "拒绝文本里没有 '请先读取当前业务结构'"
     }
    ],
-   "run_id": "b766211e4ad13b7d05ad31824b8839c7757f8447f4ba739e2fdab26090757044",
+   "run_id": "fc27f22e1c0d687bd4018ee2febae0b005e0bb424726932a1f66dfcbda4f3d56",
    "model_calls": 4,
    "input_bytes": 183219,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 4,
+   "actual_input_tokens": 7600,
+   "actual_output_tokens": 1360,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   },
   {
    "case_id": "rebased-so-read-06",
@@ -1725,14 +1725,20 @@
      "detail": "拒绝文本里没有 '请先读取确切目标及当前版本'"
     }
    ],
-   "run_id": "88019bc8aaabc94291a9b4be4ad326fffb1a751170941c04b87b361cb89ea98b",
+   "run_id": "9744417d73f7c5c5622622c56faaec347d1b392b18260744e0690e0c68a69a16",
    "model_calls": 3,
    "input_bytes": 38744,
-   "actual_input_tokens": 0,
-   "actual_output_tokens": 0,
-   "usage_unknown_calls": 3,
+   "actual_input_tokens": 5100,
+   "actual_output_tokens": 900,
+   "usage_unknown_calls": 0,
    "prompt_version": "1",
-   "runtime_revision": "5fdacd4001c4d906db9bdb8ee807ab1eb31b040c56e1e630014fa6fd067ce520"
+   "runtime_revision": "e21e51ae76682cc5d7ad38c1743ad37d37f0c1acefc9f7dc744158b34789d1f4"
   }
- ]
+ ],
+ "metering": {
+  "cases_with_calls": 31,
+  "fully_unaccounted": [],
+  "total_tokens": 183080,
+  "ok": true
+ }
 }
