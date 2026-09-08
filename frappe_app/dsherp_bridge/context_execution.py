@@ -17,9 +17,17 @@ from dsherp_bridge import context_events as events
 from dsherp_bridge import grants
 from dsherp_bridge import context_permissions
 
-TOOLS={'erp_read_schema':(erp.read_schema,{'doctype'}),
-       'erp_read_record':(erp.read_record,{'doctype','name'}),
-       'erp_search_records':(erp.search_records,{'doctype','query','filters','fields'})}
+# The key set is strict on purpose: an argument the tool does not have is a mistake worth
+# telling the model about, not one to drop silently. Paging and shaping arguments are part of
+# the set and are filled in with their defaults below, so a call that omits them still matches.
+TOOLS={'erp_read_schema':(erp.read_schema,{'doctype','tables','after_fieldname','child_after'}),
+       'erp_read_record':(erp.read_record,{'doctype','name','fields','children','include_empty','after_idx'}),
+       'erp_search_records':(erp.search_records,{'doctype','query','filters','fields','after_name'})}
+# What each read tool assumes when the model does not say. `read_record`'s defaults are the
+# lean ones (slice 0: not expanding child tables is -51% on a Sales Order).
+TOOL_DEFAULTS={'erp_read_schema':{'tables':None,'after_fieldname':None,'child_after':None},
+               'erp_read_record':{'fields':None,'children':None,'include_empty':False,'after_idx':None},
+               'erp_search_records':{'query':'','filters':None,'fields':None,'after_name':None}}
 # 判据是"provider 是否不可用"，不是"是否 5xx"；词表与判定在 provider_failures.py（纯 Python，
 # 单元测试直接按行为验证），这里只负责取出该运行的 model_error 事件逐条计数。
 from dsherp_bridge.provider_failures import count_provider_failures
@@ -451,16 +459,13 @@ def _run_tool(run,tool,arguments):
             return propose(run.conversation,**arguments,grant=grants.of(run.name),model_run=run.name)
     if tool not in TOOLS:frappe.throw('未知工具')
     if isinstance(arguments,str):arguments=json.loads(arguments)
-    if tool=='erp_search_records' and isinstance(arguments,dict):
-        if (not set(arguments)<={'doctype','query','filters','fields'}
-            or not isinstance(arguments.get('doctype'),str)
-            or ('query' in arguments and not isinstance(arguments['query'],str))):
-            frappe.throw('工具参数无效')
-        arguments={'query':'','filters':None,'fields':None,**arguments}
     function,keys=TOOLS[tool]
-    if (not isinstance(arguments,dict) or set(arguments)!=keys
-        or (tool!='erp_search_records' and not all(isinstance(v,str) for v in arguments.values()))):
-        frappe.throw('工具参数无效')
+    if not isinstance(arguments,dict) or not set(arguments)<=keys:frappe.throw('工具参数无效')
+    if not isinstance(arguments.get('doctype'),str):frappe.throw('工具参数无效')
+    if 'name' in keys and not isinstance(arguments.get('name',''),str):frappe.throw('工具参数无效')
+    if 'query' in arguments and not isinstance(arguments['query'],str):frappe.throw('工具参数无效')
+    arguments={**TOOL_DEFAULTS[tool],**arguments}
+    if set(arguments)!=keys:frappe.throw('工具参数无效')
     with _actor(run):
         context_permissions.require_revision(run)
         conversations._context(run.page_context,check_version=False)
@@ -468,7 +473,10 @@ def _run_tool(run,tool,arguments):
         fields=[];records=[]
         if tool=='erp_read_schema':fields=[f['fieldname'] for f in result['fields']]
         elif tool=='erp_read_record':
-            fields=[key for key in result['fields'] if frappe.get_meta(arguments['doctype']).get_field(key)]
+            # Counted-but-unexpanded child tables are named here too: the model was told they
+            # exist, so the authorization replay has to cover them as read.
+            seen=set(result['fields'])|set(result.get('child_tables') or {})
+            fields=[key for key in seen if frappe.get_meta(arguments['doctype']).get_field(key)]
             records=[result['name']]
         else:
             records=[r['name'] for r in result]
@@ -488,7 +496,10 @@ def _run_tool(run,tool,arguments):
         if tool=='erp_read_schema':
             source['child_fields']={field['fieldname']:[child['fieldname'] for child in field['fields']] for field in result['fields'] if 'fields' in field}
         elif tool=='erp_read_record':
-            source['child_fields']={field:sorted({column for row in rows for column in row}) for field,rows in result['fields'].items() if isinstance(rows,list)}
+            # Only the tables actually expanded have columns to authorize; the counted ones
+            # revealed nothing but their existence and row count.
+            source['child_fields']={field:sorted({column for row in rows for column in row})
+                                    for field,rows in result['fields'].items() if isinstance(rows,list)}
         if tool=='erp_read_schema':
             source['schema_version']=str(result['modified'])
         elif tool=='erp_read_record':

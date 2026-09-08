@@ -71,7 +71,7 @@ def test_tools_send_only_bound_run_capability_and_named_arguments():
         assert all(t.inputSchema['properties']['doctype']=={'title':'Doctype','type':'string'}
                    for t in tools if 'doctype' in t.inputSchema['properties'])
         search=next(tool for tool in tools if tool.name=='erp_search_records')
-        assert set(search.inputSchema['properties'])=={'doctype','query','filters','fields'}
+        assert set(search.inputSchema['properties'])=={'doctype','query','filters','fields','after_name'}
         assert search.inputSchema['required']==['doctype']
         assert search.inputSchema['additionalProperties'] is False
         assert search.inputSchema['properties']['filters']['anyOf']==[
@@ -94,13 +94,15 @@ def test_tools_send_only_bound_run_capability_and_named_arguments():
     assert calls==[
         ('/api/method/dsherp_bridge.context_execution.run_tool',{
             'run_id':'RUN-1','capability':'CAP-1','tool':'erp_read_record',
-            'arguments':{'doctype':'Item','name':'SYNTHETIC-ITEM'}}),
+            'arguments':{'doctype':'Item','name':'SYNTHETIC-ITEM','fields':None,'children':None,
+                         'include_empty':False,'after_idx':None}}),
         ('/api/method/dsherp_bridge.context_execution.run_tool',{
             'run_id':'RUN-1','capability':'CAP-1','tool':'erp_search_records',
             'arguments':{
                 'doctype':'Bin','query':'',
                 'filters':{'item_code':['in',['DSHERP-MFG-SYN-RM']]},
                 'fields':['item_code','warehouse','actual_qty','projected_qty'],
+                'after_name':None,
             }}),
     ]
 
@@ -323,3 +325,82 @@ def test_failure_text_the_model_sees_is_also_labelled_untrusted():
         assert payload['source'] == 'erp-server'
         assert payload['error_class'] == error_class
         assert set(payload) == {'source', 'untrusted', 'error_class', 'message', 'retryable'}
+
+
+ALL_TOOLS = {
+    'query': ('erp_read_schema', 'erp_read_record', 'erp_search_records', 'erp_request_input'),
+    'operation': ('erp_read_schema', 'erp_read_record', 'erp_search_records', 'erp_request_input',
+                  'erp_propose_update', 'erp_propose_create', 'erp_propose_action',
+                  'erp_propose_fill', 'erp_propose_make'),
+    'configuration': ('erp_read_configuration', 'erp_propose_configuration', 'erp_request_input'),
+}
+SAMPLE = {
+    'erp_read_schema': {'doctype': 'Item'},
+    'erp_read_record': {'doctype': 'Item', 'name': 'I-1'},
+    'erp_search_records': {'doctype': 'Item'},
+    'erp_request_input': {'question': 'q'},
+    'erp_propose_update': {'doctype': 'Item', 'name': 'I-1', 'values': {}, 'version': 'v'},
+    'erp_propose_create': {'doctype': 'Item', 'values': {}, 'version': 'v'},
+    'erp_propose_action': {'doctype': 'Item', 'name': 'I-1', 'action': 'submit', 'version': 'v'},
+    'erp_propose_fill': {'doctype': 'Item', 'name': 'I-1', 'values': {}, 'version': 'v'},
+    'erp_propose_make': {'source_doctype': 'Item', 'source_name': 'I-1',
+                         'source_version': 'v', 'route': 'r'},
+    'erp_read_configuration': {'doctype': 'Item'},
+    'erp_propose_configuration': {'package': {}},
+}
+
+
+@pytest.mark.parametrize('domain', sorted(ALL_TOOLS))
+def test_every_tool_in_every_domain_forbids_unknown_arguments(domain):
+    """Eight of the eleven used to accept them silently: FastMCP dropped the unknown key
+    before the tool ran, so the server's own strict key-set check never saw it and the model
+    never learned it had sent something the tool does not have."""
+    client, server = _server(domain)
+    with client:
+        catalog = asyncio.run(server.list_tools())
+        assert {tool.name for tool in catalog} == set(ALL_TOOLS[domain])
+        for tool in catalog:
+            assert tool.inputSchema['additionalProperties'] is False, tool.name
+            with pytest.raises(Exception):
+                asyncio.run(server.call_tool(tool.name, {**SAMPLE[tool.name], 'site': 'x'}))
+
+
+@pytest.mark.parametrize('domain', sorted(ALL_TOOLS))
+def test_tool_descriptions_state_the_server_limits(domain):
+    from dsherp import tool_limits
+    allowed = {str(value) for value in tool_limits.LIMITS.values()}
+    client, server = _server(domain)
+    with client:
+        for tool in asyncio.run(server.list_tools()):
+            assert tool.description, tool.name
+            import re
+            numbers = set(re.findall(r'\d+', tool.description))
+            assert numbers <= allowed, f'{tool.name} states {sorted(numbers - allowed)}'
+
+
+def test_a_full_page_of_search_results_tells_the_model_there_may_be_more():
+    """The list shape is unchanged, so this is the only signal the model gets that it did not
+    see everything — today it gets none at all."""
+    from dsherp import tool_limits
+    rows = [{'name': f'I-{index:04d}', 'modified': 'v'}
+            for index in range(tool_limits.LIMITS['search_name_page_length'])]
+    client, server = _server('query', payload=rows)
+    with client:
+        envelope = _envelope_of(server, 'erp_search_records', {'doctype': 'Item'})
+    assert envelope['more_available'] is True
+    assert envelope['next_after_name'] == rows[-1]['name']
+    assert envelope['data'] == rows
+
+
+def test_a_partial_page_says_nothing_about_more():
+    client, server = _server('query', payload=[{'name': 'I-1', 'modified': 'v'}])
+    with client:
+        envelope = _envelope_of(server, 'erp_search_records', {'doctype': 'Item'})
+    assert 'more_available' not in envelope and 'next_after_name' not in envelope
+
+
+def test_an_empty_result_says_nothing_about_more():
+    client, server = _server('query', payload=[])
+    with client:
+        envelope = _envelope_of(server, 'erp_search_records', {'doctype': 'Item'})
+    assert 'more_available' not in envelope

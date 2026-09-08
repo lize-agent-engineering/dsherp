@@ -8,6 +8,7 @@ from mcp.types import ToolAnnotations
 from mcp.server.fastmcp import FastMCP
 
 import httpx
+from dsherp import tool_limits
 from dsherp.read_tools import create_read_server
 
 API='/api/method/dsherp_bridge.context_execution.'
@@ -115,6 +116,25 @@ def _doctype_of(tool,arguments,result):
     return None
 
 
+def _paging_hint(tool,result):
+    """Whether there may be more rows after this page.
+
+    `erp_search_records` returns a plain list on purpose (changing that would touch
+    `record_versions`, `_tool_summary` and seven filtered-search assertions), so the hint
+    lives here: the container knows the page length the server applied, and a full page is
+    the only signal the model gets that it did not see everything. Without it the model
+    cannot tell a complete answer from a truncated one - which is the situation today."""
+    if tool!='erp_search_records' or not isinstance(result,list) or not result:
+        return {}
+    full=(tool_limits.LIMITS['search_page_length'],tool_limits.LIMITS['search_name_page_length'])
+    if len(result) not in full:
+        return {}
+    last=result[-1]
+    if not isinstance(last,dict) or not last.get('name'):
+        return {}
+    return {'more_available':True,'next_after_name':last['name']}
+
+
 def envelope(tool,arguments,result):
     """Everything the model sees from a tool, wrapped and labelled.
 
@@ -130,17 +150,25 @@ def envelope(tool,arguments,result):
               'untrusted':True,'tool':tool}
     doctype=_doctype_of(tool,arguments,result)
     if doctype is not None:labelled['doctype']=doctype
+    labelled.update(_paging_hint(tool,result))
     labelled['data']=result
     return labelled
 
 
-def _forbid_extra_tool_arguments(server,name):
-    """FastMCP otherwise discards unknown keys before the tool function sees them."""
-    tool=server._tool_manager.get_tool(name)
-    model=tool.fn_metadata.arg_model
-    model.model_config['extra']='forbid'
-    model.model_rebuild(force=True)
-    tool.parameters=model.model_json_schema(by_alias=True)
+def _forbid_extra_tool_arguments(server,name=None):
+    """FastMCP otherwise discards unknown keys before the tool function sees them.
+
+    With no name, every tool on the server. Per-tool was how eight of the eleven came to be
+    uncovered: an unknown key on those was dropped silently, so the server's own strict
+    `set(arguments) != keys` check never saw it and the model never learned it had sent
+    something the tool does not have."""
+    names=[name] if name else list(server._tool_manager._tools)
+    for item in names:
+        tool=server._tool_manager.get_tool(item)
+        model=tool.fn_metadata.arg_model
+        model.model_config['extra']='forbid'
+        model.model_rebuild(force=True)
+        tool.parameters=model.model_json_schema(by_alias=True)
 
 
 def _add_request_input(server,invoke):
@@ -148,7 +176,6 @@ def _add_request_input(server,invoke):
     def erp_request_input(question: str) -> dict:
         """Stop this run and ask the user one explicit business question when required information is missing."""
         return invoke('erp_request_input',question=question)
-    _forbid_extra_tool_arguments(server,'erp_request_input')
 
 
 def create_server(client,run_id,capability,domain='query'):
@@ -167,9 +194,9 @@ def create_server(client,run_id,capability,domain='query'):
             """Store an immutable data-only native configuration proposal after reading its targets. Does not apply, publish, or create business records. Human preview and target confirmations are separate."""
             return invoke('erp_propose_configuration',package=package)
         _add_request_input(server,invoke)
+        _forbid_extra_tool_arguments(server)
         return server
     server=create_read_server(invoke,'dsherp-context-'+domain)
-    _forbid_extra_tool_arguments(server,'erp_search_records')
     if domain=='operation':
         @server.tool(annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=False,idempotentHint=False))
         def erp_propose_update(doctype: str,name: str,values: dict,version: str) -> dict:
@@ -192,8 +219,8 @@ def create_server(client,run_id,capability,domain='query'):
             """Propose a server-mapped target draft from an exact source record/version and enabled named route. Does not insert or submit the target; confirmation reruns and compares the mapper."""
             return invoke('erp_propose_make',source_doctype=source_doctype,source_name=source_name,
                           source_version=source_version,route=route)
-        _forbid_extra_tool_arguments(server,'erp_propose_make')
     _add_request_input(server,invoke)
+    _forbid_extra_tool_arguments(server)
     return server
 
 
