@@ -54,7 +54,17 @@ try:
     action={'doctype':'Sales Order','name':order.name,'action':'submit','version':str(order.modified)}
     try:run_tool(**cap,tool='erp_propose_action',arguments=action);raise AssertionError('unread order accepted')
     except frappe.ValidationError:pass
-    read=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Sales Order','name':order.name})
+    # A default read now names the line table and counts its rows without exposing a single
+    # column, so the run records the table as read but authorizes no child column for it.
+    counted=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Sales Order','name':order.name})
+    assert 'items' not in counted['fields']
+    assert counted['child_tables']['items']=={'child_doctype':'Sales Order Item','rows':len(order.items)}
+    counted_source=json.loads(frappe.db.get_value('DS Model Run',run.name,'sources'))[-1]
+    assert 'items' in counted_source['fields'] and 'items' not in counted_source['child_fields']
+    # The original judgement, unchanged: a read that really exposes the line columns records
+    # qty among the child fields this run may replay. It now takes an explicit children.
+    read=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Sales Order','name':order.name,'children':['items']})
+    assert read['fields']['items'][0]['qty']==order.items[0].qty
     sources=json.loads(frappe.db.get_value('DS Model Run',run.name,'sources'))
     assert 'qty' in sources[-1]['child_fields']['items']
     proposal_count=frappe.db.count('DS Operation Proposal',{'conversation':conversation.name})

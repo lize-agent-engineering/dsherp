@@ -175,6 +175,11 @@ try:
     # without writing a Delivery Note.
     cap,drift_run=new_run();frappe.set_user('Guest')
     read=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Sales Order','name':order_name})
+    # The source read no longer expands the order lines - it counts them. What make freezes
+    # below is mapped from those same lines by the server, not from what the model was shown.
+    assert 'items' not in read['fields'],read
+    assert read['child_tables']['items']=={
+        'child_doctype':'Sales Order Item','rows':len(order.items)},read
     proposal=run_tool(**cap,tool='erp_propose_make',arguments=make_arguments(str(read['modified'])))
     proposal_names.append(proposal['id'])
     assert proposal['proposal_type']=='make' and proposal['action']=='make'

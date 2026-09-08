@@ -152,6 +152,59 @@ def confirm_once(proposal,run_name):
     return result
 
 
+def schema_field_map(cap,doctype,tables=None):
+    """Every field of one DocType, in order, following the schema cursor.
+
+    read_schema pages since the tool-output slice, so a single call is only the first page
+    of a wide DocType such as Purchase Order. The first page is still the one whose version
+    pins a create proposal, so it is returned alongside the complete map.
+    """
+    first=None;collected={};after=None
+    for _page in range(40):
+        arguments={'doctype':doctype}
+        if tables is not None:
+            arguments['tables']=tables
+        if after:
+            arguments['after_fieldname']=after
+        page=run_tool(**cap,tool='erp_read_schema',arguments=arguments)
+        if first is None:
+            first=page
+        collected.update({field['fieldname']:field for field in page['fields']})
+        after=page.get('next_after_fieldname')
+        if not after:
+            break
+    assert len(collected)==first['total_fields'],(len(collected),first['total_fields'])
+    return first,collected
+
+
+def child_column_map(cap,doctype,table,fields):
+    """Every column of one child table, expanded on purpose.
+
+    Child tables are named but not inlined by default now, so the columns come from an
+    explicit `tables=[table]` read. `fields` is the ordered map from schema_field_map: the
+    field just before the table puts the expansion at the head of its own page, and a wide
+    child table such as Purchase Order Item pages its columns behind `child_after`.
+    """
+    order=list(fields)
+    index=order.index(table)
+    assert index,(doctype,table,'no page can start at the first field of a DocType')
+    before=order[index-1]
+    columns={};cursor=None;entry=None
+    for _page in range(40):
+        arguments={'doctype':doctype,'tables':[table],'after_fieldname':before}
+        if cursor:
+            arguments['child_after']={table:cursor}
+        page=run_tool(**cap,tool='erp_read_schema',arguments=arguments)
+        entry=next(field for field in page['fields'] if field['fieldname']==table)
+        assert entry['fields'],entry
+        columns.update({column['fieldname']:column for column in entry['fields']})
+        cursor=entry.get('columns_truncated',{}).get('next_after_child_fieldname')
+        if not cursor:
+            break
+    assert len(columns)==entry['total_columns'],(len(columns),entry['total_columns'])
+    return columns
+
+
 def propose_make_after_rejecting_options(source_doctype,source_name,route_key):
     cap,run_name=new_run()
     frappe.set_user('Guest')
@@ -378,9 +431,12 @@ try:
     # A subcontracted PO proposal is schema-sourced and remains write-free.
     cap,po_create_run=new_run()
     frappe.set_user('Guest')
-    po_schema=run_tool(**cap,tool='erp_read_schema',arguments={'doctype':'Purchase Order'})
-    po_fields={field['fieldname']:field for field in po_schema['fields']}
-    po_item_fields={field['fieldname']:field for field in po_fields['items']['fields']}
+    po_schema,po_fields=schema_field_map(cap,'Purchase Order')
+    # The child table is named, not inlined: the default schema read says which DocType its
+    # rows are, and the columns come from a read that asks for that table by name.
+    assert 'fields' not in po_fields['items'],po_fields['items']
+    assert po_fields['items']['rows_of']=='Purchase Order Item',po_fields['items']
+    po_item_fields=child_column_map(cap,'Purchase Order','items',po_fields)
     assert po_fields['supplier_warehouse']['options']=='Warehouse'
     assert po_fields['is_subcontracted']['fieldtype']=='Check'
     assert po_fields['set_reserve_warehouse']['options']=='Warehouse'
@@ -896,12 +952,20 @@ try:
     sco_outcome=run_tool(**cap,tool='erp_read_record',arguments={
         'doctype':'Subcontracting Order','name':subcontracting_order,
     })
+    # per_received is 0 here and has to survive the empty-field filter: only None and ''
+    # are absences, a zero is an answer.
     assert flt(po_outcome['fields']['per_received'])==0,po_outcome
     assert po_outcome['fields']['status']=='To Receive and Bill',po_outcome
-    assert len(po_outcome['fields']['items'])==1,po_outcome
-    assert flt(
-        po_outcome['fields']['items'][0]['subcontracted_qty']
-    )==purchase_qty,po_outcome
+    # The same single line, counted by the default read and expanded by the one that asks.
+    assert 'items' not in po_outcome['fields'],po_outcome
+    assert po_outcome['child_tables']['items']=={
+        'child_doctype':'Purchase Order Item','rows':1,
+    },po_outcome
+    po_outcome_items=run_tool(**cap,tool='erp_read_record',arguments={
+        'doctype':'Purchase Order','name':purchase_order,'children':['items'],
+    })['fields']['items']
+    assert len(po_outcome_items)==1,po_outcome_items
+    assert flt(po_outcome_items[0]['subcontracted_qty'])==purchase_qty,po_outcome_items
     assert flt(sco_outcome['fields']['per_received'])==100,sco_outcome
     assert sco_outcome['fields']['status']=='Completed',sco_outcome
 
@@ -914,9 +978,7 @@ try:
         'bin_after_supply':after_supply,'bin_after_receipt':after_receipt,
         'po_per_received':flt(po_outcome['fields']['per_received']),
         'po_status':po_outcome['fields']['status'],
-        'po_subcontracted_quantity':flt(
-            po_outcome['fields']['items'][0]['subcontracted_qty']
-        ),
+        'po_subcontracted_quantity':flt(po_outcome_items[0]['subcontracted_qty']),
         'sco_per_received':flt(sco_outcome['fields']['per_received']),
         'sco_status':sco_outcome['fields']['status'],
         'supply_stock_ledger_rows':supply_ledgers,

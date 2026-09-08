@@ -97,6 +97,60 @@ def confirm_once(proposal,run_name):
     return result
 
 
+def read_schema_all(doctype):
+    """整个字段结构，按 16KB 分页跟着游标读全。
+
+    Sales Order 有 112 个字段，一页装不下，所以第一页只是结构的一部分。第一次调用
+    刻意保持最精简的参数（只有 doctype）：它同时是 propose_create 复算的那条来源。
+    """
+    first=run_tool(**cap,tool='erp_read_schema',arguments={'doctype':doctype})
+    collected=list(first['fields'])
+    cursor=first.get('next_after_fieldname')
+    guard=0
+    while cursor and guard<20:
+        page=run_tool(**cap,tool='erp_read_schema',arguments={
+            'doctype':doctype,'after_fieldname':cursor,
+        })
+        collected+=page['fields']
+        cursor=page.get('next_after_fieldname')
+        guard+=1
+    assert not cursor,(doctype,guard)
+    fields={field['fieldname']:field for field in collected}
+    assert len(fields)==first['total_fields'],(len(fields),first['total_fields'])
+    return first,fields
+
+
+def read_child_columns(doctype,table):
+    """被点名子表的全部列。
+
+    子表默认只报名不展开，点名后它会在恰好一页上展开，而它自己的列也可能分页：
+    columns_truncated 的 next_after_child_fieldname 配 child_after 才能读完。
+    """
+    columns={};total=None;child_cursor=None;guard=0
+    while guard<40:
+        entry=None;field_cursor=None
+        while entry is None and guard<40:
+            arguments={'doctype':doctype,'tables':[table]}
+            if field_cursor:
+                arguments['after_fieldname']=field_cursor
+            if child_cursor:
+                arguments['child_after']={table:child_cursor}
+            page=run_tool(**cap,tool='erp_read_schema',arguments=arguments)
+            guard+=1
+            entry=next((field for field in page['fields']
+                        if field['fieldname']==table and 'fields' in field),None)
+            field_cursor=page.get('next_after_fieldname')
+            assert entry is not None or field_cursor,table+' 被点名却没有在任何一页展开'
+        assert entry is not None,(table,guard)
+        columns.update({column['fieldname']:column for column in entry['fields']})
+        total=entry['total_columns']
+        child_cursor=entry.get('columns_truncated',{}).get('next_after_child_fieldname')
+        if not child_cursor:
+            break
+    assert len(columns)==total,(len(columns),total)
+    return columns
+
+
 try:
     frappe.set_user('Administrator')
     roles={row.name for row in frappe.get_all(
@@ -186,9 +240,12 @@ try:
     # Create and submit the source Sales Order through the server-bound HITL path.
     cap,create_run=new_run()
     frappe.set_user('Guest')
-    schema=run_tool(**cap,tool='erp_read_schema',arguments={'doctype':'Sales Order'})
-    fields={field['fieldname']:field for field in schema['fields']}
-    item_fields={field['fieldname']:field for field in fields['items']['fields']}
+    schema,fields=read_schema_all('Sales Order')
+    # 默认只报子表名不展开：这一页里 items 只有 rows_of，没有 fields。
+    assert all('fields' not in field for field in fields.values()
+               if field['fieldtype']=='Table'),'默认不应内联任何子表'
+    assert fields['items']['rows_of']=='Sales Order Item',fields['items']
+    item_fields=read_child_columns('Sales Order','items')
     assert fields['customer']['options']=='Customer' and fields['customer']['reqd']
     assert fields['delivery_date']['fieldtype']=='Date',fields['delivery_date']
     assert item_fields['item_code']['options']=='Item',item_fields['item_code']
@@ -241,6 +298,19 @@ try:
     order_read=run_tool(**cap,tool='erp_read_record',arguments={
         'doctype':'Sales Order','name':sales_order,
     })
+    # 默认不展开子表，只报行数；点名 children 才拿到行内容，业务判据仍是同一行。
+    assert 'items' not in order_read['fields'],sorted(order_read['fields'])
+    assert order_read['child_tables']['items']=={
+        'child_doctype':'Sales Order Item','rows':1,
+    },order_read['child_tables']
+    assert order_read['fields']['docstatus']==0,order_read['fields']['docstatus']
+    order_lines=run_tool(**cap,tool='erp_read_record',arguments={
+        'doctype':'Sales Order','name':sales_order,'children':['items'],
+    })
+    assert len(order_lines['fields']['items'])==1,order_lines['fields']['items']
+    assert order_lines['fields']['items'][0]['item_code']==item_code
+    assert flt(order_lines['fields']['items'][0]['qty'])==delivery_qty
+    assert order_lines['fields']['items'][0]['warehouse']==warehouse
     submit_counts=site_document_counts()
     submit_order=run_tool(**cap,tool='erp_propose_action',arguments={
         'doctype':'Sales Order','name':sales_order,'action':'submit',

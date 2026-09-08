@@ -63,6 +63,32 @@ def _actor(run):
         frappe.set_user(original)
 
 
+def grounds(sources,tool,identity,*,version,key):
+    """Whether this run already read exactly what the proposal claims to act on.
+
+    Matched on the **identity** keys only - the doctype, and the record name where there is
+    one - never on the whole argument dict. Reads now carry shaping and paging arguments
+    (`fields`, `children`, `after_idx`, `after_fieldname`), and `_run_tool` fills in their
+    defaults before recording the source, so a whole-dict comparison against a two-key
+    literal matches nothing: every proposal would be refused immediately after reading its
+    own target. Sources recorded before those arguments existed are audit facts and still
+    match, for the same reason.
+
+    Freshness is not weakened by this: it is carried by `version`, compared below against the
+    `modified` the read itself returned. A partial read is still a read of that record at
+    that version.
+    """
+    for source in sources:
+        if source['tool']!=tool:continue
+        args=source['arguments']
+        if any(args.get(field)!=value for field,value in identity.items()):continue
+        recorded=source.get(key)
+        if isinstance(recorded,dict):
+            recorded=recorded.get(identity.get('name'))
+        if recorded==version:return True
+    return False
+
+
 def authorize_sources(sources):
     for source in sources:
         if source['tool']=='erp_read_configuration':
@@ -70,9 +96,18 @@ def authorize_sources(sources):
             authorize_source(source)
             continue
         args=source['arguments'];doctype=args['doctype']
-        schema={f['fieldname']:f for f in erp.read_schema(doctype)['fields']}
-        visible=set(schema)|{'name','modified'}
-        if frappe.get_meta(doctype).is_submittable:
+        # Straight from the metadata, not through erp.read_schema. That tool now answers in
+        # 16KB pages and no longer inlines child tables, so a visible set built from one page
+        # would refuse the very read that produced this source - a permission error about
+        # history, raised on something that just happened. Replaying an authorization is also
+        # the wrong place to pay for paging: this is the same permitted-field computation the
+        # tool does internally, without the shaping.
+        meta=frappe.get_meta(doctype)
+        visible=erp._readable_fields(meta,frappe.session.user)|{'name','modified'}
+        visible|={field.fieldname for field in meta.fields
+                  if field.fieldtype=='Table'
+                  and field.permlevel in meta.get_permlevel_access('read',user=frappe.session.user)}
+        if meta.is_submittable:
             visible.add('docstatus')
         if set(source['fields'])-visible:
             raise frappe.PermissionError('历史结果的字段权限已改变')
@@ -85,8 +120,12 @@ def authorize_sources(sources):
                 or set(match_fields)-visible):
                 raise frappe.PermissionError('历史结果的匹配字段权限已改变')
         for table,columns in source.get('child_fields',{}).items():
-            readable={field['fieldname'] for field in schema.get(table,{}).get('fields',[])}|{'name','idx'}
-            if table not in visible or set(columns)-readable:
+            definition=meta.get_field(table)
+            if definition is None or definition.fieldtype!='Table' or table not in visible:
+                raise frappe.PermissionError('历史结果的明细字段权限已改变')
+            readable=erp._readable_fields(frappe.get_meta(definition.options),frappe.session.user,
+                                          parenttype=doctype)|{'name','idx'}
+            if set(columns)-readable:
                 raise frappe.PermissionError('历史结果的明细字段权限已改变')
         for name in source['records']:
             frappe.get_doc(doctype,name).check_permission('read')
@@ -434,15 +473,15 @@ def _run_tool(run,tool,arguments):
             sources=json.loads(run.sources or '[]')
             authorize_sources(sources)
             if tool=='erp_propose_make':
-                if not any(source['tool']=='erp_read_record'
-                           and source['arguments']=={'doctype':arguments['source_doctype'],'name':arguments['source_name']}
-                           and source.get('record_versions',{}).get(arguments['source_name'])==arguments['source_version']
-                           for source in sources):
+                if not grounds(sources,'erp_read_record',
+                               {'doctype':arguments['source_doctype'],'name':arguments['source_name']},
+                               version=arguments['source_version'],key='record_versions'):
                     frappe.throw('请先读取确切来源及当前版本，再提出 make 操作')
                 from dsherp_bridge.operations import propose_make as propose
             elif tool in ('erp_propose_update','erp_propose_action','erp_propose_fill'):
-                if not any(source['tool']=='erp_read_record' and source['arguments']=={'doctype':arguments['doctype'],'name':arguments['name']}
-                           and source.get('record_versions',{}).get(arguments['name'])==arguments['version'] for source in sources):
+                if not grounds(sources,'erp_read_record',
+                               {'doctype':arguments['doctype'],'name':arguments['name']},
+                               version=arguments['version'],key='record_versions'):
                     frappe.throw('请先读取确切目标及当前版本，再提出操作')
                 if tool=='erp_propose_action':
                     from dsherp_bridge.operations import propose_action as propose
@@ -451,8 +490,8 @@ def _run_tool(run,tool,arguments):
                 else:
                     from dsherp_bridge.operations import propose_update as propose
             else:
-                if not any(source['tool']=='erp_read_schema' and source['arguments']=={'doctype':arguments['doctype']}
-                           and source.get('schema_version')==arguments['version'] for source in sources):
+                if not grounds(sources,'erp_read_schema',{'doctype':arguments['doctype']},
+                               version=arguments['version'],key='schema_version'):
                     frappe.throw('请先读取当前业务结构，再提出创建操作')
                 from dsherp_bridge.operations import propose_create as propose
             from dsherp_bridge import grants

@@ -37,7 +37,11 @@ try:
     sources=message.get('sources')
     assert isinstance(sources,list) and sources, 'message must carry its authorized tool reads'
     assert sources[0]['tool']=='erp_read_record', sources[0]
-    assert sources[0]['arguments']=={'doctype':'Item','name':item.name}, sources[0]
+    # run_tool 记录来源前会用默认值补齐缺省参数，所以 arguments 是补齐后的形状；
+    # 判据不变：这条来源必须精确指向刚读过的那个 doctype 与那一条记录，且是精简默认读法
+    # （没点名字段、没展开子表、没要空值、没续读游标）。
+    assert sources[0]['arguments']=={'doctype':'Item','name':item.name,'fields':None,'children':None,
+        'include_empty':False,'after_idx':None}, sources[0]
     assert item.name in sources[0]['records'], sources[0]
     assert session['proposals'][0]['id']==proposal['id']
     assert session['proposals'][0].get('model_run')==run.name, 'proposal must name the run that produced it'
