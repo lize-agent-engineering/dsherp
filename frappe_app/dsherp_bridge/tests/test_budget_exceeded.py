@@ -181,6 +181,27 @@ class TestBudgetRuling(BudgetCase):
             execution.finish_run(**cap, status='BudgetExceeded', error='我说的')
         self.assertEqual(frappe.db.get_value('DS Model Run', cap['run_id'], 'status'), 'Running')
 
+    def test_the_finished_event_carries_the_reason_as_a_code_not_only_as_prose(self):
+        """So a reader — the transcript, a report, an evaluation — can tell the three ways a
+        run can end expensively apart without parsing a Chinese sentence."""
+        cap = self._running_run()
+        from dsherp_bridge import context_events as events
+        events.record(cap['run_id'], 'loop_detected', {'tool': 'erp_read_record'})
+        self._finish(cap)
+        payload = json.loads(frappe.get_all(
+            'DS Run Event', filters={'run': cap['run_id'], 'kind': 'finished'},
+            fields=['payload'], limit_page_length=1)[0]['payload'])
+        self.assertEqual(payload['reason'], 'loop_detected')
+        self.assertEqual(payload['status'], 'BudgetExceeded')
+
+    def test_an_ordinary_failure_carries_no_reason(self):
+        cap = self._running_run()
+        self._finish(cap)
+        payload = json.loads(frappe.get_all(
+            'DS Run Event', filters={'run': cap['run_id'], 'kind': 'finished'},
+            fields=['payload'], limit_page_length=1)[0]['payload'])
+        self.assertEqual(payload['reason'], '')
+
     def test_a_runner_cannot_write_the_facts_this_ruling_reads(self):
         """`budget_exceeded` and `loop_detected` are server kinds. A runner able to write them
         could make any failure look like an expense — and, with the time-budget branch, could

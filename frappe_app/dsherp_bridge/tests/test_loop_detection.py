@@ -82,7 +82,10 @@ class TestLoopDetection(IntegrationTestCase):
             self.assertTrue(execution.run_tool(**cap, tool='erp_read_schema', arguments=arguments))
         with self.assertRaises(frappe.ValidationError) as raised:
             execution.run_tool(**cap, tool='erp_read_schema', arguments=arguments)
-        self.assertEqual(str(raised.exception), execution.LOOP_MESSAGE)
+        # The model's copy names the two ways out it has right now; the person's copy, stored
+        # on the run by `finish_run`, says what happened. They are deliberately different.
+        self.assertEqual(str(raised.exception), execution.LOOP_REFUSAL)
+        self.assertIn('erp_request_input', execution.LOOP_REFUSAL)
         self.assertEqual(self._kinds(cap['run_id']).count('tool_call'), 2,
                          'the third call must not have run')
         self.assertIn('loop_detected', self._kinds(cap['run_id']))
@@ -112,7 +115,7 @@ class TestLoopDetection(IntegrationTestCase):
                 execution.run_tool(**cap, tool='erp_read_schema', arguments=arguments)
         with self.assertRaises(frappe.ValidationError) as raised:
             execution.run_tool(**cap, tool='erp_read_schema', arguments=arguments)
-        self.assertEqual(str(raised.exception), execution.LOOP_MESSAGE)
+        self.assertEqual(str(raised.exception), execution.LOOP_REFUSAL)
         self.assertEqual(self._kinds(cap['run_id']).count('tool_refused'), 2)
         self.assertIn('loop_detected', self._kinds(cap['run_id']))
 

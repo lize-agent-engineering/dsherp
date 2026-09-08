@@ -386,8 +386,13 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
     return {'allowed':True}
 
 
+# Two audiences, two sentences. BUDGET/LOOP/TIME_MESSAGE end up in `DS Model Run.error`,
+# which a **person** reads after the fact, so they say what happened and what to do next time.
+# LOOP_REFUSAL is handed to the **model** at the moment it repeats itself, so it names the two
+# ways out it actually has right now.
 BUDGET_MESSAGE='本轮模型调用预算已用尽，运行已停止；请把问题拆小后重试'
 LOOP_MESSAGE='本轮因同一工具同参数连续 3 次调用被停止；请换一个问法或补充信息'
+LOOP_REFUSAL='同一工具同参数已连续调用 3 次，已停止重复；请改变参数，或用 erp_request_input 向用户说明'
 TIME_MESSAGE='本轮已达运行时长上限并停止'
 
 
@@ -469,7 +474,7 @@ def _loop_guard(run,tool,arguments):
         previous.append(_call_key(payload.get('tool'),payload.get('arguments') or {}))
     if loop_guard.repeats(previous,key):
         _refuse(run.name,'loop_detected',{'tool':tool,'repeats':loop_guard.LOOP_LIMIT},
-                frappe.ValidationError(LOOP_MESSAGE))
+                frappe.ValidationError(LOOP_REFUSAL))
 
 
 def _message_reason():
@@ -673,14 +678,18 @@ def _budget_ruling(run,error):
     Each branch requires **a fact the server wrote itself**. The runner's word alone never
     moves a status: a runtime that reported a timeout it did not actually hit would otherwise
     relabel an ordinary failure as an expense.
+
+    Returns `(status, error, reason)`. The reason is a code, not prose: it rides on the
+    `finished` event so the transcript can say why the run ended without anyone parsing the
+    message, and it is `''` for an ordinary failure.
     """
     kinds={row['kind'] for row in frappe.get_all('DS Run Event',
         filters={'run':run.name,'kind':['in',('budget_exceeded','loop_detected')]},
         fields=['kind'],limit_page_length=0)}
     if 'loop_detected' in kinds:
-        return 'BudgetExceeded',LOOP_MESSAGE
+        return 'BudgetExceeded',LOOP_MESSAGE,'loop_detected'
     if 'budget_exceeded' in kinds:
-        return 'BudgetExceeded',BUDGET_MESSAGE
+        return 'BudgetExceeded',BUDGET_MESSAGE,'budget_exceeded'
     # The time budget is the one limit only the runner observes. So it is believed only when
     # the server's own clock agrees: claimed → now must actually have reached the budget.
     timed_out=frappe.get_all('DS Run Event',
@@ -694,8 +703,8 @@ def _budget_ruling(run,error):
             from frappe.utils import get_datetime,now_datetime,time_diff_in_seconds
             elapsed=time_diff_in_seconds(now_datetime(),get_datetime(claimed))
             if elapsed>=run_budget(run.domain)['run_total_seconds']-5:
-                return 'BudgetExceeded',TIME_MESSAGE
-    return 'Failed',error
+                return 'BudgetExceeded',TIME_MESSAGE,'run_total_exceeded'
+    return 'Failed',error,''
 
 
 def _usage_of(run):
@@ -730,8 +739,9 @@ def finish_run(run_id,capability,status,answer='',error=''):
         if run.status=='Cancelling':status='Cancelled'
     if status=='Cancelled' and run.status!='Cancelling':frappe.throw('运行未请求取消')
     if status=='NeedsInput' and run.status!='NeedsInput':frappe.throw('运行未请求补充信息')
+    reason=''
     if status=='Failed':
-        status,error=_budget_ruling(run,error)
+        status,error,reason=_budget_ruling(run,error)
     provider_failures=_provider_failures(run.name)
     sources=json.loads(run.sources or '[]')
     proposals=frappe.db.count('DS Operation Proposal',{'model_run':run.name})
@@ -739,7 +749,7 @@ def finish_run(run_id,capability,status,answer='',error=''):
     executions=frappe.db.count('DS Execution Record',{'proposal':['in',proposal_names],'status':'Succeeded'}) if proposal_names else 0
     # One line closes the capability's audit: who used it, from where, how many times.
     events.record_safely(run.name,'finished',{'status':status,'answer_chars':len(answer) if isinstance(answer,str) else 0,
-        'error':(error or '')[:500],'model_calls':run.model_calls or 0,'provider_failures':provider_failures,
+        'error':(error or '')[:500],'reason':reason,'model_calls':run.model_calls or 0,'provider_failures':provider_failures,
         'proposals':proposals,'executions':executions,'sources':len(sources),
         'source':source or '','capability_calls':_capability_calls(run.name)})
     values={'status':status,'answer':answer if requested_success else '',

@@ -187,3 +187,26 @@ def test_an_unresolvable_placeholder_is_left_alone():
 
 def test_arguments_without_a_placeholder_are_untouched():
     assert model_server.substitute('{"doctype": "Item"}', []) == '{"doctype": "Item"}'
+
+
+def _result(case_id, verdict='pass', final_status='Succeeded'):
+    return {'case_id': case_id, 'verdict': verdict, 'tags': [], 'checks': [],
+            'final_status': final_status, 'model_calls': 2, 'actual_input_tokens': 100,
+            'actual_output_tokens': 20, 'usage_unknown_calls': 0}
+
+
+def test_a_replay_run_that_hit_a_budget_is_reported_and_red():
+    """The slice-6 gate, as a number in the report rather than something to notice by eye.
+
+    A replay batch that starts stopping runs on budget is the signal that a change grew the
+    call count or the input size. Raising the budget would erase exactly the measurement the
+    official values are derived from, so this is deliberately a red, not a warning.
+    """
+    from evals import run as runner
+    summary = runner.report([_result('a'), _result('b', final_status='BudgetExceeded')],
+                            mode='replay', site='s', started='t')
+    assert summary['totals']['budget_exceeded'] == 1
+    assert '因预算或循环停止 **1** 条' in runner.markdown(summary)
+    clean = runner.report([_result('a'), _result('b')], mode='replay', site='s', started='t')
+    assert clean['totals']['budget_exceeded'] == 0
+    assert '因预算或循环停止 **0** 条' in runner.markdown(clean)
