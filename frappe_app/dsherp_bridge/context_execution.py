@@ -551,6 +551,11 @@ def finish_run(run_id,capability,status,answer='',error=''):
         'source':source or '','capability_calls':_capability_calls(run.name)})
     values={'status':status,'answer':answer if requested_success else '',
         'error':error if status=='Failed' else '','capability_hash':'','provider_failures':provider_failures}
+    if status in ('Succeeded','Failed','Cancelled'):
+        # 结算这次运行的真实用量。必须在 finished 事件之后：duration 由「首事件 → finished」算出。
+        # 不包 try/except：读本站自己的事件表失败即 500，worker 侧有 finish_outcome_unknown 与租约
+        # 清扫兜底；把 run 写成终态却不记用量，会造成永远补不回的计量空洞。
+        values.update(_usage_of(run.name))
     if status=='NeedsInput':values['needs_input']=answer
     if requested_success:
         flagged=executions==0 and bool(re.search(r'(已|成功)(创建|提交|保存|完成|生成|录入|执行)',answer))
