@@ -203,3 +203,33 @@ class TestSourceAuthorization(IntegrationTestCase):
                                 version=str(result['modified']), key='record_versions'))
         self.assertEqual(json.loads(json.dumps(legacy))['arguments'],
                          {'doctype': 'Sales Order', 'name': order.name})
+
+    def test_replay_still_faces_the_doctype_policy(self):
+        """The gate used to come for free: the visible set was rebuilt by calling
+        `erp.read_schema`, which authorizes on the way in. Computing the set from metadata
+        instead is faster and page-free — and would silently drop the gate, letting a source
+        be replayed against a DocType whose policy has since been removed or disabled."""
+        order = self._order()
+        source, _ = self._source('Sales Order', order.name)
+        authorize_sources([source])                       # policy is enabled: still fine
+
+        # The policy DocType demands a fresh reason for every change, so each save gets one.
+        policy = frappe.get_doc('DS Doctype Policy', 'Sales Order')
+        policy.enabled = 0
+        policy.change_reason = '来源回放测试：停用以确认回放仍过策略闸'
+        policy.save(ignore_permissions=True)
+        try:
+            with self.assertRaises(frappe.PermissionError):
+                authorize_sources([source])
+        finally:
+            policy = frappe.get_doc('DS Doctype Policy', 'Sales Order')
+            policy.enabled = 1
+            policy.change_reason = '来源回放测试：恢复启用'
+            policy.save(ignore_permissions=True)
+
+    def test_a_source_naming_a_doctype_with_no_policy_is_refused(self):
+        source = {'tool': 'erp_read_record',
+                  'arguments': {'doctype': 'DS Doctype Policy', 'name': 'Sales Order'},
+                  'fields': [], 'records': [], 'record_versions': {}}
+        with self.assertRaises(frappe.PermissionError):
+            authorize_sources([source])

@@ -96,6 +96,12 @@ def authorize_sources(sources):
             authorize_source(source)
             continue
         args=source['arguments'];doctype=args['doctype']
+        # The policy gate first, exactly as a fresh read would face it. This used to come for
+        # free because the visible set was rebuilt by calling erp.read_schema, which
+        # authorizes on the way in; computing the set from metadata instead is faster and
+        # page-free, but it would silently drop the gate - a source could be replayed against
+        # a DocType whose policy has since been removed or disabled.
+        erp._authorize(doctype)
         # Straight from the metadata, not through erp.read_schema. That tool now answers in
         # 16KB pages and no longer inlines child tables, so a visible set built from one page
         # would refuse the very read that produced this source - a permission error about
