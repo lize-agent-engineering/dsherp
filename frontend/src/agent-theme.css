@@ -356,6 +356,7 @@
   transition: border-color var(--dsh-dur-2) var(--dsh-ease), color var(--dsh-dur-2) var(--dsh-ease);
 }
 .dsh-more-btn:hover { border-color: var(--dsh-accent-line); color: var(--dsh-accent-ink); }
+.dsh-load-capped { color: var(--dsh-ink-3); font-size: 12px; text-align: center; }
 
 /* The ERP reads behind an answer, offered as a quiet footer control that
    opens the run's actual call chain. */

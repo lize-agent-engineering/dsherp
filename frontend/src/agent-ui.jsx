@@ -124,13 +124,17 @@ export function EmptyState({ icon, title, description, children, compact }) {
 
 // Lists grow as you scroll. The button stays real so keyboard users and
 // browsers without IntersectionObserver can still reach the next page.
-export function LoadMore({ hasMore, busy, onLoad, label }) {
+// Past LOAD_MORE_CAP rows we stop growing entirely: the sentinel is never observed
+// and the button is gone, so scrolling to the bottom cannot keep pulling pages.
+export const LOAD_MORE_CAP = 200;
+export function LoadMore({ hasMore, busy, onLoad, label, count }) {
   const sentinel = useRef(null);
   const load = useRef(onLoad);
   load.current = onLoad;
+  const capped = typeof count === 'number' && count >= LOAD_MORE_CAP;
   useEffect(() => {
     const node = sentinel.current;
-    if (!node || !hasMore || typeof IntersectionObserver === 'undefined') return undefined;
+    if (!node || !hasMore || capped || typeof IntersectionObserver === 'undefined') return undefined;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) load.current();
@@ -139,8 +143,15 @@ export function LoadMore({ hasMore, busy, onLoad, label }) {
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasMore, busy]);
+  }, [hasMore, busy, capped]);
   if (!hasMore) return null;
+  if (capped) {
+    return (
+      <div className="dsh-more">
+        <span className="dsh-load-capped">已显示前 {LOAD_MORE_CAP} 条，请用搜索缩小范围</span>
+      </div>
+    );
+  }
   return (
     <div className="dsh-more" ref={sentinel}>
       {busy ? (

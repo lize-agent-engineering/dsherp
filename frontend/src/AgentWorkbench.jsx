@@ -432,7 +432,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
           );
         })}
         {!sessions.length && !busy && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />}
-        <LoadMore hasMore={hasMore} busy={moreBusy} onLoad={growSessions} label="加载更多会话" />
+        <LoadMore hasMore={hasMore} busy={moreBusy} onLoad={growSessions} label="加载更多会话" count={sessions.length} />
       </div>
     </nav>
   );
