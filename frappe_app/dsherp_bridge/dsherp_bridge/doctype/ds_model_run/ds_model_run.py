@@ -3,7 +3,10 @@ from frappe.model.document import Document
 
 # A run that has ended is a fact about what the assistant did. Nothing on the ordinary
 # document path may rewrite it - not a role, not Administrator, not ignore_permissions.
-TERMINAL = ('Succeeded', 'Failed', 'Cancelled')
+# BudgetExceeded belongs here for the same reason as the rest: it is the most expensive
+# kind of ended run, and leaving it out would make it the one terminal state a Document
+# write could still rewrite.
+TERMINAL = ('Succeeded', 'Failed', 'Cancelled', 'BudgetExceeded')
 # The one transition a person makes through the document path: asking for a stop. Every
 # other change to a run is made by the execution module itself through database writes,
 # which this validation does not see and which the state machine there constrains.

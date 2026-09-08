@@ -236,3 +236,22 @@ def test_runtime_failed_event_carries_no_stack_frames_to_the_user(model_server,t
     assert failures and failures[-1]['error_class']=='RuntimeError'
     serialized=json.dumps(failures,ensure_ascii=False)
     assert 'frames' not in serialized and 'context_runner.py' not in serialized and 'monitored_run' not in serialized
+
+
+def test_runtime_started_names_the_assembly_this_run_used():
+    """A run whose prompt version and skill versions are not on the event stream cannot be
+    reproduced from its record; usage.summarise reads them from exactly this event."""
+    from dsherp import context_runner, prompt_assembly
+    versions = context_runner._skill_versions()
+    assert versions == {'erp-query': '1.4.0', 'erp-operation': '2.2.0', 'erp-configuration': '1.1.0'}
+    assert prompt_assembly.PROMPT_VERSION and prompt_assembly.sampling_note()
+
+
+def test_skill_versions_raises_rather_than_returning_none(monkeypatch, tmp_path):
+    """A silent None means an unreproducible run gets recorded as if it were fine."""
+    import pytest
+
+    from dsherp import context_runner
+    monkeypatch.setattr(context_runner, 'ROOT', tmp_path)
+    with pytest.raises((OSError, ValueError, TypeError)):
+        context_runner._skill_versions()

@@ -53,6 +53,7 @@ def summarise(events):
     input_tokens = output_tokens = unknown = 0
     reserved = responses = 0
     skills = None
+    prompt_version = sampling = None
     first = last = None
     for event in events:
         kind = event.get('kind')
@@ -62,8 +63,13 @@ def summarise(events):
             if kind == 'finished':
                 last = moment if last is None else max(last, moment)
         payload = _payload(event)
-        if kind == 'runtime_started' and isinstance(payload.get('skill_versions'), dict):
-            skills = payload['skill_versions']
+        if kind == 'runtime_started':
+            if isinstance(payload.get('skill_versions'), dict):
+                skills = payload['skill_versions']
+            if isinstance(payload.get('prompt_version'), str) and payload['prompt_version']:
+                prompt_version = payload['prompt_version']
+            if isinstance(payload.get('sampling'), str) and payload['sampling']:
+                sampling = payload['sampling']
         if kind == 'model_call_reserved':
             reserved += 1
         if kind != 'model_response':
@@ -98,6 +104,9 @@ def summarise(events):
     return {'model': ','.join(models), 'provider_request_ids': json.dumps(requests),
             'actual_input_tokens': input_tokens, 'actual_output_tokens': output_tokens,
             'duration_ms': duration, 'skill_versions': json.dumps(skills) if skills is not None else json.dumps(None),
+            # The assembly this run used. Unknown stays None so storable drops it: writing ''
+            # would claim we recorded a version we never saw.
+            'prompt_version': prompt_version, 'sampling': sampling,
             # missing or incomplete provider accounting, not a count of free calls
             'usage_unknown_calls': unknown}
 

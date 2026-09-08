@@ -1160,3 +1160,42 @@ def test_only_a_definite_refusal_of_the_success_write_back_gets_the_failed_fallb
         assert run_once(client,SETTINGS,tmp_path,execute=lambda *a:{'status':'Succeeded','answer':'ok'})
     finishes=[body for method,body in calls if method=='finish_run']
     assert [body['status'] for body in finishes]==['Succeeded','Failed'],finishes
+
+
+def test_provider_key_state_names_the_ledger_version_without_carrying_the_key(tmp_path):
+    """spec:159 wants the runtime fingerprint split into a config digest (which goes on the run)
+    and a key version (which does not). The config digest already excludes the key (S9), so the
+    only missing half is this: which registered rotation the running key corresponds to. It is
+    answered by comparing fingerprints the ledger already stores — no new hash, no new field,
+    and the fingerprint itself never leaves this function."""
+    import json
+
+    from dsherp import rotation
+    from dsherp.context_worker import provider_key_state
+
+    runtime = tmp_path / '.runtime'
+    runtime.mkdir()
+    ledger = runtime / 'rotations.json'
+
+    # 1. Never registered: no ledger at all.
+    state = provider_key_state({'DEEPSEEK_API_KEY': 'synthetic-not-a-credential'}, runtime)
+    assert state == {'version': None, 'state': 'never', 'effective_at': None}
+
+    # 2. Registered and matching: the running key is the one that was rotated in.
+    rows = [rotation.entry(kind='provider', target='host', value='synthetic-not-a-credential',
+                           previous=None, version=1, at=_moment())]
+    ledger.write_text(json.dumps(rows))
+    state = provider_key_state({'DEEPSEEK_API_KEY': 'synthetic-not-a-credential'}, runtime)
+    assert state['state'] == 'registered' and state['version'] == 1 and state['effective_at']
+
+    # 3. Registered but the running key is something else - rotated without a restart.
+    state = provider_key_state({'DEEPSEEK_API_KEY': 'synthetic-other-value'}, runtime)
+    assert state['state'] == 'unregistered' and state['version'] == 1
+
+    # The key and its fingerprint are never part of the answer.
+    assert not any('synthetic' in str(value) for value in state.values())
+
+
+def _moment():
+    from datetime import datetime
+    return datetime(2026, 9, 8, 12, 0, 0)

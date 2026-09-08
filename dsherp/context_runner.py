@@ -9,7 +9,7 @@ import threading
 import time
 import httpx
 from dsherp.context_mcp import post
-from dsherp import run_events
+from dsherp import prompt_assembly, run_events
 from dsherp.session_runtime import open_runtime,ROOT
 from dsherp.runtime_revision import configuration_revision
 
@@ -92,7 +92,8 @@ def monitored_run(runtime,question,session_id,status,*,poll_interval=2,record=No
     initial=check()
     if initial['status']=='Cancelling':return {'status':'Cancelled','answer':''}
     if initial['status']=='NeedsInput':return {'status':'NeedsInput','answer':initial.get('needs_input','')}
-    emit([{'kind':'runtime_started','source':'runner','payload':{'session_id':session_id,'skill_versions':_skill_versions()}}])
+    emit([{'kind':'runtime_started','source':'runner','payload':{'session_id':session_id,'skill_versions':_skill_versions(),
+        'prompt_version':prompt_assembly.PROMPT_VERSION,'sampling':prompt_assembly.sampling_note()}}])
     def invoke():
         try:results.put((True,runtime.run(question,session_id=session_id,on_notification=notifications.append)))
         except BaseException as error:results.put((False,error))
@@ -151,12 +152,13 @@ def monitored_run(runtime,question,session_id,status,*,poll_interval=2,record=No
 def _skill_versions():
     """Which business skills, at which versions, this run executes with: the pinned manifest
     the guard already verifies. Attributed on the runtime_started event so usage can be
-    broken down by skill version later (T5)."""
-    try:
-        manifest=json.loads((ROOT/'config/business-skills.json').read_text())
-        return {row['name']:row['version'] for row in manifest.get('skills',[]) if isinstance(row,dict) and row.get('name')}
-    except (OSError,ValueError,TypeError):
-        return None
+    broken down by skill version later (T5).
+
+    Raises rather than returning None: the manifest was already verified byte for byte at
+    startup (verify_business_skills), so failing to read it here means the runtime is not
+    what it claims to be — and a run whose assembly cannot be named is not reproducible."""
+    manifest=json.loads((ROOT/'config/business-skills.json').read_text())
+    return {row['name']:row['version'] for row in manifest.get('skills',[]) if isinstance(row,dict) and row.get('name')}
 
 
 def run_business(config_path,directory):

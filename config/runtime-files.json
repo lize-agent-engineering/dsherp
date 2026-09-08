@@ -8,6 +8,7 @@
   "config/dsh-context.yml",
   "runtime/context-plugin.cjs",
   "runtime/model-guard.cjs",
+  "dsherp/prompt_assembly.py",
   "dsherp/context_runner.py",
   "dsherp/run_events.py",
   "dsherp/context_mcp.py",
