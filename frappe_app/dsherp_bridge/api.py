@@ -212,6 +212,49 @@ def _field_schema(field):
             if value is not None}
 
 
+def _routes_for(doc):
+    """Which server-owned routes this exact record is ready for, and why not for the rest.
+
+    Evaluated per record, not per DocType: "can I make a Purchase Receipt from this" depends
+    on whether *this* order is submitted, not subcontracted, and not closed.
+
+    This is what lets the token list leave `SKILL.md`. The refusal in `resolve_route` only
+    echoes the name the model guessed wrong; it never lists what is available - so before
+    this existed, a model that did not memorise the seven names had no way to find them.
+
+    Counted in the byte total but never truncated: there are at most seven of them, and a
+    half-list of available next steps is worse than none. Not recorded in `sources` and not
+    replayed by `authorize_sources` - it reveals no field values, only which steps the
+    server would accept.
+    """
+    from dsherp_bridge.doctype_policy import require_policy_schema
+    from dsherp_bridge.make_adapters import _ADAPTERS, route_requirements, unmet_requirements
+    require_policy_schema()
+    policy = frappe.db.get_value('DS Doctype Policy',
+                                 {'target_doctype': doc.doctype, 'enabled': 1}, 'name')
+    if not policy:
+        return []
+    enabled = frappe.get_all('DS Doctype Policy Route',
+                             filters={'parent': policy, 'parenttype': 'DS Doctype Policy',
+                                      'parentfield': 'routes'},
+                             fields=['route_name', 'method_path', 'target_doctype'],
+                             order_by='idx asc,name asc')
+    routes = []
+    for row in enabled:
+        key = (doc.doctype, row['route_name'], row['method_path'], row['target_doctype'])
+        if key not in _ADAPTERS:
+            # Configured but not registered in code. `resolve_route` would refuse it, so
+            # offering it here would be offering something that cannot be done.
+            continue
+        requirement = route_requirements(*key)
+        unmet = unmet_requirements(doc, requirement)
+        progress = requirement['progress_field']
+        routes.append({'route': row['route_name'], 'target_doctype': row['target_doctype'],
+                       'ready': not unmet, 'unmet': unmet,
+                       'progress_field': progress, 'progress_value': doc.get(progress)})
+    return routes
+
+
 def _is_empty(value):
     """Only None and the empty string are absences.
 
@@ -306,6 +349,9 @@ def read_record(doctype: str, name: str, fields=None, children=None,
     }
     if tables:
         result['child_tables'] = tables
+    routes = _routes_for(doc)
+    if routes:
+        result['routes'] = routes
     if truncated:
         result['truncated'] = truncated
     if _too_big(result, LIMITS['record_max_bytes']):

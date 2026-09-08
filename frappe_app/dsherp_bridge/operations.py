@@ -422,7 +422,20 @@ def propose_update(session_id, doctype, name, values, version, grant=None, model
     changes = update_diff(doc, values)
     if str(doc.modified) != version:
         frappe.throw('记录版本已变化，请重新提出操作')
+    _preflight_update(doctype, name, values)
     return _propose(session_id,doctype,name,'update',changes,version,grant,model_run)
+
+
+def _preflight_update(doctype, name, values):
+    """Check the document as it *would* be, on a copy.
+
+    Never on the document `update_diff` inspected: that one is handed back to the caller and
+    `update_diff` promises not to mutate it. A separate `get_doc` costs one read and keeps
+    that promise exactly."""
+    from dsherp_bridge import preflight
+    candidate = frappe.get_doc(doctype, name)
+    _apply_values(candidate, values)
+    preflight.before_update(candidate)
 
 
 def propose_create(session_id, doctype, values, version, grant=None, model_run=None):
@@ -430,6 +443,10 @@ def propose_create(session_id, doctype, values, version, grant=None, model_run=N
     changes=create_diff(doctype,values)
     if str(frappe.get_meta(doctype).modified)!=version:
         frappe.throw('业务结构已变化，请重新读取后提出操作')
+    from dsherp_bridge import preflight
+    candidate=frappe.get_doc({'doctype':doctype})
+    _apply_values(candidate,values)
+    preflight.before_create(doctype,candidate,values)
     return _propose(session_id,doctype,None,'create',changes,version,grant,model_run)
 
 
@@ -546,6 +563,13 @@ def propose_make(session_id,source_doctype,source_name,source_version,route,gran
     from dsherp_bridge.doctype_policy import require_enabled,resolve_route
     resolved=resolve_route(source_doctype,route)
     require_enabled(resolved['target_doctype'])
+    # Before the mapper runs: the mapper is ERPNext's own and will happily map from a draft
+    # or a closed order, producing a target the confirmation would then refuse.
+    from dsherp_bridge.make_adapters import route_requirements,unmet_requirements
+    reasons=unmet_requirements(source,route_requirements(
+        source_doctype,resolved['route_name'],resolved['method_path'],resolved['target_doctype']))
+    if reasons:
+        frappe.throw('该 route 的前置条件未满足：'+'；'.join(reasons))
     target=_mapped_target(source_name,resolved)
     target_doc=frappe.get_doc(target);target_doc.check_permission('create');target_doc.check_permission('read')
     confirmation_target=_public_make_target(target_doc,_make_confirmation_target(target),user)
@@ -565,6 +589,7 @@ def propose_make(session_id,source_doctype,source_name,source_version,route,gran
 def propose_fill(session_id,doctype,name,values,version,grant=None,model_run=None):
     doc=frappe.get_doc(doctype,name)
     changes=update_diff(doc,values,include_unchanged=True,action='fill')
+    _preflight_update(doctype,name,values)
     for change in changes:
         if isinstance(change['after'],list):
             if [row.get('name') for row in change['after']]!=[row['name'] for row in change['before']]:
@@ -586,6 +611,10 @@ def propose_action(session_id,doctype,name,action,version,grant=None,model_run=N
     changes=action_diff(doc,action)
     if str(doc.modified)!=version:frappe.throw('记录版本已变化，请重新提出操作')
     impact=action_impact(doc,action)
+    if action=='submit':
+        # Only submit: cancelling returns stock rather than consuming it.
+        from dsherp_bridge import preflight
+        preflight.before_submit(doc,impact)
     return _propose(session_id,doctype,name,action,changes,version,grant,model_run,impact=impact)
 
 

@@ -81,8 +81,10 @@ def resolve_route(source_doctype, route_name):
         or not re.fullmatch(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+',resolved['method_path'])
         or not frappe.db.exists('DocType',resolved['target_doctype'])):
         frappe.throw('make 路由配置无效：'+source_doctype+' / '+route_name)
-    from dsherp_bridge.make_adapters import get_make_adapter
-    get_make_adapter(source_doctype,resolved['route_name'],resolved['method_path'],resolved['target_doctype'])
+    from dsherp_bridge.make_adapters import get_make_adapter,route_requirements
+    key=(source_doctype,resolved['route_name'],resolved['method_path'],resolved['target_doctype'])
+    get_make_adapter(*key)
+    resolved['progress_field']=route_requirements(*key)['progress_field']
     resolved['source_doctype']=source_doctype
     return resolved
 
