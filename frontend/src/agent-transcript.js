@@ -94,6 +94,16 @@ const reasonLabels = {
   loop_detected: '同一工具同参数连续调用，已停止重复',
 };
 
+// The limit names the server records. Shown instead of the payload, which would otherwise be
+// dumped as JSON at a business user — the one thing this stream is not supposed to do.
+const limitLabels = {
+  model_max_calls: '本轮模型调用次数',
+  model_max_input_bytes_per_call: '单次输入字节',
+  model_max_input_bytes_total: '本轮累计输入字节',
+  model_max_output_tokens_per_call: '单次输出 token',
+  model_max_output_tokens_total: '本轮累计输出 token',
+};
+
 const reasonText = (reason) => reasonLabels[reason] ?? reason;
 
 function eventDetail(event, payload) {
@@ -102,6 +112,15 @@ function eventDetail(event, payload) {
   if (payload == null) return bits.join(' ');
   if (typeof payload !== 'object') {
     bits.push(String(payload));
+    return bits.join(' ');
+  }
+  if (event.kind === 'budget_exceeded' && typeof payload.limit === 'string') {
+    const name = limitLabels[payload.limit] ?? payload.limit;
+    bits.push(`${name} ${payload.used}/${payload.allowed}`);
+    return bits.join(' ');
+  }
+  if (event.kind === 'loop_detected') {
+    bits.push(`${payload.tool ?? ''} 连续 ${payload.repeats ?? 3} 次`.trim());
     return bits.join(' ');
   }
   if (typeof payload.text === 'string' && payload.text) bits.push(payload.text);
@@ -161,6 +180,10 @@ function eventLabel(event, payload, reserved) {
       return '提案已过期';
     case 'unverified_completion_claim':
       return '完成自述未经核实';
+    case 'budget_exceeded':
+      return reasonLabels.budget_exceeded;
+    case 'loop_detected':
+      return reasonLabels.loop_detected;
     default:
       return event.kind;
   }

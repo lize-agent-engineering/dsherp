@@ -90,6 +90,19 @@ launchctl bootstrap gui/$(id -u) .runtime/com.dsherp.agent-worker-v16.plist
 `1` 表示以下任一：任一 `evaluator_failed` 或 `case_invalid`；回放层不是 100%；
 `--compare-baseline` 下有用例由 pass 转 fail；或通过率低于基线。
 
+## 预算与循环：回放跑完必须是零条 `BudgetExceeded`
+
+切片 6 起，超预算与「同一工具同参数连续 3 次」都会让运行落在 `BudgetExceeded` 而不是 `Failed`，
+`report.json` 的每条用例都带 `final_status`。**回放全量跑完出现任何一条 `BudgetExceeded`，
+都要先当成本次改动把调用数或输入字节撑大了**——而不是把预算调高。
+
+这条判据存在的原因很具体：子表默认不展开之后，operation 链有可能每条多一次模型调用。
+如果那真的发生了，正确的反应是复核调用膨胀的来源，不是抬预算——预算正式值是从**改完之后**
+的观测值裁定的，抬上去就再也量不出膨胀。
+
+循环检测在回放里同样生效：脚本如果连发三次同一工具同参数，第 3 次会被服务端拒绝，
+运行以 `BudgetExceeded` 结束。这不是评估器故障，是用例脚本写错了。
+
 ## 判定词汇
 
 | verdict | 含义 |

@@ -363,7 +363,12 @@ def reserve_model_call(run_id,capability,input_bytes,max_output_tokens,provider,
         # container that is still going; poisoning the next model authorization is the
         # mechanism this repository already uses to end a run (model-guard sets disabled and
         # the container exits). See the deviation table.
-        _over_budget(run,'loop_detected',0,0)
+        #
+        # Raised, not `_refuse`d: the fact `finish_run` rules on is the `loop_detected` event
+        # that is already on the stream. Writing a `budget_exceeded` event here would put a
+        # second, differently-worded reason next to it and label the run's most important
+        # event with a limit name that is not a limit.
+        raise frappe.ValidationError(LOOP_MESSAGE)
     calls=run.model_calls or 0
     total_input=(run.model_input_bytes or 0)+input_bytes
     total_output=(run.model_output_tokens_reserved or 0)+max_output_tokens
@@ -399,7 +404,7 @@ def _over_budget(run,limit,used,allowed):
     reads the facts the server itself wrote. Same shape as every other refusal here.
     """
     _refuse(run.name,'budget_exceeded',{'limit':limit,'used':int(used),'allowed':int(allowed)},
-            frappe.ValidationError(LOOP_MESSAGE if limit=='loop_detected' else BUDGET_MESSAGE))
+            frappe.ValidationError(BUDGET_MESSAGE))
 
 
 class RefusalNotPersisted(Exception):

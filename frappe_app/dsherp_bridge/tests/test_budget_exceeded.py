@@ -181,6 +181,16 @@ class TestBudgetRuling(BudgetCase):
             execution.finish_run(**cap, status='BudgetExceeded', error='我说的')
         self.assertEqual(frappe.db.get_value('DS Model Run', cap['run_id'], 'status'), 'Running')
 
+    def test_a_runner_cannot_write_the_facts_this_ruling_reads(self):
+        """`budget_exceeded` and `loop_detected` are server kinds. A runner able to write them
+        could make any failure look like an expense — and, with the time-budget branch, could
+        do it without the server's clock ever agreeing."""
+        from dsherp_bridge import context_events as events
+        for kind in ('budget_exceeded', 'loop_detected'):
+            with self.assertRaises(frappe.ValidationError):
+                events.record_many(self._running_run()['run_id'],
+                                   [{'kind': kind, 'source': 'runner', 'payload': {}}])
+
     def test_budget_exceeded_runs_are_billed_like_other_finished_runs(self):
         """The most expensive kind of run there is must not be billed as zero.
 
