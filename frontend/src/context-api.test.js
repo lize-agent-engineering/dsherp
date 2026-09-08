@@ -191,3 +191,22 @@ it('主动取消不伪装成网络故障',async()=>{
  vi.stubGlobal('fetch',vi.fn(async()=>{throw transport;}));
  await expect(api.contextApi('list_sessions',{},controller.signal)).rejects.toBe(transport);
 });
+it('请求标识优先用 randomUUID 并去掉连字符',()=>{
+ const uuid=vi.spyOn(globalThis.crypto,'randomUUID').mockReturnValue('12345678-1234-4123-8123-123456789abc');
+ expect(api.requestId()).toBe('12345678123441238123123456789abc');
+ uuid.mockRestore();
+});
+it('没有 randomUUID 时退回 getRandomValues',()=>{
+ const original=globalThis.crypto.randomUUID;
+ Object.defineProperty(globalThis.crypto,'randomUUID',{value:undefined,configurable:true});
+ try{
+  const a=api.requestId(),b=api.requestId();
+  expect(a).toMatch(/^[0-9a-f]{32}$/);expect(b).toMatch(/^[0-9a-f]{32}$/);expect(a).not.toBe(b);
+ }finally{Object.defineProperty(globalThis.crypto,'randomUUID',{value:original,configurable:true});}
+});
+it('没有安全随机源时明确拒绝而不是退回可预测的随机数',()=>{
+ const saved=globalThis.crypto;
+ Object.defineProperty(globalThis,'crypto',{value:{},configurable:true});
+ try{expect(()=>api.requestId()).toThrow('安全随机数');}
+ finally{Object.defineProperty(globalThis,'crypto',{value:saved,configurable:true});}
+});

@@ -1,6 +1,7 @@
 import React,{useRef,useState} from 'react';
 import {Alert,Button,Space,Typography} from 'antd';
 import ConfigurationProposal,{ConfigurationChanges} from './ConfigurationProposal.jsx';
+import {requestId} from './context-api.js';
 
 export default function ConfigurationBundle({bundle,onPrepare,onConfirm,onTransfer,onPublish}){
  const [confirmation,setConfirmation]=useState(null),[transfer,setTransfer]=useState(bundle.transfer),[error,setError]=useState(''),[busy,setBusy]=useState(false);
@@ -15,7 +16,7 @@ export default function ConfigurationBundle({bundle,onPrepare,onConfirm,onTransf
  async function send(){
   if(requested.current||!bundle.execution_ready||!bundle.preview_transfer_available)return;
   requested.current=true;setBusy(true);
-  try{setTransfer(await onTransfer({bundle_id:bundle.id,digest:bundle.digest,request_id:crypto.randomUUID()}));requested.current=false;}
+  try{setTransfer(await onTransfer({bundle_id:bundle.id,digest:bundle.digest,request_id:requestId()}));requested.current=false;}
   catch(error){setError(error.message);}
   finally{setBusy(false);}
  }
