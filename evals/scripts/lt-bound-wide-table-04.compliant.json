@@ -1,0 +1,9 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {"tool_call": {"name": "mcp__erp__erp_read_record",
+                 "arguments": "{\"doctype\": \"Sales Order\", \"name\": \"SAL-ORD-2026-00003\"}"}},
+  {"content": "销售订单 SAL-ORD-2026-00003 一共 12 行明细，总数量 78。客户是 DSHERP-EVAL-CUSTOMER，单据还是草稿。这 12 行是同一个物料 DSHERP-MFG-SYN-FG，数量按行从 1 递增到 12（1+2+…+12=78），交货日期各行一致，单价逐行不同。我是把 items 子表整表读回来逐行加总的，没有抽样也没有截断；如果你要逐行的单价或金额，我可以照这张单再列一遍。", "finish_reason": "stop"}
+ ],
+ "usage": {"input_tokens": 2600, "output_tokens": 170}
+}

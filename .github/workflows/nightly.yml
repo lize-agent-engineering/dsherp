@@ -95,6 +95,24 @@ jobs:
       - name: Frappe 原生测试（两个测试站）
         run: .venv/bin/python infra/dev_stack.py native-tests --out work/native
 
+      # 评估身份与注入载体：站是每夜从零建的，载体不重建的话注入用例会静默变成
+      # 「站上没有注入文本」的假绿。两个脚本都是幂等的。
+      - name: 评估身份与注入载体（隔离合成站）
+        run: |
+          .venv/bin/python infra/provision_eval_identity.py --site dsherp-daily.localhost
+          .venv/bin/python evals/setup/injection.py --site dsherp-daily.localhost
+          .venv/bin/python evals/setup/rebased_records.py --site dsherp-daily.localhost
+
+      # 回放层：模型是脚本写死的，**这一步永远不需要 provider key**，也永远不该花钱。
+      # 判据是 100%：确定性的模型下，任何低于 100% 的阈值都是给已知回归开口子。
+      # 语义层（--mode live）只在本机手工跑，见 evals/README.md。
+      - name: 评估集回放（不接真实模型）
+        run: |
+          mkdir -p work/evals
+          .venv/bin/python evals/run.py --mode replay --site dsherp-daily.localhost \
+            --out work/evals --junit work/junit-evals.xml \
+            --compare-baseline evals/baseline.json --started "${{ github.run_id }}"
+
       - name: 现场快照（总是）
         if: always()
         run: |
@@ -119,7 +137,8 @@ jobs:
         if: always()
         # .runtime/control 上一步交给了 uid 1000，root 才读得到。
         run: sudo -E .venv/bin/python infra/dev_stack.py scan-artifacts work/junit-*.xml work/native/*.log
-          work/native/*.json work/compose.log work/dev-stack-ledger.json work/dev-stack-status.json
+          work/native/*.json work/evals/**/*.json work/compose.log work/dev-stack-ledger.json
+          work/dev-stack-status.json
 
       # 仓库是公开的，工件保留 30 天：上传必须以泄漏自检通过为前提，否则那一步只是在报告而不是在阻止。
       # always() 保证测试红了工件照样上传，outcome 的判断只把「扫出密钥」这一种情况挡在外面。
@@ -130,6 +149,7 @@ jobs:
           path: |
             work/junit-*.xml
             work/native/
+            work/evals/
             work/compose.log
             work/dev-stack-ledger.json
             work/dev-stack-status.json

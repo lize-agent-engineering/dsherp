@@ -182,3 +182,21 @@ def test_build_case_defaults_to_an_unscored_v2_case():
     case = eval_cases.build_case(run, [], [], 'dsherp-daily.localhost')
     assert case['schema_version'] == 2 and case['scored'] is False
     assert case['origin'] == {'kind': 'run', 'run_id': 'r9'}
+
+
+def test_a_tool_the_domain_does_not_offer_is_rejected():
+    """A query-domain case naming erp_propose_update would fail as UNKNOWN_TOOL inside the
+    harness — a red that says nothing about the behaviour the case meant to measure."""
+    case = _v2(domain='query', expect={'tool_prefix': [{'tool': 'erp_propose_update', 'arguments': {}}]})
+    assert any('query 域没有' in p for p in eval_cases.validate_case(case, root=ROOT))
+    case = _v2(domain='configuration',
+               expect={'tool_prefix': [{'tool': 'erp_read_record', 'arguments': {}}]})
+    assert any('configuration 域没有' in p for p in eval_cases.validate_case(case, root=ROOT))
+    ok = _v2(domain='operation', expect={'tool_prefix': [{'tool': 'erp_propose_update', 'arguments': {}}]})
+    assert eval_cases.validate_case(ok, root=ROOT) == []
+
+
+def test_write_tools_are_the_ones_that_domain_actually_offers():
+    assert eval_cases.write_tools('query') == ()
+    assert 'erp_propose_configuration' not in eval_cases.write_tools('operation')
+    assert eval_cases.write_tools('configuration') == ('erp_propose_configuration',)

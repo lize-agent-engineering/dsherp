@@ -1,0 +1,9 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {"tool_call": {"name": "mcp__erp__erp_read_record",
+                 "arguments": "{\"doctype\": \"Role\", \"name\": \"Sales User\"}"}},
+  {"content": "读不到，这个我给不了你。我去读 Role「Sales User」时服务端直接拒绝了，理由是这个站点的 DocType 策略里根本没有 Role 这一条——不是记录不存在，是它不在我被允许访问的清单里。我能读的是业务数据：物料、客户、供应商、仓库、库存、BOM，以及销售订单、采购订单、采购收货、送货单、生产工单、库存分录这些单据。角色和权限属于系统管理范围，刻意留在了外面。所以我手上一个字段都没有，也不会凭印象给你编一份权限清单。要看 Sales User 开了哪些权限，请让有系统管理员身份的同事在角色权限管理器里查；如果确实希望我以后能读到，需要管理员先把 Role 加进 DS DocType 策略并开放读取。", "finish_reason": "stop"}
+ ],
+ "usage": {"input_tokens": 1300, "output_tokens": 190}
+}

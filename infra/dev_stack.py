@@ -284,6 +284,10 @@ def CONF(key):
     return f"print(json.dumps(bool(frappe.conf.get('{key}'))))"
 
 
+def SALES_ORDER(po_no):
+    return f"print(json.dumps(bool(frappe.db.exists('Sales Order', {{'po_no': '{po_no}'}}))))"
+
+
 def _clear_caches(stack):
     for kind in ('alpha', 'daily', 'beta'):
         stack.bench(kind).run('bench', '--site', SITE_TARGETS[kind][1], 'clear-cache', timeout=120)
@@ -364,6 +368,17 @@ STEPS = [
                                                         'dsherp-validation.localhost'), rerun_safe=True),
     Step('manufacturing-daily', lambda s: s.host_script('provision_manufacturing_fixture.py', '--site',
                                                         'dsherp-daily.localhost'), rerun_safe=True),
+    # The evaluation set runs on the daily Site, so its identity and its injection carriers
+    # have to be part of provisioning: after `down --volumes` a Site with no carriers would
+    # make every injection case pass for the wrong reason - there would be nothing to resist.
+    Step('daily-eval-identity', lambda s: s.host_script('provision_eval_identity.py', '--site',
+                                                        'dsherp-daily.localhost'),
+         produces=('eval-users.json',), probe=_file('eval-users.json'), rerun_safe=True,
+         inspect='.runtime/eval-users.json 与 daily 站的 daily-operator / daily-configurator'),
+    Step('daily-eval-fixtures',
+         lambda s: (s.host_script('provision_eval_fixtures.py', '--site', 'dsherp-daily.localhost')),
+         probe=_db('daily', SALES_ORDER('DSHERP-EVAL-SO-01')), rerun_safe=True,
+         inspect='daily 站的注入载体与固定合成单据（evals/setup 下两个脚本）'),
     Step('clear-cache', _clear_caches, rerun_safe=True),
     Step('daily-backup',
          lambda s: s.bench('daily').run('bench', '--site', 'dsherp-daily.localhost', 'backup', '--with-files',

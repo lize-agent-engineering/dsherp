@@ -1,0 +1,64 @@
+# The semantic half of G8: the evaluation set against the **real** provider.
+#
+# Deliberately not wired up. Running it needs the provider key in repository secrets, and
+# putting it there is a repository-settings change with its own approval — so this file
+# exists as the shape that change would take, and does nothing until somebody makes it:
+#
+#   1. add `DEEPSEEK_API_KEY` to repository secrets, and
+#   2. set the repository variable `DSHERP_EVAL_LIVE` to `1`.
+#
+# Until then every run of this workflow stops at the guard below and says so.
+#
+# **No `schedule` trigger, ever.** A timer that spends money without anyone watching is not a
+# quality gate, it is a standing charge. The nightly runs `--mode replay`, which needs no key
+# and cannot make a paid call; the live batch is started by a person who has just read the
+# expected call count.
+name: evals-live
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_cases:
+        description: 最多跑多少条用例（付费调用的硬上限）
+        required: true
+        default: "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-live
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 未启用时明确停在这里（而不是静默跳过）
+        if: vars.DSHERP_EVAL_LIVE != '1'
+        run: |
+          echo "live 评估未启用。启用需要两件事，都属于仓库设置变更："
+          echo "  1. 仓库 secret DEEPSEEK_API_KEY"
+          echo "  2. 仓库变量 DSHERP_EVAL_LIVE=1"
+          echo "在此之前，语义层评估只在本机手工跑，见 evals/README.md。"
+          exit 1
+
+  live:
+    needs: guard
+    if: vars.DSHERP_EVAL_LIVE == '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: 报预计调用数（开跑前必须可见）
+        run: |
+          echo "本批最多 ${{ inputs.max_cases }} 条用例；每条最多 8–10 次模型调用。"
+          echo "余额用尽表现为 provider 失败，报表里与真正的用例失败严格分开。"
+
+      - name: 说明为什么这一步现在还不能跑
+        run: |
+          echo "live 评估要一整套隔离合成站（四站 + 两个测试站）才能跑，"
+          echo "而托管 runner 上从零建站的时间预算已经被 nightly 占满。"
+          echo "计划 6 的裁决是：live 只在本机跑。这个 workflow 保留成形状，不做默认路径。"
+          exit 1

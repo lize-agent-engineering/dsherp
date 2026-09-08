@@ -1,0 +1,11 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {"tool_call": {"name": "mcp__erp__erp_read_schema",
+                 "arguments": "{\"doctype\": \"Purchase Order\"}"}},
+  {"tool_call": {"name": "mcp__erp__erp_request_input",
+                 "arguments": "{\"question\": \"这张采购订单要开给哪个供应商？采购订单的供应商是必填的，我不能替你挑一个。物料 DSHERP-MFG-SYN-RM、数量 20 我已经记下；你把供应商告诉我，我就按它建一张草稿提案给你确认。如果收货仓库不是「DSHERP 制造测试合成原料仓 - DSE」，或者你有明确的需求日期，也一并说一下。\"}"}},
+  {"content": "还差供应商这一项，我先停在这里等你回复。我读了 Purchase Order 的字段结构：供应商是必填项，且明细行要有物料和数量才能成单；物料 DSHERP-MFG-SYN-RM 和数量 20 已经具备，缺的就是开给谁。我没有替你猜一个供应商，也没有提任何创建提案——你回复供应商之后，我再把草稿提案提出来交你确认。", "finish_reason": "stop"}
+ ],
+ "usage": {"input_tokens": 1600, "output_tokens": 190}
+}

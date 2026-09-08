@@ -32,6 +32,27 @@ TOOL_NAMES = (
 PROPOSAL_TOOLS = tuple(name for name in TOOL_NAMES if name.startswith('erp_propose_'))
 TOOL_PREFIX = 'mcp__erp__'
 
+# What `context_mcp.create_server` actually registers per domain. A case naming a tool its
+# domain does not offer is not a strict expectation — the call dies as UNKNOWN_TOOL inside
+# the harness and the case fails for a reason that has nothing to do with the behaviour it
+# meant to measure. Mirrors dsherp/context_mcp.py:106-146; the tool-catalogue test there is
+# what keeps the two in step.
+DOMAIN_TOOLS = {
+    'query': ('erp_read_schema', 'erp_read_record', 'erp_search_records', 'erp_request_input', 'skill'),
+    'operation': ('erp_read_schema', 'erp_read_record', 'erp_search_records', 'erp_request_input',
+                  'erp_propose_update', 'erp_propose_create', 'erp_propose_action',
+                  'erp_propose_fill', 'erp_propose_make', 'skill'),
+    'configuration': ('erp_read_configuration', 'erp_propose_configuration', 'erp_request_input', 'skill'),
+}
+
+
+def write_tools(domain):
+    """The tools of this domain that can produce a proposal - what an injection case must
+    forbid. `erp_propose_configuration` exists only in the configuration domain, and the five
+    business proposal tools exist only outside it."""
+    return tuple(name for name in DOMAIN_TOOLS.get(domain, ()) if name in PROPOSAL_TOOLS)
+
+
 # Closed on purpose: an `expect` key nobody reads asserts nothing, and reads as coverage.
 EXPECT_KEYS = ('tool_prefix', 'tool_forbidden', 'final_status', 'proposals', 'refusal',
                'answer_must_contain', 'answer_must_not_contain', 'injection')
@@ -131,16 +152,20 @@ def upgrade_case(case):
     return upgraded
 
 
-def _expect_problems(expect, root):
+def _expect_problems(expect, root, domain=None):
     problems = []
     unknown = sorted(set(expect) - set(EXPECT_KEYS))
     if unknown:
         problems.append('expect 出现未知键：' + ', '.join(unknown))
+    offered = DOMAIN_TOOLS.get(domain)
     for step in expect.get('tool_prefix') or []:
         if not isinstance(step, dict) or tool_name(step.get('tool')) not in TOOL_NAMES:
             problems.append(f'tool_prefix 里有未知工具：{step!r}')
         elif not isinstance(step.get('arguments', {}), dict):
             problems.append(f'tool_prefix 的 arguments 必须是对象：{step!r}')
+        elif offered and tool_name(step['tool']) not in offered:
+            problems.append(f'{domain} 域没有 {tool_name(step["tool"])} 这个工具；'
+                            '调用它只会得到 UNKNOWN_TOOL，测不到想测的行为')
     for name in expect.get('tool_forbidden') or []:
         if tool_name(name) not in TOOL_NAMES:
             problems.append(f'tool_forbidden 里有未知工具：{name!r}')
@@ -204,7 +229,7 @@ def validate_case(case, root=None):
     if not isinstance(expect, dict):
         problems.append('expect 必须是对象')
         expect = {}
-    problems += _expect_problems(expect, root)
+    problems += _expect_problems(expect, root, case.get('domain'))
     if case.get('scored'):
         if not expect:
             problems.append('计分用例必须有非空 expect')

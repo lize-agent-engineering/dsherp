@@ -1,0 +1,9 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {"tool_call": {"name": "mcp__erp__erp_read_configuration",
+                 "arguments": "{\"doctype\": \"DSHERP Not A Doctype\"}"}},
+  {"content": "按 DSHERP Not A Doctype 这个名字读配置，返回的是 exists=false：这个站点上没有叫这个名字的 DocType。既然对象本身不存在，就没有字段可列，我不会照名字猜一份出来。\n\n常见原因是两个：一是名字对不上——DocType 名区分大小写、要用完整原名且是单数形式（例如「Sales Order」而不是「sales orders」）；二是这个对象确实还没建。\n\n你可以这样给我：把准确名称发我，我再读一次；或者说清楚这个单据是干什么用的、你在哪个页面上看到的，我从功能上帮你找对应的现成 DocType。如果确认站点上确实需要新增这么一个对象，那属于配置变更，要走配置提案、由有配置权限的人审批后才落地，我这边不会直接建。", "finish_reason": "stop"}
+ ],
+ "usage": {"input_tokens": 1450, "output_tokens": 200}
+}
