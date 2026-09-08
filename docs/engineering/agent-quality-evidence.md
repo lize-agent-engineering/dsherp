@@ -287,3 +287,73 @@ spec:159 要的「拆为配置指纹（进 run）与密钥版本（只进 worker
 
 本片全程 `--mode replay`，容器里根本没有 provider key。nightly 新增的评估步同样只跑 replay，
 该 job 全程没有 `DEEPSEEK_API_KEY`（`tests/test_ci_contract.py` 按 YAML 断言这一点）。
+
+---
+
+## 切片 3：注入信封与 skill 摘要进系统提示
+
+### 判定：回放 31/31 = 100%，`--compare-baseline` 无由 pass 转 fail；信封 wire 断言开始生效
+
+三条通道逐条在**真实 wire 上**核对过，不是靠单元测试推断：
+
+| 通道 | 实测 | marker 落在哪 |
+|---|---|---|
+| 工具结果 | `DSHERP-INJ-MARK-01` 在 wire 上出现 1 次，`role=tool` | `{"source":"erp","untrusted":true,"tool":"erp_read_record","doctype":"Item","data":{…}}` |
+| 页面快照 | `DSHERP-INJ-MARK-06` 出现 2 次，`role=user` | `{"question":…,"page_context":{"source":"page","untrusted":true,"doctype":"Item","note":…,"data":{…}}}` |
+| 失败文本 | `ToolFailure.__str__` | `{"source":"erp-server","untrusted":true,"error_class":…,"message":…,"retryable":…}` |
+
+**这条断言不是空的。** marker 确实上了 wire（那正是载体的作用），预言机验证的是它只出现在带
+`"untrusted": true` 的对象里。断言在 `PROMPT_VERSION` 由 `'1'` 变 `'2'` 后自动以真名
+`injection_marker_inside_envelope` 生效——之前用的是 `..._not_yet_applicable`，
+不给一个从未被求值的检查顶真名。
+
+### 落点选择
+
+信封包在**容器侧** `dsherp/context_mcp.py` 的 `invoke` 闭包里，不是服务端。理由不是省事：
+约 20 条集成测试进程内直接调 `context_execution.run_tool` 并断言它的裸返回，
+而服务端那个形状**是审计记录**——`DS Run Event` 与 `run.sources` 存的就是它。
+容器侧是三域全部工具通向模型的唯一公共出口，包在这里覆盖面完整且零返工。
+
+`doctype` 取不到时**省略该键**而不是给空串：一个空 doctype 会让模型以为存在一个名为空串的对象。
+**只有页面信封带 `note`**：工具信封的规则在 system 段里说一次就够（压缩掉不了），
+而页面那句解释的是 `version` 与 `server_version` 两个字段的业务含义——那是判据不是提醒，
+换形状的时候不能跟着散文一起丢。
+
+### skill 强制装载（审计 A3）
+
+`ctx.systemPrompt.section()` 在本仓**可用**——这是计划列的最大风险，开工前用一个一次性探针
+证实：注册的 section 文本确实出现在 system 消息里（与 persona 同一条消息）。
+因此**不需要计划准备的 `persona: !!js` 退路**，探针已删除。
+
+为什么必须进 system：spine 注入的技能目录是一条 **user** 消息（`dsh-tool-skill` 在
+`agent/pre-step` 包成 `<system-reminder><available_skills>` 注入），从来没有任何机制要求
+模型必须调过 `skill`（审计 A3 至今未变）。把钉住的名称与版本放进 system，
+才把它从「建议」变成「关于这次运行的事实」。
+
+只放**摘要**、保留 `skill` 工具取全文（spec:154）。三份正文（52/79/27 行）内联会成为
+每次模型调用不可压缩的固定输入，与切片 4 的输入治理正相反。
+
+`tests/test_model_guard.py` 的 allow/skill/operation 三模式新增断言：
+`requests[0]['messages'][0]['role']=='system'`，其文本含该域的钉住标记
+（`业务技能：erp-query v1.4.0` / `erp-operation v2.2.0`）、含 `untrusted` 与三种 source 标签，
+且**不含**正文小标题「工具错误与做不了的出口」——正文仍然只在模型主动调 `skill` 之后才出现。
+
+### 装载失败即零 provider 请求，以及这条断言放在哪
+
+`model-guard.cjs` 新增 `requireSystem`，在 `authorize` **之前**校验。
+「装载失败」必须等于**一次 provider 请求都没有**，而不是发出去一次再被拒——后者要付钱。
+
+这条性质断言在 `runtime/model-guard.test.cjs`：把一个不带标记的系统提示直接交给守卫，
+断言 `authorize` **一次都没被调用**。**故意不在 Python 侧模拟**：从 Python 造出这个状态
+需要在插件里留一个「关掉 section」的测试开关，而一个有正式关闭方法的守卫不是守卫。
+
+Python 侧断言的是另一半、也是只有真实装配才能证明的那半：两处推导同一个钉住标记
+（`model-guard.cjs` 从清单推，`prompt-sections.cjs` 从清单 + SKILL.md frontmatter 推）
+对三个域都一致。它们一旦漂移，该域每一次运行都会停——所以「一致」才是该被测住的东西。
+这沿用仓库既有的双端同源纪律（`usage.py` 两份逐字节相同）。
+
+### 本片轮换 `runtime_revision`
+
+改了 `config/runtime-files.json` 内的五个文件（新增 `runtime/prompt-sections.cjs`、
+改 `model-guard.cjs`、`context_mcp.py`、`context_runner.py`、`prompt_assembly.py`、
+`dsh-business.yml`）。设计预期；本片内一次改完，集成测试前停常驻 worker、跑完恢复。
