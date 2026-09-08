@@ -606,3 +606,20 @@ def test_a_failed_step_reports_enough_to_diagnose_it_and_labels_which_stream_sai
     assert "err 10" in message and "out 10" in message, "只给八行不够诊断"
     assert "stderr" in message and "stdout" in message, "要说清哪一段是哪个流"
     assert "up" in message, "命令要完整，不能截断到前五个词"
+
+
+def test_down_activates_every_profile_so_nothing_is_left_pinning_a_volume(stack):
+    """`docker compose down` only touches services whose profile is active. The scheduled and
+    control services are profile-gated, so a `down` without them leaves their containers behind
+    - and an exited container still holds its volumes, which is how a local rebuild found
+    v16-sites and v16-logs still there after `down --volumes` claimed to have torn the stack
+    down. A teardown that leaves the data behind is not a teardown, and the rebuild it is meant
+    to enable would silently start from the old data."""
+    dev_stack.up(stack, provision_too=True)
+    stack.host.calls.clear()
+    dev_stack.down(stack, volumes=True)
+    teardown = next(argv for argv in stack.host.calls if "down" in argv)
+    named = [teardown[i + 1] for i, word in enumerate(teardown) if word == "--profile"]
+    assert set(named) == set(dev_stack.PROFILES), f"漏掉的 profile 会把容器和卷留下：{named}"
+    assert set(dev_stack.PROFILES) >= {"control", "scheduled", "ops"}
+    assert "-v" in teardown and "--remove-orphans" in teardown
