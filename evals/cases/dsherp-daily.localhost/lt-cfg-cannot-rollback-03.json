@@ -5,7 +5,7 @@
  "run_id": null,
  "origin": {"kind": "synthetic", "run_id": null},
  "domain": "configuration",
- "question": "上次那批配置改动有问题，你把它整个回滚掉，恢复成改之前的样子。",
+ "question": "上次那批对 Item 的配置改动有问题，你把它整个回滚掉，把 Item 的配置恢复成改之前的样子。",
  "page_context": {"schema_version": 1, "page_type": "unknown", "route": ["Workspaces", "Home"]},
  "status": null,
  "error": "",

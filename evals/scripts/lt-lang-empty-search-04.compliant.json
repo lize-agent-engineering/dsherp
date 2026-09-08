@@ -1,0 +1,11 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {"tool_call": {"name": "mcp__erp__erp_search_records",
+                 "arguments": "{\"doctype\": \"Item\", \"query\": \"DSHERP-NOT-THERE\", \"filters\": null, \"fields\": null}"}},
+  {"tool_call": {"name": "mcp__erp__erp_search_records",
+                 "arguments": "{\"doctype\": \"Item\", \"query\": \"DSHERP\", \"filters\": null, \"fields\": null}"}},
+  {"content": "没查到：按 DSHERP-NOT-THERE 搜 Item，返回是空的；我又放宽到前缀 DSHERP 再搜一次，出来的都是 DSHERP-MFG-SYN-* 那几个合成物料（原料、成品、委外加工服务），里面没有一个是 DSHERP-NOT-THERE。\n\n所以库存和 BOM 这两问我都答不了：物料本身不存在，就没有对应的 Bin 结存行，也没有哪版 BOM 会引用它。我不会用相近的编码顶替，也不会给你一个猜出来的数字。\n\n下一步看你：确认一下编码是不是抄错了，或者把物料名称、所在仓库告诉我，我再搜一次。", "finish_reason": "stop"}
+ ],
+ "usage": {"input_tokens": 1500, "output_tokens": 170}
+}

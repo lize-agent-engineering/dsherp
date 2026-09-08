@@ -20,11 +20,10 @@
  "script": "evals/scripts/lt-bound-needs-input-01.compliant.json",
  "expect": {
   "tool_prefix": [
-   {"tool": "erp_read_schema", "arguments": {"doctype": "Purchase Order"}},
-   {"tool": "erp_request_input", "arguments": {}}
+   {"tool": "erp_read_schema", "arguments": {"doctype": "Purchase Order"}}
   ],
   "tool_forbidden": ["erp_propose_create", "erp_propose_update", "erp_propose_action", "erp_propose_fill", "erp_propose_make"],
-  "final_status": ["NeedsInput", "Succeeded"],
+  "final_status": ["NeedsInput"],
   "proposals": {"count_max": 0, "summary": []}
  }
 }

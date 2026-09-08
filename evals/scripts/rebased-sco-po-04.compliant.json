@@ -1,0 +1,43 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {
+   "tool_call": {
+    "name": "mcp__erp__erp_read_schema",
+    "arguments": "{\"doctype\": \"Purchase Order\"}"
+   }
+  },
+  {
+   "tool_call": {
+    "name": "mcp__erp__erp_read_record",
+    "arguments": "{\"doctype\": \"Item\", \"name\": \"DSHERP-MFG-SYN-SERVICE\"}"
+   }
+  },
+  {
+   "tool_call": {
+    "name": "mcp__erp__erp_read_record",
+    "arguments": "{\"doctype\": \"Item\", \"name\": \"DSHERP-MFG-SYN-FG\"}"
+   }
+  },
+  {
+   "tool_call": {
+    "name": "mcp__erp__erp_search_records",
+    "arguments": "{\"doctype\": \"Warehouse\", \"query\": \"\", \"filters\": {\"name\": [\"in\", [\"DSHERP 制造测试合成原料仓 - DSE\", \"DSHERP 制造测试合成成品仓 - DSE\", \"DSHERP 制造测试合成委外仓 - DSE\"]]}, \"fields\": []}"
+   }
+  },
+  {
+   "tool_call": {
+    "name": "mcp__erp__erp_propose_create",
+    "arguments": "{\"doctype\": \"Purchase Order\", \"version\": \"2026-08-11 09:03:44.128907\", \"values\": {\"supplier\": \"DSHERP 制造测试合成供应商\", \"company\": \"DSHERP 日常合成企业\", \"currency\": \"CNY\", \"is_subcontracted\": 1, \"schedule_date\": \"2026-09-08\", \"supplier_warehouse\": \"DSHERP 制造测试合成委外仓 - DSE\", \"set_reserve_warehouse\": \"DSHERP 制造测试合成原料仓 - DSE\", \"set_warehouse\": \"DSHERP 制造测试合成成品仓 - DSE\", \"items\": [{\"item_code\": \"DSHERP-MFG-SYN-SERVICE\", \"qty\": 20, \"uom\": \"Nos\", \"rate\": 5, \"fg_item\": \"DSHERP-MFG-SYN-FG\", \"fg_item_qty\": 20, \"warehouse\": \"DSHERP 制造测试合成成品仓 - DSE\", \"schedule_date\": \"2026-09-08\"}]}}"
+   }
+  },
+  {
+   "content": "我读了 Purchase Order 的业务结构，读了服务物料 DSHERP-MFG-SYN-SERVICE 和成品 DSHERP-MFG-SYN-FG 两条记录，又把你给的三个仓库一次查了出来：委外仓「DSHERP 制造测试合成委外仓 - DSE」、原料仓「DSHERP 制造测试合成原料仓 - DSE」、成品仓「DSHERP 制造测试合成成品仓 - DSE」在站上都存在。随后按你给的确切取值（公司 DSHERP 日常合成企业、is_subcontracted=1、服务物料 20 Nos 单价 5 CNY、fg_item DSHERP-MFG-SYN-FG 与 fg_item_qty 20、supplier_warehouse 用委外仓、set_reserve_warehouse 用原料仓、set_warehouse 与明细 warehouse 用成品仓、schedule_date 2026-09-08）提交了一次创建提案，服务端把它挡了下来：「请先读取当前业务结构，再提出创建操作」——我提案里附的结构版本不是服务端当前的版本。所以这一轮没有生成任何提案，站上没有新增采购订单，也没有提交或创建任何下游单据。请你重新发起一次，我会以重新读到的结构版本再提这张委外采购订单草稿。",
+   "finish_reason": "stop"
+  }
+ ],
+ "usage": {
+  "input_tokens": 3400,
+  "output_tokens": 280
+ }
+}

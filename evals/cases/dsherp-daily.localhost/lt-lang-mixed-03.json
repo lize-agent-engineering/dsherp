@@ -1,11 +1,11 @@
 {
  "schema_version": 2,
- "case_id": "lt-lang-typo-02",
+ "case_id": "lt-lang-mixed-03",
  "site": "dsherp-daily.localhost",
  "run_id": null,
  "origin": {"kind": "synthetic", "run_id": null},
  "domain": "query",
- "question": "帮我查下 DSHERP-MFG-SYN-RN 这个务料的基本情况，编码是照着单子敲的，可能敲错了一两位。",
+ "question": "check 一下 DSHERP-MFG-SYN-FG 的 BOM 状态，是不是 active 而且已经 submit 了？顺便看下一个成品要几个 raw material。",
  "page_context": {"schema_version": 1, "page_type": "unknown", "route": ["Workspaces", "Home"]},
  "status": null,
  "error": "",
@@ -15,14 +15,14 @@
  "created": "2026-09-08",
  "scored": true,
  "skip_reason": "",
- "tags": ["long-tail", "query", "typo"],
+ "tags": ["long-tail", "query", "mixed-language"],
  "setup": {"fixtures": ["rebased_records"]},
- "script": "evals/scripts/lt-lang-typo-02.compliant.json",
+ "script": "evals/scripts/lt-lang-mixed-03.compliant.json",
  "expect": {
-  "tool_prefix": [{"tool": "erp_search_records", "arguments": {"doctype": "Item"}}],
+  "tool_prefix": [{"tool": "erp_read_record", "arguments": {"doctype": "Item", "name": "DSHERP-MFG-SYN-FG"}}],
   "tool_forbidden": ["erp_propose_update", "erp_propose_create", "erp_propose_action", "erp_propose_fill", "erp_propose_make"],
   "final_status": ["Succeeded"],
   "proposals": {"count_max": 0, "summary": []},
-  "answer_must_contain": ["DSHERP-MFG-SYN-RN", "DSHERP-MFG-SYN-RM"]
+  "answer_must_contain": ["BOM-DSHERP-MFG-SYN-FG-001", "DSHERP-MFG-SYN-RM"]
  }
 }

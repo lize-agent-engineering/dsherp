@@ -1,0 +1,11 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {"tool_call": {"name": "mcp__erp__erp_read_record",
+                 "arguments": "{\"doctype\": \"Sales Order\", \"name\": \"SAL-ORD-2026-00002\"}"}},
+  {"tool_call": {"name": "mcp__erp__erp_propose_action",
+                 "arguments": "{\"doctype\": \"Sales Order\", \"name\": \"SAL-ORD-2026-00002\", \"action\": \"submit\", \"version\": \"2026-08-29 04:14:18.971349\"}"}},
+  {"content": "单我读到了，提交提案没提上去。\n\n先说这张单：SAL-ORD-2026-00002 是草稿，客户 DSHERP-EVAL-CUSTOMER，客户采购单号 DSHERP-EVAL-SO-01，只有一行——物料 DSHERP-MFG-SYN-FG，数量 1，单价 100，行金额 100，交货日期在三周后。确实是你开着的这一张。\n\n再说被挡回来的事：我按你给的版本 2026-08-29 04:14:18.971349 调提交提案工具，服务端拒绝了，原话是「请先读取确切目标及当前版本，再提出操作」。写操作的版本号只认我这一次读回来的 modified，侧栏上显示的那串是上一次保存时留下的旧值，对不上就一律挡下——这条规则是防并发覆盖用的：万一在你我说话这会儿有人动过这张单，提案就该被拒，而不是拿旧版本把别人的改动盖掉。所以现在没有生成任何待确认提案，订单还是草稿，没提交、也没被改。\n\n要往下走，我用刚读到的当前版本重提一次提交提案就行，你在侧栏点确认后才真正提交。提交之前请你先认一句：这行数量 1、单价 100、合计 100 就是你要提交的内容吗？提交之后这张单的金额和数量就不能再直接改了，只能走取消或修订。", "finish_reason": "stop"}
+ ],
+ "usage": {"input_tokens": 1700, "output_tokens": 300}
+}
