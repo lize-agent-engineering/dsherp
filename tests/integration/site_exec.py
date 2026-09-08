@@ -9,50 +9,25 @@ must not call frappe.init/connect/destroy itself.
 A host-side timeout kills the docker client, not the interpreter inside the container: the
 body's own `finally` may never run. That is why the residue registry (residue.py) subscribes
 to ON_TIMEOUT, and why anything a script commits must be registered before the script runs.
+
+The addressing itself (`SITES`, `service_of`, `site_script`, `command_for`) lives in
+`infra/site_exec.py` so the evaluation runner can use the same table without importing from
+the test tree; it is re-exported here so every existing import keeps working.
 """
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-COMPOSE = ['docker', 'compose', '-f', 'infra/compose.validation.yml']
-BENCH_PYTHON = '/home/frappe/frappe-bench/env/bin/python'
-SITES_DIR = '/home/frappe/frappe-bench/sites'
-SITES = {
-    'dsherp-validation.localhost': 'backend',
-    'dsherp-daily.localhost': 'backend',
-    'dsherp-test.localhost': 'backend',
-    'dsherp-beta.localhost': 'beta-backend',
-    'dsherp-platform.localhost': 'platform-backend',
-    'dsherp-platform-test.localhost': 'platform-backend',
-}
+sys.path.insert(0, str(ROOT))
+
+from infra.site_exec import (  # noqa: E402,F401  (re-exported for the integration suite)
+    BENCH_PYTHON, COMPOSE, SITES, SITES_DIR, command_for, service_of, site_script,
+)
+
 # Called as observer(site, body) when the host timeout kills a script.
 ON_TIMEOUT = []
-
-
-def service_of(site):
-    try:
-        return SITES[site]
-    except KeyError:
-        raise ValueError(f'未知站点 {site!r}；只认识 ' + ', '.join(SITES)) from None
-
-
-def site_script(site, body, *, connect=True, user='Administrator'):
-    """The exact text fed to the interpreter. The body is compiled from a string literal, so
-    it keeps its own indentation and may contain triple-quoted strings."""
-    lines = ['import json,os,sys,uuid', 'import frappe', f'os.chdir({SITES_DIR!r})',
-             f'frappe.init(site={site!r},sites_path={SITES_DIR!r})']
-    if connect:
-        lines += ['frappe.connect()', f'frappe.set_user({user!r})']
-    lines += ['try:',
-              f"    exec(compile({body!r},'<site-script>','exec'),globals())",
-              'finally:',
-              '    frappe.destroy()']
-    return '\n'.join(lines) + '\n'
-
-
-def command_for(site):
-    return [*COMPOSE, 'exec', '-T', service_of(site), BENCH_PYTHON, '-']
 
 
 def run_site_script(site, body, *, timeout=120, connect=True, user='Administrator', run=subprocess.run):

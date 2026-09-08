@@ -13,11 +13,17 @@ if str(ROOT) not in sys.path:
 from dsherp.eval_cases import build_case
 
 PYTHON = "/home/frappe/frappe-bench/env/bin/python"
+# evals/run.py stamps every request it sends with this prefix.
+EXCLUDE_PREFIX = "eval-"
 CASE_PREFIX = "EVAL_CASE\t"
 DONE_PREFIX = "EVAL_DONE\t"
 
 
-def _reader_script(site, status):
+def _reader_script(site, status, exclude_request_prefix=EXCLUDE_PREFIX):
+    # Anti-backflow: an evaluation run leaves a DS Model Run on the Site that nobody can
+    # delete (ds_model_run.on_trash refuses unconditionally). Without this filter the next
+    # export would pick up the evaluator's own synthetic runs and re-export them as if they
+    # were real failures - the corpus would slowly become a recording of itself.
     return f"""
 import json
 import os
@@ -42,7 +48,7 @@ def all_events(run_name):
 
 runs = frappe.get_all(
     'DS Model Run',
-    filters={{'status': {status!r}}},
+    filters={{'status': {status!r}, 'request_id': ('not like', {exclude_request_prefix!r} + '%')}},
     fields=['name', 'domain', 'question', 'page_context', 'status', 'error', 'sources', 'creation', 'owner'],
     order_by='creation asc, name asc',
     limit_page_length=0,
@@ -109,10 +115,10 @@ def parse_export_lines(stdout):
     return rows
 
 
-def read_container_rows(container, site, status):
+def read_container_rows(container, site, status, exclude_request_prefix=EXCLUDE_PREFIX):
     result = subprocess.run(
         ["docker", "exec", "-i", container, PYTHON, "-"],
-        input=_reader_script(site, status),
+        input=_reader_script(site, status, exclude_request_prefix),
         text=True,
         capture_output=True,
         timeout=300,
@@ -144,8 +150,11 @@ def main(argv=None):
     parser.add_argument("--site", required=True)
     parser.add_argument("--container", required=True)
     parser.add_argument("--status", default="Failed")
+    parser.add_argument("--exclude-request-prefix", default=EXCLUDE_PREFIX,
+                        help="skip runs whose request_id starts with this (the evaluator's own)")
     args = parser.parse_args(argv)
-    summary = write_cases(read_container_rows(args.container, args.site, args.status), args.site)
+    rows = read_container_rows(args.container, args.site, args.status, args.exclude_request_prefix)
+    summary = write_cases(rows, args.site)
     print(summary)
     return summary
 
