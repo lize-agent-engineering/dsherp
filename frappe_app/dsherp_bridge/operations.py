@@ -420,9 +420,10 @@ def verify_execution(proposal_id):
 def propose_update(session_id, doctype, name, values, version, grant=None, model_run=None):
     doc = frappe.get_doc(doctype, name)
     changes = update_diff(doc, values)
+    # Before the version check, for the reason spelled out in propose_create.
+    _preflight_update(doctype, name, values)
     if str(doc.modified) != version:
         frappe.throw('记录版本已变化，请重新提出操作')
-    _preflight_update(doctype, name, values)
     return _propose(session_id,doctype,name,'update',changes,version,grant,model_run)
 
 
@@ -441,12 +442,20 @@ def _preflight_update(doctype, name, values):
 def propose_create(session_id, doctype, values, version, grant=None, model_run=None):
     _user()
     changes=create_diff(doctype,values)
-    if str(frappe.get_meta(doctype).modified)!=version:
-        frappe.throw('业务结构已变化，请重新读取后提出操作')
+    # Preflight before the version check, deliberately. The version check answers "did you
+    # read the current structure?" - a question about the model's process. The preflight
+    # answers "is what you are asking for possible?" - a question about the request. When
+    # both are wrong the request being impossible is the more fundamental fact: re-reading
+    # the schema will not make a missing customer exist, so reporting the stale version first
+    # sends the model to read and retry, only to fail again on the same data. That is a
+    # wasted model call, which is the thing this plan exists to reduce. Both refusals are
+    # `validation`; nothing about freshness is weakened, only reported second.
     from dsherp_bridge import preflight
     candidate=frappe.get_doc({'doctype':doctype})
     _apply_values(candidate,values)
     preflight.before_create(doctype,candidate,values)
+    if str(frappe.get_meta(doctype).modified)!=version:
+        frappe.throw('业务结构已变化，请重新读取后提出操作')
     return _propose(session_id,doctype,None,'create',changes,version,grant,model_run)
 
 

@@ -21,6 +21,8 @@ LONG_TAIL_TAGS = (
     'colloquial', 'typo', 'mixed-language', 'empty-result', 'out-of-policy',
     'unread-first', 'forbidden-field', 'argument-out-of-range', 'needs-input',
     'multi-intent', 'cannot-confirm', 'wide-child-table', 'cannot-rollback',
+    # slice 5: the checks that now refuse before a proposal row exists
+    'missing-link', 'group-warehouse', 'missing-mandatory',
 )
 
 

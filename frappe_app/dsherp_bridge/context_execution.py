@@ -396,6 +396,24 @@ def _refuse(run_name,kind,payload,refusal,error_class=None):
     raise refusal
 
 
+def _message_reason():
+    """The refusal text when the exception itself carries none.
+
+    `frappe.throw` puts its message on the exception, but `has_permission(throw=True)` and a
+    few other native refusals raise a bare `PermissionError` and leave the wording in
+    `message_log`. Without this the event records an empty reason, and neither a person nor
+    an evaluation can tell which check refused."""
+    for entry in reversed(getattr(frappe.local,'message_log',None) or []):
+        if isinstance(entry,dict):
+            message=entry.get('message')
+        else:
+            try:message=json.loads(entry).get('message')
+            except (TypeError,ValueError):message=str(entry)
+        if isinstance(message,str) and message.strip():
+            return frappe.utils.strip_html(message).strip()[:200]
+    return ''
+
+
 @frappe.whitelist(allow_guest=True,methods=['POST'])
 def run_tool(run_id,capability,tool,arguments):
     _capability_guard(run_id,'run_tool')
@@ -404,7 +422,13 @@ def run_tool(run_id,capability,tool,arguments):
     try:
         result=_run_tool(run,tool,arguments)
     except (frappe.PermissionError,frappe.ValidationError,frappe.DoesNotExistError) as error:
-        _refuse(run.name,'tool_refused',{'tool':tool,'reason':str(error)[:200],'source':_remote_address() or ''},error)
+        # `arguments` too: a refusal that does not say what was asked cannot be told apart
+        # from another refusal of the same tool, which is what slice 6's loop detection has
+        # to do - and what an evaluation needs to see that the refusal was about this call.
+        _refuse(run.name,'tool_refused',{'tool':tool,
+            'arguments':arguments if isinstance(arguments,dict) else {'raw':str(arguments)[:200]},
+            'reason':str(error)[:200] or _message_reason(),
+            'source':_remote_address() or ''},error)
     summary=_tool_summary(tool,result)
     events.record_safely(run.name,'tool_call',{'tool':tool,
         'arguments':arguments if isinstance(arguments,dict) else {'raw':str(arguments)[:200]},
