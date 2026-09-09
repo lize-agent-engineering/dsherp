@@ -15,62 +15,81 @@ from frappe.tests import IntegrationTestCase
 from dsherp_bridge import preflight
 
 ACTOR = 'native-preflight@example.invalid'
+ROLES = ('System Manager', 'Item Manager', 'Stock User', 'Stock Manager', 'Sales User',
+         'Sales Manager', 'Accounts User', 'Purchase User', 'Purchase Master Manager',
+         'Manufacturing User')
+
+
+def _ensure_actor():
+    """The synthetic member every class here acts as. Idempotent, and called by **each** class:
+    a from-zero Site may run them in any order, and a class that borrowed another's setup
+    passes only on a machine where that other class has already run."""
+    roles = [role for role in ROLES if frappe.db.exists('Role', role)]
+    if not frappe.db.exists('User', ACTOR):
+        frappe.get_doc({'doctype': 'User', 'email': ACTOR, 'first_name': 'Native Preflight',
+                        'user_type': 'System User', 'send_welcome_email': 0,
+                        'roles': [{'role': role} for role in roles]}).insert(ignore_permissions=True)
+        return
+    user = frappe.get_doc('User', ACTOR)
+    held = {row.role for row in user.roles}
+    for role in roles:
+        if role not in held:
+            user.append('roles', {'role': role})
+    user.save(ignore_permissions=True)
+
+
 ITEM = 'DSHERP-PREFLIGHT-ITEM'
 STOCK_ITEM = 'DSHERP-PREFLIGHT-STOCK'
 CUSTOMER = 'DSHERP-PREFLIGHT-CUSTOMER'
 SUPPLIER = 'DSHERP-PREFLIGHT-SUPPLIER'
 
 
+def _ensure_fixtures(cls):
+    """Everything this module acts on, created by whichever class runs first.
+
+    Called from **every** `setUpClass` here on purpose. Reading a Customer or an Item that
+    some other class happened to insert reads fine and passes on a machine that has run
+    before; on a from-zero Site, run order decides whether the row is there. So each class
+    creates what it needs, under this module's own names."""
+    _ensure_actor()
+    cls.company = frappe.db.get_value('Company', {'abbr': 'DNT'}, 'name') \
+        or frappe.db.get_value('Company', {}, 'name')
+    cls.warehouse = frappe.db.get_value('Warehouse', {'is_group': 0, 'company': cls.company}, 'name')
+    cls.group_warehouse = frappe.db.get_value('Warehouse', {'is_group': 1, 'company': cls.company}, 'name')
+    uom = frappe.db.get_single_value('Stock Settings', 'stock_uom') or 'Nos'
+    group = frappe.db.get_value('Item Group', {'is_group': 0}, 'name')
+    for code, stock in ((ITEM, 0), (STOCK_ITEM, 1)):
+        if not frappe.db.exists('Item', code):
+            frappe.get_doc({'doctype': 'Item', 'item_code': code, 'item_name': code,
+                            'item_group': group, 'stock_uom': uom,
+                            'is_stock_item': stock}).insert(ignore_permissions=True)
+    if not frappe.db.exists('Customer', CUSTOMER):
+        frappe.get_doc({'doctype': 'Customer', 'customer_name': CUSTOMER,
+                        'customer_type': 'Individual',
+                        'customer_group': frappe.db.get_value('Customer Group', {'is_group': 0}, 'name'),
+                        'territory': frappe.db.get_value('Territory', {'is_group': 0}, 'name')
+                        }).insert(ignore_permissions=True)
+    # `check_mandatory` reports only child tables and mandatory Links to DocTypes this
+    # Site governs, so the rule needs a governed Customer to be observable at all.
+    for target in ('Sales Order', 'Customer', 'Item'):
+        if not frappe.db.exists('DS Doctype Policy', target):
+            frappe.get_doc({'doctype': 'DS Doctype Policy', 'target_doctype': target,
+                            'enabled': 1, 'allow_read': 1, 'allow_create': 0,
+                            'allow_update': 0, 'allow_submit': 0, 'allow_cancel': 0,
+                            'allow_fill': 0, 'change_reason': '前置校验测试'
+                            }).insert(ignore_permissions=True)
+    if not frappe.db.exists('Supplier', SUPPLIER):
+        frappe.get_doc({'doctype': 'Supplier', 'supplier_name': SUPPLIER,
+                        'supplier_group': frappe.db.get_value('Supplier Group', {'is_group': 0}, 'name')
+                        }).insert(ignore_permissions=True)
+    frappe.db.commit()
+
+
 class TestPreflight(IntegrationTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        roles = [role for role in ('System Manager', 'Item Manager', 'Stock User', 'Stock Manager',
-                                   'Sales User', 'Sales Manager', 'Accounts User', 'Purchase User',
-                                   'Purchase Master Manager', 'Manufacturing User')
-                 if frappe.db.exists('Role', role)]
-        if not frappe.db.exists('User', ACTOR):
-            frappe.get_doc({'doctype': 'User', 'email': ACTOR, 'first_name': 'Native Preflight',
-                            'user_type': 'System User', 'send_welcome_email': 0,
-                            'roles': [{'role': role} for role in roles]}).insert(ignore_permissions=True)
-        else:
-            user = frappe.get_doc('User', ACTOR)
-            held = {row.role for row in user.roles}
-            for role in roles:
-                if role not in held:
-                    user.append('roles', {'role': role})
-            user.save(ignore_permissions=True)
-        cls.company = frappe.db.get_value('Company', {'abbr': 'DNT'}, 'name') \
-            or frappe.db.get_value('Company', {}, 'name')
-        cls.warehouse = frappe.db.get_value('Warehouse', {'is_group': 0, 'company': cls.company}, 'name')
-        cls.group_warehouse = frappe.db.get_value('Warehouse', {'is_group': 1, 'company': cls.company}, 'name')
-        uom = frappe.db.get_single_value('Stock Settings', 'stock_uom') or 'Nos'
-        group = frappe.db.get_value('Item Group', {'is_group': 0}, 'name')
-        for code, stock in ((ITEM, 0), (STOCK_ITEM, 1)):
-            if not frappe.db.exists('Item', code):
-                frappe.get_doc({'doctype': 'Item', 'item_code': code, 'item_name': code,
-                                'item_group': group, 'stock_uom': uom,
-                                'is_stock_item': stock}).insert(ignore_permissions=True)
-        if not frappe.db.exists('Customer', CUSTOMER):
-            frappe.get_doc({'doctype': 'Customer', 'customer_name': CUSTOMER,
-                            'customer_type': 'Individual',
-                            'customer_group': frappe.db.get_value('Customer Group', {'is_group': 0}, 'name'),
-                            'territory': frappe.db.get_value('Territory', {'is_group': 0}, 'name')
-                            }).insert(ignore_permissions=True)
-        # `check_mandatory` reports only child tables and mandatory Links to DocTypes this
-        # Site governs, so the rule needs a governed Customer to be observable at all.
-        for target in ('Sales Order', 'Customer', 'Item'):
-            if not frappe.db.exists('DS Doctype Policy', target):
-                frappe.get_doc({'doctype': 'DS Doctype Policy', 'target_doctype': target,
-                                'enabled': 1, 'allow_read': 1, 'allow_create': 0,
-                                'allow_update': 0, 'allow_submit': 0, 'allow_cancel': 0,
-                                'allow_fill': 0, 'change_reason': '前置校验测试'
-                                }).insert(ignore_permissions=True)
-        if not frappe.db.exists('Supplier', SUPPLIER):
-            frappe.get_doc({'doctype': 'Supplier', 'supplier_name': SUPPLIER,
-                            'supplier_group': frappe.db.get_value('Supplier Group', {'is_group': 0}, 'name')
-                            }).insert(ignore_permissions=True)
-        frappe.db.commit()
+        _ensure_fixtures(cls)
 
     def setUp(self):
         super().setUp()
@@ -300,18 +319,11 @@ class TestChildRowLinks(IntegrationTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.company = frappe.db.get_value('Company', {'abbr': 'DNT'}, 'name') \
-            or frappe.db.get_value('Company', {}, 'name')
-        cls.warehouse = frappe.db.get_value('Warehouse', {'is_group': 0, 'company': cls.company},
-                                            'name')
-        cls.customer = frappe.db.get_value('Customer', {}, 'name')
-        cls.item = frappe.db.get_value('Item', {'is_stock_item': 0}, 'name') \
-            or frappe.db.get_value('Item', {}, 'name')
-        frappe.db.commit()
+        _ensure_fixtures(cls)
 
     def _order(self, item_code):
         return frappe.get_doc({
-            'doctype': 'Sales Order', 'customer': type(self).customer,
+            'doctype': 'Sales Order', 'customer': CUSTOMER,
             'company': type(self).company,
             'delivery_date': frappe.utils.add_days(frappe.utils.nowdate(), 14),
             'items': [{'item_code': item_code, 'qty': 1, 'rate': 100,
@@ -326,7 +338,7 @@ class TestChildRowLinks(IntegrationTestCase):
         self.assertIn('items 第 1 行的', message, '要说清是哪一行，否则模型改不动')
 
     def test_a_line_whose_references_all_exist_passes(self):
-        preflight.check_links(self._order(type(self).item))
+        preflight.check_links(self._order(ITEM))
 
 
 class TestNoProposalRowSurvivesAPreflightRefusal(IntegrationTestCase):
@@ -341,13 +353,7 @@ class TestNoProposalRowSurvivesAPreflightRefusal(IntegrationTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.company = frappe.db.get_value('Company', {'abbr': 'DNT'}, 'name') \
-            or frappe.db.get_value('Company', {}, 'name')
-        cls.warehouse = frappe.db.get_value('Warehouse', {'is_group': 0, 'company': cls.company},
-                                            'name')
-        cls.customer = frappe.db.get_value('Customer', {}, 'name')
-        cls.item = frappe.db.get_value('Item', {}, 'name')
-        frappe.db.commit()
+        _ensure_fixtures(cls)
 
     def setUp(self):
         super().setUp()
@@ -370,7 +376,7 @@ class TestNoProposalRowSurvivesAPreflightRefusal(IntegrationTestCase):
         super().tearDown()
 
     def _values(self, item_code):
-        return {'customer': type(self).customer, 'company': type(self).company,
+        return {'customer': CUSTOMER, 'company': type(self).company,
                 'delivery_date': frappe.utils.add_days(frappe.utils.nowdate(), 14),
                 'items': [{'item_code': item_code, 'qty': 1, 'rate': 100,
                            'warehouse': type(self).warehouse,
@@ -402,5 +408,5 @@ class TestNoProposalRowSurvivesAPreflightRefusal(IntegrationTestCase):
         before = frappe.db.count('DS Operation Proposal')
         version = str(frappe.get_meta('Sales Order').modified)
         operations.propose_create(self._conversation(), 'Sales Order',
-                                  self._values(type(self).item), version)
+                                  self._values(ITEM), version)
         self.assertEqual(frappe.db.count('DS Operation Proposal'), before + 1)
