@@ -13,7 +13,7 @@
 | 3 部署制品与安全边界 | 工作流 A；出口控制、非 root、SSO 强制、CSP | 主体实现完成、验收未闭合：G1 字面判据与 ACME 待合规主机由审计方执行（已裁决 #9） | [deployment-security-evidence](docs/engineering/deployment-security-evidence.md)、[runbook](docs/engineering/deployment-runbook.md) |
 | 4 数据治理与容灾 | 工作流 E；凭证托管与轮换 | 全部合入 main（PR #7、#9、#10）；G3 正式验收与真机 `restore-site` 未闭合 | [data-governance-evidence](docs/engineering/data-governance-evidence.md)、runbook 第 12–14 节 |
 | 5 质量门禁（瘦身版） | CI 与每夜从零、一条命令开发栈、登记式清理、原生测试与权限矩阵、交接令牌落表 | 六个切片全部合入 main，PR 门与分支保护生效；**G9 自 2026-09-08 的绿夜起算**（17/17 步、集成 215 passed、原生 12+5 条），30 天连续绿由 workflow 历史证明 | [quality-gates-evidence](docs/engineering/quality-gates-evidence.md) |
-| 6 Agent 质量与成本 | 工作流 F；注入信封 | 七个切片实现完成，PR #20–#26 待合入；**G8 三条判据全部成立**（回放 34/34 = 100%、live 注入组 6/6 零提案、live 总体 31/34 = 91.2%），预算正式值按真实模型实测裁定 | [agent-quality-evidence](docs/engineering/agent-quality-evidence.md)、计划 [2026-09-08-agent-quality](docs/superpowers/plans/2026-09-08-agent-quality.md) |
+| 6 Agent 质量与成本 | 工作流 F；注入信封 | 七个切片全部合入 main（PR #20–#26，另 #27 修每夜拆栈）；**G8 三条判据全部成立**（回放 34/34 = 100%、live 注入组 6/6 零提案、live 总体 31/34 = 91.2%），预算正式值按真实模型实测裁定；合入前 49 个代理的全栈审查抄出一条假绿与七条真缺陷，已逐条修复 | [agent-quality-evidence](docs/engineering/agent-quality-evidence.md)、计划 [2026-09-08-agent-quality](docs/superpowers/plans/2026-09-08-agent-quality.md) |
 | 终验 生产浸泡 | 全部 | 未开始 | — |
 
 已推迟、不在计划 5 范围：`dsherp/admin.py` 体量拆分（复盘 Q5）；Playwright 五路径、mypy、存量注入脚本整体改写（理由见证据文档的偏离表）。
