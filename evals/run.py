@@ -324,7 +324,9 @@ def report(results, *, mode, site, started):
                        'evaluator_failed': sum(1 for r in results if r['verdict'] == 'evaluator_failed'),
                        'case_invalid': sum(1 for r in results if r['verdict'] == 'case_invalid'),
                        'version_changed': sum(1 for r in results if r['verdict'] == 'version_changed'),
-                       'skipped': sum(1 for r in results if r['verdict'] == 'skipped')},
+                       'skipped': sum(1 for r in results if r['verdict'] == 'skipped'),
+                       'budget_exceeded': sum(1 for r in results
+                                              if r.get('final_status') == 'BudgetExceeded')},
             'pass_rate': (len(passed) / len(scored)) if scored else None,
             'by_group': groups, 'cases': results}
 
@@ -336,7 +338,8 @@ def markdown(summary):
              f'- 用例 {totals["cases"]}，计分 {totals["scored"]}，通过 {totals["passed"]}，'
              f'失败 {totals["failed"]}，通过率 **{rate}**',
              f'- 评估器失败 {totals["evaluator_failed"]}，用例非法 {totals["case_invalid"]}，'
-             f'装配已变 {totals["version_changed"]}，跳过 {totals["skipped"]}', '',
+             f'装配已变 {totals["version_changed"]}，跳过 {totals["skipped"]}',
+             f'- 因预算或循环停止 **{totals.get("budget_exceeded", 0)}** 条', '',
              '| 用例 | 判定 | 域 | 红在哪 |', '|---|---|---|---|']
     for case in summary['cases']:
         detail = '; '.join(f'{c["name"]}' for c in case['checks'] if not c['ok']) or '—'
@@ -451,6 +454,10 @@ def main(argv=None):
                      'detail': '负对照按声明变红，预言机没有漏判'}]}
         run = seen.get('run') or {}
         results.append({**entry, **judged, 'run_id': seen.get('run_id'),
+                        # Read back as its own field, not only inside a check's message: from
+                        # slice 6 a run can end `BudgetExceeded`, and the replay layer's gate
+                        # is that none of them do.
+                        'final_status': run.get('status'),
                         'model_calls': run.get('model_calls'),
                         'input_bytes': run.get('model_input_bytes'),
                         'actual_input_tokens': run.get('actual_input_tokens'),
@@ -480,6 +487,12 @@ def main(argv=None):
             bad = True
     if args.mode == 'replay' and summary['pass_rate'] not in (None, 1.0):
         print('回放层不是 100%：脚本化的模型是确定的，任何低于 100% 都是真实回归')
+        bad = True
+    stopped = [r['case_id'] for r in results if r.get('final_status') == 'BudgetExceeded']
+    if stopped:
+        # 预算正式值是从改完之后的观测值裁定的：抬上去就再也量不出调用膨胀。所以这里红，
+        # 要查的是「这次改动是不是把调用数或输入字节撑大了」，而不是把预算调高。
+        print('有运行因预算或循环被停止，先查调用膨胀而不是调高预算：' + ', '.join(stopped))
         bad = True
     if not summary['metering']['ok']:
         print('用量没有落库：回放的替身总会报 usage，所以这说明计量链断了，而不是 provider 没报。'

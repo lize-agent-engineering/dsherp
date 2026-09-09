@@ -102,8 +102,20 @@ class TestPreflight(IntegrationTestCase):
         class Stripped:
             meta = None
             get_invalid_links = None
+            get_all_children = None
         with self.assertRaises(frappe.ValidationError) as caught:
             preflight.check_links(Stripped())
+        self.assertIn('原生校验方法', str(caught.exception))
+
+        class NoChildren:
+            """Child rows are half the check now, so losing the way to reach them is the
+            same loud failure as losing the link check itself."""
+            meta = None
+
+            def get_invalid_links(self):
+                return [], []
+        with self.assertRaises(frappe.ValidationError) as caught:
+            preflight.check_links(NoChildren())
         self.assertIn('原生校验方法', str(caught.exception))
 
     # --- mandatory ------------------------------------------------------------------------
@@ -268,3 +280,45 @@ class TestPreflight(IntegrationTestCase):
         self.assertEqual(inspected.as_dict(), before, '被检查的那份文档不能被前置校验改动')
         self.assertIsNone(frappe.db.get_value('Sales Order', order.name, 'po_no'),
                           '前置校验不能落库')
+
+
+class TestChildRowLinks(IntegrationTestCase):
+    """The most common mistake a model makes is in a line, not in the header.
+
+    `BaseDocument.get_invalid_links` walks `self` only; Frappe's own `_validate_links` calls it
+    for the document **and then for every row of `get_all_children()`**. Checking the parent
+    alone let an invented `item_code` through the preflight, be stored as a Pending proposal,
+    be shown to a person, and fail at confirm with a `LinkValidationError` — exactly the class
+    of failure this module exists to move before the approval.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company = frappe.db.get_value('Company', {'abbr': 'DNT'}, 'name') \
+            or frappe.db.get_value('Company', {}, 'name')
+        cls.warehouse = frappe.db.get_value('Warehouse', {'is_group': 0, 'company': cls.company},
+                                            'name')
+        cls.customer = frappe.db.get_value('Customer', {}, 'name')
+        cls.item = frappe.db.get_value('Item', {'is_stock_item': 0}, 'name') \
+            or frappe.db.get_value('Item', {}, 'name')
+        frappe.db.commit()
+
+    def _order(self, item_code):
+        return frappe.get_doc({
+            'doctype': 'Sales Order', 'customer': type(self).customer,
+            'company': type(self).company,
+            'delivery_date': frappe.utils.add_days(frappe.utils.nowdate(), 14),
+            'items': [{'item_code': item_code, 'qty': 1, 'rate': 100,
+                       'warehouse': type(self).warehouse,
+                       'delivery_date': frappe.utils.add_days(frappe.utils.nowdate(), 14)}]})
+
+    def test_an_invented_item_code_in_a_line_is_refused_before_the_proposal(self):
+        with self.assertRaises(frappe.ValidationError) as caught:
+            preflight.check_links(self._order('DSHERP-NO-SUCH-ITEM'))
+        message = str(caught.exception)
+        self.assertIn('DSHERP-NO-SUCH-ITEM', message)
+        self.assertIn('items 第 1 行的', message, '要说清是哪一行，否则模型改不动')
+
+    def test_a_line_whose_references_all_exist_passes(self):
+        preflight.check_links(self._order(type(self).item))

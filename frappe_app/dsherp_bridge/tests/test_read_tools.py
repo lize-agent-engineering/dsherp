@@ -153,25 +153,57 @@ class TestReadTools(IntegrationTestCase):
         self.assertLess(lean, full)
         self.assertLess(lean, LIMITS['record_max_bytes'])
 
+    def test_an_expanded_record_never_exceeds_the_byte_cap_it_promises(self):
+        """`describe_read_record()` tells the model results are capped at 16384 bytes.
+
+        Until this was fixed the cap was a label: `truncated['bytes']` was set and nothing was
+        removed. Measured on this Site, a Sales Order with 8 expanded lines came back at
+        ~21KB and at 20 lines — exactly `child_rows_per_page` — at ~52KB, three times the
+        promise; two or three such reads exhaust `model_max_input_bytes_per_call` and end the
+        run on budget.
+        """
+        order = self._order(rows=LIMITS['child_rows_per_page'] + 5)
+        result = api.read_record('Sales Order', order.name, children=['items'])
+        self.assertLessEqual(_bytes(result), LIMITS['record_max_bytes'])
+        self.assertNotIn('bytes', result.get('truncated', {}),
+                         '还能靠丢行收进上限时，不该报「装不下」')
+
     def test_oversized_table_is_truncated_and_marked_with_a_cursor(self):
         order = self._order(rows=LIMITS['child_rows_per_page'] + 5)
         result = api.read_record('Sales Order', order.name, children=['items'])
         table = result['truncated']['tables']['items']
-        self.assertEqual(table['returned'], LIMITS['child_rows_per_page'])
+        returned = len(result['fields']['items'])
+        # 行页长现在是上限而不是承诺：字节上限先到就先生效。
+        self.assertEqual(table['returned'], returned)
+        self.assertLessEqual(returned, LIMITS['child_rows_per_page'])
+        self.assertGreater(returned, 0)
         self.assertEqual(table['total'], LIMITS['child_rows_per_page'] + 5)
-        self.assertEqual(table['next_after_idx'], LIMITS['child_rows_per_page'])
+        self.assertEqual(table['next_after_idx'], result['fields']['items'][-1]['idx'],
+                         '游标必须指向真正返回的最后一行')
 
     def test_after_idx_continues_from_the_cursor(self):
+        """Paging must reach the end of the table however many rows each page holds.
+
+        Asserted by walking the cursor to exhaustion rather than by a fixed page size: with
+        the byte cap enforced, how many rows fit in one page depends on the record, and a test
+        that pinned the number would be asserting the row limit instead of the promise that
+        matters — that nothing is unreachable.
+        """
         total = LIMITS['child_rows_per_page'] + 5
         order = self._order(rows=total)
-        first = api.read_record('Sales Order', order.name, children=['items'])
-        cursor = first['truncated']['tables']['items']['next_after_idx']
-        rest = api.read_record('Sales Order', order.name, children=['items'],
-                               after_idx={'items': cursor})
-        self.assertEqual(len(rest['fields']['items']), 5)
-        self.assertEqual(rest['fields']['items'][0]['idx'], cursor + 1)
-        seen = [row['idx'] for row in first['fields']['items']] + \
-               [row['idx'] for row in rest['fields']['items']]
+        seen, cursor, pages = [], None, 0
+        while True:
+            page = api.read_record('Sales Order', order.name, children=['items'],
+                                   after_idx={'items': cursor} if cursor else None)
+            rows = page['fields']['items']
+            self.assertTrue(rows, '每一页都必须有内容，否则游标走不完')
+            seen += [row['idx'] for row in rows]
+            pages += 1
+            self.assertLess(pages, total + 2, '游标必须收敛')
+            table = (page.get('truncated') or {}).get('tables', {}).get('items')
+            if not table:
+                break
+            cursor = table['next_after_idx']
         self.assertEqual(seen, list(range(1, total + 1)), 'the cursor must read the whole table')
 
     def test_a_record_that_fits_carries_no_truncation_key(self):

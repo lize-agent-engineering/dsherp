@@ -49,7 +49,13 @@ def test_nightly_compares_against_the_archived_baseline():
 
 def test_nightly_scans_and_uploads_the_evaluation_artifacts():
     text = NIGHTLY.read_text(encoding='utf-8')
-    assert 'work/evals/**/*.json' in text, '评估报表必须过泄漏自检'
+    # `**` 而不是 `*`：Actions 的默认 bash 没开 globstar，`work/evals/**/*.json` 等价于
+    # `work/evals/*/*.json`，而 evals/run.py 只往这一层写 report.json 与 report.md——
+    # 于是模式一个文件都匹配不到，未展开的字面量传给 scan-artifacts，被当成「不存在，未扫描」
+    # 并返回 0。报表照样进了公开仓库的 30 天工件，而这一步还报绿。
+    assert 'work/evals/*.json' in text and 'work/evals/**' not in text, \
+        '评估报表必须过泄漏自检，且模式不能依赖未开启的 globstar'
+    assert 'work/evals/*.md' in text, 'report.md 同样是产出，同样要扫'
     assert re.search(r'path: \|(?:.|\n)*?work/evals/', text), '评估报表必须上传'
 
 

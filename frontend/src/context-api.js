@@ -56,6 +56,9 @@ function reasonFromException(exception){
 }
 function classifyKind(status,message){
   if(status===401||status===403)return 'permission';
+  // 429 is a tenant quota, not a failure of the request: the message already says which
+  // allowance ran out and when it resets, so it must not be offered as retryable.
+  if(status===429)return 'quota';
   if(status===503&&message.includes('助手服务暂不可用'))return 'unavailable';
   if(status>=500)return 'transient';
   return 'validation';

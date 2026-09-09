@@ -22,6 +22,22 @@ Agent 质量的度量在这里。两种后端、一套用例、一个预言机�
 
 ## 跑之前
 
+**改过 `frappe_app/dsherp_bridge/` 里任何一个 .py，先重启 backend。** 评估走的是 HTTP，
+请求由长驻的 gunicorn 工作进程处理，它们在启动那一刻就把模块导进了 `sys.modules`——
+改文件不会重新导入。原生测试和集成脚本每次都是新进程，所以它们看得见新代码，**评估看不见**。
+2026-09-09 的两批 live 就是这样白跑的：预算正式值写回了，站上发下来的仍是旧值。
+
+```bash
+docker compose -p dsherp-validation -f infra/compose.validation.yml restart backend beta-backend platform-backend
+```
+
+三个都要重启：集成套件里的配置链路走的是 beta 站（`preview.localhost:18085`），只重启
+`backend` 会留下一个仍按旧预算下发的 beta——表现是容器领到的预算与站上不一致、
+运行以「没有答复」失败。
+
+一条免费的核对：跑一条回放用例，看它的 `model_call_reserved` 事件里 `max_output_tokens`
+是不是当前 `run_budget.py` 里的值。
+
 ```bash
 # 1. 常驻 worker 必须停：它会抢先领走评估运行
 launchctl bootout gui/$(id -u)/com.dsherp.agent-worker-v16
@@ -79,6 +95,20 @@ launchctl bootstrap gui/$(id -u) .runtime/com.dsherp.agent-worker-v16.plist
 并且开跑前会打印用例清单与预计最多多少次付费调用。余额用尽表现为 provider 失败，
 报表里与真正的用例失败严格分开。
 
+## 改了用例判据之后：重判，不必重花钱
+
+用例的 `expect` 改的是**判定**，从不改运行。`oracle.judge` 是 `observed` 的纯函数，
+`run.observe` 能把 `observed` 从站上原样重建——所以改完 `expect` 的正确核对方式是拿
+**今天的用例与预言机**把已经跑过的那一批重判一遍：
+
+```bash
+.venv/bin/python evals/rejudge.py work/evals-live/report.json dsherp-daily.localhost \
+  work/evals-live-rejudged
+```
+
+它做不到的事：**只重判已经发生的运行**。改了提示词、技能或服务端之后，必须重跑真批次。
+重判出来的报表带 `rejudged_from`，别当成新测量读。
+
 ## `--compare-baseline` 的语义
 
 只升不降。任何**曾经 pass、这次不是 pass** 的用例都让退出码变 1，与平均通过率无关——
@@ -89,6 +119,19 @@ launchctl bootstrap gui/$(id -u) .runtime/com.dsherp.agent-worker-v16.plist
 
 `1` 表示以下任一：任一 `evaluator_failed` 或 `case_invalid`；回放层不是 100%；
 `--compare-baseline` 下有用例由 pass 转 fail；或通过率低于基线。
+
+## 预算与循环：回放跑完必须是零条 `BudgetExceeded`
+
+切片 6 起，超预算与「同一工具同参数连续 3 次」都会让运行落在 `BudgetExceeded` 而不是 `Failed`，
+`report.json` 的每条用例都带 `final_status`。**回放全量跑完出现任何一条 `BudgetExceeded`，
+都要先当成本次改动把调用数或输入字节撑大了**——而不是把预算调高。
+
+这条判据存在的原因很具体：子表默认不展开之后，operation 链有可能每条多一次模型调用。
+如果那真的发生了，正确的反应是复核调用膨胀的来源，不是抬预算——预算正式值是从**改完之后**
+的观测值裁定的，抬上去就再也量不出膨胀。
+
+循环检测在回放里同样生效：脚本如果连发三次同一工具同参数，第 3 次会被服务端拒绝，
+运行以 `BudgetExceeded` 结束。这不是评估器故障，是用例脚本写错了。
 
 ## 判定词汇
 

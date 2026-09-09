@@ -24,7 +24,8 @@ frappe.query_reports["DS Agent Audit"] = {
 			fieldname: "status",
 			label: __("Status"),
 			fieldtype: "Select",
-			options: ["", "Queued", "Running", "Cancelling", "Succeeded", "Failed", "Cancelled"],
+			options: ["", "Queued", "Running", "Cancelling", "Succeeded", "Failed", "Cancelled",
+				"NeedsInput", "BudgetExceeded"],
 		},
 	],
 };

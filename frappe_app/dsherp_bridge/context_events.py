@@ -21,6 +21,11 @@ SERVER_KINDS = (
     "model_call_reserved",
     "tool_call",
     "tool_refused",
+    # Server-only, both of them: a runner may not manufacture the fact that a run ran out of
+    # budget or went in circles - those are rulings, and finish_run reads them to decide a
+    # terminal status.
+    "budget_exceeded",
+    "loop_detected",
     "finished",
 )
 RUNNER_KINDS = (
@@ -60,6 +65,10 @@ MAX_PAYLOAD = 8192
 MAX_BATCH = 200
 MAX_ITEMS = 50
 MAX_DEPTH = 6
+# The marks a lossy step leaves. `loop_guard` reads both to decide two calls are not
+# comparable; nothing else may reuse these strings as data.
+TRUNCATED = "…[truncated]"
+DEPTH_CUT = "…[depth]"
 SECRET_KEY_PARTS = (
     "secret",
     "password",
@@ -80,20 +89,35 @@ def _secret_key(key, value):
 
 
 def sanitize(value, depth=0):
+    """Every lossy step leaves a mark.
+
+    A long string always did. A dict past `MAX_ITEMS`, a list past `MAX_ITEMS` and anything
+    below `MAX_DEPTH` used to be cut silently, and two callers read that silence as sameness:
+    a person looking at the event could not tell a 50-row proposal from a 60-row one, and
+    `loop_guard.comparable` — which is what stands between a model fixing line 55 and line 58
+    of the same proposal and having its run killed as a loop — saw two genuinely different
+    calls as identical. The marker is what makes those two cases distinguishable.
+    """
     if depth > MAX_DEPTH:
-        return "…[depth]"
+        return DEPTH_CUT
     if isinstance(value, dict):
-        return {
+        kept = {
             str(key): sanitize(item, depth + 1)
             for key, item in list(value.items())[:MAX_ITEMS]
             if not _secret_key(key, item)
         }
+        if len(value) > MAX_ITEMS:
+            kept[TRUNCATED] = len(value) - MAX_ITEMS
+        return kept
     if isinstance(value, (list, tuple)):
-        return [sanitize(item, depth + 1) for item in list(value)[:MAX_ITEMS]]
+        kept = [sanitize(item, depth + 1) for item in list(value)[:MAX_ITEMS]]
+        if len(value) > MAX_ITEMS:
+            kept.append(TRUNCATED)
+        return kept
     if isinstance(value, str):
         if re.fullmatch(r"sk-[A-Za-z0-9_-]{10,}", value) or value.startswith("Bearer "):
             return "[redacted]"
-        return value if len(value) <= MAX_STRING else value[:MAX_STRING] + "…[truncated]"
+        return value if len(value) <= MAX_STRING else value[:MAX_STRING] + TRUNCATED
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     return type(value).__name__

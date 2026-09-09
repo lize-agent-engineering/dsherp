@@ -22,18 +22,29 @@ def _complete_budget(domain,model):
         'queue_expires_seconds':600,'heartbeat_stale_seconds':60,
         'run_total_seconds':600 if operation else 300,'site_concurrency':1,
         'provider':'deepseek-official','model':model,
-        'model_max_calls':10 if operation else 8,
-        'model_max_input_bytes_per_call':131072,'model_max_input_bytes_total':524288,
-        'model_max_output_tokens_per_call':3072 if operation else 2048,
-        'model_max_output_tokens_total':30720 if operation else 16384}
+        'model_max_calls':15 if operation else 11,
+        'model_max_input_bytes_per_call':131072,'model_max_input_bytes_total':786432,
+        'model_max_output_tokens_per_call':8192,
+        'model_max_output_tokens_total':122880 if operation else 90112}
 
 
-@pytest.mark.parametrize('mode',['denied','drift','allow','skill','operation'])
+@pytest.mark.parametrize('mode',['denied','drift','allow','skill','operation','loop'])
 def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,mode):
     observed=[]
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             observed.append((self.path,json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
+            if mode=='loop':
+                # What the Site does once it has written `loop_detected`: the first
+                # reservation was already granted, every later one is refused. Nothing kills
+                # the container directly - this refusal is what ends the run.
+                reserved=[item for item in observed if item[0].endswith('.reserve_model_call')]
+                if self.path.endswith('.reserve_model_call') and len(reserved)>1:
+                    self.send_response(417);self.end_headers()
+                    self.wfile.write(b'{"exc_type":"ValidationError"}')
+                    return
+                self.send_response(200);self.end_headers();self.wfile.write(b'{"message":{"allowed":true}}')
+                return
             if mode in ('drift','allow','skill','operation'):
                 if mode=='drift':config.write_text(config.read_text()+'\n')
                 self.send_response(200);self.end_headers();self.wfile.write(b'{"message":{"allowed":true}}')
@@ -89,6 +100,14 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
                 assert label in text, label
             # 只放摘要：正文仍然只在模型主动调 skill 之后才出现（既有断言保持不变）。
             assert '工具错误与做不了的出口' not in text
+        elif mode=='loop':
+            # The turn that had its reservation is allowed to finish; the next one gets no
+            # provider request at all. That gap is the whole point of stopping a loop by
+            # poisoning the authorization: no fourth call is paid for.
+            assert result.finish_reason=='completed'
+            assert second.finish_reason!='completed'
+            assert len(requests)==1
+            assert len([item for item in observed if item[0].endswith('.reserve_model_call')])==2
         else:
             assert result.finish_reason!='completed'
             assert second.finish_reason!='completed'

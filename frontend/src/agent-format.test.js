@@ -12,6 +12,12 @@ it('把后端真实状态翻译成中文说明，但不改写原状态', () => {
  expect(statusText('Running')).toBe('执行中');
 });
 
+it('预算上限是提醒而不是失败：文案说清是「这一轮问得太大」而不是「你的活儿出错了」', () => {
+ expect(statusText('BudgetExceeded')).toBe('已达本轮预算上限');
+ expect(statusTone('BudgetExceeded')).toBe('warning');
+ expect(statusTone('BudgetExceeded')).not.toBe('danger');
+});
+
 it('未知状态原样显示，不伪造成功也不吞掉', () => {
  expect(statusText('Reconciling')).toBe('Reconciling');
  expect(statusTone('Reconciling')).toBe('neutral');

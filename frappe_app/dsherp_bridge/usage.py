@@ -19,7 +19,15 @@ import json
 INPUT_KEYS = ('input_tokens', 'inputTokens', 'prompt_tokens', 'promptTokens', 'input', 'prompt')
 OUTPUT_KEYS = ('output_tokens', 'outputTokens', 'completion_tokens', 'completionTokens', 'output', 'completion')
 REQUEST_KEYS = ('request_id', 'id', 'provider_request_id')
-FINISHED_STATUSES = ('Succeeded', 'Failed', 'Cancelled')
+# BudgetExceeded is a finished run like any other, and its tokens are just as billable.
+# The statuses in which a run row is **closed and its numbers final** — which is what both
+# callers need, and why NeedsInput belongs here despite its name. `finish_run` clears the
+# capability, drops the grant and never touches the row again; the user's reply starts a
+# brand-new run. A NeedsInput row that made two paid calls was settling at zero and being
+# reported as `unfinished`, so its real tokens fell out of the month's bill and out of
+# `site_monthly_tokens` for good (measured: `lt-bound-needs-input-01` in the archived
+# baseline — model_calls 2, actual tokens 0).
+FINISHED_STATUSES = ('Succeeded', 'Failed', 'Cancelled', 'BudgetExceeded', 'NeedsInput')
 
 
 def _payload(event):
@@ -168,7 +176,8 @@ def monthly(rows, month):
         if bucket != month:
             continue
         site = sites.setdefault(row.get('site') or '', {
-            'runs': 0, 'succeeded': 0, 'failed': 0, 'cancelled': 0, 'unfinished': 0,
+            'runs': 0, 'succeeded': 0, 'failed': 0, 'cancelled': 0, 'budget_exceeded': 0,
+            'needs_input': 0, 'unfinished': 0,
             'input_tokens': 0, 'output_tokens': 0, 'model_calls': 0, 'duration_ms': 0,
             'unknown_calls': 0, 'runs_with_unknown_usage': 0})
         status = row.get('status')
@@ -176,7 +185,10 @@ def monthly(rows, month):
             site['unfinished'] += 1
             continue
         site['runs'] += 1
-        site[{'Succeeded': 'succeeded', 'Failed': 'failed', 'Cancelled': 'cancelled'}[status]] += 1
+        # A status missing from this map is a KeyError on the first run that uses it —
+        # the monthly bill is where a forgotten terminal state surfaces, loudly and late.
+        site[{'Succeeded': 'succeeded', 'Failed': 'failed', 'Cancelled': 'cancelled',
+              'BudgetExceeded': 'budget_exceeded', 'NeedsInput': 'needs_input'}[status]] += 1
         site['input_tokens'] += int(row.get('actual_input_tokens') or 0)
         site['output_tokens'] += int(row.get('actual_output_tokens') or 0)
         site['model_calls'] += int(row.get('model_calls') or 0)
@@ -189,7 +201,8 @@ def monthly(rows, month):
     for site in sites.values():
         site['complete'] = site['unknown_calls'] == 0
     totals = {key: sum(site[key] for site in sites.values())
-              for key in ('runs', 'succeeded', 'failed', 'cancelled', 'unfinished',
+              for key in ('runs', 'succeeded', 'failed', 'cancelled', 'budget_exceeded',
+                          'needs_input', 'unfinished',
                           'input_tokens', 'output_tokens', 'model_calls', 'duration_ms',
                           'unknown_calls', 'runs_with_unknown_usage')}
     totals['complete'] = totals['unknown_calls'] == 0

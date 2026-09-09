@@ -129,7 +129,10 @@ def _note_run(status,duration_ms):
     RUNS_TOTAL.inc(status=status)
     RUN_DURATION.observe(duration_ms/1000)
     if status=='Failed':set_consecutive_failures(_consecutive+1)
-    elif status in ('Succeeded','Cancelled','NeedsInput'):set_consecutive_failures(0)
+    # BudgetExceeded breaks the streak rather than extending it: such a run made several
+    # successful provider calls and then stopped because it was told to. Counting it as a
+    # failure would push the circuit breaker towards opening on a provider that is working.
+    elif status in ('Succeeded','Cancelled','NeedsInput','BudgetExceeded'):set_consecutive_failures(0)
 
 
 def profile_business(profile):
@@ -625,7 +628,13 @@ class Coordinator:
                             'payload':{'duration_ms':duration}}])
                 finish=post(site['client'],'finish_run',**cap,status='Failed',
                             error='业务运行失败：'+type(error).__name__)
-                completed='Failed'
+                # Read the server's ruling back rather than assuming the status we asked for.
+                # `finish_run` turns a plain failure into BudgetExceeded when its own events
+                # say the run ran out of budget or went in circles - and a run that stopped
+                # because it was told to is not a provider failure. Assuming 'Failed' here
+                # would count every budget stop as a consecutive failure and push the
+                # circuit breaker towards opening on a Site that is working perfectly well.
+                completed=(finish or {}).get('status','Failed')
             else:
                 duration=int((time.monotonic()-started)*1000)
                 worker_log.log('container_finished',run_id=cap['run_id'],status=result['status'],
@@ -655,7 +664,7 @@ class Coordinator:
                 outcome='provider_failure'
             elif execution_error is not None and failures is None:
                 outcome='provider_failure'
-            elif completed in ('Succeeded','Cancelled','NeedsInput'):
+            elif completed in ('Succeeded','Cancelled','NeedsInput','BudgetExceeded'):
                 outcome='ok'
             else:
                 outcome='other'

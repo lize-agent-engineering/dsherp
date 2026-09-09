@@ -26,10 +26,10 @@ def _claimed_budget(domain):
     tokens={'query':1024,'configuration':1536,'operation':2560}[domain]
     return {'provider':'deepseek-official','model':'synthetic-site-model',
         'model_request_timeout_seconds':90,
-        'model_max_calls':10 if domain=='operation' else 8,
-        'model_max_input_bytes_per_call':131072,'model_max_input_bytes_total':524288,
+        'model_max_calls':{'operation':15,'query':11,'configuration':8}[domain],
+        'model_max_input_bytes_per_call':131072,'model_max_input_bytes_total':786432,
         'model_max_output_tokens_per_call':tokens,
-        'model_max_output_tokens_total':30720 if domain=='operation' else 16384}
+        'model_max_output_tokens_total':{'operation':122880,'query':90112,'configuration':65536}[domain]}
 
 
 def _capture_harness(monkeypatch):

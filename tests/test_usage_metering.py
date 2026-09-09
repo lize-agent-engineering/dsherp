@@ -97,6 +97,51 @@ def test_the_monthly_report_groups_by_tenant_and_month_and_counts_only_finished_
     assert report["totals"]["input_tokens"] == 150 and report["totals"]["runs"] == 2
 
 
+def test_the_monthly_report_counts_budget_exceeded_apart_from_failed():
+    """A run stopped by its budget is billed like any other finished run, in its own column.
+
+    Two ways this goes wrong silently. Leaving the status out of `FINISHED_STATUSES` bills
+    the most expensive kind of run as zero and calls it unfinished; leaving it out of the
+    literal status map raises `KeyError` on the first month that contains one — in the
+    monthly bill, which is the worst place to discover a forgotten terminal state.
+    """
+    rows = [
+        {"site": "acme.tenant.example.com", "creation": "2026-09-01 10:00:00", "status": "BudgetExceeded",
+         "actual_input_tokens": 900, "actual_output_tokens": 300, "model_calls": 8, "duration_ms": 42000},
+        {"site": "acme.tenant.example.com", "creation": "2026-09-02 10:00:00", "status": "Failed",
+         "actual_input_tokens": 10, "actual_output_tokens": 0, "model_calls": 1, "duration_ms": 500},
+    ]
+    report = usage.monthly(rows, month="2026-09")
+    acme = report["sites"]["acme.tenant.example.com"]
+    assert acme["budget_exceeded"] == 1 and acme["failed"] == 1
+    assert acme["runs"] == 2 and acme["unfinished"] == 0
+    assert acme["input_tokens"] == 910 and acme["output_tokens"] == 300 and acme["model_calls"] == 9
+    assert report["totals"]["budget_exceeded"] == 1
+
+
+def test_a_run_that_stopped_to_ask_the_person_is_billed_not_written_off():
+    """`NeedsInput` is where the *conversation* pauses, not where the *row* does.
+
+    `finish_run` clears the capability and drops the grant; the reply arrives as a brand-new
+    run and nothing ever touches this row again. Counting it as unfinished meant the tokens it
+    really spent fell out of the month's bill and out of `site_monthly_tokens` permanently —
+    measured on the archived baseline, where `lt-bound-needs-input-01` shows model_calls 2 and
+    actual tokens 0. The three preflight cases end this way too, so it is not an edge.
+    """
+    rows = [
+        {"site": "acme.tenant.example.com", "creation": "2026-09-01 10:00:00", "status": "NeedsInput",
+         "actual_input_tokens": 800, "actual_output_tokens": 150, "model_calls": 2, "duration_ms": 9000},
+        {"site": "acme.tenant.example.com", "creation": "2026-09-01 11:00:00", "status": "Queued",
+         "actual_input_tokens": 0, "actual_output_tokens": 0, "model_calls": 0, "duration_ms": None},
+    ]
+    report = usage.monthly(rows, month="2026-09")
+    acme = report["sites"]["acme.tenant.example.com"]
+    assert acme["needs_input"] == 1 and acme["runs"] == 1
+    assert acme["input_tokens"] == 800 and acme["output_tokens"] == 150 and acme["model_calls"] == 2
+    assert acme["unfinished"] == 1, "还在排队的那条才是未完成"
+    assert report["totals"]["needs_input"] == 1
+
+
 def test_the_site_and_the_host_count_usage_by_the_same_rules():
     """The bridge runs inside the container where dsherp/ is not importable, so it carries its
     own copy; a copy that drifts would bill differently from what the Site recorded."""

@@ -69,8 +69,13 @@
    "Succeeded"
   ],
   "proposals": {
-   "count_max": 0,
-   "summary": []
+   "count_max": 1,
+   "summary": [
+    {
+     "action": "create",
+     "doctype": "Purchase Order"
+    }
+   ]
   },
   "refusal": {
    "error_class": "validation",

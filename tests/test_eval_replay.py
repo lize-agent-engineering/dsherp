@@ -5,6 +5,7 @@ isolation changes — an evaluation run under different isolation measures a dif
 """
 import json
 import os
+import tempfile
 import sys
 from pathlib import Path
 
@@ -187,3 +188,46 @@ def test_an_unresolvable_placeholder_is_left_alone():
 
 def test_arguments_without_a_placeholder_are_untouched():
     assert model_server.substitute('{"doctype": "Item"}', []) == '{"doctype": "Item"}'
+
+
+def _result(case_id, verdict='pass', final_status='Succeeded'):
+    return {'case_id': case_id, 'verdict': verdict, 'tags': [], 'checks': [],
+            'final_status': final_status, 'model_calls': 2, 'actual_input_tokens': 100,
+            'actual_output_tokens': 20, 'usage_unknown_calls': 0}
+
+
+def test_a_replay_run_that_hit_a_budget_is_reported_and_red():
+    """The slice-6 gate, as a number in the report rather than something to notice by eye.
+
+    A replay batch that starts stopping runs on budget is the signal that a change grew the
+    call count or the input size. Raising the budget would erase exactly the measurement the
+    official values are derived from, so this is deliberately a red, not a warning.
+    """
+    from evals import run as runner
+    summary = runner.report([_result('a'), _result('b', final_status='BudgetExceeded')],
+                            mode='replay', site='s', started='t')
+    assert summary['totals']['budget_exceeded'] == 1
+    assert '因预算或循环停止 **1** 条' in runner.markdown(summary)
+    clean = runner.report([_result('a'), _result('b')], mode='replay', site='s', started='t')
+    assert clean['totals']['budget_exceeded'] == 0
+    assert '因预算或循环停止 **0** 条' in runner.markdown(clean)
+
+
+def test_rejudging_uses_todays_cases_and_marks_the_report_as_not_fresh():
+    """A corpus change is a change to judging, never to the run — so it can be measured
+    against the recorded behaviour without paying for the model again. What must never happen
+    is a re-judged report being read as a fresh batch."""
+    from evals import rejudge as rejudger
+    previous = {'mode': 'live', 'started': 'r1', 'pass_rate': 0.5,
+                'cases': [{'case_id': 'c1', 'run_id': 'run-1', 'verdict': 'fail',
+                           'model_calls': 3, 'prompt_version': '2'}]}
+    case = {'schema_version': 2, 'case_id': 'c1', 'domain': 'query', 'scored': True,
+            'tags': ['t'], 'expect': {'final_status': ['Succeeded']}}
+    root = Path(tempfile.mkdtemp())
+    (root / 'c1.json').write_text(json.dumps(case), encoding='utf-8')
+    seen = {'status': 'Succeeded', 'answer': 'ok', 'sources': [], 'events': [], 'proposals': []}
+    summary = rejudger.rejudge(previous, 'site', root, observer=lambda site, run: dict(seen))
+    assert summary['pass_rate'] == 1.0
+    assert summary['cases'][0]['run_id'] == 'run-1', '重判的是那一次真实运行，不是新跑一次'
+    assert summary['cases'][0]['model_calls'] == 3, '原始用量原样带过来'
+    assert summary['rejudged_from']['pass_rate_before'] == 0.5

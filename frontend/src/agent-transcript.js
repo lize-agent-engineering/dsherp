@@ -79,7 +79,7 @@ export const pendingCount = (session) =>
   (session?.proposals ?? []).filter((item) => item.status === 'Pending').length +
     (session?.configuration_confirmations ?? []).filter((item) => item.status === 'Pending').length;
 
-const eventTones = new Set(['model_error', 'tool_error', 'tool_refused', 'runtime_failed', 'worker_error', 'unverified_completion_claim']);
+const eventTones = new Set(['model_error', 'tool_error', 'tool_refused', 'runtime_failed', 'worker_error', 'unverified_completion_claim', 'budget_exceeded', 'loop_detected']);
 
 // Server-side reason codes are rendered as business text; the raw payload is never
 // dumped at a business user, who reads this stream through list_run_events.
@@ -90,6 +90,18 @@ const reasonLabels = {
   lease_expired: '运行租约过期',
   queue_expired: '排队超时',
   claim_unacked: '领取未确认，运行未开始，请重试',
+  budget_exceeded: '已达本轮模型调用预算',
+  loop_detected: '同一工具同参数连续调用，已停止重复',
+};
+
+// The limit names the server records. Shown instead of the payload, which would otherwise be
+// dumped as JSON at a business user — the one thing this stream is not supposed to do.
+const limitLabels = {
+  model_max_calls: '本轮模型调用次数',
+  model_max_input_bytes_per_call: '单次输入字节',
+  model_max_input_bytes_total: '本轮累计输入字节',
+  model_max_output_tokens_per_call: '单次输出 token',
+  model_max_output_tokens_total: '本轮累计输出 token',
 };
 
 const reasonText = (reason) => reasonLabels[reason] ?? reason;
@@ -100,6 +112,15 @@ function eventDetail(event, payload) {
   if (payload == null) return bits.join(' ');
   if (typeof payload !== 'object') {
     bits.push(String(payload));
+    return bits.join(' ');
+  }
+  if (event.kind === 'budget_exceeded' && typeof payload.limit === 'string') {
+    const name = limitLabels[payload.limit] ?? payload.limit;
+    bits.push(`${name} ${payload.used}/${payload.allowed}`);
+    return bits.join(' ');
+  }
+  if (event.kind === 'loop_detected') {
+    bits.push(`${payload.tool ?? ''} 连续 ${payload.repeats ?? 3} 次`.trim());
     return bits.join(' ');
   }
   if (typeof payload.text === 'string' && payload.text) bits.push(payload.text);
@@ -159,6 +180,10 @@ function eventLabel(event, payload, reserved) {
       return '提案已过期';
     case 'unverified_completion_claim':
       return '完成自述未经核实';
+    case 'budget_exceeded':
+      return reasonLabels.budget_exceeded;
+    case 'loop_detected':
+      return reasonLabels.loop_detected;
     default:
       return event.kind;
   }

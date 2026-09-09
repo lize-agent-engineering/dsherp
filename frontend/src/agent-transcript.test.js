@@ -158,6 +158,18 @@ it('新增运行事件按精确标签翻译，未核实完成自述用 danger', 
  expect(rows.map(row=>row.tone)).toEqual(['default','default','default','default','danger']);
 });
 
+it('预算与循环事件有中文标签，且不把 payload 当 JSON 甩给用户', () => {
+ const rows = runEventRows([
+  {seq:1,kind:'budget_exceeded',source:'server',payload:{limit:'model_max_calls',used:8,allowed:8},recorded_at:'2026-09-09 10:00:00'},
+  {seq:2,kind:'loop_detected',source:'server',payload:{tool:'erp_read_record',repeats:3},recorded_at:'2026-09-09 10:00:01'},
+ ]);
+ expect(rows.map(row=>row.label)).toEqual(['已达本轮模型调用预算','同一工具同参数连续调用，已停止重复']);
+ expect(rows[0].detail).toBe('本轮模型调用次数 8/8');
+ expect(rows[1].detail).toBe('erp_read_record 连续 3 次');
+ expect(rows.map(row=>row.tone)).toEqual(['danger','danger']);
+ for (const row of rows) expect(row.detail).not.toContain('{');
+});
+
 it('运行失败事件只显示错误类别与可读原因，不渲染原始 payload', () => {
  const rows = runEventRows([
   {seq:1,kind:'runtime_failed',source:'runner',error_class:'RuntimeError',payload:{reason:'runtime_error'},recorded_at:'2026-09-05 10:00:00'},

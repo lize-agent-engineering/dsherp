@@ -13,6 +13,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from dsherp_bridge import api
+from dsherp_bridge import make_adapters
 from dsherp_bridge.make_adapters import (
     _ADAPTERS, _REQUIREMENTS, route_requirements, unmet_requirements,
 )
@@ -258,3 +259,38 @@ class TestRoutesOnARecordRead(IntegrationTestCase):
                 route_requirements('Purchase Order', resolved['route_name'],
                                    resolved['method_path'], resolved['target_doctype']))
             self.assertEqual(ready, not reasons, name)
+
+
+class TestHeldSourceIsNotReady(IntegrationTestCase):
+    """A held order must not be reported as ready to receive.
+
+    Measured against the pinned image rather than assumed: `Purchase Order` carries an
+    `On Hold` status and `StockController.check_for_on_hold_or_closed_status` refuses both
+    `Closed` and `On Hold`, while `Subcontracting Order` has no such status and `Work Order`
+    uses `Stopped`. The Sales Order route already listed both; the two Purchase Order routes
+    listed only `Closed`, so `routes[]` said `ready` on a held order and the proposal could
+    only fail at confirm.
+    """
+
+    def test_the_purchase_routes_block_every_status_erpnext_refuses(self):
+        options = (frappe.get_meta('Purchase Order').get_field('status').options or '').split('\n')
+        self.assertIn('On Hold', options, '镜像里 Purchase Order 确实有这个状态')
+        for route in ('purchase_order_to_purchase_receipt',
+                      'purchase_order_to_subcontracting_order'):
+            blocked = next(rule['blocked_when']
+                           for key, rule in make_adapters._REQUIREMENTS.items()
+                           if key[1] == route)
+            statuses = {value for _field, _operator, values in blocked for value in values}
+            self.assertEqual(statuses, {'Closed', 'On Hold'}, route)
+
+    def test_a_route_only_blocks_statuses_its_source_actually_has(self):
+        """The mirror of the fix: a status the source DocType cannot hold would be a rule that
+        never fires, and reading it would suggest a check that is not there."""
+        for (doctype, route, _method, _target), rule in make_adapters._REQUIREMENTS.items():
+            field = frappe.get_meta(doctype).get_field('status')
+            if field is None:
+                continue
+            options = {item for item in (field.options or '').split('\n') if item}
+            for _field, _operator, values in rule['blocked_when']:
+                for value in values:
+                    self.assertIn(value, options, f'{route} 拦的状态 {value} 在 {doctype} 上不存在')

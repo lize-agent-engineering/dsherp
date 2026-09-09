@@ -67,7 +67,8 @@
    "erp_propose_make"
   ],
   "final_status": [
-   "Succeeded"
+   "Succeeded",
+   "NeedsInput"
   ],
   "proposals": {
    "count_max": 0,

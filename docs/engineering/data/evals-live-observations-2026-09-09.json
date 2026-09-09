@@ -1,0 +1,152 @@
+{
+ "site": "dsherp-daily.localhost",
+ "mode": "live",
+ "date": "2026-09-09",
+ "cases": 34,
+ "model": "deepseek-v4-flash",
+ "turn_end_reasons": {
+  "completed": 21,
+  "max-tokens": 6,
+  "error": 7
+ },
+ "observed": {
+  "configuration": {
+   "per_call": {
+    "output_tokens": {
+     "n": 9,
+     "max": 2840,
+     "p95": 2840
+    },
+    "input_bytes": {
+     "n": 10,
+     "max": 55392,
+     "p95": 55392
+    },
+    "cap_in_force": [
+     3072
+    ],
+    "responses": 9,
+    "responses_at_cap": 0
+   },
+   "per_run": {
+    "model_calls": {
+     "n": 4,
+     "max": 3,
+     "p95": 3
+    },
+    "model_input_bytes": {
+     "n": 4,
+     "max": 63569,
+     "p95": 63569
+    },
+    "actual_input_tokens": {
+     "n": 4,
+     "max": 12667,
+     "p95": 12667
+    },
+    "actual_output_tokens": {
+     "n": 4,
+     "max": 3023,
+     "p95": 3023
+    },
+    "duration_ms": {
+     "n": 4,
+     "max": 91652,
+     "p95": 91652
+    }
+   }
+  },
+  "operation": {
+   "per_call": {
+    "output_tokens": {
+     "n": 95,
+     "max": 3072,
+     "p95": 3072
+    },
+    "input_bytes": {
+     "n": 100,
+     "max": 87301,
+     "p95": 81512
+    },
+    "cap_in_force": [
+     3072
+    ],
+    "responses": 95,
+    "responses_at_cap": 6
+   },
+   "per_run": {
+    "model_calls": {
+     "n": 19,
+     "max": 10,
+     "p95": 10
+    },
+    "model_input_bytes": {
+     "n": 19,
+     "max": 487976,
+     "p95": 487976
+    },
+    "actual_input_tokens": {
+     "n": 19,
+     "max": 24562,
+     "p95": 24562
+    },
+    "actual_output_tokens": {
+     "n": 19,
+     "max": 13533,
+     "p95": 13533
+    },
+    "duration_ms": {
+     "n": 19,
+     "max": 188850,
+     "p95": 188850
+    }
+   }
+  },
+  "query": {
+   "per_call": {
+    "output_tokens": {
+     "n": 41,
+     "max": 2048,
+     "p95": 1583
+    },
+    "input_bytes": {
+     "n": 46,
+     "max": 77271,
+     "p95": 50731
+    },
+    "cap_in_force": [
+     2048
+    ],
+    "responses": 41,
+    "responses_at_cap": 1
+   },
+   "per_run": {
+    "model_calls": {
+     "n": 11,
+     "max": 7,
+     "p95": 7
+    },
+    "model_input_bytes": {
+     "n": 11,
+     "max": 239993,
+     "p95": 239993
+    },
+    "actual_input_tokens": {
+     "n": 11,
+     "max": 17837,
+     "p95": 17837
+    },
+    "actual_output_tokens": {
+     "n": 11,
+     "max": 6231,
+     "p95": 6231
+    },
+    "duration_ms": {
+     "n": 11,
+     "max": 126897,
+     "p95": 126897
+    }
+   }
+  }
+ }
+}
