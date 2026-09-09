@@ -139,3 +139,48 @@ test('usage from one call does not leak into the next', async () => {
   const usages = reports.filter(r => r.kind === 'model_response').map(r => r.payload.usage);
   assert.deepEqual(usages, [{input: 7, output: 8}, null]);
 });
+
+test('refuses before calling authorize when the system prompt is missing the pinned marker',
+     async () => {
+  // "Loading failed" must mean zero provider requests, not a request that happens to be
+  // answered badly. The check therefore runs before authorize, which is what pays.
+  let authorizations = 0;
+  const requireSystem = system => {
+    if (!String(system || '').includes('业务技能：erp-query v')) {
+      throw new Error('System prompt is missing the pinned business skill summary');
+    }
+  };
+  const guard = createGuard(async () => { authorizations++; },
+                            () => {}, async () => {}, requireSystem);
+  await assert.rejects(consume(guard({...request, system: '你是当前企业的业务助手。'},
+                                     async function*() { yield {type: 'finish'}; })),
+                       /pinned business skill summary/);
+  assert.equal(authorizations, 0, 'the provider must not have been paid for this call');
+});
+
+test('allows dispatch when the system prompt carries the pinned marker', async () => {
+  let authorizations = 0;
+  const requireSystem = system => {
+    if (!String(system || '').includes('业务技能：erp-query v')) throw new Error('missing');
+  };
+  const guard = createGuard(async () => { authorizations++; },
+                            () => {}, async () => {}, requireSystem);
+  await consume(guard({...request, system: '你是助手。\n\n业务技能：erp-query v1.4.0'},
+                      async function*() { yield {type: 'finish'}; }));
+  assert.equal(authorizations, 1);
+});
+
+test('a missing marker poisons every later call, like any other failed authorization', async () => {
+  const requireSystem = () => { throw new Error('missing'); };
+  const guard = createGuard(async () => {}, () => {}, async () => {}, requireSystem);
+  await assert.rejects(consume(guard(request, async function*() {})), /missing/);
+  const permissive = {...request, system: 'anything'};
+  await assert.rejects(consume(guard(permissive, async function*() {})), /disabled/);
+});
+
+test('with no requireSystem the guard behaves exactly as before', async () => {
+  let authorizations = 0;
+  const guard = createGuard(async () => { authorizations++; });
+  await consume(guard(request, async function*() { yield {type: 'finish'}; }));
+  assert.equal(authorizations, 1);
+});

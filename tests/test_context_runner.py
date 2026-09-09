@@ -255,3 +255,40 @@ def test_skill_versions_raises_rather_than_returning_none(monkeypatch, tmp_path)
     monkeypatch.setattr(context_runner, 'ROOT', tmp_path)
     with pytest.raises((OSError, ValueError, TypeError)):
         context_runner._skill_versions()
+
+
+def test_page_snapshot_reaches_the_model_inside_an_untrusted_envelope():
+    """spec:93: everything external the model can see carries the label. The page snapshot is
+    the one channel that never passes through a tool, so it is wrapped where it is assembled."""
+    from dsherp import prompt_assembly
+    context = {'schema_version': 1, 'page_type': 'form', 'doctype': 'Item', 'name': 'I-1',
+               'version': 'v1', 'server_version': 'v2', 'unsaved': {'description': '……'}}
+    prompt = prompt_assembly.user_prompt('这张单现在是什么状态？', context)
+    payload = json.loads(prompt)
+    assert payload['question'] == '这张单现在是什么状态？'
+    page = payload['page_context']
+    assert page['untrusted'] is True and page['source'] == 'page'
+    assert page['doctype'] == 'Item'
+    assert page['data'] == context
+
+
+def test_page_note_still_explains_both_versions():
+    """That sentence carries a real business judgement — version vs server_version means the
+    page is stale — so it must survive the change of shape, not be lost with the prose."""
+    from dsherp import prompt_assembly
+    note = json.loads(prompt_assembly.user_prompt('q', {}))['page_context']['note']
+    assert 'version' in note and 'server_version' in note
+    assert '未保存' in note
+    assert '不是授权' in note or '不是指令' in note
+
+
+def test_only_the_page_envelope_carries_a_note():
+    """Tool envelopes deliberately have none: the rule is stated once, in the system prompt,
+    where compaction cannot drop it. The page note is different — it explains two fields."""
+    from dsherp import context_mcp
+    assert 'note' not in context_mcp.envelope('erp_read_record', {'doctype': 'Item'}, {})
+
+
+def test_prompt_version_advances_with_the_template():
+    from dsherp import prompt_assembly
+    assert prompt_assembly.PROMPT_VERSION == '2'

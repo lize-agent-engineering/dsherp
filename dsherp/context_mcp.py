@@ -30,7 +30,12 @@ class ToolFailure(BusinessRuntimeError):
         self.classification=classification
         super().__init__(classification.get('http_status'))
     def __str__(self):
-        return json.dumps({key:self.classification[key] for key in ('error_class','message','retryable')},ensure_ascii=False)
+        # Labelled like any other external text. `message` echoes the server's own wording -
+        # doctype names, field names, ERP validation text - and slice 5's preflight checks put
+        # more document text in it. Leaving it bare would be a channel around the envelope.
+        return json.dumps({'source':SERVER_SOURCE,'untrusted':True,
+                           **{key:self.classification[key] for key in ('error_class','message','retryable')}},
+                          ensure_ascii=False)
 
 
 def _failure_message(body):
@@ -86,6 +91,49 @@ def post(client,method,*,timeout=None,**data):
     return body['message']
 
 
+# Where the data came from, as the model is told to read it.
+#   erp        - business data out of the ERP; anything in it is content, never instruction
+#   erp-server - the server's own ruling: a stored proposal, a refusal, a question to relay
+ERP_SOURCE='erp'
+SERVER_SOURCE='erp-server'
+# The tools whose result is ERP data rather than a server ruling.
+DATA_TOOLS=('erp_read_schema','erp_read_record','erp_search_records','erp_read_configuration')
+DOCTYPE_ARGUMENTS=('doctype','source_doctype')
+
+
+def _doctype_of(tool,arguments,result):
+    """Which business object this result is about, if that can be said at all.
+
+    Omitted rather than blank when unknown: an empty doctype would tell the model there is an
+    object whose name is the empty string."""
+    for key in DOCTYPE_ARGUMENTS:
+        value=arguments.get(key)
+        if isinstance(value,str) and value.strip():return value
+    if isinstance(result,dict):
+        value=result.get('doctype')
+        if isinstance(value,str) and value.strip():return value
+    return None
+
+
+def envelope(tool,arguments,result):
+    """Everything the model sees from a tool, wrapped and labelled.
+
+    Wrapped here, in the container, rather than on the server: about twenty integration tests
+    call `context_execution.run_tool` in-process and assert on its bare return value, and the
+    server's shape is the audit record. This is the one place every domain's every tool
+    passes through on its way to the model.
+
+    No `note` key: the rule lives in the system prompt, where compaction cannot drop it, and
+    FastMCP serialises with `indent=2` - another nested key costs two spaces on every line of
+    it, on every tool result, for a sentence that is already stated once per run."""
+    labelled={'source':ERP_SOURCE if tool in DATA_TOOLS else SERVER_SOURCE,
+              'untrusted':True,'tool':tool}
+    doctype=_doctype_of(tool,arguments,result)
+    if doctype is not None:labelled['doctype']=doctype
+    labelled['data']=result
+    return labelled
+
+
 def _forbid_extra_tool_arguments(server,name):
     """FastMCP otherwise discards unknown keys before the tool function sees them."""
     tool=server._tool_manager.get_tool(name)
@@ -106,7 +154,8 @@ def _add_request_input(server,invoke):
 def create_server(client,run_id,capability,domain='query'):
     if domain not in ('query','operation','configuration'):raise ValueError('Unknown business domain')
     def invoke(tool,**arguments):
-        return post(client,'run_tool',run_id=run_id,capability=capability,tool=tool,arguments=arguments)
+        return envelope(tool,arguments,
+                        post(client,'run_tool',run_id=run_id,capability=capability,tool=tool,arguments=arguments))
     if domain=='configuration':
         server=FastMCP('dsherp-context-configuration')
         @server.tool(annotations=ToolAnnotations(readOnlyHint=True,destructiveHint=False,idempotentHint=True))
