@@ -656,3 +656,30 @@ def test_the_leak_scan_treats_api_key_as_a_secret_like_the_rest_of_the_repositor
     found = dev_stack.leaked_secrets(stack.runtime, [leaking])
     assert found, 'api_key 值出现在工件里却没有被扫出来'
     assert all(profiles['reader']['api_key'] not in name for name, _ in found), '只报名字，不报值'
+
+
+def test_the_stack_parses_without_the_operator_supplied_backup_credentials():
+    """`dev_stack down` must work on a machine that never configured off-site backup.
+
+    `backup_storage_credentials` and `backup_secrets_storage_credentials` are supplied by an
+    operator, never generated: `admin.doctor` only requires them when a backup repository is
+    configured. But compose validates `env_file` while **parsing**, so a plain
+    `env_file: <path>` made every command that selects the scheduled/ops profiles fail on a
+    machine without them — which is every fresh CI runner. That is what turned the nightly of
+    2026-09-08 red: 215 integration tests passed and the teardown step then exited 1 with
+    `env file … not found`.
+
+    Asserted on the compose file rather than by running compose, so it holds in CI too.
+    """
+    # 读文本而不是 yaml：仓库的宿主依赖里没有 PyYAML，为一条契约断言引进一个依赖不划算。
+    root = Path(__file__).resolve().parents[1]
+    text = (root / 'infra/compose.validation.yml').read_text(encoding='utf-8')
+    bare = re.findall(r'^[^\S\n]*env_file:[^\S\n]*\S.*$', text, re.MULTILINE)
+    assert not bare, f'env_file 写成裸路径，缺文件时整份 compose 都解析不了：{bare}'
+    blocks = re.findall(r'^[^\S\n]*env_file:[^\S\n]*\n((?:[^\S\n]*(?:-[^\S\n]*path:|required:).*\n)+)',
+                        text, re.MULTILINE)
+    assert len(blocks) >= 2, '两个运维自备的凭据文件都要覆盖到'
+    for block in blocks:
+        assert 'required: false' in block, f'env_file 必须标 required: false：{block!r}'
+    for name in ('backup_storage_credentials', 'backup_secrets_storage_credentials'):
+        assert any(name in block for block in blocks), f'{name} 应当是可选的 env_file'
