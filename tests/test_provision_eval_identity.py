@@ -27,17 +27,33 @@ class _Run:
                                      stderr='')
 
 
+SERVICE = {'business_url': 'http://business.invalid', 'base_url': 'http://base.invalid'}
+
+
+@pytest.fixture
+def service(tmp_path):
+    """A synthetic Site profile for `--service`.
+
+    The real one lives in `.runtime/`, which is deliberately not in the repository, so a test
+    that read it passed on a developer's machine and failed in CI with `FileNotFoundError` —
+    which is exactly what happened until 2026-09-09. Nothing here touches a Site.
+    """
+    path = tmp_path / 'context-worker-synthetic.json'
+    path.write_text(json.dumps(SERVICE), encoding='utf-8')
+    return str(path)
+
+
 ISSUED = {'user': 'daily-operator@example.invalid', 'api_key': 'k-synthetic',
           'api_secret': 's-synthetic', 'version': 1, 'reused': False,
           'configurator': {'user': 'daily-configurator@example.invalid',
                            'api_key': 'ck-synthetic', 'api_secret': 'cs-synthetic'}}
 
 
-def test_no_secret_ever_reaches_argv(tmp_path):
+def test_no_secret_ever_reaches_argv(tmp_path, service):
     run = _Run(ISSUED)
     provision.main(['--out', str(tmp_path.relative_to(ROOT) / 'eval-users.json')]
                    if str(tmp_path).startswith(str(ROOT)) else
-                   ['--out', 'work/test-eval-users.json'], run=run)
+                   ['--out', 'work/test-eval-users.json', '--service', service], run=run)
     joined = ' '.join(run.calls[0]['command'])
     for secret in ('k-synthetic', 's-synthetic', 'cs-synthetic', 'password', 'api_secret'):
         assert secret not in joined, joined
@@ -46,12 +62,16 @@ def test_no_secret_ever_reaches_argv(tmp_path):
     (ROOT / 'work/test-eval-users.json').unlink(missing_ok=True)
 
 
-def test_the_profile_has_a_fixed_key_set_and_no_extra_fields():
+def test_the_profile_has_a_fixed_key_set_and_no_extra_fields(service):
     run = _Run(ISSUED)
-    profile = provision.main(['--out', 'work/test-eval-users.json'], run=run)
+    profile = provision.main(['--out', 'work/test-eval-users.json', '--service', service], run=run)
     assert set(profile) == {'site', 'business_url', 'operator', 'configurator'}
     for role in ('operator', 'configurator'):
         assert set(profile[role]) == {'user', 'api_key', 'api_secret', 'site', 'base_url'}
+    # The URLs come from the profile named on the command line, not from a pinned daily one:
+    # `--site` is a parameter, so the Site's own addresses have to follow it.
+    assert profile['business_url'] == SERVICE['business_url']
+    assert profile['operator']['base_url'] == SERVICE['base_url']
     written = json.loads((ROOT / 'work/test-eval-users.json').read_text())
     assert written == profile
     assert oct((ROOT / 'work/test-eval-users.json').stat().st_mode)[-3:] == '600'
