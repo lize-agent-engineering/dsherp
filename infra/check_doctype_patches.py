@@ -34,24 +34,42 @@ PAYLOAD_SCOPE = ('frappe_app', ':(exclude)frappe_app/*/public/dist/**',
                  ':(exclude)frappe_app/*/tests/**')
 
 
-def schema_version_moved(diff):
-    """Whether an **existing** payload's schema_version changed in this diff.
+VERSION_NUMBER = re.compile(r'schema_version\D{0,12}?(\d+)')
 
-    Both halves matter. An added line alone is not a migration event: a payload declared for
-    the first time at today's version has no stored data behind it to back-fill, and that is
-    what every false positive so far has been — a fixture, a rebuilt bundle, a new test. What
-    needs a backfill is a version that **moved**, and a move always removes the old line as
-    well as adding the new one.
+
+def _versions(line):
+    return set(VERSION_NUMBER.findall(line))
+
+
+def schema_version_moved(diff):
+    """Whether an **existing** payload's schema_version changed to a different number.
+
+    Three things have to be true, and each one was learned from a refusal this guard issued
+    against a change that needed no migration at all:
+
+    - The line must be **modified**, not merely added. A payload declared for the first time at
+      today's version has no stored data behind it to back-fill; a new test fixture, a rebuilt
+      bundle and a new file all look like additions.
+    - The **number** must differ. Slice 4 rewrote
+      `source.get('schema_version')==arguments['version']` into
+      `grounds(..., key='schema_version')` — the string moved, the version did not. Comparing
+      the numbers rather than the presence of the word is what tells a refactor from a bump.
+    - It must be outside `PAYLOAD_SCOPE`'s exclusions (build artefacts and native tests).
+
+    A bump writes `!= 1` as `!= 2`, so the removed and added number sets differ and it is
+    caught. Everything above leaves them equal — or empty.
     """
-    added = removed = False
+    added, removed = set(), set()
+    changed = False
     for line in diff.splitlines():
         if 'schema_version' not in line:
             continue
         if line.startswith('+') and not line.startswith('+++'):
-            added = True
+            added |= _versions(line)
+            changed = True
         elif line.startswith('-') and not line.startswith('---'):
-            removed = True
-    return added and removed
+            removed |= _versions(line)
+    return changed and bool(removed) and added != removed
 
 
 def added_patch_lines(diff):

@@ -90,6 +90,33 @@ def _script(site, user, configurator=CONFIGURATOR):
             .replace('__CONFIGURATOR__', repr(configurator)))
 
 
+def _authenticates(profile):
+    """Whether the stored pair still works, rather than whether the file exists.
+
+    The credential is issued with a window and the Site re-issues on renewal, so a profile
+    written earlier can name a key that no longer authenticates - and the evaluation then
+    fails every case with `evaluator_failed: 401`, which looks like the Site being down. The
+    integration suite exercises credential issue on this Site, so this is a normal Tuesday,
+    not an exception.
+    """
+    import httpx
+    for role in ('operator', 'configurator'):
+        identity = profile.get(role) or {}
+        if not identity.get('api_key') or not identity.get('api_secret'):
+            return False
+        try:
+            with httpx.Client(base_url=identity['base_url'], trust_env=False, timeout=15,
+                              headers={'X-Frappe-Site-Name': identity['site'],
+                                       'Authorization': 'token ' + identity['api_key'] + ':'
+                                                        + identity['api_secret']}) as client:
+                response = client.get('/api/method/dsherp_bridge.context_api.list_sessions')
+        except Exception:                                   # noqa: BLE001 - unreachable is unusable
+            return False
+        if response.status_code != 200:
+            return False
+    return True
+
+
 def main(argv=None, run=subprocess.run):
     parser = argparse.ArgumentParser(description='为评估运行器开通业务用户凭据（隔离合成站）')
     parser.add_argument('--site', default=DEFAULT_SITE)
@@ -102,10 +129,10 @@ def main(argv=None, run=subprocess.run):
     target = ROOT / args.out
     if target.is_file():
         profile = json.loads(target.read_text())
-        if profile.get('site') == args.site and profile.get('operator', {}).get('api_key') \
-                and profile.get('configurator', {}).get('api_key'):
-            print(f'评估身份已存在，复用 {args.out}（不轮换密钥）')
+        if profile.get('site') == args.site and _authenticates(profile):
+            print(f'评估身份已存在且仍可用，复用 {args.out}（不轮换密钥）')
             return profile
+        print('已存的评估身份认证失败，重新签发')
 
     command = [*COMPOSE, 'exec', '-T', service_of(args.site), BENCH_PYTHON, '-']
     result = run(command, cwd=ROOT, input=_script(args.site, args.user),

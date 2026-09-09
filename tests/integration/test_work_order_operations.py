@@ -100,6 +100,59 @@ def confirm_once(proposal,run_name):
     return result
 
 
+def schema_field_map(cap,doctype,tables=None):
+    """Every field of one DocType, in order, following the schema cursor.
+
+    read_schema pages since the tool-output slice, so a single call is only the first page
+    of a wide DocType. The first page is still the one whose version pins a create proposal,
+    so it is returned alongside the complete map.
+    """
+    first=None;collected={};after=None
+    for _page in range(40):
+        arguments={'doctype':doctype}
+        if tables is not None:
+            arguments['tables']=tables
+        if after:
+            arguments['after_fieldname']=after
+        page=run_tool(**cap,tool='erp_read_schema',arguments=arguments)
+        if first is None:
+            first=page
+        collected.update({field['fieldname']:field for field in page['fields']})
+        after=page.get('next_after_fieldname')
+        if not after:
+            break
+    assert len(collected)==first['total_fields'],(len(collected),first['total_fields'])
+    return first,collected
+
+
+def child_column_map(cap,doctype,table,fields):
+    """Every column of one child table, expanded on purpose.
+
+    Child tables are named but not inlined by default now, so the columns come from an
+    explicit `tables=[table]` read. `fields` is the ordered map from schema_field_map: the
+    field just before the table puts the expansion at the head of its own page, and a wide
+    child table pages its columns behind `child_after`.
+    """
+    order=list(fields)
+    index=order.index(table)
+    assert index,(doctype,table,'no page can start at the first field of a DocType')
+    before=order[index-1]
+    columns={};cursor=None;entry=None
+    for _page in range(40):
+        arguments={'doctype':doctype,'tables':[table],'after_fieldname':before}
+        if cursor:
+            arguments['child_after']={table:cursor}
+        page=run_tool(**cap,tool='erp_read_schema',arguments=arguments)
+        entry=next(field for field in page['fields'] if field['fieldname']==table)
+        assert entry['fields'],entry
+        columns.update({column['fieldname']:column for column in entry['fields']})
+        cursor=entry.get('columns_truncated',{}).get('next_after_child_fieldname')
+        if not cursor:
+            break
+    assert len(columns)==entry['total_columns'],(len(columns),entry['total_columns'])
+    return columns
+
+
 try:
     frappe.set_user('Administrator')
     roles={row.name for row in frappe.get_all(
@@ -184,8 +237,7 @@ try:
     # The create proposal is schema-sourced and performs no Work Order write.
     cap,create_run=new_run()
     frappe.set_user('Guest')
-    schema=run_tool(**cap,tool='erp_read_schema',arguments={'doctype':'Work Order'})
-    fields={field['fieldname']:field for field in schema['fields']}
+    schema,fields=schema_field_map(cap,'Work Order')
     assert fields['production_item']['options']=='Item' and fields['production_item']['reqd']
     assert fields['bom_no']['options']=='BOM' and fields['bom_no']['reqd']
     assert fields['qty']['fieldtype']=='Float' and fields['qty']['reqd']
@@ -193,13 +245,24 @@ try:
     assert fields['wip_warehouse']['options']=='Warehouse'
     assert fields['fg_warehouse']['options']=='Warehouse' and not fields['fg_warehouse']['reqd']
     assert fields['naming_series']['options']=='MFG-WO-.YYYY.-'
-    required_item_fields={
-        field['fieldname']:field for field in fields['required_items']['fields']
-    }
+    # The child table is named, not inlined: the default schema read says which DocType its
+    # rows are, and the columns come from a read that asks for that table by name.
+    assert 'fields' not in fields['required_items'],fields['required_items']
+    assert fields['required_items']['rows_of']=='Work Order Item',fields['required_items']
+    required_item_fields=child_column_map(cap,'Work Order','required_items',fields)
     assert required_item_fields['item_code']['options']=='Item'
     assert required_item_fields['source_warehouse']['options']=='Warehouse'
     assert required_item_fields['required_qty']['fieldtype']=='Float'
-    actual_bom=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'BOM','name':bom_name})
+    # Child rows are counted, not expanded, unless the read names the table. The count is
+    # the same single raw line the expanded read below reads its item code and qty from.
+    counted_bom=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'BOM','name':bom_name})
+    assert 'items' not in counted_bom['fields'],counted_bom
+    assert counted_bom['child_tables']['items']=={
+        'child_doctype':'BOM Item','rows':1,
+    },counted_bom
+    actual_bom=run_tool(**cap,tool='erp_read_record',arguments={
+        'doctype':'BOM','name':bom_name,'children':['items'],
+    })
     actual_wip=run_tool(**cap,tool='erp_read_record',arguments={
         'doctype':'Warehouse','name':wip_warehouse,
     })
@@ -433,6 +496,9 @@ try:
         record=run_tool(**cap,tool='erp_read_record',arguments={'doctype':'Bin','name':bin_name})
         assert record['fields']['item_code']==item_code
         assert record['fields']['warehouse']==warehouse
+        # The WIP Bin is back to 0 by now. Only None and '' count as empty, so a zero
+        # quantity is still reported rather than silently omitted.
+        assert 'actual_qty' in record['fields'],record
         bin_values[key]=flt(record['fields']['actual_qty'])
     assert bin_values==after_bins
     completed=run_tool(**cap,tool='erp_read_record',arguments={

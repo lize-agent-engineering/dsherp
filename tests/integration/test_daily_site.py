@@ -32,8 +32,13 @@ frappe.destroy()
         'DSHERP-MFG-SYN-RM',
         'DSHERP-MFG-SYN-SERVICE',
     ]
-    assert state['customers'] == ['日常 Agent 合成客户']
-    assert state['sales_orders'] == 0
+    # The evaluation set lives on this Site (plan 6, slice 2), so its fixtures are part of
+    # the expected shape now — named one by one, so anything *else* appearing still fails.
+    # `DSHERP-EVAL-CUSTOMER` and the two draft Sales Orders come from
+    # evals/setup/rebased_records.py; the third order carries an injection payload from
+    # evals/setup/injection.py and is deliberately kept apart from the ordinary fixtures.
+    assert sorted(state['customers']) == ['DSHERP-EVAL-CUSTOMER', '日常 Agent 合成客户']
+    assert state['sales_orders'] == 3
     assert {
         'Sales User', 'Sales Manager', 'Stock Manager', 'Item Manager',
         'Manufacturing User', 'Purchase User', 'Purchase Master Manager', 'Stock User',
@@ -101,7 +106,11 @@ frappe.destroy()
     assert state['oauth']['enterprise'] == 'daily'
     assert state['roles'] == [] and state['business_read'] is False
     assert state['active_runs'] == 0
-    assert set(state['conversation_owners']).issubset({'daily-operator@example.invalid'})
+    # Two business identities, not one: the configuration domain reads DocType definitions,
+    # which an ordinary business user cannot, and widening the operator to reach them would
+    # have quietly widened every other evaluation case too (plan 6, slice 2).
+    assert set(state['conversation_owners']).issubset({
+        'daily-operator@example.invalid', 'daily-configurator@example.invalid'})
 
     platform_script = r'''
 import json,os,frappe
