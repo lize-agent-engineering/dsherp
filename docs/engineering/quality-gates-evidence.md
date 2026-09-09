@@ -17,6 +17,24 @@ Frappe `16.31.0`，容器 Python `3.14.7`，DSH SDK/Runtime `0.1.1rc1`。
 
 **起算绿夜的触发方式：`workflow_dispatch`。** 截至 2026-09-08，唯一一次 `schedule` 触发的 nightly（run 34150819690）是红的（原因见「每夜时间线」）。`schedule` 路径与 `workflow_dispatch` 路径在 GitHub Actions 里除触发器外无差异，但「定时触发本身能跑绿」要等第一个 `schedule` 绿夜才算证明：尚未出现，待补（2026-09-08 核实：nightly 最近 20 次运行里只有一次 `schedule` 触发，conclusion=failure）。
 
+> **2026-09-10 更正：起算点必须后移到 2026-09-09。**
+> 上面钉的 2026-09-08 起算点当时是对的，但**当夜的 `schedule` 触发那一次是红的**
+> （[run 34261898024](https://github.com/lize-agent-engineering/dsherp/actions/runs/34261898024)，
+> 红在「拆栈」步：两个运维自备的对象存储凭据文件不存在，而 compose 在**解析**阶段校验
+> `env_file`，详见 agent-quality-evidence 的对应一节，已由 PR #27 改成 `required: false`）。
+> 一夜红就断了「连续绿」，所以 30 天只能从修好之后的第一个绿夜重新计。
+>
+> 新起算点：**2026-09-09 ·
+> [run 34387910099](https://github.com/lize-agent-engineering/dsherp/actions/runs/34387910099)**
+> ——`schedule` 触发、19 步全绿、64 分钟。它同时把上一段「`schedule` 路径尚未证明」的待补项
+> 关掉了：定时触发本身能跑绿，这是第一次被证明。
+>
+> **一个仍需裁决的口径**：2026-09-09 当天还有几次 `workflow_dispatch` 的 nightly，其中
+> [34396781643](https://github.com/lize-agent-engineering/dsherp/actions/runs/34396781643) 是红的
+> （原生测试的类间借状态，PR #33 修）。这些是为验证而手工触发的，**不是「那一夜」**。
+> 「30 天连续绿」按每天的 `schedule` 那一次计、还是按当天所有 nightly 运行计，本文不替这道门
+> 决定；按前者，起算点是 2026-09-09，按后者，起算点是 2026-09-10 的第一个绿夜。
+
 **G9 尚未通过**，也不该由本文宣称通过：它要的是 30 天的运行历史，只能由 workflow 自己证明。
 本文只负责把起点钉死，并说明这个起点凭什么算数。
 
