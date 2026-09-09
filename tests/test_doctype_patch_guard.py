@@ -44,23 +44,30 @@ def test_a_stored_schema_version_change_always_needs_a_backfill():
                   schema_version_changed=True) == []
 
 
-def test_a_version_that_moved_needs_a_backfill_but_one_merely_introduced_does_not():
-    """The half of the rule that was missing, and that refused a whole branch for it.
+def test_only_a_version_that_actually_moved_needs_a_backfill():
+    """Three shapes the guard refused although none of them needed a migration.
 
-    A backfill exists to carry **stored** data forward. A payload declared for the first time
-    at today's version has nothing stored behind it — and every false positive so far was
-    exactly that shape: a new test fixture, a rebuilt bundle, a new file. A version that
-    actually moved removes the old line as well as adding the new one.
+    A backfill carries **stored** data forward, so the event to catch is an existing payload's
+    version changing to a different number. Everything else — a payload declared for the first
+    time at today's version, a rebuilt bundle, and a refactor that moves the string
+    `schema_version` around without touching the number — is not that event, and each one of
+    them refused a whole branch before this was narrowed.
     """
-    moved = ("--- a/frappe_app/dsherp_bridge/context_api.py\n"
-             "+++ b/frappe_app/dsherp_bridge/context_api.py\n"
-             "-    if value.get('schema_version') != 1:\n"
-             "+    if value.get('schema_version') != 2:\n")
+    bump = ("--- a/frappe_app/dsherp_bridge/context_api.py\n"
+            "+++ b/frappe_app/dsherp_bridge/context_api.py\n"
+            "-    if value.get('schema_version') != 1:\n"
+            "+    if value.get('schema_version') != 2:\n")
     introduced = ("--- /dev/null\n"
                   "+++ b/frappe_app/dsherp_bridge/tests/test_quota.py\n"
                   "+PAGE = {'schema_version': 1, 'page_type': 'unknown', 'route': []}\n")
-    assert schema_version_moved(moved) is True
+    # Slice 4's real refactor: the key name moved into `grounds(...)`, the version did not.
+    refactor = ("--- a/frappe_app/dsherp_bridge/context_execution.py\n"
+                "+++ b/frappe_app/dsherp_bridge/context_execution.py\n"
+                "-                and source.get('schema_version')==arguments['version']\n"
+                "+                               version=arguments['version'],key='schema_version'):\n")
+    assert schema_version_moved(bump) is True
     assert schema_version_moved(introduced) is False
+    assert schema_version_moved(refactor) is False
     assert schema_version_moved("") is False
 
 
