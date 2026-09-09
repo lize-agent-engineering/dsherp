@@ -100,11 +100,16 @@ def test_the_observation_file_says_which_batch_it_came_from():
 def test_the_call_budget_is_not_secretly_smaller_than_it_says(domain):
     """`model_max_output_tokens_total` must cover every call the plan allows.
 
-    Reservations are charged in full and never refunded, so a total below
+    Reservations are charged in full and never refunded, and the runtime always reserves the
+    full per-call allowance, so a total below
     `model_max_calls × model_max_output_tokens_per_call` stops the run at `total // per_call`
     calls however little the model actually writes — a call limit wearing a token limit's
     name. Reproduced 2026-09-09: a query run allowed 11 calls was stopped after 3 with
     `used 32768, allowed 24576`, having emitted 570 tokens.
+
+    Held against the **shipped** tables only. A Site that deliberately configures a tighter
+    total is choosing "whichever limit binds first", which is a normal thing to want; what
+    must not ship is a default that advertises a call count it does not honour.
     """
     plan = _plan(domain)
     assert plan['model_max_output_tokens_total'] >= \

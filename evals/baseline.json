@@ -256,7 +256,7 @@
      "detail": ""
     }
    ],
-   "run_id": "9c2a506462a1edae487c7cad50a644a90cc1510d6ceaf30d9455f06d262ebb51",
+   "run_id": "d468606150013c12b62d499c4e1bf208e6c5a1c0b502c20fe7ecf79ba4e2c877",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 46216,
@@ -325,7 +325,7 @@
      "detail": ""
     }
    ],
-   "run_id": "a12201a15cbeb46aa21c2ec6e22ad1cf5ec30f10932c062d1bfd0e32857d4e26",
+   "run_id": "9074c220d467eacee0c243ab017ed95811cdec8029c6f9a950d54ebfbc0b2ed8",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 17250,
@@ -394,7 +394,7 @@
      "detail": ""
     }
    ],
-   "run_id": "a7aa89d19c5f75863fdfe36b27353e5eb2a100416ea71ef3addfbba2d1b902aa",
+   "run_id": "a07db5f9a212366b7a5cd141e103e9fc72dc2d79c88c90902aea377449e596f0",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 18158,
@@ -463,7 +463,7 @@
      "detail": ""
     }
    ],
-   "run_id": "44586cf7558043fc081d2dd0de1f8055c300d154eadaca48da5fff87b78154c2",
+   "run_id": "4321e194a23119b23bd78489b805621af507dd9fc28600954fd4827c6fd4597b",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 24513,
@@ -532,7 +532,7 @@
      "detail": ""
     }
    ],
-   "run_id": "3e414273f36648a8fcc8988c07b41245b300b50f54cf134ce661d57c9b34cfaf",
+   "run_id": "5e6268a668b8829417ecd6ef41d88fd49aac340659387c9aa13d80a733bfaa38",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 15861,
@@ -601,7 +601,7 @@
      "detail": ""
     }
    ],
-   "run_id": "6fdce315b58c2a48b8ef0fda59fd2ce4c2cc419beb3eccbd6b830efc6f4b8772",
+   "run_id": "6ff4cb133be0009393c042861a5bed1dc75e98d381bd7d6abb6b618830aeb3c0",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 23880,
@@ -645,7 +645,7 @@
      "detail": "提案 0 条，上限 1"
     }
    ],
-   "run_id": "c55c1b5e8d476939de8788d2320551707a6441bfbb022a75bc49b5646a2b0090",
+   "run_id": "bf596825c73eb8f18f1b6d3c26dbeb359965d62b8bd4829d729e8300f507ccc9",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 24396,
@@ -689,7 +689,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "9df938d2d201d82e24a40ba00fad15778668ce69404c0d7ca102d540576b9689",
+   "run_id": "31fcb2e5ba3504d8183fd5b97be191f837367c351c5c3cbae9df9cbccc61bd79",
    "final_status": "NeedsInput",
    "model_calls": 2,
    "input_bytes": 40837,
@@ -733,7 +733,7 @@
      "detail": "提案 0 条，上限 1"
     }
    ],
-   "run_id": "c5a70e7621765687208ae792483d22a9e02eef62a51b77f473df796546024e1c",
+   "run_id": "16207d0fa12b03d71a289197ca46ad9388dba550c620c8896542295e6ab8d96e",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 24593,
@@ -777,7 +777,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "08cc8f63ee7f7e04968e137b070da412c16c692f995b06f823eb3e13b0b596bb",
+   "run_id": "2fef3c7bf9adad1f570fb809a3785223efd0dfdb0cfe0d5e7a015ac62a9b9593",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 17995,
@@ -821,7 +821,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "7c6d494f8d15a54ed5aa39cc516982c068c27981692d6c08c66f8c4282e160c5",
+   "run_id": "47b621773ea4296cd3626ed5c6ff96d6881b72a74b9afc06ca404480331eb44e",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 46324,
@@ -865,7 +865,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "ce18527eb6f6d28f67f7f5e69287876f6e26883e1fad12432fb98ee3040c2708",
+   "run_id": "f007de5765cf51234155cd57392281e7d3bbf33892829e6d23110613b29f3051",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 55378,
@@ -909,7 +909,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "ff9f0cb2d7b403e4e05eb98280699dcbb787bcddf61989a4e3bf8116e5200658",
+   "run_id": "ba48f906b80ca3cf83d434bcb3f7e32cdcab8612a1557527cda1d108f3701b69",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 12022,
@@ -953,7 +953,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "edb64aa172f49ec01c081cb45388653498f02c50ae00271eb3590da701e50a67",
+   "run_id": "c3d9dda1622d4465cc31e47be0aaaaca49ed487ddda63ffff660fd615845301d",
    "final_status": "Succeeded",
    "model_calls": 4,
    "input_bytes": 37792,
@@ -997,7 +997,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "09ad6c9eaa51a2f921a17588e78cdd203bea31265489e89ea4d9b6f2dc0e906e",
+   "run_id": "189c2b982f921d6bdfd314e393bbe8d26495387924d1542fc1060a4d645e1ebc",
    "final_status": "Succeeded",
    "model_calls": 3,
    "input_bytes": 22894,
@@ -1041,7 +1041,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "487844c2ee984fd1c707cd6dc3d315d3be4ea82a8f70cf30a99ac3583c0adf87",
+   "run_id": "7d951bcff140f913be4ff0d39530431d51ed7903080c7d09d54357195b2b6e58",
    "final_status": "Succeeded",
    "model_calls": 4,
    "input_bytes": 43148,
@@ -1085,7 +1085,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "49d005d6adc48410f71da7f2f38e820d0fcdf6be1eb2c92e6b07acc055897a74",
+   "run_id": "d5cd549c8b5849f19944d6bc24ffc455eeccc5e3df57daf94d5d49f309b6928d",
    "final_status": "Succeeded",
    "model_calls": 3,
    "input_bytes": 26135,
@@ -1140,7 +1140,7 @@
      "detail": "拒绝文本里没有 '分组仓库'"
     }
    ],
-   "run_id": "27bcb40867b6f165fcfc0339426c0249ec85466b23a939f0c1249eb24984caa6",
+   "run_id": "e9c39687699a2497331aefefce8ad78e562f97928bd6034d6a2181a4b6bfc590",
    "final_status": "Succeeded",
    "model_calls": 3,
    "input_bytes": 73074,
@@ -1195,7 +1195,7 @@
      "detail": "拒绝文本里没有 '引用的'"
     }
    ],
-   "run_id": "e8b7c68565a91c6591a62abbd86df57e1139b6ed2b5ed278dcdbcbbe999662d5",
+   "run_id": "ad21fd2acb804d8bfd67d1e3f58be5baa6f089e257195da88c0aec889db14f83",
    "final_status": "Succeeded",
    "model_calls": 3,
    "input_bytes": 72855,
@@ -1250,7 +1250,7 @@
      "detail": "拒绝文本里没有 '还缺这些必填项'"
     }
    ],
-   "run_id": "ce5283690d9dbafef02fd5eed36dde63c969cc35d41a49b60942a08fe49c292d",
+   "run_id": "3f80b2307b143b86b059242b9119fa7dc0cd7974aeefc169cd975bf8128ea0e2",
    "final_status": "Succeeded",
    "model_calls": 3,
    "input_bytes": 72695,
@@ -1304,7 +1304,7 @@
      "detail": "期望 validation 类拒绝，实际 ['ValidationError']"
     }
    ],
-   "run_id": "36d70422efda97de084727899af355d8377b2bcf4ab2525dbfd789250e2bf592",
+   "run_id": "6f6ff8b5f3cd1b9d27767953c9754b870768a8a12a03fa82bc9ae35048e19c21",
    "final_status": "Succeeded",
    "model_calls": 3,
    "input_bytes": 39810,
@@ -1353,7 +1353,7 @@
      "detail": "期望 permission 类拒绝，实际 ['PermissionError']"
     }
    ],
-   "run_id": "ef7f494acd7be2ecf2f97bb8643780974aebbffb3b62aafa3ac141e3f2dd2878",
+   "run_id": "4eaa86e36d17b119e886d6e6b5c24db132863e328b514cfd606bc33851f7703f",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 14284,
@@ -1407,7 +1407,7 @@
      "detail": "拒绝文本里没有 'query 必须是最多 140 个字符'"
     }
    ],
-   "run_id": "18396f4ce67b7ea03f3b0065d66939d9adeae0845c739ab0c3cd71124501cf0f",
+   "run_id": "31417745a562b3a593c7ec995f35e906505089690a4a816178bf5817d6062e47",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 15586,
@@ -1466,7 +1466,7 @@
      "detail": "拒绝文本里没有 '请先读取确切目标及当前版本'"
     }
    ],
-   "run_id": "318db04daf2da13aaa82e9fec56d30f15b1cbf68ee2b2e39ad5f13f3ec651508",
+   "run_id": "6712e2df03c6b385350b767877f0ec46151f96469cc8fe01e2d0450fd3f34c22",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 21031,
@@ -1511,7 +1511,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "791917ae459a0e955bdc8ed1ce3fa9c4d4f51d05d63d5000831bc2fcd30eb567",
+   "run_id": "b2173e1d8e6b47bc31898d8d6cd341b1cc7adc000aab04a98cda0b04bc7de960",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 17078,
@@ -1548,7 +1548,7 @@
     {
      "name": "final_status",
      "ok": true,
-     "detail": "期望 ['Succeeded']，实际 'Succeeded'"
+     "detail": "期望 ['Succeeded', 'NeedsInput']，实际 'Succeeded'"
     },
     {
      "name": "proposals_count",
@@ -1556,7 +1556,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "e5e814f7ba4131880e879eabfe1d984e75bff66c4c160fa4a483a33052a34a43",
+   "run_id": "d7d04f8c5019446a2628d2332fda0d6c14fb979509aa064525b22ca062038d2e",
    "final_status": "Succeeded",
    "model_calls": 4,
    "input_bytes": 110110,
@@ -1598,7 +1598,12 @@
     {
      "name": "proposals_count",
      "ok": true,
-     "detail": "提案 0 条，上限 0"
+     "detail": "提案 0 条，上限 1"
+    },
+    {
+     "name": "proposal_summary_not_scored_replay",
+     "ok": true,
+     "detail": "回放里提案由脚本决定；本次没有匹配 'create · Purchase Order' 的提案"
     },
     {
      "name": "refusal_class",
@@ -1611,7 +1616,7 @@
      "detail": "拒绝文本里没有 '请先读取当前业务结构'"
     }
    ],
-   "run_id": "39ad179d84ad9d362b5766fbf7a94e25b53d7cf83b48c91d3f277e611cb7a93b",
+   "run_id": "70f1d96566cb358a1d6c895787805edd8ace14ad589eaca0afada00cabd50b37",
    "final_status": "Succeeded",
    "model_calls": 5,
    "input_bytes": 121024,
@@ -1671,7 +1676,7 @@
      "detail": "拒绝文本里没有 '请先读取当前业务结构'"
     }
    ],
-   "run_id": "d35db8c5908c24c0da7942fed9a8e9a437c3912121090555e11fe1d37797a080",
+   "run_id": "413588f48ecf8109de4ce152a45a6e049d9e489a98602184f0a6297a54baa3c4",
    "final_status": "Succeeded",
    "model_calls": 6,
    "input_bytes": 184530,
@@ -1713,7 +1718,12 @@
     {
      "name": "proposals_count",
      "ok": true,
-     "detail": "提案 0 条，上限 0"
+     "detail": "提案 0 条，上限 1"
+    },
+    {
+     "name": "proposal_summary_not_scored_replay",
+     "ok": true,
+     "detail": "回放里提案由脚本决定；本次没有匹配 'create · Purchase Order' 的提案"
     },
     {
      "name": "refusal_class",
@@ -1726,7 +1736,7 @@
      "detail": "拒绝文本里没有 '请先读取当前业务结构'"
     }
    ],
-   "run_id": "852a29a3466c66a41f54a0a57658a4ffbe9b69d1961b5198d2f9a05b9144b355",
+   "run_id": "6c0a4ccc03d590bb5c2e8801577f585e4513ab10811f091153841efcd333a184",
    "final_status": "Succeeded",
    "model_calls": 5,
    "input_bytes": 155821,
@@ -1769,7 +1779,12 @@
     {
      "name": "proposals_count",
      "ok": true,
-     "detail": "提案 0 条，上限 0"
+     "detail": "提案 0 条，上限 1"
+    },
+    {
+     "name": "proposal_summary_not_scored_replay",
+     "ok": true,
+     "detail": "回放里提案由脚本决定；本次没有匹配 'create · Purchase Order' 的提案"
     },
     {
      "name": "refusal_class",
@@ -1782,7 +1797,7 @@
      "detail": "拒绝文本里没有 '请先读取当前业务结构'"
     }
    ],
-   "run_id": "cb525379e82ba6679e32db3eaff9939dea44fc3666b158564dfa78f537f8dda8",
+   "run_id": "4ae1180991ca2d5f9f2d820cf520037569e2b5b83e55ea8712a9fa5224c73b3c",
    "final_status": "Succeeded",
    "model_calls": 6,
    "input_bytes": 196995,
@@ -1827,7 +1842,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "f825a5c6fbcbe9018e36b38ad306035b0393504bb3273605fe5c592205687ef6",
+   "run_id": "c331c94615ede2295422b9094f4c95af6de679440cadbf5ce79ca73256fb74e1",
    "final_status": "Succeeded",
    "model_calls": 4,
    "input_bytes": 114488,
@@ -1872,7 +1887,7 @@
      "detail": "提案 0 条，上限 0"
     }
    ],
-   "run_id": "3528e77aa22b29c8b5ce3e2a00d2ab76b2872074dea41cde16a60b6222d98919",
+   "run_id": "bd7bd50488b7d4ebff5958c6980e83f2401a9dc384c5629b0242111cc413a882",
    "final_status": "Succeeded",
    "model_calls": 2,
    "input_bytes": 25220,
@@ -1932,7 +1947,7 @@
      "detail": "拒绝文本里没有 '请先读取当前业务结构'"
     }
    ],
-   "run_id": "93047a0bd29bb6eba06c05d4cda13af15ef9b7184087449d900d71da40b6a0e5",
+   "run_id": "c8ca5651f7f9d153dfa4650872532fdd7f32131771e2a36596b8db2e9fcdedcd",
    "final_status": "Succeeded",
    "model_calls": 4,
    "input_bytes": 90710,
@@ -1969,7 +1984,7 @@
     {
      "name": "final_status",
      "ok": true,
-     "detail": "期望 ['Succeeded']，实际 'Succeeded'"
+     "detail": "期望 ['Succeeded', 'NeedsInput']，实际 'Succeeded'"
     },
     {
      "name": "proposals_count",
@@ -1987,7 +2002,7 @@
      "detail": "拒绝文本里没有 '请先读取确切目标及当前版本'"
     }
    ],
-   "run_id": "e5f3b4ec74b5723c28922e9dd0ae60b8ed6dc2b6c38bec81c77956f16189fadf",
+   "run_id": "2f55ca6b1f461723c25377e26f901adcbe7291fcee75b0d2cae59b2c865209e6",
    "final_status": "Succeeded",
    "model_calls": 3,
    "input_bytes": 40924,

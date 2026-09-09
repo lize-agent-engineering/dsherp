@@ -71,15 +71,16 @@ DOMAINS={
 # in every domain, and that is not laziness.
 #
 # `reserve_model_call` charges the **reservation** against the total and never refunds the
-# difference when the model answers in 200 tokens. So a total below the product is not a token
-# limit at all — it is a stricter call limit wearing a token limit's name, and it binds at
-# `total // per_call` calls no matter how little the model actually writes. Measured
+# difference when the model answers in 200 tokens, and the runtime always reserves the full
+# per-call allowance (measured: every `model_call_reserved` in three live batches carried
+# exactly the cap). So a total below the product does not bound tokens — it bounds **calls**,
+# at `total // per_call`, and `model_max_calls` then says something untrue. Measured
 # 2026-09-09: with the total at 24,576 and the per-call at 8,192, a query run that was allowed
 # 11 calls was stopped after 3, `used 32768, allowed 24576`, having emitted 570 tokens.
 #
-# Two limits that disagree about the same thing is the trap this plan exists to remove. The
-# run's output spend is bounded by the call count; this line is the arithmetic that says so,
-# and `budget()` refuses a configuration that breaks it.
+# "Whichever limit binds first" is a fine semantic for a Site that deliberately configures
+# one, so `budget()` still accepts it; what is not fine is shipping defaults that advertise a
+# call count they do not honour. `tests/test_budget_official_values.py` holds the shipped tables to it.
 
 
 def _model_policy():
@@ -109,10 +110,6 @@ def budget(domain):
         frappe.throw('模型单次输入预算不能超过累计输入预算')
     if values['model_max_output_tokens_per_call']>values['model_max_output_tokens_total']:
         frappe.throw('模型单次输出预算不能超过累计输出预算')
-    if values['model_max_calls']*values['model_max_output_tokens_per_call']>values['model_max_output_tokens_total']:
-        # 保留额度按预留计、不退款，所以累计输出预算低于「调用数 × 单次」时，真正生效的是
-        # 一个更小的调用数上限，而 model_max_calls 会说谎。实测撞过一次，见模块注释。
-        frappe.throw('累计输出预算必须不少于 调用数 × 单次输出预算，否则调用数上限形同虚设')
     if values['lease_renew_below_seconds']>=values['lease_seconds']:
         frappe.throw('租约续期阈值必须小于租约时长')
     concurrency=frappe.conf.get('dsherp_site_concurrency',1)

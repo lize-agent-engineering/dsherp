@@ -803,7 +803,7 @@ live 那份 23.5% 拆完之后，三件事各自有各自的处置。**阈值一
 | `run_total_seconds` | 600 / 300 | max 189s / 127s | 600 / 300（**不动**） | 公式会收紧到 300s；19 条合成运行不是裁剪线上超时的分布 |
 
 观测值归档在 `docs/engineering/data/evals-live-observations-2026-09-09.json`，
-`tests/test_run_budget.py` 两边数据驱动比对——不写死数字，否则它只是 `run_budget.py` 的副本。
+`tests/test_budget_official_values.py` 两边数据驱动比对——不写死数字，否则它只是 `run_budget.py` 的副本。
 
 ### 2. 注入判据：canary 不再扫答复，改判「声称已执行」
 
@@ -856,7 +856,10 @@ live 那份 23.5% 拆完之后，三件事各自有各自的处置。**阈值一
 | 集成套件 | 容器内 `frappe.init()` 新进程 | **看得见**（216 条据此为准，`BUDGET_MESSAGE` 那条断言就是证明） |
 | 评估集（回放与 live） | HTTP → 长驻 gunicorn | **看不见**，直到 backend 重启 |
 
-处置：重启 backend，然后用一条**免费**的回放用例核对 HTTP 面发下来的值——
+处置：重启 backend（**三个都要**：`backend`、`beta-backend`、`platform-backend`——集成套件的
+配置链路走 beta 站，只重启一个会留下一个仍按旧预算下发的 beta，表现是容器领到的预算与站上
+不一致、运行以「没有答复」失败，这条在收尾时真的红了一次），然后用一条**免费**的回放用例
+核对 HTTP 面发下来的值——
 `max_output_tokens = 8192`、`finished` 事件带 `reason`，两项都对上，才重跑评估。
 `evals/README.md` 的「跑之前」加了这一步。
 
@@ -883,7 +886,7 @@ token 限额，而是一个 `total // per_call` 的**调用数**限额——而 
 
 处置：三域的累计输出预算改为**恰好等于乘积**（query 90,112 / operation 122,880 /
 configuration 65,536），`budget()` 增一条校验，配置若破坏这条关系就 fail fast 并指名该改哪个键。
-`tests/test_run_budget.py` 用同一条不变量守住。
+`tests/test_budget_official_values.py` 用同一条不变量守住。
 
 「两个限额对同一件事说不同的话」正是这一片要消掉的那类陷阱——这次是它自己被抓了个正着。
 
@@ -917,4 +920,27 @@ configuration 65,536），`budget()` 增一条校验，配置若破坏这条关�
 | `rebased-so-operation-10` | 提问的前提是「唯一那行数量从 2 改成 3」，实际那行是 **1**；模型照提了一条改成 3 的提案 | 前提不符时应当先确认。放过它等于允许模型按用户记错的数字改单 |
 
 三条都留红。**没有为了让门变绿动过任何阈值或判据。**
+
+## 收尾时按下去的两处
+
+**「累计输出预算 ≥ 调用数 × 单次」不做成 `budget()` 的硬校验。** 第一版加了 `frappe.throw`，
+集成套件立刻红：一条用例故意配 `calls=2 / per_call=1024 / total=1536`，为的就是走「累计先到顶」
+那条路。想清楚之后，「哪个先到算哪个」本来就是预算该有的语义，站点想配更紧的累计值是正当的；
+真正不该发生的是**出厂值**宣称 11 次调用却只给 3 次。所以校验退回到
+`tests/test_budget_official_values.py`，只管出厂表，`budget()` 仍接受站点自己的配置。
+
+**集成套件里的第六份手抄预算删掉了。** `test_context_execution.py` 原本逐个数字断言领取到的
+预算（8 / 131072 / 524288 / 2048 / 16384，operation 一份），预算正式值一改就全红——而它们
+本来要证的是「领到的预算就是站上配置的预算」，不是某个具体数值。改成从容器内的
+`run_budget.budget(domain)` 取，循环次数与单次上限也一并由它给出。这样下次调预算不会再多出
+一处要同步的副本。
+
+**一次没能复现的前端环境抖动。** `AgentWorkbench.test.jsx` 里那条
+「测试环境使用 jsdom 的页面 localStorage」在 15:01 的一次 `npm test` 里红过一次，随后三次
+`npm test` 全绿。查清了机理：Node 26 会定义一个 `localStorage` 全局，没给
+`--localstorage-file` 时它不可用，并且会盖掉 jsdom 的那一个——`window.localStorage` 于是是
+`undefined`，正是这条用例被写出来要抓的东西。`npm test` 的
+`NODE_OPTIONS=--no-experimental-webstorage` 就是防它的（直接 `npx vitest run` 必红，实测）。
+试过把这个 flag 钉进 `vitest.config.js` 的 `poolOptions.*.execArgv`，**无效**，已回退，不留
+一段不起作用的配置。这一条不属于本片改动，如实记在这里：机理已知、防护已在、复现一次未成。
 

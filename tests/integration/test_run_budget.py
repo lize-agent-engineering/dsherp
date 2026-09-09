@@ -10,7 +10,10 @@ os.chdir('/home/frappe/frappe-bench/sites')
 frappe.init(site='dsherp-validation.localhost');frappe.connect()
 from dsherp_bridge.run_budget import budget
 MODEL_KEYS=('model_max_calls','model_max_input_bytes_per_call','model_max_input_bytes_total','model_max_output_tokens_per_call','model_max_output_tokens_total')
-DOMAIN_DEFAULTS={'query':(8,131072,524288,2048,16384),'configuration':(8,131072,524288,3072,16384),'operation':(10,131072,524288,3072,30720)}
+# 正式值（2026-09-09，按真实模型实测裁定，见 agent-quality-evidence Task 6.5）。
+# 这份表是有意的手抄：本用例要证的就是「站上真的按 run_budget 里写的那组数下发」，
+# 从 run_budget 里取值会让它退化成自己和自己比。数值随正式值调整时一起改。
+DOMAIN_DEFAULTS={'query':(11,131072,786432,8192,90112),'configuration':(8,131072,786432,8192,65536),'operation':(15,131072,786432,8192,122880)}
 had_budget='dsherp_run_budget' in frappe.conf
 original_budget=frappe.conf.get('dsherp_run_budget')
 had_policy='dsherp_model_policy' in frappe.conf
@@ -65,7 +68,9 @@ try:
         {'model_max_calls':-1},
         {'model_max_calls':True},
         {'model_max_output_tokens_total':False},
-        {'model_max_input_bytes_per_call':524289},
+        # 由出厂累计值 +1 推出，而不是写一个会随正式值失效的字面数：这一条要证的是
+        # 「单次不得超过累计」，不是某个具体字节数。
+        {'model_max_input_bytes_per_call':DOMAIN_DEFAULTS['query'][2]+1},
         {'model_max_input_bytes_per_call':200,'model_max_input_bytes_total':100},
         {'model_max_output_tokens_per_call':2049,'model_max_output_tokens_total':2048},
         {'lease_renew_below_seconds':180},

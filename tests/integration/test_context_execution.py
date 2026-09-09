@@ -55,11 +55,14 @@ try:
     claim=execution.claim_run('a'*64);frappe.db.commit()
     assert claim['run_id']==doc['active_run']
     assert claim['session_id']==doc['id']
-    assert claim['budget']['model_max_calls']==8,claim['budget']
-    assert claim['budget']['model_max_input_bytes_per_call']==131072,claim['budget']
-    assert claim['budget']['model_max_input_bytes_total']==524288,claim['budget']
-    assert claim['budget']['model_max_output_tokens_per_call']==2048,claim['budget']
-    assert claim['budget']['model_max_output_tokens_total']==16384,claim['budget']
+    # 从服务端自己的表取，而不是再抄一份数字：预算正式值会随实测调整（计划 6 Task 6.5），
+    # 抄下来的副本只会在下一次调整时变成一条与真相无关的红。这里要证的是「领取到的预算就是
+    # 站上配置的预算」，不是某个具体数值。
+    from dsherp_bridge.run_budget import budget as run_budget
+    plan=run_budget('query')
+    assert claim['budget']==plan,claim['budget']
+    per_call=plan['model_max_output_tokens_per_call']
+    max_calls=plan['model_max_calls']
     expected_scope=hashlib.sha256(json.dumps([frappe.local.site,actor,doc['id'],'query',claim['native_session_id']],separators=(',',':')).encode()).hexdigest()
     assert claim['scope_id']==expected_scope
     assert execution.claim_run('a'*64) is None
@@ -68,15 +71,15 @@ try:
     status=execution.run_status(**cap)
     assert status['run_id']==claim['run_id'] and status['status']=='Running',status
     assert 0<status['lease_remaining_seconds']<=claim['budget']['lease_seconds'],status
-    model_call={'input_bytes':100,'max_output_tokens':2048,'provider':'deepseek-official','model':'deepseek-v4-flash','purpose':'conversation','runtime_revision':'a'*64,'claimed_budget':claim['budget']}
+    model_call={'input_bytes':100,'max_output_tokens':per_call,'provider':'deepseek-official','model':'deepseek-v4-flash','purpose':'conversation','runtime_revision':'a'*64,'claimed_budget':claim['budget']}
     try:execution.reserve_model_call(**cap,**{**model_call,'runtime_revision':'b'*64});raise AssertionError('unbound model config allowed')
     except frappe.PermissionError:pass
     for invalid in ({'input_bytes':-1},{'input_bytes':99999999},{'model':'unauthorized'},{'max_output_tokens':None}):
         try:execution.reserve_model_call(**cap,**{**model_call,**invalid});raise AssertionError('invalid model call allowed')
         except frappe.ValidationError:pass
-    for index in range(8):
+    for index in range(max_calls):
         assert execution.reserve_model_call(**cap,**{**model_call,'purpose':'compaction' if index==1 else 'conversation'})['allowed']
-    assert frappe.db.get_value('DS Model Run',claim['run_id'],'model_calls')==8
+    assert frappe.db.get_value('DS Model Run',claim['run_id'],'model_calls')==max_calls
     try:execution.reserve_model_call(**cap,**model_call);raise AssertionError('model budget exceeded')
     except frappe.ValidationError as error:
         assert str(error)==execution.BUDGET_MESSAGE,error
@@ -176,29 +179,29 @@ try:
     )
     frappe.db.commit()
     operation_claim=execution.claim_run('a'*64);frappe.db.commit()
-    assert operation_claim['budget']['model_max_calls']==10,operation_claim['budget']
-    assert operation_claim['budget']['model_max_input_bytes_per_call']==131072,operation_claim['budget']
-    assert operation_claim['budget']['model_max_input_bytes_total']==524288,operation_claim['budget']
-    assert operation_claim['budget']['model_max_output_tokens_per_call']==3072,operation_claim['budget']
-    assert operation_claim['budget']['model_max_output_tokens_total']==30720,operation_claim['budget']
+    operation_plan=run_budget('operation')
+    assert operation_claim['budget']==operation_plan,operation_claim['budget']
     operation_cap={'run_id':operation_claim['run_id'],'capability':operation_claim['capability']}
     frappe.set_user('Guest')
-    operation_call={**model_call,'max_output_tokens':3072,'domain':'operation','claimed_budget':operation_claim['budget']}
-    for index in range(10):
+    operation_call={**model_call,'max_output_tokens':operation_plan['model_max_output_tokens_per_call'],
+        'domain':'operation','claimed_budget':operation_claim['budget']}
+    for index in range(operation_plan['model_max_calls']):
         assert execution.reserve_model_call(
             **operation_cap,**{
                 **operation_call,
                 'purpose':'compaction' if index in (3,8) else 'conversation',
             }
         )['allowed']
+    # 每次预留都按单次上限扣账、不退款，所以跑满调用数之后累计预留恰好等于乘积——正式值
+    # 里两者相等就是这个道理（run_budget 模块注释）。
     assert frappe.db.get_value(
         'DS Model Run',operation_claim['run_id'],'model_output_tokens_reserved'
-    )==30720
+    )==operation_plan['model_max_calls']*operation_plan['model_max_output_tokens_per_call']
     try:
         execution.reserve_model_call(
             **operation_cap,**operation_call
         )
-        raise AssertionError('operation output budget exceeded')
+        raise AssertionError('operation call budget exceeded')
     except frappe.ValidationError as error:
         assert str(error)==execution.BUDGET_MESSAGE,error
     execution.finish_run(

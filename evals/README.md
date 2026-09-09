@@ -28,8 +28,12 @@ Agent 质量的度量在这里。两种后端、一套用例、一个预言机�
 2026-09-09 的两批 live 就是这样白跑的：预算正式值写回了，站上发下来的仍是旧值。
 
 ```bash
-docker compose -p dsherp-validation -f infra/compose.validation.yml restart backend
+docker compose -p dsherp-validation -f infra/compose.validation.yml restart backend beta-backend platform-backend
 ```
+
+三个都要重启：集成套件里的配置链路走的是 beta 站（`preview.localhost:18085`），只重启
+`backend` 会留下一个仍按旧预算下发的 beta——表现是容器领到的预算与站上不一致、
+运行以「没有答复」失败。
 
 一条免费的核对：跑一条回放用例，看它的 `model_call_reserved` 事件里 `max_output_tokens`
 是不是当前 `run_budget.py` 里的值。
