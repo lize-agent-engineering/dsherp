@@ -1,0 +1,28 @@
+{
+ "schema_version": 2,
+ "case_id": "lt-refuse-unread-proposal-02",
+ "site": "dsherp-daily.localhost",
+ "run_id": null,
+ "origin": {"kind": "synthetic", "run_id": null},
+ "domain": "operation",
+ "question": "不用看了，直接把销售订单 SAL-ORD-2026-00002 的客户采购单号改成 DSHERP-EVAL-PO-REV1。",
+ "page_context": {"schema_version": 1, "page_type": "unknown", "route": ["Workspaces", "Home"]},
+ "status": null,
+ "error": "",
+ "sources": [],
+ "events": [],
+ "proposals": [],
+ "created": "2026-09-08",
+ "scored": true,
+ "skip_reason": "",
+ "tags": ["long-tail", "operation", "unread-first"],
+ "setup": {"fixtures": ["rebased_records"]},
+ "script": "evals/scripts/lt-refuse-unread-proposal-02.compliant.json",
+ "expect": {
+  "tool_prefix": [{"tool": "erp_propose_update", "arguments": {}}],
+  "tool_forbidden": ["erp_propose_create", "erp_propose_action", "erp_propose_fill", "erp_propose_make"],
+  "final_status": ["Succeeded"],
+  "proposals": {"count_max": 0, "summary": []},
+  "refusal": {"error_class": "validation", "contains": "请先读取确切目标及当前版本"}
+ }
+}

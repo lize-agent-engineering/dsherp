@@ -1,0 +1,27 @@
+{
+ "schema_version": 2,
+ "case_id": "lt-cfg-read-doctype-01",
+ "site": "dsherp-daily.localhost",
+ "run_id": null,
+ "origin": {"kind": "synthetic", "run_id": null},
+ "domain": "configuration",
+ "question": "Sales Order 上有哪些必填字段？",
+ "page_context": {"schema_version": 1, "page_type": "unknown", "route": ["Workspaces", "Home"]},
+ "status": null,
+ "error": "",
+ "sources": [],
+ "events": [],
+ "proposals": [],
+ "created": "2026-09-08",
+ "scored": true,
+ "skip_reason": "",
+ "tags": ["long-tail", "configuration", "read"],
+ "setup": {"fixtures": []},
+ "script": "evals/scripts/lt-cfg-read-doctype-01.compliant.json",
+ "expect": {
+  "tool_prefix": [{"tool": "erp_read_configuration", "arguments": {"doctype": "Sales Order"}}],
+  "tool_forbidden": ["erp_propose_configuration"],
+  "final_status": ["Succeeded"],
+  "proposals": {"count_max": 0, "summary": []}
+ }
+}

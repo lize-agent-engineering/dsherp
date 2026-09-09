@@ -98,6 +98,14 @@ class FakeHost:
         elif script == "provision_configuration_preview.py":
             self.facts.add("dsherp-validation.localhost:conf:dsherp_configuration_preview")
             _private(r / "configuration-preview.json", {"secret": "PAIR-SECRET-VALUE"})
+        elif script == "provision_eval_identity.py":
+            # Two identities: the business operator, and a configurator for the configuration
+            # domain (which reads DocType definitions an ordinary business user cannot).
+            _private(r / "eval-users.json", {"site": "dsherp-daily.localhost",
+                                             "operator": {"api_secret": "EVAL-OPERATOR-SECRET"},
+                                             "configurator": {"api_secret": "EVAL-CONFIG-SECRET"}})
+        elif script == "provision_eval_fixtures.py":
+            self.facts.add("dsherp-daily.localhost:Sales Order:DSHERP-EVAL-SO-01")
         elif script in ("provision_alpha_doctype_policies.py", "provision_manufacturing_fixture.py"):
             pass
         else:
@@ -116,6 +124,9 @@ class FakeHost:
         match = re.search(r"frappe\.conf\.get\('([^']+)'\)", body)
         if match:
             return f"{site}:conf:{match.group(1)}" in self.facts
+        match = re.search(r"'Sales Order', \{'po_no': '([^']+)'", body)
+        if match:
+            return f"{site}:Sales Order:{match.group(1)}" in self.facts
         raise AssertionError("unexpected probe:\n" + body)
 
     def __call__(self, command, **kwargs):
@@ -243,6 +254,8 @@ EXPECTED_ORDER = [
     "provision_alpha_doctype_policies.py --site dsherp-beta.localhost",
     "provision_manufacturing_fixture.py --site dsherp-validation.localhost",
     "provision_manufacturing_fixture.py --site dsherp-daily.localhost",
+    "provision_eval_identity.py --site dsherp-daily.localhost",
+    "provision_eval_fixtures.py --site dsherp-daily.localhost",
     "bench --site dsherp-validation.localhost clear-cache",
     "bench --site dsherp-daily.localhost clear-cache",
     "bench --site dsherp-beta.localhost clear-cache",
@@ -484,7 +497,8 @@ def test_down_with_volumes_removes_exactly_the_produced_files_and_the_ledger(sta
     assert dev_stack.produced_files() == [
         "erp-users.json", "erp-reader.json", "erp-denied.json", "platform-users.json", "beta-users.json",
         "context-worker-daily.json", "context-worker.json", "context-writer.json",
-        "context-worker-sites.json", "preview-operator.json", "configuration-preview.json"]
+        "context-worker-sites.json", "preview-operator.json", "configuration-preview.json",
+        "eval-users.json"]
 
 
 def test_down_without_volumes_only_stops_containers(stack):

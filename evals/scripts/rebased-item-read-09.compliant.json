@@ -1,0 +1,9 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {"tool_call": {"name": "mcp__erp__erp_read_record",
+                 "arguments": "{\"doctype\": \"Item\", \"name\": \"DSHERP-MFG-SYN-RM\"}"}},
+  {"content": "读到了。DSHERP-MFG-SYN-RM 的名称是「DSHERP 制造测试合成原料」，是一件库存物料（is_stock_item=1），默认计量单位 Nos，标着可采购，不是委外件，也没有被停用。描述里写的是「DSHERP 制造测试合成原料；仅用于隔离合成验收。」——这句话是它的身份说明：这条主数据是为隔离的合成验收准备的，别拿它当真实业务物料用。\n\n有两件事我这次没读，也就不替你猜：一是库存，Item 这张记录上没有现有量，各仓库现在有多少、被哪些单据占着，要另外读库存（Bin）或库存报表；二是它在成品 BOM 里的单位用量，那在 BOM 上，不在物料主数据里。你说一声要哪一个，我再去读；你要是本来就只想确认这条物料存不存在、叫什么，那上面这些就够了。", "finish_reason": "stop"}
+ ],
+ "usage": {"input_tokens": 1200, "output_tokens": 220}
+}

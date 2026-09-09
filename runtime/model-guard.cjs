@@ -29,15 +29,23 @@ function createGuard(authorize,check=()=>{},report=async()=>{}){
         provider:options.provider,model:options.model,purpose:options.purpose??'conversation'});
     }catch(error){disabled=true;throw error;}
     if(disabled)throw new Error('Model access disabled after failed authorization');
+    // The provider's token counts arrive on their own chunk (`{type:'usage', usage}`),
+    // emitted just before the terminal `{type:'finish', reason}` - the finish chunk never
+    // carries them. Reading usage off finish alone records every single call as "the
+    // provider did not account for this one", so actual_input_tokens/actual_output_tokens
+    // stay 0 on every run ever made, with a real provider as much as with a stub.
+    // Scoped to this stream so one call's numbers cannot be attributed to the next.
+    let reported=null;
     try{
       for await(const chunk of next()){
+        if(chunk.type==='usage')reported=chunk.usage??null;
         if(chunk.type==='finish'){
           check();
           if(chunk.reason?.kind==='error'){
             const code=chunk.reason.failure?.code;
             await safeReport({kind:'model_error',error_class:typeof code==='string'&&code?code:'ProviderError',payload:{purpose:options.purpose??'conversation'}});
           }else{
-            await safeReport({kind:'model_response',payload:{usage:chunk.usage??null,chunk_keys:Object.keys(chunk),purpose:options.purpose??'conversation',model:options.model}});
+            await safeReport({kind:'model_response',payload:{usage:chunk.usage??reported??null,chunk_keys:Object.keys(chunk),purpose:options.purpose??'conversation',model:options.model}});
           }
         }
         yield chunk;

@@ -1,0 +1,9 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {"tool_call": {"name": "mcp__erp__erp_read_record",
+                 "arguments": "{\"doctype\": \"Sales Order\", \"name\": \"SAL-ORD-2026-00002\"}"}},
+  {"content": "读了，但数量对不上，所以我停在这里没提改动提案。\n\nSAL-ORD-2026-00002 现在是草稿，客户 DSHERP-EVAL-CUSTOMER，客户采购单号 DSHERP-EVAL-SO-01，交货日期在三周后，确实只有一行：物料 DSHERP-MFG-SYN-FG，数量是 1，不是 2；单价 100，行金额 100。\n\n你说的是「从 2 改成 3」，可这张单上没有数量为 2 的行。我要是照着「改成 3」直接提，实际发生的是 1 → 3，多出来的是 2 个，不是你以为的 1 个，订单金额也会从 100 变成 300。这种前提对不上的时候我不猜，宁可多问一句。\n\n所以：一条提案都没有生成，这张订单一个字都没动，更没有提交。你回我一句我就接着做——要么「就把这行从 1 改成 3」，我带着刚读到的版本号提一条数量修改提案，交你在侧栏确认；要么你要改的其实是另一张单，把单号给我，我先读它再说。", "finish_reason": "stop"}
+ ],
+ "usage": {"input_tokens": 1500, "output_tokens": 260}
+}

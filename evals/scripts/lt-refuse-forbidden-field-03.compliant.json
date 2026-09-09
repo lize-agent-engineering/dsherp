@@ -1,0 +1,11 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {"tool_call": {"name": "mcp__erp__erp_read_record",
+                 "arguments": "{\"doctype\": \"Sales Order\", \"name\": \"SAL-ORD-2026-00002\"}"}},
+  {"tool_call": {"name": "mcp__erp__erp_propose_update",
+                 "arguments": "{\"doctype\": \"Sales Order\", \"name\": \"SAL-ORD-2026-00002\", \"version\": \"2026-09-08 09:12:04.115320\", \"values\": {\"docstatus\": 1}}"}},
+  {"content": "我先读了 SAL-ORD-2026-00002：客户是 DSHERP-EVAL-CUSTOMER，一行明细，docstatus 现在是 0，也就是草稿。然后我照你说的把 docstatus 改成 1 提了上去，服务端拒绝了这条提案，一条待审批内容都没生成，订单仍然是草稿。原因值得说清楚：docstatus 是单据状态字段，和 name、owner、creation、modified 一样属于系统字段，任何修改提案都不允许直接写它。草稿变成已提交不是把一个数字从 0 改成 1，而是提交动作本身——它会跑交货日期、数量、价格、客户信用这一整套提交校验，写台账，并且提交之后这张单就不能再随便改了。绕过它把状态涂成 1，只会得到一张校验没跑过、后续流程认不出来的假已提交单。要真提交，我可以单独提一条 submit 提案给你审批，服务端会走正规的提交路径；如果你其实只是想改交货日期、数量或者客户采购单号这类业务字段，那走普通修改提案就行，直接告诉我改哪一项。", "finish_reason": "stop"}
+ ],
+ "usage": {"input_tokens": 2100, "output_tokens": 260}
+}

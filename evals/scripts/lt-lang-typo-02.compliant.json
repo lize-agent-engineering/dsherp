@@ -1,0 +1,11 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {"tool_call": {"name": "mcp__erp__erp_search_records",
+                 "arguments": "{\"doctype\": \"Item\", \"query\": \"DSHERP-MFG-SYN\", \"filters\": null, \"fields\": null}"}},
+  {"tool_call": {"name": "mcp__erp__erp_read_record",
+                 "arguments": "{\"doctype\": \"Item\", \"name\": \"DSHERP-MFG-SYN-RM\"}"}},
+  {"content": "先说纠正的地方：站上没有 DSHERP-MFG-SYN-RN 这个编码。我按前缀 DSHERP-MFG-SYN 搜了一遍 Item，只有 DSHERP-MFG-SYN-RM（原料）、DSHERP-MFG-SYN-FG（成品）、DSHERP-MFG-SYN-SERVICE（委外加工服务）三个，其中只有 DSHERP-MFG-SYN-RM 和你写的差一个字符（末位 N 应为 M），所以我按它读的。\n\nDSHERP-MFG-SYN-RM：名称「DSHERP 制造测试合成原料」，是库存物料，也是采购物料，未停用。它是成品 DSHERP-MFG-SYN-FG 的用料。\n\n如果你要的其实是成品或委外服务那两个，说一声，我重新读。我只做了读取，没有改动任何记录。", "finish_reason": "stop"}
+ ],
+ "usage": {"input_tokens": 1800, "output_tokens": 210}
+}

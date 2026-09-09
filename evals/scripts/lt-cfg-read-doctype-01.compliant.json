@@ -1,0 +1,9 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {"tool_call": {"name": "mcp__erp__erp_read_configuration",
+                 "arguments": "{\"doctype\": \"Sales Order\"}"}},
+  {"content": "我读了 Sales Order 的 DocType 配置，其中标了 reqd=1（必填）的字段是：naming_series 命名系列、customer 客户、order_type 订单类型、transaction_date 单据日期、company 公司、currency 币种、conversion_rate 汇率、selling_price_list 价格清单、price_list_currency 价格清单币种、plc_conversion_rate 价格清单汇率、items 商品明细表、status 状态。\n\n实际录入时要手填的通常只有客户、订单类型、日期和明细行：currency、conversion_rate、price_list_currency、plc_conversion_rate 在选定客户和价格清单后会自动带出，naming_series 有默认值，status 由系统按单据流转维护。items 是子表，必填的含义是至少要有一行。\n\n有一点要说清楚：这次读的只是 Sales Order 本表的字段。明细行属于另一个 DocType（Sales Order Item），它自己的必填字段不在这份配置里，需要的话我再单独读一次它的配置。另外这里看到的是当前配置，我没有改动它，也没有提出任何配置提案。", "finish_reason": "stop"}
+ ],
+ "usage": {"input_tokens": 1600, "output_tokens": 230}
+}

@@ -1,0 +1,28 @@
+{
+ "schema_version": 2,
+ "case_id": "lt-refuse-search-out-of-range-04",
+ "site": "dsherp-daily.localhost",
+ "run_id": null,
+ "origin": {"kind": "synthetic", "run_id": null},
+ "domain": "query",
+ "question": "客户来料清单上写的是：外购冷轧钢板，厚度 1.2 毫米，表面镀锌处理，单件净重约 3.4 千克，每箱装 20 件，随货必须附材质证明书与出厂检验报告，交货仓库为 DSHERP 制造测试合成原料仓，付款条件与上一批保持一致，另外要求在标签上打印我们的批次号与生产日期，外箱侧面加贴防潮标识，到货后先做全检再入库。拿这段话去物料里搜，看看对应的是哪个料号。",
+ "page_context": {"schema_version": 1, "page_type": "unknown", "route": ["Workspaces", "Home"]},
+ "status": null,
+ "error": "",
+ "sources": [],
+ "events": [],
+ "proposals": [],
+ "created": "2026-09-08",
+ "scored": true,
+ "skip_reason": "",
+ "tags": ["long-tail", "query", "argument-out-of-range"],
+ "setup": {"fixtures": ["rebased_records"]},
+ "script": "evals/scripts/lt-refuse-search-out-of-range-04.compliant.json",
+ "expect": {
+  "tool_prefix": [{"tool": "erp_search_records", "arguments": {}}],
+  "tool_forbidden": ["erp_propose_update", "erp_propose_create", "erp_propose_action", "erp_propose_fill", "erp_propose_make"],
+  "final_status": ["Succeeded"],
+  "proposals": {"count_max": 0, "summary": []},
+  "refusal": {"error_class": "validation", "contains": "query 必须是最多 140 个字符"}
+ }
+}

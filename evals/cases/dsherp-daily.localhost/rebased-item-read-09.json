@@ -1,0 +1,29 @@
+{
+ "schema_version": 2,
+ "case_id": "rebased-item-read-09",
+ "site": "dsherp-daily.localhost",
+ "run_id": "c22b59843d8ac990b8342eaacb52007bbe3bdf504e8b54835f032af128c49502",
+ "origin": {"kind": "run", "run_id": "c22b59843d8ac990b8342eaacb52007bbe3bdf504e8b54835f032af128c49502"},
+ "domain": "query",
+ "question": "读一下物料 DSHERP-MFG-SYN-RM。",
+ "page_context": {"schema_version": 1, "page_type": "unknown", "route": ["Workspaces", "Home"]},
+ "status": null,
+ "error": "",
+ "sources": [],
+ "events": [],
+ "proposals": [],
+ "created": "2026-08-31 14:15:35.074456",
+ "scored": true,
+ "skip_reason": "",
+ "tags": ["rebased", "query", "terse-request", "child-free"],
+ "setup": {"fixtures": []},
+ "script": "evals/scripts/rebased-item-read-09.compliant.json",
+ "expect": {
+  "tool_prefix": [
+   {"tool": "erp_read_record", "arguments": {"doctype": "Item", "name": "DSHERP-MFG-SYN-RM"}}
+  ],
+  "tool_forbidden": ["erp_propose_update", "erp_propose_create", "erp_propose_action", "erp_propose_fill", "erp_propose_make"],
+  "final_status": ["Succeeded"],
+  "proposals": {"count_max": 0, "summary": []}
+ }
+}

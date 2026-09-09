@@ -97,3 +97,45 @@ test('thrown provider failures are normalised into the observable failure vocabu
   // A real programming bug must stay itself; only network-shaped failures open the circuit.
   assert.equal(await classify(new TypeError('options.messages is not iterable')),'TypeError');
 });
+
+test('the provider usage arrives on its own chunk, and must still reach the run', async () => {
+  // The SDK emits `{type:'usage', usage}` immediately before `{type:'finish', reason}`; the
+  // finish chunk never carries usage. Reading usage off finish alone means every call is
+  // recorded as "the provider did not account for this one" — for a real provider too, so
+  // actual_input_tokens/actual_output_tokens stay 0 on every run ever made.
+  const reports = [];
+  const guard = createGuard(async () => {}, () => {}, async record => { reports.push(record); });
+  const next = async function*() {
+    yield {type: 'block-end', index: 0};
+    yield {type: 'usage', usage: {input: 1200, output: 340}};
+    yield {type: 'finish', reason: {kind: 'stop'}};
+  };
+  const delivered = [];
+  for await (const chunk of guard(request, next)) delivered.push(chunk);
+  assert.equal(delivered.length, 3, 'the guard must not swallow the usage chunk');
+  const responses = reports.filter(record => record.kind === 'model_response');
+  assert.equal(responses.length, 1, 'still exactly one model_response per call');
+  assert.deepEqual(responses[0].payload.usage, {input: 1200, output: 340});
+});
+
+test('a call the provider never accounted for still reports, with a null usage', async () => {
+  const reports = [];
+  const guard = createGuard(async () => {}, () => {}, async record => { reports.push(record); });
+  const next = async function*() { yield {type: 'finish', reason: {kind: 'stop'}}; };
+  await consume(guard(request, next));
+  const responses = reports.filter(record => record.kind === 'model_response');
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].payload.usage, null, 'unknown, never zero');
+});
+
+test('usage from one call does not leak into the next', async () => {
+  const reports = [];
+  const guard = createGuard(async () => {}, () => {}, async record => { reports.push(record); });
+  await consume(guard(request, async function*() {
+    yield {type: 'usage', usage: {input: 7, output: 8}};
+    yield {type: 'finish', reason: {kind: 'stop'}};
+  }));
+  await consume(guard(request, async function*() { yield {type: 'finish', reason: {kind: 'stop'}}; }));
+  const usages = reports.filter(r => r.kind === 'model_response').map(r => r.payload.usage);
+  assert.deepEqual(usages, [{input: 7, output: 8}, null]);
+});

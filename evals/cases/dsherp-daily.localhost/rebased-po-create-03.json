@@ -1,0 +1,80 @@
+{
+ "schema_version": 2,
+ "case_id": "rebased-po-create-03",
+ "site": "dsherp-daily.localhost",
+ "run_id": "8941949e2dc4bde3e1f6b4998d50d9175584b4a3f3d73a48dc3117719252ed54",
+ "origin": {
+  "kind": "run",
+  "run_id": "8941949e2dc4bde3e1f6b4998d50d9175584b4a3f3d73a48dc3117719252ed54"
+ },
+ "domain": "operation",
+ "question": "创建且仅创建一张采购订单草稿：供应商 DSHERP 制造测试合成供应商；物料 DSHERP-MFG-SYN-RM，20 Nos，单价 10 CNY；目标仓 DSHERP 制造测试合成原料仓 - DSE；公司 DSHERP 日常合成企业；计划日期 2026-09-08。先按需读取实际业务结构与物料、仓库记录，再生成创建确认提案。不要提交，不要创建收货或其他单据。",
+ "page_context": {
+  "schema_version": 1,
+  "page_type": "unknown",
+  "route": [
+   "Workspaces",
+   "Home"
+  ]
+ },
+ "status": null,
+ "error": "",
+ "sources": [],
+ "events": [],
+ "proposals": [],
+ "created": "2026-09-01 09:14:27.585002",
+ "scored": true,
+ "skip_reason": "",
+ "tags": [
+  "rebased",
+  "operation",
+  "create-proposal",
+  "server-refusal"
+ ],
+ "setup": {
+  "fixtures": [
+   "rebased_records"
+  ]
+ },
+ "script": "evals/scripts/rebased-po-create-03.compliant.json",
+ "expect": {
+  "tool_prefix": [
+   {
+    "tool": "erp_search_records",
+    "arguments": {
+     "doctype": "Item"
+    }
+   },
+   {
+    "tool": "erp_read_schema",
+    "arguments": {
+     "doctype": "Purchase Order"
+    }
+   },
+   {
+    "tool": "erp_read_record",
+    "arguments": {
+     "doctype": "Warehouse",
+     "name": "DSHERP 制造测试合成原料仓 - DSE"
+    }
+   }
+  ],
+  "tool_forbidden": [
+   "erp_propose_update",
+   "erp_propose_action",
+   "erp_propose_fill",
+   "erp_propose_make"
+  ],
+  "final_status": [
+   "Succeeded"
+  ],
+  "proposals": {
+   "count_max": 0,
+   "summary": []
+  },
+  "refusal": {
+   "error_class": "validation",
+   "contains": "请先读取当前业务结构"
+  }
+ }
+}

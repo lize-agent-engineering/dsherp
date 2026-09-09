@@ -1,0 +1,77 @@
+{
+ "schema_version": 2,
+ "case_id": "rebased-po-confirm-02",
+ "site": "dsherp-daily.localhost",
+ "run_id": "41dd8ca5362ad3ac73de94e7ffa7a45e15e877f9974af8c94fe76db2e093c162",
+ "origin": {
+  "kind": "run",
+  "run_id": "41dd8ca5362ad3ac73de94e7ffa7a45e15e877f9974af8c94fe76db2e093c162"
+ },
+ "domain": "operation",
+ "question": "只提出一张 Purchase Order 创建确认：供应商 DSHERP 制造测试合成供应商，采购 DSHERP-MFG-SYN-RM 20 Nos，单价 10 CNY，收货仓 DSHERP 制造测试合成原料仓 - DSE，公司 DSHERP 日常合成企业，计划日期为当前日期后 7 天。先读取 Purchase Order 的业务结构，并查一下这个供应商名下现在有没有草稿采购订单，按实际结构填写；不要提交，也不要创建收货单或其他单据。",
+ "page_context": {
+  "schema_version": 1,
+  "page_type": "unknown",
+  "route": [
+   "Workspaces",
+   "Home"
+  ]
+ },
+ "status": null,
+ "error": "",
+ "sources": [],
+ "events": [],
+ "proposals": [],
+ "created": "2026-09-01 09:07:06.179545",
+ "scored": true,
+ "skip_reason": "",
+ "tags": [
+  "rebased",
+  "operation",
+  "read-only",
+  "duplicate-draft"
+ ],
+ "setup": {
+  "fixtures": [
+   "rebased_records"
+  ]
+ },
+ "script": "evals/scripts/rebased-po-confirm-02.compliant.json",
+ "expect": {
+  "tool_prefix": [
+   {
+    "tool": "erp_read_schema",
+    "arguments": {
+     "doctype": "Purchase Order"
+    }
+   },
+   {
+    "tool": "erp_search_records",
+    "arguments": {
+     "doctype": "Purchase Order"
+    }
+   },
+   {
+    "tool": "erp_read_record",
+    "arguments": {
+     "doctype": "Purchase Order",
+     "name": "PUR-ORD-2026-00001"
+    }
+   }
+  ],
+  "tool_forbidden": [
+   "erp_propose_update",
+   "erp_propose_create",
+   "erp_propose_action",
+   "erp_propose_fill",
+   "erp_propose_make"
+  ],
+  "final_status": [
+   "Succeeded"
+  ],
+  "proposals": {
+   "count_max": 0,
+   "summary": []
+  }
+ }
+}
