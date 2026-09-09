@@ -1,5 +1,5 @@
 """A DocType change ships with its migration or it does not ship."""
-from infra.check_doctype_patches import added_patch_lines, review
+from infra.check_doctype_patches import added_patch_lines, review, schema_version_moved
 
 
 DOCTYPE = "frappe_app/dsherp_bridge/dsherp_bridge/doctype/ds_model_run/ds_model_run.json"
@@ -42,6 +42,46 @@ def test_a_stored_schema_version_change_always_needs_a_backfill():
     assert review([DOCTYPE, "frappe_app/dsherp_bridge/patches.txt"],
                   {"dsherp_bridge": PATCH_ADDED}, "feat: 变更 payload",
                   schema_version_changed=True) == []
+
+
+def test_a_version_that_moved_needs_a_backfill_but_one_merely_introduced_does_not():
+    """The half of the rule that was missing, and that refused a whole branch for it.
+
+    A backfill exists to carry **stored** data forward. A payload declared for the first time
+    at today's version has nothing stored behind it — and every false positive so far was
+    exactly that shape: a new test fixture, a rebuilt bundle, a new file. A version that
+    actually moved removes the old line as well as adding the new one.
+    """
+    moved = ("--- a/frappe_app/dsherp_bridge/context_api.py\n"
+             "+++ b/frappe_app/dsherp_bridge/context_api.py\n"
+             "-    if value.get('schema_version') != 1:\n"
+             "+    if value.get('schema_version') != 2:\n")
+    introduced = ("--- /dev/null\n"
+                  "+++ b/frappe_app/dsherp_bridge/tests/test_quota.py\n"
+                  "+PAGE = {'schema_version': 1, 'page_type': 'unknown', 'route': []}\n")
+    assert schema_version_moved(moved) is True
+    assert schema_version_moved(introduced) is False
+    assert schema_version_moved("") is False
+
+
+def test_a_native_test_fixture_is_not_a_stored_payload():
+    """Slice 6 added three native tests whose page-context fixture contains `schema_version`.
+    The guard refused the branch over them, naming a migration that never happened — the same
+    false positive the built bundles produced, one directory over."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    fixtures = sorted((root / 'frappe_app/dsherp_bridge/tests').glob('test_*.py'))
+    carriers = [path for path in fixtures if 'schema_version' in path.read_text(encoding='utf-8')]
+    assert carriers, '原生测试里应当有带 schema_version 的页面上下文夹具'
+    result = subprocess.run(
+        [sys.executable, '-c',
+         "import sys;from infra.check_doctype_patches import PAYLOAD_SCOPE;"
+         "print(any('tests' in item for item in PAYLOAD_SCOPE))"],
+        cwd=root, text=True, capture_output=True, timeout=60)
+    assert result.stdout.strip() == 'True', '原生测试目录必须排除在存量 payload 的扫描之外'
 
 
 def test_only_real_patch_lines_are_counted():

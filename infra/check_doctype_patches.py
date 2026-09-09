@@ -20,6 +20,40 @@ NO_PATCH = re.compile(r'no-patch:\s*(?P<reason>\S.*)')
 SECTION = re.compile(r'^\[[a-z_]+\]$')
 
 
+# Where a stored payload's own version can actually live. Two exclusions, each for the same
+# reason and each learned from a real refusal:
+#
+# - `public/dist`: esbuild puts the whole application on a few enormous lines, two of which
+#   carry the page-context snapshot's `schema_version`. Every frontend rebuild added such a
+#   line. A build artefact is not a stored payload.
+# - `tests/`: a native test builds a page context to hand to the code under test, so its
+#   fixture contains `schema_version` too. Slice 6 added three such files and the guard
+#   refused the whole branch, naming a migration that never happened. A fixture is not a
+#   stored payload either.
+PAYLOAD_SCOPE = ('frappe_app', ':(exclude)frappe_app/*/public/dist/**',
+                 ':(exclude)frappe_app/*/tests/**')
+
+
+def schema_version_moved(diff):
+    """Whether an **existing** payload's schema_version changed in this diff.
+
+    Both halves matter. An added line alone is not a migration event: a payload declared for
+    the first time at today's version has no stored data behind it to back-fill, and that is
+    what every false positive so far has been — a fixture, a rebuilt bundle, a new test. What
+    needs a backfill is a version that **moved**, and a move always removes the old line as
+    well as adding the new one.
+    """
+    added = removed = False
+    for line in diff.splitlines():
+        if 'schema_version' not in line:
+            continue
+        if line.startswith('+') and not line.startswith('+++'):
+            added = True
+        elif line.startswith('-') and not line.startswith('---'):
+            removed = True
+    return added and removed
+
+
 def added_patch_lines(diff):
     """Lines a diff adds to a patches.txt, ignoring comments and section headers."""
     added = []
@@ -90,16 +124,7 @@ def main(argv=None):
         match = PATCHES.match(name)
         if match:
             patch_diffs[match.group('app')] = _git('diff', span, '--', name)
-    # The built Desk bundles are committed and esbuild puts the whole application on a few
-    # enormous lines, two of which carry the page-context snapshot's own `schema_version`. Every
-    # frontend change therefore added such a line, and the branch below has no escape hatch: it
-    # refused every commit that ever rebuilt them, each time naming a stored-payload migration
-    # that had not happened. A build artefact is not a stored payload.
-    schema_version_changed = any(
-        'schema_version' in line
-        for line in _git('diff', span, '--', 'frappe_app',
-                         ':(exclude)frappe_app/*/public/dist/**').splitlines()
-        if line.startswith('+') and not line.startswith('+++'))
+    schema_version_changed = schema_version_moved(_git('diff', span, '--', *PAYLOAD_SCOPE))
     problems = review(changed, patch_diffs, _git('log', '--format=%B', span), schema_version_changed)
     for problem in problems:
         print(problem, file=sys.stderr)
