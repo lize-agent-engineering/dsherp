@@ -84,7 +84,7 @@ def test_query_skill_plans_bom_then_batches_warehouse_scoped_bins():
 def test_operation_skill_discovers_dynamic_capabilities_and_manufacturing_routes():
     content=(ROOT/'business-skills/erp-operation/SKILL.md').read_text()
     header=content.split('---',2)[1]
-    assert 'version: 2.3.0' in header
+    assert 'version: 2.4.0' in header
     description=next(
         line for line in header.splitlines() if line.startswith('description:')
     )
@@ -180,7 +180,7 @@ def test_operation_skill_no_longer_carries_route_tokens():
 ERROR_EXIT_HEADING='## 工具错误与做不了的出口'
 ERROR_EXIT_SKILLS=(
     ('erp-query','1.4.0'),
-    ('erp-operation','2.3.0'),
+    ('erp-operation','2.4.0'),
     ('erp-configuration','1.1.0'),
 )
 

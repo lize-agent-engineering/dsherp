@@ -96,6 +96,29 @@ def test_classified_tool_failure_reaches_next_model_request(model_server,tmp_pat
     assert message in text
 
 
+@pytest.mark.parametrize('status,body,error_class',[
+    (417,{'exc_type':'ValidationError','_server_messages':json.dumps([json.dumps({'message':'仓库不存在'})])},'validation'),
+    (403,{'exception':'frappe.exceptions.PermissionError: 无权读取'},'permission'),
+    (503,{'_server_messages':json.dumps([json.dumps({'message':'上游超时'})])},'transient'),
+])
+def test_failure_text_the_model_sees_is_also_labelled_untrusted(model_server,tmp_path,status,body,error_class):
+    """A refusal is server-authored text, and it reaches the model through the same channel a
+    record's contents do — so it carries the same label.
+
+    Asserted on the wire, which is the only place that settles it: `ToolFailure.__str__` is
+    unit-tested elsewhere, but what matters is the bytes in the tool message the model is
+    actually handed. Until 2026-09-10 the envelope's third channel — failure text — had no
+    assertion at this level, while the other two did.
+    """
+    text=_run_classified_tool_failure(model_server,tmp_path,status,body)
+    # The runtime wraps a failed tool call in its own prose ("Error: Error executing tool …"),
+    # so the envelope is a JSON object embedded in that text rather than the whole message.
+    start=text.index('{');payload=json.loads(text[start:text.rindex('}')+1])
+    assert payload['untrusted'] is True, text
+    assert payload['source']=='erp-server', '失败文本来自服务端，不是被读到的业务数据'
+    assert payload['error_class']==error_class
+
+
 if __name__ == '__main__':
     _serve_classified_mcp()
     raise SystemExit(0)

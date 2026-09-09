@@ -76,7 +76,7 @@ exports.skillSection = skillSection;
 exports.ENVELOPE_RULE = ENVELOPE_RULE;
 
 exports.apply = (ctx, config) => {
-  // Fail fast, four ways. Every one of them means this run would proceed with a system
+  // Fail fast, three ways. Every one of them means this run would proceed with a system
   // prompt that does not say what it is operating under — and a run whose assembly cannot be
   // named is a run whose result cannot be trusted or reproduced. Throwing here means the
   // runtime never comes up, so the provider is never contacted at all.
@@ -85,12 +85,11 @@ exports.apply = (ctx, config) => {
   const domain = (config && config.domain) || process.env.DSHERP_DOMAIN;
   if (!domain) throw new Error('DSHERP_DOMAIN is not set; cannot load the business skill summary');
   verifyBusinessSkills(root);                       // manifest / directories / sha256 / frontmatter
-  const text = skillSection(root, domain);          // directory present, description, version agree
-  if (!text.includes('业务技能：erp-' + domain + ' v')) {
-    // Belt and braces: an assembled section that lost its version line would load "successfully"
-    // while telling the model nothing about which skill it is running.
-    throw new Error('Assembled business skill section carries no version line');
-  }
+  // Directory present, description present, and the body's version agrees with the manifest —
+  // `skillSection` builds the text from `skillMarker` and refuses to return anything whose
+  // version line is missing, so there is no fourth check here. There used to be one; it could
+  // not fire, and a guard that cannot fire reads as protection without being any.
+  const text = skillSection(root, domain);
   ctx.systemPrompt.section({ name: 'dsherp:untrusted-envelope', order: 5, text: ENVELOPE_RULE });
   ctx.systemPrompt.section({ name: 'dsherp:business-skill', order: 10, text });
 };

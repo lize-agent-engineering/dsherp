@@ -18,7 +18,7 @@ from dsherp_bridge.context_permissions import run_revision
 actor='dsherp-reader@example.invalid'
 conversation=None
 page_context=json.dumps({'schema_version':1,'page_type':'unknown','route':[]})
-SKILLS={'erp-query':'1.4.0','erp-operation':'2.3.0','erp-configuration':'1.1.0'}
+SKILLS={'erp-query':'1.4.0','erp-operation':'2.4.0','erp-configuration':'1.1.0'}
 
 def start_run(question):
     capability=uuid.uuid4().hex

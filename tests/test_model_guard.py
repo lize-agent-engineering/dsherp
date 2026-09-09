@@ -92,7 +92,7 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
             system=requests[0]['messages'][0]
             assert system['role']=='system'
             text=system['content']
-            expected_skill=('业务技能：erp-operation v2.3.0' if mode=='operation'
+            expected_skill=('业务技能：erp-operation v2.4.0' if mode=='operation'
                             else '业务技能：erp-query v1.4.0')
             assert expected_skill in text
             assert 'untrusted' in text
@@ -137,15 +137,23 @@ def test_the_guard_and_the_prompt_plugin_derive_the_same_pinned_marker():
     derivations of the pinned marker — model-guard.cjs from the manifest, prompt-sections.cjs
     from the manifest plus the SKILL.md frontmatter — agree for every domain. If they ever
     drift, every run of that domain stops, so the agreement is the thing to keep tested.
+
+    **Both** derivations are executed here. Until 2026-09-10 this test only ran the
+    prompt-sections one and compared it against the manifest that Python had read itself, so
+    the guard's copy — the one that actually stops a run — was never evaluated, and the
+    sentence above was not true of the code. `model-guard.cjs` now exports `skillMarker` for
+    exactly this reason.
     """
     import subprocess
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
     script = (
         "const s=require('./runtime/prompt-sections.cjs');"
+        "const g=require('./runtime/model-guard.cjs');"
         "const out={};"
         "for (const d of ['query','operation','configuration']){"
-        "  out[d]={marker:s.skillMarker('.',d), section:s.skillSection('.',d)};"
+        "  out[d]={marker:s.skillMarker('.',d), guard_marker:g.skillMarker('.',d),"
+        "          section:s.skillSection('.',d)};"
         "}"
         "console.log(JSON.stringify(out));")
     done = subprocess.run(['node', '-e', script], cwd=root, capture_output=True, text=True, timeout=60)
@@ -156,6 +164,8 @@ def test_the_guard_and_the_prompt_plugin_derive_the_same_pinned_marker():
     for domain, values in derived.items():
         expected = f'业务技能：erp-{domain} v{versions["erp-" + domain]}'
         assert values['marker'] == expected, domain
+        assert values['guard_marker'] == expected, f'{domain}：守卫那份推导也必须算出同一个标记'
+        assert values['guard_marker'] == values['marker'], domain
         assert values['section'].startswith(expected), domain
         # A summary, never the body: the body is what the `skill` tool is for (spec:154).
         assert '工具错误与做不了的出口' not in values['section'], domain

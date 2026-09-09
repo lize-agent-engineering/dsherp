@@ -1,8 +1,13 @@
 """The five business checks, and the five things they deliberately do not check.
 
 Every one of these used to fail at `confirm` — after a person had read a proposal and clicked
-to approve it. The point of moving them earlier is that **no Pending row is ever created**,
-so the assertions below all check the proposal count as well as the refusal.
+to approve it. The point of moving them earlier is that **no Pending row is ever created**.
+
+Most cases here call a check directly, so what they assert is the refusal and its wording.
+The «no row was stored» half needs the whole `propose_*` path and is asserted where that path
+runs: `TestNoProposalRowSurvivesAPreflightRefusal` below. (Until 2026-09-10 this docstring
+claimed every assertion checked the proposal count; none of them did — the claim is now the
+name of a test instead of a sentence.)
 """
 import frappe
 from frappe.tests import IntegrationTestCase
@@ -322,3 +327,80 @@ class TestChildRowLinks(IntegrationTestCase):
 
     def test_a_line_whose_references_all_exist_passes(self):
         preflight.check_links(self._order(type(self).item))
+
+
+class TestNoProposalRowSurvivesAPreflightRefusal(IntegrationTestCase):
+    """The half the module docstring promises: a refused request stores nothing.
+
+    Every other case here calls a check directly, so it can only assert the refusal and its
+    wording. What the person actually cares about is that a proposal they would have been
+    asked to approve was never created — and that needs the whole `propose_*` path, because
+    the preflight runs inside it, before `_propose`.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company = frappe.db.get_value('Company', {'abbr': 'DNT'}, 'name') \
+            or frappe.db.get_value('Company', {}, 'name')
+        cls.warehouse = frappe.db.get_value('Warehouse', {'is_group': 0, 'company': cls.company},
+                                            'name')
+        cls.customer = frappe.db.get_value('Customer', {}, 'name')
+        cls.item = frappe.db.get_value('Item', {}, 'name')
+        frappe.db.commit()
+
+    def setUp(self):
+        super().setUp()
+        # Creation has to be allowed for this class, and **only** for this class: other native
+        # modules commit a read-only Sales Order policy as their own fixture. Flipped inside
+        # the test transaction with no commit, so the class rollback puts it back.
+        if frappe.db.exists('DS Doctype Policy', 'Sales Order'):
+            frappe.db.set_value('DS Doctype Policy', 'Sales Order', 'allow_create', 1)
+        else:
+            frappe.get_doc({'doctype': 'DS Doctype Policy', 'target_doctype': 'Sales Order',
+                            'enabled': 1, 'allow_read': 1, 'allow_create': 1, 'allow_update': 0,
+                            'allow_submit': 0, 'allow_cancel': 0, 'allow_fill': 0,
+                            'change_reason': '前置校验落库测试'}).insert(ignore_permissions=True)
+        # `propose_create` acts for a business member; `_user()` refuses Administrator, and the
+        # conversation it stores against has to belong to that member too.
+        frappe.set_user(ACTOR)
+
+    def tearDown(self):
+        frappe.set_user('Administrator')
+        super().tearDown()
+
+    def _values(self, item_code):
+        return {'customer': type(self).customer, 'company': type(self).company,
+                'delivery_date': frappe.utils.add_days(frappe.utils.nowdate(), 14),
+                'items': [{'item_code': item_code, 'qty': 1, 'rate': 100,
+                           'warehouse': type(self).warehouse,
+                           'delivery_date': frappe.utils.add_days(frappe.utils.nowdate(), 14)}]}
+
+    def _conversation(self):
+        doc = frappe.get_doc({'doctype': 'DS Conversation',
+                              'title': 'preflight'}).insert(ignore_permissions=True)
+        frappe.db.set_value('DS Conversation', doc.name, 'owner', ACTOR)
+        return doc.name
+
+    def test_create_with_a_missing_link_is_refused_before_any_proposal_row_exists(self):
+        from dsherp_bridge import operations
+        before = frappe.db.count('DS Operation Proposal')
+        version = str(frappe.get_meta('Sales Order').modified)
+        with self.assertRaises(frappe.ValidationError) as caught:
+            operations.propose_create(self._conversation(), 'Sales Order',
+                                      self._values('DSHERP-NO-SUCH-ITEM'), version)
+        message = str(caught.exception)
+        self.assertIn('DSHERP-NO-SUCH-ITEM', message)
+        self.assertIn('items 第 1 行的', message, '要说清是哪一行，模型才改得动')
+        self.assertEqual(frappe.db.count('DS Operation Proposal'), before,
+                         '被前置校验拒绝的请求不能留下待确认的提案')
+
+    def test_a_request_that_passes_preflight_does_store_its_proposal(self):
+        """The control. Without it the assertion above would also pass if `propose_create`
+        never stored anything at all."""
+        from dsherp_bridge import operations
+        before = frappe.db.count('DS Operation Proposal')
+        version = str(frappe.get_meta('Sales Order').modified)
+        operations.propose_create(self._conversation(), 'Sales Order',
+                                  self._values(type(self).item), version)
+        self.assertEqual(frappe.db.count('DS Operation Proposal'), before + 1)

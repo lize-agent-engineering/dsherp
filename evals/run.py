@@ -318,7 +318,20 @@ def report(results, *, mode, site, started):
             if result['verdict'] in ('pass', 'fail'):
                 bucket['total'] += 1
                 bucket['pass'] += result['verdict'] == 'pass'
+    # The assembly the batch ran under, at the top level rather than only inside each case: a
+    # report whose numbers cannot be tied to one runtime_revision / prompt_version / model /
+    # skill set is a report nobody can reproduce, and reproducibility is what this plan is
+    # for. A **set**, not a single value — a batch that straddled a rotation has to say so
+    # rather than quietly reporting whichever one it saw first.
+    def _spread(field):
+        seen = sorted({str(result[field]) for result in results
+                       if result.get(field) not in (None, '')})
+        return seen[0] if len(seen) == 1 else seen
     return {'mode': mode, 'site': site, 'started': started,
+            'runtime_revision': _spread('runtime_revision'),
+            'prompt_version': _spread('prompt_version'),
+            'model': _spread('model'),
+            'skill_versions': _spread('skill_versions'),
             'totals': {'cases': len(results), 'scored': len(scored), 'passed': len(passed),
                        'failed': len(scored) - len(passed),
                        'evaluator_failed': sum(1 for r in results if r['verdict'] == 'evaluator_failed'),
@@ -464,6 +477,8 @@ def main(argv=None):
                         'actual_output_tokens': run.get('actual_output_tokens'),
                         'usage_unknown_calls': run.get('usage_unknown_calls'),
                         'prompt_version': run.get('prompt_version'),
+                        'model': run.get('model'),
+                        'skill_versions': run.get('skill_versions'),
                         'runtime_revision': run.get('runtime_revision')})
 
     summary = report(results, mode=args.mode, site=args.site, started=args.started)

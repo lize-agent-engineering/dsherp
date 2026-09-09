@@ -88,6 +88,29 @@ function verifyBusinessSkills(root){
     if(!header?.includes(`name: ${row.name}`)||!header.includes(`version: ${row.version}`))throw new Error('Business skill version mismatch');
   }
 }
+// Derived here from the manifest, independently of runtime/prompt-sections.cjs which builds
+// the text: two derivations of one pinned fact, the same discipline the repository already
+// uses for the host and bridge copies of the metering rules. If they ever disagree, the run
+// stops instead of quietly running without its skill.
+//
+// Exported rather than closed over inside `apply`, so that the equality between the two
+// derivations can be asserted directly, and so that `requireSystem` can be tested with the
+// real marker instead of a hand-written stand-in — a stub would prove only that the test
+// knows what it wrote.
+function skillMarker(root,domain){
+  const manifest=JSON.parse(readFileSync(path.join(root,'config/business-skills.json'),'utf8'));
+  const name='erp-'+domain;
+  const listed=(manifest.skills||[]).find(row=>row&&row.name===name);
+  if(!listed?.version)throw new Error('Business skill not in manifest: '+name);
+  return '业务技能：'+name+' v'+listed.version;
+}
+function requireSystemFor(marker){
+  return system=>{
+    if(!String(system??'').includes(marker))throw new Error('System prompt is missing the pinned business skill summary');
+  };
+}
+exports.skillMarker=skillMarker;
+exports.requireSystemFor=requireSystemFor;
 exports.verifyBusinessSkills=verifyBusinessSkills;
 exports.apply=function(ctx){
   const root=path.resolve(__dirname,'..');
@@ -111,20 +134,8 @@ exports.apply=function(ctx){
       headers:{'Content-Type':'application/json','X-Frappe-Site-Name':config.site},
       body:JSON.stringify({run_id:config.run_id,capability:config.capability,events:[{...record,source:'runner'}]})});
   };
-  // Derived here from the manifest, independently of runtime/prompt-sections.cjs which
-  // builds the text: two derivations of one pinned fact, the same discipline the repository
-  // already uses for the host and bridge copies of the metering rules. If they ever disagree,
-  // the run stops instead of quietly running without its skill.
-  const skillMarker=(()=>{
-    const manifest=JSON.parse(readFileSync(path.join(root,'config/business-skills.json'),'utf8'));
-    const name='erp-'+config.domain;
-    const listed=(manifest.skills||[]).find(row=>row&&row.name===name);
-    if(!listed?.version)throw new Error('Business skill not in manifest: '+name);
-    return '业务技能：'+name+' v'+listed.version;
-  })();
-  const requireSystem=system=>{
-    if(!String(system??'').includes(skillMarker))throw new Error('System prompt is missing the pinned business skill summary');
-  };
+  const marker=skillMarker(root,config.domain);
+  const requireSystem=requireSystemFor(marker);
   ctx.on('llm/stream',createGuard(async metadata=>{
     check();
     const response=await fetch(endpoint,{method:'POST',redirect:'error',signal:AbortSignal.timeout(20000),
