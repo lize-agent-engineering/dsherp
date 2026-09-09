@@ -47,25 +47,41 @@ BOM = 'BOM'
 def check_links(doc):
     """Every Link on the document points at something that exists and is not cancelled.
 
-    Frappe's own `_validate_links` does exactly this and knows about `ignore_link_validation`,
-    dynamic links and set-only-once. It is a private method, so its absence is checked for and
-    **fails loudly**: silently skipping would leave a check that reads as done and is not.
+    Frappe's own `_validate_links` does exactly this — document **and every child row** — and
+    knows about `ignore_link_validation`, dynamic links and set-only-once. It is a private
+    method, so its absence is checked for and **fails loudly**: silently skipping would leave
+    a check that reads as done and is not.
     """
     # `get_invalid_links`, not `_validate_links`: the latter throws Frappe's own message and
     # returns nothing, so there is no way to say which field and which value in Chinese.
     # `get_invalid_links` answers `([(fieldname, value, label)], [same for cancelled])`.
-    collect = getattr(doc, 'get_invalid_links', None)
-    if not callable(collect):
+    #
+    # **Child rows too, and that is the whole point.** `BaseDocument.get_invalid_links` walks
+    # `self` only; Frappe's own `_validate_links` calls it once for the document and then again
+    # for every row of `get_all_children()`. Checking the parent alone missed the most common
+    # mistake there is — a model inventing an `item_code` on a line — and the person only found
+    # out after approving the proposal, which is exactly the failure this module exists to
+    # prevent.
+    # Both native methods are checked before either is used, and their absence is the same
+    # loud failure: a version that renamed one of them must not leave a check that reads as
+    # done and is not.
+    children = getattr(doc, 'get_all_children', None)
+    if not callable(getattr(doc, 'get_invalid_links', None)) or not callable(children):
         frappe.throw('当前 Frappe 版本缺少必要的原生校验方法，无法在提案前校验引用')
-    invalid, cancelled = collect()
-    for row in invalid or []:
-        fieldname, value = row[0], row[1]
-        label = row[2] if len(row) > 2 else fieldname
-        frappe.throw(f'引用的 {label} 不存在：{fieldname}={value}')
-    for row in cancelled or []:
-        fieldname, value = row[0], row[1]
-        label = row[2] if len(row) > 2 else fieldname
-        frappe.throw(f'引用的 {label} 已取消，不能使用：{fieldname}={value}')
+    for target, prefix in [(doc, '')] + [(row, f'{row.parentfield} 第 {row.idx} 行的 ')
+                                         for row in children()]:
+        collect = getattr(target, 'get_invalid_links', None)
+        if not callable(collect):
+            frappe.throw('当前 Frappe 版本缺少必要的原生校验方法，无法在提案前校验引用')
+        invalid, cancelled = collect()
+        for row in invalid or []:
+            fieldname, value = row[0], row[1]
+            label = row[2] if len(row) > 2 else fieldname
+            frappe.throw(f'{prefix}引用的 {label} 不存在：{fieldname}={value}')
+        for row in cancelled or []:
+            fieldname, value = row[0], row[1]
+            label = row[2] if len(row) > 2 else fieldname
+            frappe.throw(f'{prefix}引用的 {label} 已取消，不能使用：{fieldname}={value}')
 
 
 def check_mandatory(doctype, values):

@@ -137,7 +137,7 @@ jobs:
         if: always()
         # .runtime/control 上一步交给了 uid 1000，root 才读得到。
         run: sudo -E .venv/bin/python infra/dev_stack.py scan-artifacts work/junit-*.xml work/native/*.log
-          work/native/*.json work/evals/**/*.json work/compose.log work/dev-stack-ledger.json
+          work/native/*.json work/evals/*.json work/evals/*.md work/compose.log work/dev-stack-ledger.json
           work/dev-stack-status.json
 
       # 仓库是公开的，工件保留 30 天：上传必须以泄漏自检通过为前提，否则那一步只是在报告而不是在阻止。

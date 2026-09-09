@@ -86,6 +86,12 @@ _ADAPTERS={
 #
 # Same keys as `_ADAPTERS`, so a route can never have an adapter and no requirements, or the
 # reverse - a test asserts the two key sets are equal.
+# `blocked_when` mirrors what ERPNext itself refuses at submit, per source DocType — measured
+# against the pinned image, not assumed: `Purchase Order` and `Sales Order` both carry an
+# `On Hold` status and `StockController.check_for_on_hold_or_closed_status` refuses
+# ("Closed", "On Hold"); `Subcontracting Order` has no such status, and `Work Order` uses
+# `Stopped` instead. A route that reports `ready` on a held order sends the person a proposal
+# that can only fail at confirm.
 _REQUIREMENTS={
     ('Sales Order','sales_order_to_delivery_note',
      'erpnext.selling.doctype.sales_order.sales_order.make_delivery_note','Delivery Note'): {
@@ -116,7 +122,7 @@ _REQUIREMENTS={
         'requires_source_docstatus':1,
         'requires_source_fields':[('is_subcontracted','eq',0)],
         'satisfied_if':None,
-        'blocked_when':[('status','in',['Closed'])],
+        'blocked_when':[('status','in',['Closed','On Hold'])],
         'progress_field':'per_received'},
     ('Purchase Order','purchase_order_to_subcontracting_order',
      'erpnext.buying.doctype.purchase_order.purchase_order.make_subcontracting_order',
@@ -124,7 +130,7 @@ _REQUIREMENTS={
         'requires_source_docstatus':1,
         'requires_source_fields':[('is_subcontracted','eq',1)],
         'satisfied_if':None,
-        'blocked_when':[('status','in',['Closed'])],
+        'blocked_when':[('status','in',['Closed','On Hold'])],
         'progress_field':'per_received'},
     ('Subcontracting Order','subcontracting_order_to_supply_stock_entry',
      'erpnext.controllers.subcontracting_controller.make_rm_stock_entry','Stock Entry'): {

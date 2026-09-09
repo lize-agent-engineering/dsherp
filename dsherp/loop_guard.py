@@ -14,22 +14,29 @@ Same precedent as `usage.py` and `tool_limits.py`.
 """
 
 LOOP_LIMIT = 3
-# The marker `run_events.sanitize` leaves when it cuts a long value short.
+# The marks `run_events.sanitize` leaves wherever it dropped something. A key built from a
+# value that lost content cannot be compared with another: the two calls may differ exactly
+# in what was dropped.
 TRUNCATED = '…[truncated]'
+DEPTH_CUT = '…[depth]'
+LOSSY = (TRUNCATED, DEPTH_CUT)
 
 
 def comparable(key):
     """Whether two calls can be compared at all.
 
-    Arguments are stored through `sanitize`, which truncates long values. Two calls whose
-    arguments differ only inside the part that was cut would look identical here — so a
-    truncated key is treated as **not comparable** and never counts towards a repeat.
+    Arguments are stored through `sanitize`, which cuts long strings, long dicts, long lists
+    and deep nesting. Two calls differing only inside a part that was cut would look identical
+    here — so a key carrying any of those marks is treated as **not comparable** and never
+    counts towards a repeat.
 
-    Deliberately biased towards missing a loop rather than inventing one: this judgement
-    stops a person's run. A false negative costs a few more calls, which the budget already
-    caps. A false positive ends work that was going fine.
+    Deliberately biased towards missing a loop rather than inventing one: this judgement stops
+    a person's run. A false negative costs a few more calls, which the budget already caps. A
+    false positive ends work that was going fine — a model fixing line 55 of a 60-row proposal
+    and then line 58 sends three genuinely different arguments, and before the marks existed
+    all three collapsed to the same key.
     """
-    return TRUNCATED not in key
+    return not any(mark in key for mark in LOSSY)
 
 
 def repeats(previous, key, window=LOOP_LIMIT):

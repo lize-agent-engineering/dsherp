@@ -4,6 +4,7 @@ The drift this prevents is not hypothetical: before this module, `read_tools.py`
 model "up to 100 rows" while `api.py` returned 20 for the name and no-argument branches. A
 model plans around what the description says, so a wrong description is worse than none.
 """
+import json
 import re
 from pathlib import Path
 
@@ -61,3 +62,21 @@ def test_the_record_description_says_what_is_omitted_by_default():
 def test_the_schema_description_says_child_tables_are_not_expanded_by_default():
     text = tool_limits.describe_read_schema()
     assert 'tables' in text and 'next_after_fieldname' in text
+
+
+def test_the_limits_are_part_of_the_runtime_fingerprint():
+    """Everything the container loads that decides what the model sees must be in the
+    manifest, or two commits with different tool contracts compute the same
+    `runtime_revision`.
+
+    Measured: with `tool_limits.py` outside the manifest, changing `search_page_length` from
+    100 to 50 left `configuration_revision()` byte-identical while `describe_search()` began
+    promising the model a different page. This was a regression against main, where those
+    three descriptions were docstrings in `read_tools.py` — a file the manifest has always
+    listed. `model-guard.cjs` watches the same list, so it did not invalidate in-flight runs
+    either, and `agent-quality-evidence.md` uses the fingerprint as the one handle for
+    "check out the commit that produced this run".
+    """
+    files = json.loads((ROOT / 'config/runtime-files.json').read_text(encoding='utf-8'))
+    assert 'dsherp/tool_limits.py' in files
+    assert 'dsherp/read_tools.py' in files, '它的使用者本来就在清单里，被 import 的这份不能在外面'

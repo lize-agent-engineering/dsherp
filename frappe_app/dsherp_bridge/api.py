@@ -311,6 +311,7 @@ def read_record(doctype: str, name: str, fields=None, children=None,
     cursors = cursors or {}
 
     values, tables, truncated, omitted = {}, {}, {}, 0
+    expanded = {}
     for key in sorted(permitted):
         definition = doc.meta.get_field(key)
         if definition is not None and definition.fieldtype == 'Table':
@@ -320,12 +321,14 @@ def read_record(doctype: str, name: str, fields=None, children=None,
                 tables[key] = {'child_doctype': definition.options,
                                'rows': len(doc.get(key) or [])}
                 continue
-            rows, total, more = _child_rows(doc, definition, doctype, int(cursors.get(key, 0) or 0))
+            cursor = int(cursors.get(key, 0) or 0)
+            rows, total, more = _child_rows(doc, definition, doctype, cursor)
             values[key] = rows
+            expanded[key] = {'total': total, 'cursor': cursor}
             if more:
                 truncated.setdefault('tables', {})[key] = {
                     'returned': len(rows), 'total': total,
-                    'next_after_idx': rows[-1]['idx'] if rows else int(cursors.get(key, 0) or 0)}
+                    'next_after_idx': rows[-1]['idx'] if rows else cursor}
             continue
         value = doc.get(key)
         if wanted is not None:
@@ -354,9 +357,39 @@ def read_record(doctype: str, name: str, fields=None, children=None,
         result['routes'] = routes
     if truncated:
         result['truncated'] = truncated
-    if _too_big(result, LIMITS['record_max_bytes']):
-        result.setdefault('truncated', {})['bytes'] = LIMITS['record_max_bytes']
+    _fit_bytes(result, values, expanded, LIMITS['record_max_bytes'])
     return result
+
+
+def _fit_bytes(result, values, expanded, limit):
+    """Bring an expanded record under the byte cap by dropping child rows, and say so.
+
+    The cap used to be a label: `truncated['bytes']` was set and **nothing was removed**. A
+    Sales Order with 8 expanded lines came back at ~21KB against a 16KB cap that
+    `tool_limits.describe_read_record()` promises the model in so many words, and at 20 lines
+    — exactly `child_rows_per_page` — at ~52KB, three times over. Two or three such reads
+    exhaust `model_max_input_bytes_per_call` and the run ends on budget. The reverse was just
+    as wrong: a record that fitted after all could be labelled truncated with no cursor to
+    follow, telling the model it was missing something it was not.
+
+    Rows come off the longest table first, so one huge table cannot starve the others, and the
+    cursor is rewritten each time — `next_after_idx` always names the last row actually
+    returned, so the model can ask for the rest. `bytes` is set only when there is nothing
+    left to drop: then the record genuinely does not fit and the model has to narrow `fields`
+    rather than page.
+    """
+    while _too_big(result, limit):
+        longest = max((key for key in expanded if values.get(key)),
+                      key=lambda key: len(values[key]), default=None)
+        if longest is None:
+            break
+        values[longest] = values[longest][:-1]
+        kept = values[longest]
+        result.setdefault('truncated', {}).setdefault('tables', {})[longest] = {
+            'returned': len(kept), 'total': expanded[longest]['total'],
+            'next_after_idx': kept[-1]['idx'] if kept else expanded[longest]['cursor']}
+    if _too_big(result, limit):
+        result.setdefault('truncated', {})['bytes'] = limit
 
 
 def _searchable_fields(meta):

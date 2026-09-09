@@ -42,7 +42,10 @@
     "tool": "erp_read_record",
     "arguments": {
      "doctype": "Sales Order",
-     "name": "SAL-ORD-2026-00001"
+     "name": "SAL-ORD-2026-00001",
+     "children": [
+      "items"
+     ]
     }
    }
   ],

@@ -757,9 +757,12 @@ def finish_run(run_id,capability,status,answer='',error=''):
         # person sees an empty error on the most expensive kind of run there is.
         'error':error if status in ('Failed','BudgetExceeded') else '',
         'capability_hash':'','provider_failures':provider_failures}
-    # `FINISHED_STATUSES`, not a fourth hand-written tuple: a run stopped by its budget spent
-    # real money before it stopped, and the month's bill reads the same fields as any other
-    # finished run. Leaving it out would bill it as zero — a hole nothing can fill in later.
+    # `FINISHED_STATUSES`, not a hand-written tuple: a run stopped by its budget spent real
+    # money before it stopped, and so did one that stopped to ask the person a question. Both
+    # rows are closed here — the capability is cleared two lines up and the grant dropped
+    # below, and the reply arrives as a brand-new run — so this is the only moment their
+    # numbers can ever be written. Leaving either out bills it as zero, a hole nothing can
+    # fill in later.
     from dsherp_bridge.usage import FINISHED_STATUSES
     if status in FINISHED_STATUSES:
         # 结算这次运行的真实用量。必须在 finished 事件之后：duration 由「首事件 → finished」算出。
