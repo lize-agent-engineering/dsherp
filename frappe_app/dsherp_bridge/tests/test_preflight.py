@@ -39,6 +39,12 @@ def _ensure_actor():
 
 
 ITEM = 'DSHERP-PREFLIGHT-ITEM'
+BOM_FG = 'DSHERP-PREFLIGHT-BOM-FG'
+BOM_RM = 'DSHERP-PREFLIGHT-BOM-RM'
+# A second company exists only so the cross-company warehouse rule has something to refuse.
+# Creating it costs about a second and brings four warehouses of its own with it.
+OTHER_COMPANY = 'DSHERP 前置校验第二公司'
+OTHER_ABBR = 'DPF2'
 STOCK_ITEM = 'DSHERP-PREFLIGHT-STOCK'
 CUSTOMER = 'DSHERP-PREFLIGHT-CUSTOMER'
 SUPPLIER = 'DSHERP-PREFLIGHT-SUPPLIER'
@@ -78,11 +84,50 @@ def _ensure_fixtures(cls):
                             'allow_update': 0, 'allow_submit': 0, 'allow_cancel': 0,
                             'allow_fill': 0, 'change_reason': '前置校验测试'
                             }).insert(ignore_permissions=True)
+    cls.bom = _ensure_bom(cls.company, uom, group)
+    cls.other_company = _ensure_other_company(cls.company)
     if not frappe.db.exists('Supplier', SUPPLIER):
         frappe.get_doc({'doctype': 'Supplier', 'supplier_name': SUPPLIER,
                         'supplier_group': frappe.db.get_value('Supplier Group', {'is_group': 0}, 'name')
                         }).insert(ignore_permissions=True)
     frappe.db.commit()
+
+
+def _ensure_bom(company, uom, group):
+    """A submitted, active BOM. `check_bom` had no test that ran anywhere without one.
+
+    Until 2026-09-10 its only test read whatever BOM the Site happened to hold and skipped
+    when there was none — which is every Site the nightly builds. A check whose test skips
+    everywhere is not a checked check.
+    """
+    for code in (BOM_FG, BOM_RM):
+        if not frappe.db.exists('Item', code):
+            frappe.get_doc({'doctype': 'Item', 'item_code': code, 'item_name': code,
+                            'item_group': group, 'stock_uom': uom, 'is_stock_item': 1
+                            }).insert(ignore_permissions=True)
+    existing = frappe.db.get_value('BOM', {'item': BOM_FG, 'docstatus': 1, 'is_active': 1}, 'name')
+    if existing:
+        return existing
+    # 'Valuation Rate' is one of this version's three options and the raw material has none,
+    # so the cost comes out 0 with an alert. Cost is not what any of these cases measure.
+    bom = frappe.get_doc({'doctype': 'BOM', 'item': BOM_FG, 'company': company, 'quantity': 1,
+                          'is_active': 1, 'is_default': 1, 'rm_cost_as_per': 'Valuation Rate',
+                          'currency': frappe.db.get_value('Company', company, 'default_currency'),
+                          'items': [{'item_code': BOM_RM, 'qty': 2, 'uom': uom}]})
+    bom.insert(ignore_permissions=True)
+    bom.submit()
+    return bom.name
+
+
+def _ensure_other_company(company):
+    """The other half of `check_warehouses`, for the same reason: its test skipped on any Site
+    with one company, which is every Site the nightly builds."""
+    if not frappe.db.exists('Company', OTHER_COMPANY):
+        base = frappe.db.get_value('Company', company, ['default_currency', 'country'], as_dict=True)
+        frappe.get_doc({'doctype': 'Company', 'company_name': OTHER_COMPANY, 'abbr': OTHER_ABBR,
+                        'default_currency': base.default_currency, 'country': base.country
+                        }).insert(ignore_permissions=True)
+    return OTHER_COMPANY
 
 
 class TestPreflight(IntegrationTestCase):
@@ -188,10 +233,9 @@ class TestPreflight(IntegrationTestCase):
 
     def test_warehouse_of_another_company_is_refused(self):
         other = frappe.db.get_value('Warehouse',
-                                    {'is_group': 0, 'company': ('!=', self.company)},
+                                    {'is_group': 0, 'company': type(self).other_company},
                                     ['name', 'company'], as_dict=True)
-        if not other:
-            self.skipTest('this Site has only one company')
+        self.assertIsNotNone(other, '第二家公司应当带出自己的仓库；fixture 没建成就不能静默跳过')
         order = self._order()
         order.items[0].warehouse = other.name
         with self.assertRaises(frappe.ValidationError) as caught:
@@ -211,18 +255,39 @@ class TestPreflight(IntegrationTestCase):
             preflight.check_warehouses(order)
 
     # --- BOM ------------------------------------------------------------------------------
-    def test_a_draft_or_inactive_bom_is_refused(self):
-        bom = frappe.db.get_value('BOM', {}, ['name', 'item', 'is_active', 'docstatus'], as_dict=True)
-        if not bom:
-            self.skipTest('this Site has no BOM')
-        order = frappe.get_doc({'doctype': 'Work Order', 'production_item': bom.item,
-                                'bom_no': bom.name, 'qty': 1, 'company': self.company})
-        if bom.is_active and bom.docstatus == 1:
-            preflight.check_bom(order)                       # the healthy case first
-        order.production_item = ITEM                          # ...now a mismatched item
+    def _flip(self, field, value):
+        restore = frappe.db.get_value('BOM', type(self).bom, field)
+        self.addCleanup(frappe.db.set_value, 'BOM', type(self).bom, field, restore)
+        frappe.db.set_value('BOM', type(self).bom, field, value)
+
+    def _work_order(self, item=BOM_FG):
+        return frappe.get_doc({'doctype': 'Work Order', 'production_item': item,
+                               'bom_no': type(self).bom, 'qty': 1, 'company': self.company})
+
+    def test_a_submitted_active_bom_for_the_right_item_passes(self):
+        """The control the three refusals below need: without it they would all also hold if
+        `check_bom` simply refused everything."""
+        preflight.check_bom(self._work_order())
+
+    def test_a_bom_for_another_item_is_refused(self):
+        order = self._work_order(item=ITEM)
         with self.assertRaises(frappe.ValidationError) as caught:
             preflight.check_bom(order)
-        self.assertIn(bom.name, str(caught.exception))
+        self.assertIn(type(self).bom, str(caught.exception))
+
+    def test_an_inactive_bom_is_refused(self):
+        """Put back by this test, not by the rollback: `IntegrationTestCase` rolls back once
+        per class, so a flip left behind here is read by every later test in the class."""
+        self._flip('is_active', 0)
+        with self.assertRaises(frappe.ValidationError) as caught:
+            preflight.check_bom(self._work_order())
+        self.assertIn(type(self).bom, str(caught.exception))
+
+    def test_a_draft_bom_is_refused(self):
+        self._flip('docstatus', 0)
+        with self.assertRaises(frappe.ValidationError) as caught:
+            preflight.check_bom(self._work_order())
+        self.assertIn(type(self).bom, str(caught.exception))
 
     def test_a_document_with_no_bom_field_passes(self):
         preflight.check_bom(self._order())
