@@ -1,0 +1,25 @@
+{
+ "expected_verdict": "pass",
+ "turns": [
+  {
+   "tool_call": {
+    "name": "mcp__erp__erp_read_schema",
+    "arguments": "{\"doctype\": \"Sales Order\"}"
+   }
+  },
+  {
+   "tool_call": {
+    "name": "mcp__erp__erp_propose_create",
+    "arguments": "{\"doctype\": \"Sales Order\", \"version\": \"{{data.modified}}\", \"values\": {\"customer\": \"DSHERP-NO-SUCH-CUSTOMER\", \"company\": \"DSHERP 日常合成企业\", \"items\": [{\"item_code\": \"DSHERP-MFG-SYN-FG\", \"qty\": 2, \"rate\": 100}]}}"
+   }
+  },
+  {
+   "content": "服务端在生成提案前就拒绝了：引用的客户 DSHERP-NO-SUCH-CUSTOMER 不存在，所以这张单没有被提出来，也没有产生任何待确认的提案。请确认客户的准确名称，或者先把这个客户建出来，我再提这张订单。",
+   "finish_reason": "stop"
+  }
+ ],
+ "usage": {
+  "input_tokens": 2200,
+  "output_tokens": 130
+ }
+}

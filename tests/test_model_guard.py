@@ -81,7 +81,7 @@ def test_business_denial_prevents_actual_provider_request(model_server,tmp_path,
             system=requests[0]['messages'][0]
             assert system['role']=='system'
             text=system['content']
-            expected_skill=('业务技能：erp-operation v2.2.0' if mode=='operation'
+            expected_skill=('业务技能：erp-operation v2.3.0' if mode=='operation'
                             else '业务技能：erp-query v1.4.0')
             assert expected_skill in text
             assert 'untrusted' in text

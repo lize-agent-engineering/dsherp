@@ -243,7 +243,7 @@ def test_runtime_started_names_the_assembly_this_run_used():
     reproduced from its record; usage.summarise reads them from exactly this event."""
     from dsherp import context_runner, prompt_assembly
     versions = context_runner._skill_versions()
-    assert versions == {'erp-query': '1.4.0', 'erp-operation': '2.2.0', 'erp-configuration': '1.1.0'}
+    assert versions == {'erp-query': '1.4.0', 'erp-operation': '2.3.0', 'erp-configuration': '1.1.0'}
     assert prompt_assembly.PROMPT_VERSION and prompt_assembly.sampling_note()
 
 

@@ -16,6 +16,7 @@ Two differences from the test fixture, both deliberate:
 stdlib only: this file is bind-mounted into the run container, which has no test packages.
 """
 import json
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -42,6 +43,63 @@ def load_script(path):
         elif not isinstance(turn.get('content'), str):
             raise ValueError(f'第 {index + 1} 轮既不是 tool_call 也没有 content：{path}')
     return script
+
+
+PLACEHOLDER = re.compile(r'\{\{([A-Za-z0-9_.\[\]]+)\}\}')
+
+
+def _dig(node, path):
+    """`data.modified`, `data.fields.items[0].name` — enough to name a value in a tool result."""
+    for part in path.split('.'):
+        while part.endswith(']') and '[' in part:
+            part, _, index = part.rpartition('[')
+            if part:
+                node = node.get(part) if isinstance(node, dict) else None
+            node = node[int(index[:-1])] if isinstance(node, list) else None
+            part = ''
+        if not part:
+            continue
+        node = node.get(part) if isinstance(node, dict) else None
+        if node is None:
+            return None
+    return node
+
+
+def last_tool_result(messages):
+    """The most recent tool result the model was shown, parsed."""
+    for message in reversed(messages or []):
+        if message.get('role') != 'tool':
+            continue
+        try:
+            return json.loads(message.get('content') or 'null')
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def substitute(arguments, messages):
+    """Fill `{{data.modified}}`-style placeholders from the last tool result.
+
+    Without this a replay script can never make a **successful** proposal: every proposal
+    tool is grounded on a version the server only reveals at run time, so a static script can
+    only ever be refused with "read the target first". That would leave the whole
+    "the model proposed the right thing" half of the evaluation set unreachable, and every
+    operation case written as an expected refusal - which is exactly what a set of cases that
+    quietly measures less than it claims looks like.
+    """
+    if not PLACEHOLDER.search(arguments):
+        return arguments
+    result = last_tool_result(messages)
+
+    def replace(match):
+        value = _dig(result, match.group(1))
+        if value is None:
+            # Left in place on purpose: a silently blank version would be refused with a
+            # message about freshness, and the script's real mistake would stay hidden.
+            return match.group(0)
+        return str(value).replace('"', '\\"')
+
+    return PLACEHOLDER.sub(replace, arguments)
 
 
 def _chunk(delta, reason):
@@ -100,9 +158,10 @@ def serve(script_path, port=PORT):
                 turns[index] if index < len(turns) else turns[-1])
             if not compact and 'tool_call' in turn:
                 call = turn['tool_call']
+                arguments = substitute(call['arguments'], requests[-1].get('messages'))
                 deltas = [({'role': 'assistant', 'tool_calls': [
                     {'index': 0, 'id': f'call-eval-{len(requests)}', 'type': 'function',
-                     'function': {'name': call['name'], 'arguments': call['arguments']}}]}, None),
+                     'function': {'name': call['name'], 'arguments': arguments}}]}, None),
                     ({}, 'tool_calls')]
             else:
                 deltas = [({'role': 'assistant', 'content': turn.get('content', '')}, None),

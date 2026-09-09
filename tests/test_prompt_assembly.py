@@ -35,7 +35,7 @@ def test_skill_summary_matches_the_manifest_version_for_each_domain():
     assert prompt_assembly.skill_summary('query') == {
         'name': 'erp-query', 'version': '1.4.0',
         'description': '在当前业务用户权限与服务端策略允许的业务对象中执行只读查询，并给出有来源的业务回答。'}
-    for domain, name, version in (('operation', 'erp-operation', '2.2.0'),
+    for domain, name, version in (('operation', 'erp-operation', '2.3.0'),
                                   ('configuration', 'erp-configuration', '1.1.0')):
         summary = prompt_assembly.skill_summary(domain)
         assert summary['name'] == name and summary['version'] == version

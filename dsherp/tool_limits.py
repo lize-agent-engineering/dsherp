@@ -51,7 +51,9 @@ def describe_read_record():
         'as row counts rather than expanded - name the ones you need in `children` '
         f'(at most {LIMITS["max_child_tables"]}, {LIMITS["child_rows_per_page"]} rows each). '
         f'Results are capped at {LIMITS["record_max_bytes"]} bytes; when a table is truncated '
-        'the reply says so and returns a cursor for `after_idx`.'
+        'the reply says so and returns a cursor for `after_idx`. '
+        '`routes` lists the server-owned next steps this exact record is ready for, and for '
+        'the rest why not - use those names with erp_propose_make.'
     )
 
 

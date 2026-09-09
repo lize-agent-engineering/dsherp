@@ -84,7 +84,7 @@ def test_query_skill_plans_bom_then_batches_warehouse_scoped_bins():
 def test_operation_skill_discovers_dynamic_capabilities_and_manufacturing_routes():
     content=(ROOT/'business-skills/erp-operation/SKILL.md').read_text()
     header=content.split('---',2)[1]
-    assert 'version: 2.2.0' in header
+    assert 'version: 2.3.0' in header
     description=next(
         line for line in header.splitlines() if line.startswith('description:')
     )
@@ -130,9 +130,9 @@ def test_operation_skill_discovers_dynamic_capabilities_and_manufacturing_routes
     assert '每个 make 都只产生草稿' in content
     assert '每次保存和提交分别产生自己的提案与侧栏确认' in content
 
-    assert 'Purchase Order 普通收货看 per_received' in content
-    assert '委外供料进度看明细 subcontracted_qty' in content
-    assert 'Subcontracting Order 看 per_received 与 status' in content
+    # 进度字段名已下沉到 make_adapters._REQUIREMENTS，由 erp_read_record 的 routes 逐单给出；
+    # 这里只保留真正属于业务语义的那一条。字段名的断言在 tests/test_make_adapters.py。
+    assert 'progress_field' in content and 'progress_value' in content
     assert 'Sales Order 完成交付但未开票时可为 To Bill' in content
     assert '不能误报为业务失败' in content
 
@@ -144,31 +144,43 @@ def test_operation_skill_discovers_dynamic_capabilities_and_manufacturing_routes
     assert '当前工具支持 Item、Customer' not in content
 
 
-def test_operation_skill_supplies_exact_trusted_make_route_tokens():
+def _registered_route_names():
+    """The route names from `make_adapters._ADAPTERS`, read with `ast`.
+
+    The module itself imports frappe and cannot be imported on the host, but its key tuples
+    are literals — so this reads the authority rather than a copy. A route added later is
+    covered without anyone remembering to update a list here.
+    """
+    import ast
+    tree=ast.parse((ROOT/'frappe_app/dsherp_bridge/make_adapters.py').read_text(encoding='utf-8'))
+    for node in tree.body:
+        if not isinstance(node,ast.Assign):continue
+        if not any(getattr(target,'id',None)=='_ADAPTERS' for target in node.targets):continue
+        return sorted({key.elts[1].value for key in node.value.keys})
+    raise AssertionError('make_adapters 里找不到 _ADAPTERS')
+
+
+def test_operation_skill_no_longer_carries_route_tokens():
+    """The seven route names left the skill when `erp_read_record` started answering
+    `routes[]` per record (plan 6, slice 5).
+
+    They were a memorised vocabulary that could silently disagree with what the Site actually
+    has enabled, and `resolve_route`'s refusal only echoes the name the model guessed wrong —
+    it never lists what is available. The replacement is not "the model should just know":
+    it is that the server now answers, for this exact document, which steps it is ready for
+    and why not for the rest.
+    """
     content=(ROOT/'business-skills/erp-operation/SKILL.md').read_text()
-    mappings={
-        'work_order_material_transfer':'Work Order → Material Transfer for Manufacture Stock Entry',
-        'work_order_manufacture':'Work Order → Manufacture Stock Entry',
-        'purchase_order_to_purchase_receipt':'Purchase Order → Purchase Receipt',
-        'purchase_order_to_subcontracting_order':'is_subcontracted Purchase Order → Subcontracting Order',
-        'subcontracting_order_to_supply_stock_entry':'Subcontracting Order → Send to Subcontractor Stock Entry',
-        'subcontracting_order_to_subcontracting_receipt':'Subcontracting Order → Subcontracting Receipt',
-        'sales_order_to_delivery_note':'Sales Order → Delivery Note',
-    }
-    for token, mapping in mappings.items():
-        assert f'`{token}`：{mapping}' in content
-        assert content.count(f'`{token}`')==1
-    assert '当前发布版本可提交给 erp_propose_make 的精确 route token' in content
-    assert '这些 token 只是 make 调用词汇表，不是 DocType 能力白名单' in content
-    assert '服务端当前策略、用户权限和固定 adapter 仍是最终裁决' in content
-    assert '服务端拒绝时立即停止，不能尝试或发明其他 token' in content
-    assert 'route 内容变化会轮换权限版本，使在飞运行和提案失效' in content
+    for token in _registered_route_names():
+        assert token not in content, f'{token} 还留在 SKILL.md 里，词表没有真正下沉'
+    assert 'routes' in content, '必须告诉模型去哪里拿这一单可走的步骤'
+    assert 'erp_read_record' in content
 
 
 ERROR_EXIT_HEADING='## 工具错误与做不了的出口'
 ERROR_EXIT_SKILLS=(
     ('erp-query','1.4.0'),
-    ('erp-operation','2.2.0'),
+    ('erp-operation','2.3.0'),
     ('erp-configuration','1.1.0'),
 )
 

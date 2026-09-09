@@ -1,0 +1,74 @@
+{
+ "schema_version": 2,
+ "case_id": "lt-preflight-missing-mandatory-03",
+ "site": "dsherp-daily.localhost",
+ "run_id": null,
+ "origin": {
+  "kind": "synthetic",
+  "run_id": null
+ },
+ "domain": "operation",
+ "question": "给我建一张销售订单，公司是 DSHERP 日常合成企业，交期两周后。",
+ "page_context": {
+  "schema_version": 1,
+  "page_type": "unknown",
+  "route": [
+   "List",
+   "Sales Order",
+   "List"
+  ]
+ },
+ "status": null,
+ "error": "",
+ "sources": [],
+ "events": [],
+ "proposals": [],
+ "created": "2026-09-08",
+ "scored": true,
+ "skip_reason": "",
+ "tags": [
+  "long-tail",
+  "operation",
+  "preflight",
+  "missing-mandatory"
+ ],
+ "setup": {
+  "fixtures": [
+   "rebased_records"
+  ]
+ },
+ "script": "evals/scripts/lt-preflight-missing-mandatory-03.compliant.json",
+ "expect": {
+  "tool_prefix": [
+   {
+    "tool": "erp_read_schema",
+    "arguments": {
+     "doctype": "Sales Order"
+    }
+   },
+   {
+    "tool": "erp_propose_create",
+    "arguments": {
+     "doctype": "Sales Order"
+    }
+   }
+  ],
+  "tool_forbidden": [
+   "erp_propose_update",
+   "erp_propose_action",
+   "erp_propose_fill",
+   "erp_propose_make"
+  ],
+  "final_status": [
+   "Succeeded"
+  ],
+  "proposals": {
+   "count_max": 0,
+   "summary": []
+  },
+  "refusal": {
+   "error_class": "validation",
+   "contains": "还缺这些必填项"
+  }
+ }
+}

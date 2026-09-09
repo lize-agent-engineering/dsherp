@@ -154,3 +154,36 @@ def test_newest_wire_reads_the_last_recorded_wire(tmp_path):
     later.write_text(json.dumps({'requests': [{'n': 2}]}))
     os.utime(later, (2 ** 31, 2 ** 31))
     assert replay.newest_wire(tmp_path)['requests'] == [{'n': 2}]
+
+
+def test_a_placeholder_is_filled_from_the_last_tool_result():
+    """Without this, a replay script can never make a **successful** proposal: every proposal
+    is grounded on a version the server only reveals at run time, so a static script can only
+    ever be refused with "read the target first" — leaving the whole "the model proposed the
+    right thing" half of the set unreachable."""
+    messages = [{'role': 'user', 'content': 'q'},
+                {'role': 'tool', 'content': json.dumps(
+                    {'source': 'erp', 'untrusted': True, 'tool': 'erp_read_record',
+                     'data': {'name': 'SO-1', 'modified': '2026-09-09 01:02:03',
+                              'fields': {'items': [{'name': 'ROW-1'}]}}})}]
+    filled = model_server.substitute(
+        '{"doctype": "Sales Order", "name": "{{data.name}}", "version": "{{data.modified}}"}',
+        messages)
+    assert json.loads(filled) == {'doctype': 'Sales Order', 'name': 'SO-1',
+                                  'version': '2026-09-09 01:02:03'}
+    assert model_server.substitute('{"row": "{{data.fields.items[0].name}}"}', messages) \
+        == '{"row": "ROW-1"}'
+
+
+def test_an_unresolvable_placeholder_is_left_alone():
+    """A silently blank version would be refused with a message about freshness, and the
+    script's real mistake would stay hidden behind it."""
+    messages = [{'role': 'tool', 'content': json.dumps({'data': {}})}]
+    assert model_server.substitute('{"version": "{{data.modified}}"}', messages) \
+        == '{"version": "{{data.modified}}"}'
+    assert model_server.substitute('{"version": "{{data.modified}}"}', []) \
+        == '{"version": "{{data.modified}}"}'
+
+
+def test_arguments_without_a_placeholder_are_untouched():
+    assert model_server.substitute('{"doctype": "Item"}', []) == '{"doctype": "Item"}'

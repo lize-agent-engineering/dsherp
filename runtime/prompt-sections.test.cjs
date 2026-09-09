@@ -94,7 +94,7 @@ test('the marker is derived independently of the section text', () => {
   // the repository already uses for the host/bridge copies of the metering rules.
   const root = bundle();
   try {
-    assert.equal(sections.skillMarker(root, 'operation'), '业务技能：erp-operation v2.2.0');
+    assert.equal(sections.skillMarker(root, 'operation'), '业务技能：erp-operation v2.3.0');
     assert.ok(sections.skillSection(root, 'operation').startsWith(sections.skillMarker(root, 'operation')));
   } finally { fs.rmSync(root, {recursive: true}); }
 });
