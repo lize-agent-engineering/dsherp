@@ -29,7 +29,7 @@ def _claimed_budget(domain):
         'model_max_calls':{'operation':15,'query':11,'configuration':8}[domain],
         'model_max_input_bytes_per_call':131072,'model_max_input_bytes_total':786432,
         'model_max_output_tokens_per_call':tokens,
-        'model_max_output_tokens_total':61440 if domain=='operation' else 24576}
+        'model_max_output_tokens_total':{'operation':122880,'query':90112,'configuration':65536}[domain]}
 
 
 def _capture_harness(monkeypatch):

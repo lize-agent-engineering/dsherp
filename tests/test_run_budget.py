@@ -94,3 +94,18 @@ def test_the_observation_file_says_which_batch_it_came_from():
     assert payload['cases'] >= 30
     assert payload['turn_end_reasons']['max-tokens'] > 0, \
         '这份观测的意义就是它记录了饿死答复的那一批；没有 max-tokens 就不是那一批'
+
+
+@pytest.mark.parametrize('domain', ('query', 'operation', 'configuration'))
+def test_the_call_budget_is_not_secretly_smaller_than_it_says(domain):
+    """`model_max_output_tokens_total` must cover every call the plan allows.
+
+    Reservations are charged in full and never refunded, so a total below
+    `model_max_calls × model_max_output_tokens_per_call` stops the run at `total // per_call`
+    calls however little the model actually writes — a call limit wearing a token limit's
+    name. Reproduced 2026-09-09: a query run allowed 11 calls was stopped after 3 with
+    `used 32768, allowed 24576`, having emitted 570 tokens.
+    """
+    plan = _plan(domain)
+    assert plan['model_max_output_tokens_total'] >= \
+        plan['model_max_calls'] * plan['model_max_output_tokens_per_call']

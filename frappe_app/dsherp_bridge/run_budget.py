@@ -43,16 +43,17 @@ DOMAINS={
         # Observed max 7 of 8 — near the ceiling. ceil(7 × 1.5) = 11.
         'model_max_calls':11,
         'model_max_output_tokens_per_call':8192,
-        # Observed cumulative max 6,231. ceil(× 1.5) → 16,384 was already enough, but the
-        # per-call rise has to fit: raised in step so one long answer cannot exhaust the run.
-        'model_max_output_tokens_total':24576,
+        # 11 × 8192. See the note below the table: anything less is a stricter call limit
+        # wearing a token limit's name.
+        'model_max_output_tokens_total':90112,
     },
     'configuration':{
         'run_total_seconds':300,
         # Observed max 3 of 8; left as it is rather than tightened on four runs.
         'model_max_calls':8,
         'model_max_output_tokens_per_call':8192,
-        'model_max_output_tokens_total':24576,
+        # 8 × 8192.
+        'model_max_output_tokens_total':65536,
     },
     'operation':{
         # Observed max 188,850 ms of 600,000. Deliberately **not** tightened to ceil(P95×1.5):
@@ -62,11 +63,23 @@ DOMAINS={
         # Observed max 10 — exactly the old ceiling, on two runs. Censored, so ceil(10 × 1.5).
         'model_max_calls':15,
         'model_max_output_tokens_per_call':8192,
-        # Observed cumulative max 13,533; ceil(× 1.5) = 20,300, but 15 calls at 8,192 need
-        # room to be spent on answers rather than refused halfway.
-        'model_max_output_tokens_total':61440,
+        # 15 × 8192.
+        'model_max_output_tokens_total':122880,
     },
 }
+# `model_max_output_tokens_total` is exactly `model_max_calls × model_max_output_tokens_per_call`
+# in every domain, and that is not laziness.
+#
+# `reserve_model_call` charges the **reservation** against the total and never refunds the
+# difference when the model answers in 200 tokens. So a total below the product is not a token
+# limit at all — it is a stricter call limit wearing a token limit's name, and it binds at
+# `total // per_call` calls no matter how little the model actually writes. Measured
+# 2026-09-09: with the total at 24,576 and the per-call at 8,192, a query run that was allowed
+# 11 calls was stopped after 3, `used 32768, allowed 24576`, having emitted 570 tokens.
+#
+# Two limits that disagree about the same thing is the trap this plan exists to remove. The
+# run's output spend is bounded by the call count; this line is the arithmetic that says so,
+# and `budget()` refuses a configuration that breaks it.
 
 
 def _model_policy():
@@ -96,6 +109,10 @@ def budget(domain):
         frappe.throw('模型单次输入预算不能超过累计输入预算')
     if values['model_max_output_tokens_per_call']>values['model_max_output_tokens_total']:
         frappe.throw('模型单次输出预算不能超过累计输出预算')
+    if values['model_max_calls']*values['model_max_output_tokens_per_call']>values['model_max_output_tokens_total']:
+        # 保留额度按预留计、不退款，所以累计输出预算低于「调用数 × 单次」时，真正生效的是
+        # 一个更小的调用数上限，而 model_max_calls 会说谎。实测撞过一次，见模块注释。
+        frappe.throw('累计输出预算必须不少于 调用数 × 单次输出预算，否则调用数上限形同虚设')
     if values['lease_renew_below_seconds']>=values['lease_seconds']:
         frappe.throw('租约续期阈值必须小于租约时长')
     concurrency=frappe.conf.get('dsherp_site_concurrency',1)

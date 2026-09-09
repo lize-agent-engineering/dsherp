@@ -22,6 +22,18 @@ Agent 质量的度量在这里。两种后端、一套用例、一个预言机�
 
 ## 跑之前
 
+**改过 `frappe_app/dsherp_bridge/` 里任何一个 .py，先重启 backend。** 评估走的是 HTTP，
+请求由长驻的 gunicorn 工作进程处理，它们在启动那一刻就把模块导进了 `sys.modules`——
+改文件不会重新导入。原生测试和集成脚本每次都是新进程，所以它们看得见新代码，**评估看不见**。
+2026-09-09 的两批 live 就是这样白跑的：预算正式值写回了，站上发下来的仍是旧值。
+
+```bash
+docker compose -p dsherp-validation -f infra/compose.validation.yml restart backend
+```
+
+一条免费的核对：跑一条回放用例，看它的 `model_call_reserved` 事件里 `max_output_tokens`
+是不是当前 `run_budget.py` 里的值。
+
 ```bash
 # 1. 常驻 worker 必须停：它会抢先领走评估运行
 launchctl bootout gui/$(id -u)/com.dsherp.agent-worker-v16
