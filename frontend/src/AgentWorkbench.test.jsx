@@ -206,13 +206,20 @@ it("左栏只列进行中的对话，搜索也不会翻出归档的", async () =
 });
 
 it("已归档对话在 Agent 设置里：可以取消归档，也可以直接打开为只读", async () => {
+  // 取消归档之后，站上就不会再把 S-2 算进归档列表——替身必须跟着变，否则「归档行消失」这条
+  // 断言就变成了在赌「本地乐观移除」与「重新拉取」谁先到：CI 上真的红过一次（run 34381505935），
+  // 本机四次全绿。让替身如实反映这次写入，断言才与顺序无关。
+  let restored = false;
   const api = vi.fn(async (method, params) => {
     if (method === "search_sessions")
       return params.archived === 1
-        ? { items: [{ id: "S-2", title: archived.title, archived: true, modified: "2026-08-28", archived_at: "2026-08-28" }], has_more: false }
+        ? { items: restored ? [] : [{ id: "S-2", title: archived.title, archived: true, modified: "2026-08-28", archived_at: "2026-08-28" }], has_more: false }
         : { items: [{ id: "S-1", title: active.title, modified: "2026-08-29" }], has_more: false };
     if (method === "get_session") return params.session_id === "S-2" ? archived : active;
-    if (method === "restore_session") return { id: "S-2", title: archived.title, archived: false, modified: "2026-08-29" };
+    if (method === "restore_session") {
+      restored = true;
+      return { id: "S-2", title: archived.title, archived: false, modified: "2026-08-29" };
+    }
     return { items: [] };
   });
   const controls = {};
