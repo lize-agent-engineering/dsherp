@@ -37,6 +37,8 @@
     "actual_output_tokens",
     "duration_ms",
     "skill_versions",
+    "prompt_version",
+    "sampling",
     "usage_unknown_calls"
   ],
   "fields": [
@@ -141,7 +143,7 @@
       "fieldname": "status",
       "label": "status",
       "fieldtype": "Select",
-      "options": "Queued\nRunning\nCancelling\nCancelled\nSucceeded\nFailed\nNeedsInput",
+      "options": "Queued\nRunning\nCancelling\nCancelled\nSucceeded\nFailed\nNeedsInput\nBudgetExceeded",
       "search_index": 1
     },
     {
@@ -198,6 +200,20 @@
       "fieldname": "skill_versions",
       "label": "Skill versions this run loaded",
       "fieldtype": "Long Text",
+      "read_only": 1
+    },
+    {
+      "fieldname": "prompt_version",
+      "label": "Prompt template version this run assembled",
+      "fieldtype": "Data",
+      "length": 40,
+      "read_only": 1
+    },
+    {
+      "fieldname": "sampling",
+      "label": "Sampling actually sent to the provider",
+      "fieldtype": "Data",
+      "length": 40,
       "read_only": 1
     },
     {

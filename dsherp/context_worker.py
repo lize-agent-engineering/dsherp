@@ -799,6 +799,30 @@ def serve_once(coordinator,sites,notifier,ops_state,now=None,backups=None):
     return not STOPPING.is_set()
 
 
+def provider_key_state(settings,runtime_dir):
+    """Which registered rotation the provider key in hand corresponds to.
+
+    spec:159 asks for `runtime_revision` to be split into a configuration digest (which goes
+    on the run) and a key version (which does not). The digest half is already done: S9 keeps
+    the key out of it deliberately (dsherp/runtime_revision.py:45-47, runtime/model-guard.cjs:88-89),
+    and binding a run to a key version would rotate every native session on every key change
+    while telling nobody anything new. So the key version lives here, in the worker's own log:
+    version, state, and when it took effect - never the key, never the fingerprint.
+
+    `unregistered` is the interesting state: the ledger says a key was rotated in, but the one
+    this process is running with is a different value, i.e. somebody rotated without restarting.
+    """
+    from dsherp import rotation
+    rows=rotation.read(Path(runtime_dir)/'rotations.json')
+    last=rotation.latest(rows,'provider','host')
+    if not last:
+        return {'version':None,'state':'never','effective_at':None}
+    running=rotation.fingerprint(settings.get('DEEPSEEK_API_KEY'))
+    matches=running==last.get('fingerprint')
+    return {'version':int(last['version']),'state':'registered' if matches else 'unregistered',
+            'effective_at':last.get('effective_at')}
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--profile',type=Path,required=True)
@@ -825,9 +849,17 @@ def main():
                 ops_state={}
                 if not args.once:
                     notifier=alerts.Notifier(webhook=profile.get('alert_webhook'),cooldown=600)
-                settings_loader=lambda:agent_settings(args.provider_env)
                 resolved=deploy_env.settings()
                 runtime_dir=Path(os.environ.get('DSHERP_RUNTIME_DIR') or resolved.get('runtime_dir') or ROOT/'.runtime')
+                key_state=provider_key_state(settings,runtime_dir)
+                worker_log.log('provider_key',**key_state)
+                def settings_loader(previous=[key_state]):
+                    current=agent_settings(args.provider_env)
+                    state=provider_key_state(current,runtime_dir)
+                    if state!=previous[0]:
+                        worker_log.log('provider_key_changed',**state)
+                        previous[0]=state
+                    return current
                 coordinator=Coordinator(sites,settings_loader,profile['slots'],run_container,CircuitBreaker(),
                                         host_probe(args.provider_env),state_root,notifier=notifier,
                                         isolation=isolation.allows if isolation else None,

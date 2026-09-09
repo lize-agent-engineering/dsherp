@@ -279,3 +279,30 @@ def test_the_runner_attributes_the_pinned_skill_versions_to_the_run():
     versions = context_runner._skill_versions()
     manifest = json.loads((ROOT / "config/business-skills.json").read_text())
     assert versions == {row["name"]: row["version"] for row in manifest["skills"]}
+
+
+def test_summarise_reports_prompt_version_and_sampling_from_runtime_started():
+    """The assembly a run used is part of its metering: a score without it cannot be reproduced."""
+    from dsherp.usage import summarise
+    rows = [
+        {"kind": "runtime_started", "recorded_at": "2026-09-08 10:00:00", "source": "runner",
+         "payload": {"skill_versions": {"erp-query": "1.4.0"}, "prompt_version": "1",
+                     "sampling": "provider-default"}},
+        {"kind": "finished", "recorded_at": "2026-09-08 10:00:02", "source": "server", "payload": {}},
+    ]
+    summary = summarise(rows)
+    assert summary["prompt_version"] == "1"
+    assert summary["sampling"] == "provider-default"
+
+
+def test_missing_prompt_version_is_absent_not_empty_string():
+    """storable drops what is unknown; writing '' would claim we recorded something we did not."""
+    from dsherp.usage import storable, summarise
+    rows = [
+        {"kind": "runtime_started", "recorded_at": "2026-09-08 10:00:00", "source": "runner", "payload": {}},
+        {"kind": "finished", "recorded_at": "2026-09-08 10:00:02", "source": "server", "payload": {}},
+    ]
+    summary = summarise(rows)
+    assert summary["prompt_version"] is None and summary["sampling"] is None
+    stored = storable(summary)
+    assert "prompt_version" not in stored and "sampling" not in stored

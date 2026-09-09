@@ -10,3 +10,4 @@ dsherp_bridge.patches.v1.backfill_execution_targets
 dsherp_bridge.patches.v1.business_credentials
 dsherp_bridge.patches.v1.drop_run_grant
 dsherp_bridge.patches.v1.expire_transfer_grant
+dsherp_bridge.patches.v1.run_reproducibility_fields

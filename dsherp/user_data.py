@@ -32,7 +32,8 @@ BOUNDARY = {
                   'error': ''},
         'keep': ('name', 'owner', 'conversation', 'domain', 'status', 'sources', 'request_id',
                  'request_digest', 'model_calls', 'model_input_bytes', 'model', 'actual_input_tokens',
-                 'actual_output_tokens', 'duration_ms', 'creation', 'modified'),
+                 'actual_output_tokens', 'duration_ms', 'skill_versions', 'prompt_version', 'sampling',
+                 'creation', 'modified'),
         'why': '运行本身是"助手替谁做了什么"的凭据：谁、何时、读了哪些记录、结果如何都保留；'
                '提问、页面快照、回答与错误正文是本人内容，清除。平台授权令牌不在任何行里：'
                '运行期间只存于缓存（R7），配置交接期间也只存于缓存、随交接窗口到期（计划 5）。',
