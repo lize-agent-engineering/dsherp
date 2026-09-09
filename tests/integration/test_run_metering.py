@@ -54,7 +54,11 @@ try:
     assert row.model=='deepseek-v4-flash',row
     assert row.actual_input_tokens==1200 and row.actual_output_tokens==340,row
     assert json.loads(row.skill_versions)==SKILLS,row
-    assert row.duration_ms is not None and row.duration_ms>=0,row
+    # `> 0`，不是 `>= 0`：`duration_ms` 是 Int 列、默认 0，所以 `>= 0` 对每一行都成立——
+    # 包括从未结算过的那些。而这条断言唯一要挡的就是「结算跑在 finished 事件之前」，
+    # 那种情况下 summarise 算不出时长、storable 丢掉这个键、列停在默认 0。恒真的断言
+    # 挡不住它，正是本片反复抄到的那种空转。
+    assert row.duration_ms>0,row
     assert row.usage_unknown_calls==0,row
     assert json.loads(row.provider_request_ids)==['req-1','req-2'],row
 
