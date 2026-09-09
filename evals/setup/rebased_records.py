@@ -37,7 +37,15 @@ NAMES = {
     'wide_sales_order_po_no': 'DSHERP-EVAL-SO-WIDE',
     'purchase_order_ref': 'DSHERP-EVAL-PO-01',
     'short_issue_ref': 'DSHERP-EVAL-ISSUE-SHORT',
+    # This one is a *document* name, not a field: `MAT-STE-.YYYY.-` counts up per Site, so the
+    # draft only lands on 00001 while nothing else has drawn from that series first. The case
+    # and its script name it literally, so a shift has to stop provisioning here rather than
+    # turn up later as an unexplained red in the replay step.
+    'short_issue_name': 'MAT-STE-2026-00001',
 }
+# The two files that hard-code `short_issue_name`, quoted in the failure so the fix is one grep.
+SHORT_ISSUE_CASE = ('evals/cases/dsherp-daily.localhost/lt-preflight-short-stock-04.json',
+                    'evals/scripts/lt-preflight-short-stock-04.compliant.json')
 WIDE_ROWS = 12
 
 SCRIPT = r'''
@@ -128,6 +136,11 @@ made['sales_order'], made['sales_order_action'] = sales_order(names['sales_order
 made['wide_sales_order'], made['wide_action'] = sales_order(names['wide_sales_order_po_no'], wide_rows)
 made['purchase_order'], made['purchase_order_action'] = purchase_order()
 made['short_stock_issue'], made['short_stock_issue_action'] = short_stock_issue()
+if made['short_stock_issue'] != names['short_issue_name']:
+    raise SystemExit(
+        f"库存不足用例的领料单落在 {made['short_stock_issue']}，用例里写的是 "
+        f"{names['short_issue_name']}——本站的 MAT-STE 序号已被别的单据占用。"
+        '改 rebased_records.NAMES 里的 short_issue_name，并同步改 ' + __SHORT_FILES__)
 frappe.db.commit()
 
 # The business user must be able to read every one of them, or a case would fail on
@@ -152,7 +165,8 @@ def main(argv=None, run=subprocess.run):
     args = parser.parse_args(argv)
     body = (SCRIPT.replace('__SITE__', repr(args.site))
                   .replace('__NAMES__', repr(json.dumps(NAMES, ensure_ascii=False)))
-                  .replace('__WIDE__', str(WIDE_ROWS)))
+                  .replace('__WIDE__', str(WIDE_ROWS))
+                  .replace('__SHORT_FILES__', repr(' 与 '.join(SHORT_ISSUE_CASE))))
     result = run([*COMPOSE, 'exec', '-T', service_of(args.site), BENCH_PYTHON, '-'],
                  cwd=ROOT, input=body, text=True, capture_output=True, timeout=300)
     if result.returncode:
