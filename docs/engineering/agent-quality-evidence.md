@@ -1080,6 +1080,16 @@ configuration 65,536），`budget()` 增一条校验，配置若破坏这条关�
 `evals-live.yml` 是一份永不执行的形状文件、两条采购路由的 `blocked_when` 比计划多拦 `On Hold`——五条都进了
 spec 的「计划 6 偏离表」，各自写明理由与「缺了会漏什么」。
 
+### 还有两条，一条补了检查一条记了偏离
+
+`tests/integration/test_run_metering.py` 的 `duration_ms` 断言写的是 `>= 0`，而这一列是 Int、
+默认 0——**对每一行都成立**，包括从未结算过的。它唯一要挡的是「结算跑在 finished 事件之前」，
+那时 `summarise` 算不出时长、`storable` 丢掉这个键、列停在 0，恒真的断言正好挡不住。改成 `> 0`。
+
+计划要求在 `test_purchase_operations.py` 与 `test_work_order_operations.py` 各加一条拒绝用例；
+不加，理由与替代覆盖写进偏离表——同一性质今天由原生文案、真实 wire 的 417 与信封、
+以及端到端的 `lt-preflight-short-stock-04`（还多验了「零提案行」）三面覆盖。
+
 ### 一处方向性错误已在上一节改正
 
 Task 0.6 的「5 行 Sales Order」外推漏了 `indent=2` 的缩进：实测 5 行 17,782 字节（**超** 16KB），
