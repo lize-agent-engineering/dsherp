@@ -101,7 +101,7 @@ launchctl bootstrap gui/$(id -u) .runtime/com.dsherp.agent-worker-v16.plist
 | 项 | 结果 |
 |---|---|
 | 上位设计与证据口径 | spec `:41` G9 判据指向「计划 5 偏离表」；实施顺序表第 6 行依赖改为「5（串行；执行方式按裁决 #11）」；裁决 #7 改写为事实；新增裁决 #11、#12 |
-| G9 起算绿夜的触发方式 | `quality-gates-evidence.md` 写明是 `workflow_dispatch`；`schedule` 路径尚未证明（2026-09-08 核实：nightly 最近 20 次里只有 run 34150819690 是 `schedule`，红） |
+| G9 起算绿夜的触发方式 | ~~`schedule` 路径尚未证明~~ **2026-09-10 关闭**：[run 34387910099](https://github.com/lize-agent-engineering/dsherp/actions/runs/34387910099) 是 `schedule` 触发、19 步全绿（`9539768`，64 分钟） |
 | `crypto.randomUUID` 回退 | `frontend/src/context-api.js` 的 `requestId()`：`randomUUID` → `getRandomValues` → **抛错**（不退化到 `Math.random`，可预测的标识会让一次请求被当成另一次重放）；九处调用点改用它 |
 | 长列表 200 条封顶 | `LoadMore` 达到 `LOAD_MORE_CAP=200` 后按钮消失、**哨兵不再 observe**（否则滚到底仍会继续拉），提示改用搜索。替代 spec:179 的虚拟化，见偏离表 |
 | 模型答复外链域名白名单 | `boot.py` 的 `link_hosts()` 按 `frappe.conf.dsherp_link_hosts` 下发（list、小写主机名、≤20 项、去重排序；非法则空表 + `log_error`，**不 500**）；`agent-ui.jsx` 的 `isSameSiteHref(href, hosts)` 只放行站内相对路径与白名单内的 http/https 主机。**默认空表 = 今天的行为**，`img` 与 `urlTransform` 一字未改 |
@@ -1018,6 +1018,10 @@ configuration 65,536），`budget()` 增一条校验，配置若破坏这条关�
 
 至此切片 6 的结束门全部满足，计划 6 关闭。
 
+> **2026-09-10 更正**：这一句当时写早了。这一夜跑的是**补差之前**的 main；补差合入后的
+> 第一夜是红的，见文末《真正的结束门：从零全绿的那一夜》。结束门以那一节的
+> [run 34403951406](https://github.com/lize-agent-engineering/dsherp/actions/runs/34403951406) 为准。
+
 ## 计划 6 的完成度：41 项里 23 项完全做到，18 项与计划原文有差
 
 2026-09-10 用 7 名审计者逐条核对已合入的 main，每条判定再由一名独立复核者尽力推翻
@@ -1095,3 +1099,78 @@ spec 的「计划 6 偏离表」，各自写明理由与「缺了会漏什么」
 Task 0.6 的「5 行 Sales Order」外推漏了 `indent=2` 的缩进：实测 5 行 17,782 字节（**超** 16KB），
 文档原写「15,758，限内」。切片 4 的 `_fit_bytes` 按字节真截断，所以没有变成线上缺陷。
 
+
+## 真正的结束门：从零全绿的那一夜（2026-09-10）
+
+上面「切片 6 结束门的最后一项」那一节记的是 [run 34345420570](https://github.com/lize-agent-engineering/dsherp/actions/runs/34345420570)，
+它确实全绿，但那是**补差之前**的 main。补差合入（PR #31、#32）之后的第一夜
+[run 34396781643](https://github.com/lize-agent-engineering/dsherp/actions/runs/34396781643) 是**红的**，
+红在第 13 步原生测试，两条：
+
+```
+ERROR test_a_request_that_passes_preflight_does_store_its_proposal
+ERROR test_create_with_a_missing_link_is_refused_before_any_proposal_row_exists
+  File "dsherp_bridge/context_api.py", line 26, in _user
+    raise frappe.PermissionError('需要当前业务用户身份')
+```
+
+**第四种「只在本机绿」。** 前三种记在上一节；这一种是**类之间借状态**：unittest 按类名字典序
+发现类，`TestNoProposalRowSurvivesAPreflightRefusal` 排在 `TestPreflight` 前面，而创建业务身份
+`native-preflight@example.invalid` 的代码只写在后者的 `setUpClass` 里。本机跑绿是因为那个用户
+早被前几轮跑出来并留在测试站上——**测试站是有记忆的，每夜的站没有**。
+
+修法不是给那个类补一句创建，而是把建档抽成模块级 `_ensure_fixtures()`，三个类各自调用；
+同时把 `get_value('Customer', {}, 'name')` 这类「捡站上碰巧存在的行」的写法全换成本模块自己的
+常量——同一个顺序依赖，只是还没红过（PR #33）。
+
+复现是先做的：把本机测试站上这五个 fixture 删掉，跑出与每夜逐字一致的 2 ERROR，再改。
+
+### 顺手补掉两条「到处都跳过」的检查
+
+同一份日志里还有两条常年 skip：`this Site has no BOM`、`this Site has only one company`。
+两条都读「站上碰巧有没有」，而每夜从零建的站两样都没有——也就是 **`check_bom` 这条前置校验
+在任何地方都没有被跑过一次**，`check_warehouses` 的跨公司那半条同理。跳过的检查和没有检查，
+报表上是一样的：这是自审那六处「空转的检查」的第七种形状。
+
+建了两个幂等 fixture（BOM 0.2 秒、第二家公司 1.2 秒，后者自带四个非分组仓库），
+BOM 那条拆成四条：一条**正对照**（合法 BOM 必须放行——没有它，「一律拒绝」也能让三条拒绝
+判据同时成立）加三条拒绝（物料不匹配、未启用、草稿）（PR #34）。
+
+写这四条时踩到一个事实：**`IntegrationTestCase` 是每「类」回滚一次，不是每条**。
+先写成靠回滚还原 `is_active` / `docstatus` 的版本时，草稿用例留下的 `docstatus=0` 被字典序排在
+后面的正对照读到，正对照红了。改成 `addCleanup` 在本条内还原。
+
+### 结束门的那一夜
+
+[run 34403951406](https://github.com/lize-agent-engineering/dsherp/actions/runs/34403951406)，
+2026-09-09 20:55–22:02 UTC，commit `3de8e34`，**19 步全绿**，67 分钟（上限 120）：
+
+| 步 | 结果 |
+|---|---|
+| 从零拉起并开通四站 | 成功 |
+| 集成测试 | **216 passed**（29 分 07 秒） |
+| Frappe 原生测试 | **146 + 5，0 跳过**（此前 143 + 5 含 2 条永远跳过） |
+| 评估身份与注入载体 | 成功 |
+| 评估集回放 | **35/35 = 100%**，因预算或循环停止 **0** 条 |
+| 泄漏自检 | 通过 |
+| 拆栈 | 成功 |
+
+工件里的 `native/dsherp_bridge.log` 逐条核对过：146 条全是 `✔`，没有一条跳过，
+四条 BOM 用例与跨公司仓库用例**在从零的站上真的跑了**——这是它们第一次跑。
+
+### `schedule` 触发路径已被证明
+
+偏离表里记着「G9 起算绿夜是 `workflow_dispatch`，`schedule` 路径尚未证明」。
+[run 34387910099](https://github.com/lize-agent-engineering/dsherp/actions/runs/34387910099)
+是 **`schedule`** 触发、19 步全绿（commit `9539768`，2026-09-09 18:15 UTC，64 分钟，
+216 集成、回放 34/34）。该条偏离就此关闭。
+
+### 一处顺手加固：库存不足用例的单据名不再靠运气
+
+`lt-preflight-short-stock-04` 与它的脚本都逐字写了 `MAT-STE-2026-00001`。这个名字来自
+`MAT-STE-.YYYY.-` 的站内计数器，只有在没有别的单据先抽过这个序列时才落在 00001。
+现在制造 fixture 与 `injection.py` 都不建 Stock Entry，所以对得上——但这是碰巧，不是保证。
+`rebased_records.short_stock_issue()` 之后加了名字比对，不一致就停在开通步，并把要同步改的
+两个文件路径写进报错。负对照做过：期望名字改成 `MAT-STE-2026-09999`，断言按预期响。
+
+至此切片 6 的结束门在**最终 main** 上全部满足，计划 6 关闭。
