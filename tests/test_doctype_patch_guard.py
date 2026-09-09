@@ -65,23 +65,23 @@ def test_a_version_that_moved_needs_a_backfill_but_one_merely_introduced_does_no
 
 
 def test_a_native_test_fixture_is_not_a_stored_payload():
-    """Slice 6 added three native tests whose page-context fixture contains `schema_version`.
-    The guard refused the branch over them, naming a migration that never happened — the same
-    false positive the built bundles produced, one directory over."""
-    import subprocess
-    import sys
-    from pathlib import Path
+    """A native test builds a page context to hand to the code under test, so its fixture
+    contains `schema_version` too. Slices 4 and 6 each added such files and the guard refused
+    the whole branch over them, naming a migration that never happened — the same false
+    positive the built bundles produced, one directory over.
 
-    root = Path(__file__).resolve().parents[1]
-    fixtures = sorted((root / 'frappe_app/dsherp_bridge/tests').glob('test_*.py'))
-    carriers = [path for path in fixtures if 'schema_version' in path.read_text(encoding='utf-8')]
-    assert carriers, '原生测试里应当有带 schema_version 的页面上下文夹具'
-    result = subprocess.run(
-        [sys.executable, '-c',
-         "import sys;from infra.check_doctype_patches import PAYLOAD_SCOPE;"
-         "print(any('tests' in item for item in PAYLOAD_SCOPE))"],
-        cwd=root, text=True, capture_output=True, timeout=60)
-    assert result.stdout.strip() == 'True', '原生测试目录必须排除在存量 payload 的扫描之外'
+    Asserted as the rule rather than as the presence of any particular fixture, so it holds on
+    every branch: the scan excludes the native test tree, and a fixture-shaped diff does not
+    trip the judgement even inside the scan."""
+    from infra.check_doctype_patches import PAYLOAD_SCOPE
+
+    assert any('tests' in item and item.startswith(':(exclude)') for item in PAYLOAD_SCOPE), \
+        '原生测试目录必须排除在存量 payload 的扫描之外'
+    assert any('public/dist' in item for item in PAYLOAD_SCOPE), '构建产物的排除不能被顺手删掉'
+    fixture = ("--- /dev/null\n"
+               "+++ b/frappe_app/dsherp_bridge/tests/test_read_tools.py\n"
+               "+PAGE = json.dumps({'schema_version': 1, 'page_type': 'unknown', 'route': []})\n")
+    assert schema_version_moved(fixture) is False
 
 
 def test_only_real_patch_lines_are_counted():
