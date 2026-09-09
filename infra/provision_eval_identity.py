@@ -38,6 +38,12 @@ OPERATOR = 'daily-operator@example.invalid'
 # a different domain is a different person.
 CONFIGURATOR = 'daily-configurator@example.invalid'
 DEFAULT_OUT = '.runtime/eval-users.json'
+# Where the Site's own URLs come from. A parameter, not a constant, for two reasons: `--site`
+# is already a parameter and pinning the daily profile here would hand another Site the daily
+# URLs; and `.runtime/` is not in the repository, so a hardcoded read makes every caller —
+# including a test that never touches a Site — depend on this machine's state. `evals/run.py`
+# takes the same argument under the same name.
+DEFAULT_SERVICE = '.runtime/context-worker-daily.json'
 
 SCRIPT = r"""
 import json, os, frappe
@@ -89,6 +95,8 @@ def main(argv=None, run=subprocess.run):
     parser.add_argument('--site', default=DEFAULT_SITE)
     parser.add_argument('--user', default=OPERATOR)
     parser.add_argument('--out', default=DEFAULT_OUT)
+    parser.add_argument('--service', default=DEFAULT_SERVICE,
+                        help='站点运行身份档案，从中取 business_url 与 base_url')
     args = parser.parse_args(argv)
 
     target = ROOT / args.out
@@ -106,7 +114,7 @@ def main(argv=None, run=subprocess.run):
         tail = (result.stderr or result.stdout or '').strip().splitlines()[-8:]
         raise RuntimeError('评估身份开通失败；未打印任何凭据：\n' + '\n'.join(tail))
     issued = json.loads([line for line in result.stdout.splitlines() if line.strip()][-1])
-    service = json.loads((ROOT / '.runtime/context-worker-daily.json').read_text())
+    service = json.loads((ROOT / args.service).read_text())
     profile = {'site': args.site, 'business_url': service['business_url'],
                'operator': {'user': issued['user'], 'api_key': issued['api_key'],
                             'api_secret': issued['api_secret'],
