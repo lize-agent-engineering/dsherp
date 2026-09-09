@@ -253,7 +253,7 @@ Internet ──TLS──▶ 反向代理（Caddy，自动证书，*.tenant.examp
 | 3 | 审计不可篡改 | 对外承诺：任何角色（含 Administrator）不可删改 | T2 定为 P0；工作流 E 的 on_trash 无条件拒绝与 track_changes 按现文执行；G7 按此验收 |
 | 4 | 凭证托管 | 业务站签发短期 API key，平台不长期保存 | 工作流 B 凭证部分按现文执行；不引入外部密钥库 |
 | 5 | 注入防护深度 | 信封标签 + 渲染限制 + 评估用例 | 工作流 B/F 按现文执行；不做独立输出复检调用，写入仍由 HITL 兜底 |
-| 6 | 预算常量正式值 | **2026-09-09 裁定完成**（34 条真实模型批次）：单次输出 token 三域 8192；调用数 operation 15 / query 11 / configuration 8；累计输入字节 786,432；累计输出 token operation 61,440 / 其余 24,576；时长维持 600s / 300s。推导与被截断的观测见「计划 6 偏离表」与 [agent-quality-evidence](../../engineering/agent-quality-evidence.md) Task 6.5 | 观测值归档在 `docs/engineering/data/evals-live-observations-2026-09-09.json`，`tests/test_budget_official_values.py` 数据驱动比对，不写死数字 |
+| 6 | 预算常量正式值 | **2026-09-09 裁定完成**（34 条真实模型批次）：单次输出 token 三域 8192；调用数 operation 15 / query 11 / configuration 8；累计输入字节 786,432；累计输出 token = **调用数 × 单次**（operation 122,880 / query 90,112 / configuration 65,536——低于这个乘积时预留不退款会让它变成一个更小的调用数上限，见证据文档「第三个真实缺陷」）；时长维持 600s / 300s。推导与被截断的观测见「计划 6 偏离表」与 [agent-quality-evidence](../../engineering/agent-quality-evidence.md) Task 6.5 | 观测值归档在 `docs/engineering/data/evals-live-observations-2026-09-09.json`，`tests/test_budget_official_values.py` 数据驱动比对，不写死数字 |
 | 7 | 执行模式 | 原为 Codex 执行；计划 3/4/5 实际由 Claude 直接执行并自审，2026-09-08 用户裁决计划 6 沿用「Claude 新会话执行 + 自审」，独立审计按需另开 | 串行顺序不变；「审计方独立重跑」的门（G1/G3）仍由用户或独立会话执行 |
 | 8 | 单主机内部 HTTP（2026-09-05 裁决） | 接受：TLS 终止在 Caddy，同一受控主机 internal 网络内各跳为明文；公网入口、provider 与任何跨主机连接继续 HTTPS | G4 判据改写为「公网入口与一切外联走 TLS，单主机内部各跳限于受控主机的 internal 网络」；配套要求宿主防火墙规则持久化并经重启/网络重建验证（计划 3 收口已做） |
 | 9 | 外部主机验收与研发解耦（2026-09-05 裁决） | 计划 3 收口后允许计划 4 本地研发开工；G1/ACME 保持未通过，仍作为真实租户接入前的必要验收 | 实施顺序表第 4 行的依赖改为「制品合入即可」；裁决 #7 的串行只约束研发顺序，不再把外部验收当作开工前置 |

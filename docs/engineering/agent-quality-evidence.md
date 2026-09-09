@@ -808,7 +808,7 @@ live 那份 23.5% 拆完之后，三件事各自有各自的处置。**阈值一
 | `model_max_calls`（query） | 8 | max 7 | **11** | `ceil(7×1.5)` |
 | `model_max_calls`（configuration） | 8 | max 3 | 8（不动） | 4 条运行不足以收紧 |
 | `model_max_input_bytes_total` | 524,288 | max 487,976（**93%**） | **786,432** | `ceil(×1.5)` 后取整到 768 KiB |
-| `model_max_output_tokens_total` | 30,720 / 16,384 | max 13,533 / 6,231 | **61,440 / 24,576** | 单次涨了，累计要跟上 |
+| `model_max_output_tokens_total` | 30,720 / 16,384 | max 13,533 / 6,231 | **122,880 / 90,112 / 65,536** | 先按「单次涨了，累计要跟上」定为 61,440 / 24,576，随后被下面「第三个真实缺陷」推翻：低于 `调用数 × 单次` 时它其实是个更小的调用数上限，故取乘积 |
 | `run_total_seconds` | 600 / 300 | max 189s / 127s | 600 / 300（**不动**） | 公式会收紧到 300s；19 条合成运行不是裁剪线上超时的分布 |
 
 观测值归档在 `docs/engineering/data/evals-live-observations-2026-09-09.json`，
@@ -1011,4 +1011,40 @@ configuration 65,536），`budget()` 增一条校验，配置若破坏这条关�
 配了异地仓库时 `admin.doctor` 仍要求文件存在且 0600。
 
 至此切片 6 的结束门全部满足，计划 6 关闭。
+
+## 计划 6 的完成度：41 项里 23 项完全做到，18 项与计划原文有差
+
+2026-09-10 用 7 名审计者逐条核对已合入的 main，每条判定再由一名独立复核者尽力推翻
+（48 个代理，工作流 `plan6-completion-audit`）。结论：**没有一项是没做（missing）**，
+但 **18 项与计划的字面要求有差**，多数是「主体做到、计划点名的某个具体东西没落实且没记偏离」。
+
+按性质分三类：
+
+**一、计划点名的文件/用例没建（不影响已验证的行为，但计划确实这么写了）**
+- Task 2.6：`frappe_app/dsherp_bridge/tests/test_injection_fixtures.py` 不存在；载体的唯一性
+  今天由 `evals/setup/injection.py` 的 SQL 断言守着。
+- Task 2.7：`evals/setup/longtail.py` 从未创建（长尾用例直接用了站上既有夹具）。
+- Task 5.1 / 5.2 / 5.3：三条点名的原生用例没有等价物，或判据比计划写的弱
+  （`test_routes_agree_with_propose_make` 没有真的调用 `propose_make`）。
+- Task 3.1：`tests/test_error_taxonomy_behavior.py` 的三条「模型看到的失败文本」用例没加。
+- Task 3.3：`prompt-sections.test.cjs` 少一条「装配结果为空即抛」。
+
+**二、做法换了但没记偏离（这一条最该补，因为偏离表本身就是为它设的）**
+- Task 2.5：16 条历史用例不是「迁到 daily 站」，而是在 daily 站**新建**了改基版本，
+  `evals/cases/dsherp-validation.localhost/` 下的 16 个 v1 文件原样留着。
+- Task 3.4：`exports.skillMarker(root, domain)` 没做；等价能力在 `prompt-sections.cjs` 里。
+- Task 5.4：SKILL.md 的「六步节奏压缩为一句」没做，那段仍是原文。
+- Task 5.6 / 6.5：计划点名的「库存不足」评估用例不存在，实际第三条是 missing-mandatory。
+- Task 0.6：计划要实测「5 行 Sales Order」，实际用单行 × 5 外推——而外推口径漏了缩进，
+  实测 5 行是 17,782 字节（超 16KB），文档写的是 15,758（限内）。**方向被写反了。**
+
+**三、已修**
+- Task 6.6：裁决 #6 与证据文档里的累计输出 token 是过期值（61,440 / 24,576），
+  写的是「累计输出预算低于调用数 × 单次」那个缺陷**修复之前**的数。出厂真值是
+  122,880 / 90,112 / 65,536。已改正，`tests/test_budget_official_values.py` 本来就是数据驱动的，
+  所以代码侧一直是对的，错的只有文档。
+
+**这些差不影响已经验证过的东西**：G8 三条判据、四套门、216 集成、140+5 原生、回放 34/34、
+含评估步的全绿 nightly，都是对**实际行为**的测量，不依赖上面这些缺口。
+但计划的字面完成度是 23/41，如实记在这里。
 
