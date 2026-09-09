@@ -118,7 +118,7 @@ export default function AgentArchive({ api, onOpen, onChange, refresh = 0 }) {
             compact
           />
         )}
-        <LoadMore hasMore={hasMore} busy={moreBusy} onLoad={grow} label="加载更多已归档对话" />
+        <LoadMore hasMore={hasMore} busy={moreBusy} onLoad={grow} label="加载更多已归档对话" count={items.length} />
       </div>
     </div>
   );

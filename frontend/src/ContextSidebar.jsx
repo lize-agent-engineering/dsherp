@@ -7,7 +7,7 @@ import {parseTime,relativeTime} from './agent-format.js';
 import {Spark} from './agent-ui.jsx';
 import {TranscriptTurn,TurnConfirmations} from './agent-turn.jsx';
 import {buildTranscript} from './agent-transcript.js';
-import {describeError} from './context-api.js';
+import {describeError,requestId} from './context-api.js';
 
 const pollCap=30000;
 const permissionError=error=>error?.kind==='permission'||(typeof error?.message==='string'&&error.message.includes('权限'));
@@ -117,7 +117,7 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
         }
         context=captureSelected(provided.keys);
       }
-      const result=await api('send_message',{session_id:selected.current,question:submitted,context,domain,request_id:crypto.randomUUID()});
+      const result=await api('send_message',{session_id:selected.current,question:submitted,context,domain,request_id:requestId()});
       if(ticket!==generation.current)return;
       selected.current=result.id;setSession(result);setQuestion('');setAttachment(null);setAttachmentError('');
       setSessions(old=>[{id:result.id,title:result.title},...old.filter(s=>s.id!==result.id)]);
@@ -127,13 +127,13 @@ export default function ContextSidebar({api,capture=capturePageContext,options=c
   async function cancel(){
     const ticket=++generation.current;pending.current=true;setBusy(true);
     try{
-      const result=await api('cancel_run',{session_id:session.id,run_id:session.active_run,request_id:crypto.randomUUID()});
+      const result=await api('cancel_run',{session_id:session.id,run_id:session.active_run,request_id:requestId()});
       if(ticket===generation.current)setSession(result);
     }catch(e){fail(e,ticket);}
     finally{if(ticket===generation.current){pending.current=false;setBusy(false);}}
   }
   function handoff(event){
-    const token=crypto.randomUUID().replaceAll('-','');
+    const token=requestId();
     sessionStorage.setItem(`dsherp-agent-handoff:${token}`,JSON.stringify(page));
     const sessionQuery=session?.id?`session=${encodeURIComponent(session.id)}&`:'';
     event.currentTarget.href=`/desk/dsherp-agent?${sessionQuery}handoff=${token}`;

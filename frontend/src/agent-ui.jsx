@@ -1,9 +1,10 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Popover } from 'antd';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { DatabaseOutlined, FileSearchOutlined, RightOutlined, SearchOutlined, SettingOutlined, SwapOutlined, ToolOutlined } from '@ant-design/icons';
 import { statusText, statusTone } from './agent-format.js';
+import { linkHosts } from './page-context.js';
 import './agent-theme.css';
 
 // The product mark, drawn rather than borrowed from a glyph so it keeps its
@@ -35,13 +36,26 @@ export function StatusChip({ status, tone, raw = true }) {
 }
 
 // Everything rendered here reached the model as business data first. An image URL or a
-// link it repeats is an outbound channel out of this page, so images never render and
-// only same-site links stay clickable; anything else degrades to visible text.
+// link it repeats is an outbound channel out of this page, so images never render, and a
+// link stays clickable only when it is site-relative or its host is on the allowlist the
+// server sent down; anything else degrades to visible text. The allowlist is empty unless
+// the site configures one, which is exactly today's behaviour.
 const SAME_SITE = /^\/(?!\/)/;
 
-export const isSameSiteHref = (href) => typeof href === 'string' && SAME_SITE.test(href);
+export const isSameSiteHref = (href, hosts = []) => {
+  if (typeof href !== 'string') return false;
+  if (SAME_SITE.test(href)) return true;
+  if (!hosts.length) return false;
+  let url;
+  try {
+    url = new URL(href);
+  } catch {
+    return false;                       // relative, protocol-relative or malformed
+  }
+  return (url.protocol === 'http:' || url.protocol === 'https:') && hosts.includes(url.hostname);
+};
 
-const markdownComponents = {
+export const makeMarkdownComponents = (hosts = []) => ({
   table: (props) => (
     <div className="dsh-table-scroll">
       <table {...props} />
@@ -49,7 +63,7 @@ const markdownComponents = {
   ),
   img: ({ alt }) => <span className="dsh-blocked-media">{alt ? `[图片：${alt}]` : '[图片已屏蔽]'}</span>,
   a: ({ href, children }) =>
-    isSameSiteHref(href) ? (
+    isSameSiteHref(href, hosts) ? (
       <a href={href}>{children}</a>
     ) : (
       <span className="dsh-plain-link">
@@ -57,7 +71,7 @@ const markdownComponents = {
         {href ? `（${href}）` : ''}
       </span>
     ),
-};
+});
 
 // Long business answers fold, but only the answer prose: alerts, proposals and
 // execution results always stay in view.
@@ -65,6 +79,7 @@ export function Prose({ children, foldAt = 420 }) {
   const body = useRef(null);
   const [tall, setTall] = useState(false);
   const [open, setOpen] = useState(false);
+  const components = useMemo(() => makeMarkdownComponents(linkHosts()), []);
   useLayoutEffect(() => {
     const node = body.current;
     if (!node || !foldAt) return;
@@ -77,7 +92,7 @@ export function Prose({ children, foldAt = 420 }) {
         <ReactMarkdown
           skipHtml
           remarkPlugins={[remarkGfm]}
-          components={markdownComponents}
+          components={components}
           // Left intact on purpose: only a site-relative href ever becomes an anchor,
           // so a javascript: or data: URL can reach the reader as text but never as a link.
           urlTransform={(url) => url}
@@ -124,13 +139,17 @@ export function EmptyState({ icon, title, description, children, compact }) {
 
 // Lists grow as you scroll. The button stays real so keyboard users and
 // browsers without IntersectionObserver can still reach the next page.
-export function LoadMore({ hasMore, busy, onLoad, label }) {
+// Past LOAD_MORE_CAP rows we stop growing entirely: the sentinel is never observed
+// and the button is gone, so scrolling to the bottom cannot keep pulling pages.
+export const LOAD_MORE_CAP = 200;
+export function LoadMore({ hasMore, busy, onLoad, label, count }) {
   const sentinel = useRef(null);
   const load = useRef(onLoad);
   load.current = onLoad;
+  const capped = typeof count === 'number' && count >= LOAD_MORE_CAP;
   useEffect(() => {
     const node = sentinel.current;
-    if (!node || !hasMore || typeof IntersectionObserver === 'undefined') return undefined;
+    if (!node || !hasMore || capped || typeof IntersectionObserver === 'undefined') return undefined;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) load.current();
@@ -139,8 +158,15 @@ export function LoadMore({ hasMore, busy, onLoad, label }) {
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasMore, busy]);
+  }, [hasMore, busy, capped]);
   if (!hasMore) return null;
+  if (capped) {
+    return (
+      <div className="dsh-more">
+        <span className="dsh-load-capped">已显示前 {LOAD_MORE_CAP} 条，请用搜索缩小范围</span>
+      </div>
+    );
+  }
   return (
     <div className="dsh-more" ref={sentinel}>
       {busy ? (

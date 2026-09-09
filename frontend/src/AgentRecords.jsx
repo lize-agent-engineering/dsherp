@@ -180,7 +180,7 @@ export default function AgentRecords({ api, method, empty, refresh = 0 }) {
         </button>
       ))}
       {!busy && !records.length && <EmptyState icon={<InboxOutlined />} title={empty.title} description={empty.hint} compact />}
-      <LoadMore hasMore={hasMore} busy={moreBusy} onLoad={grow} label="加载更多记录" />
+      <LoadMore hasMore={hasMore} busy={moreBusy} onLoad={grow} label="加载更多记录" count={records.length} />
     </div>
   );
 

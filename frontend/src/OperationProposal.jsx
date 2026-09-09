@@ -3,6 +3,7 @@ import {Alert, Button, Space, Table, Typography} from 'antd';
 import {applyFormProposal} from './form-fill.js';
 import {proposalRows} from './proposal-rows.js';
 import {isExpired} from './agent-format.js';
+import {requestId} from './context-api.js';
 
 const display = value => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value);
 const actions={create:'创建',update:'修改',submit:'提交',cancel:'取消',fill:'填入当前草稿'};
@@ -46,7 +47,7 @@ function Proposal({proposal, onConfirm,onReject,onApply=applyFormProposal,onVeri
     claimed.current = true;
     setState({status: 'Running'});
     try {
-      const result = await onConfirm({proposal_id: proposal.id, digest: proposal.digest, request_id: crypto.randomUUID()});
+      const result = await onConfirm({proposal_id: proposal.id, digest: proposal.digest, request_id: requestId()});
       if(result.status==='Authorized'&&proposal.action==='fill'){
         if(result.target!=='browser-draft'||result.doctype!==proposal.doctype||result.name!==proposal.name||result.version!==proposal.version)throw new Error('填入授权与目标不一致，请核实');
         for(const change of proposal.changes)if(JSON.stringify(result.values?.[change.field])!==JSON.stringify(change.after))throw new Error('填入授权内容不一致，请核实');
@@ -62,7 +63,7 @@ function Proposal({proposal, onConfirm,onReject,onApply=applyFormProposal,onVeri
     claimed.current = true;
     setState({status: 'Rejecting'});
     try {
-      const result = await onReject({proposal_id: proposal.id, digest: proposal.digest, request_id: crypto.randomUUID()});
+      const result = await onReject({proposal_id: proposal.id, digest: proposal.digest, request_id: requestId()});
       setState(result?.status === 'Rejected' ? result : {status: 'Unknown', error: '拒绝结果尚未核实，请刷新记录核实'});
     } catch (error) {
       setState({status: 'Unknown', error: error.message});

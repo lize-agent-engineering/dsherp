@@ -15,6 +15,8 @@ Frappe `16.31.0`，容器 Python `3.14.7`，DSH SDK/Runtime `0.1.1rc1`。
 第一个含原生测试步、17/17 步全绿的 nightly。从这一夜开始计 30 天连续绿，
 只对 `ci.yml` 与 `nightly.yml` 计算，`supply-chain.yml` 不计入。
 
+**起算绿夜的触发方式：`workflow_dispatch`。** 截至 2026-09-08，唯一一次 `schedule` 触发的 nightly（run 34150819690）是红的（原因见「每夜时间线」）。`schedule` 路径与 `workflow_dispatch` 路径在 GitHub Actions 里除触发器外无差异，但「定时触发本身能跑绿」要等第一个 `schedule` 绿夜才算证明：尚未出现，待补（2026-09-08 核实：nightly 最近 20 次运行里只有一次 `schedule` 触发，conclusion=failure）。
+
 **G9 尚未通过**，也不该由本文宣称通过：它要的是 30 天的运行历史，只能由 workflow 自己证明。
 本文只负责把起点钉死，并说明这个起点凭什么算数。
 

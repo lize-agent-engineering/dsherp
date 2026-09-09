@@ -1,6 +1,7 @@
 import React,{useRef,useState} from 'react';
 import {Alert,Button,Space,Table,Typography} from 'antd';
 import {isExpired} from './agent-format.js';
+import {requestId} from './context-api.js';
 
 export default function ConfigurationProposal(props){
  return <Confirmation key={`${props.proposal.id}:${props.proposal.digest}`} {...props}/>;
@@ -19,7 +20,7 @@ function Confirmation({proposal,onConfirm,onVerify}){
  async function confirm(){
   if(claimed.current||disabled||expired())return;
   claimed.current=true;setLocal({status:'Running'});
-  try{setLocal(await onConfirm({proposal_id:proposal.id,digest:proposal.digest,request_id:crypto.randomUUID()}));}
+  try{setLocal(await onConfirm({proposal_id:proposal.id,digest:proposal.digest,request_id:requestId()}));}
   catch(error){setLocal({status:'Unknown',error:error.message});}
  }
  async function verify(){

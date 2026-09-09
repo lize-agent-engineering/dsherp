@@ -113,3 +113,15 @@ export async function contextApi(method,params={},signal){
 export function listRunEvents(runId,page=1,signal){
   return contextApi('list_run_events',{run_id:runId,page},signal);
 }
+// 每个会改状态的调用都带一个请求标识，服务端用它做幂等（1–128 字符）。
+// crypto.randomUUID 需要安全上下文，getRandomValues 不需要；Math.random 在这里永远不是选项：
+// 可预测的标识会让一次请求被当成另一次重放。
+export function requestId(){
+  const c=globalThis.crypto;
+  if(typeof c?.randomUUID==='function')return c.randomUUID().replaceAll('-','');
+  if(typeof c?.getRandomValues==='function'){
+    const bytes=c.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+  }
+  throw new Error('当前浏览器不支持安全随机数，无法发送请求');
+}

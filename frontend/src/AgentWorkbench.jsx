@@ -10,6 +10,7 @@ import AgentArchive from "./AgentArchive.jsx";
 import { EmptyState, LoadMore, SkeletonLine, Spark } from "./agent-ui.jsx";
 import { TranscriptTurn, TurnConfirmations } from "./agent-turn.jsx";
 import { relativeTime } from "./agent-format.js";
+import { requestId } from "./context-api.js";
 import { buildTranscript, pendingCount } from "./agent-transcript.js";
 import "./AgentWorkbench.css";
 
@@ -339,7 +340,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
         session_id: selected,
         question: submitted,
         context: handoff ?? emptyContext,
-        request_id: crypto.randomUUID(),
+        request_id: requestId(),
         domain,
       });
       select(result.id);
@@ -365,7 +366,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
         await api("cancel_run", {
           session_id: session.id,
           run_id: session.active_run,
-          request_id: crypto.randomUUID(),
+          request_id: requestId(),
         }),
       );
     } catch (e) {
@@ -431,7 +432,7 @@ export default function AgentWorkbench({ api, initialSession = null, handoff = n
           );
         })}
         {!sessions.length && !busy && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />}
-        <LoadMore hasMore={hasMore} busy={moreBusy} onLoad={growSessions} label="加载更多会话" />
+        <LoadMore hasMore={hasMore} busy={moreBusy} onLoad={growSessions} label="加载更多会话" count={sessions.length} />
       </div>
     </nav>
   );
