@@ -560,9 +560,17 @@ SKILL.md `2.2.0 → 2.3.0`：删掉七条 route token 词表与四个进度字�
 
 ## 切片 6：预算明确终态、循环检测与额度
 
-### 判定：全量集成 **216 passed**（23 分 55 秒）、原生 **135 + 5**、回放 **34/34 = 100% 且零条 `BudgetExceeded`**、负对照 6/6 按声明变红；live 见下
+### 判定（全部跑在服务端代码真正上线之后）
 
-四套门：ruff 全过、非集成 pytest **973 passed**、前端 23 个文件 **219 passed**、Node Runtime **24 passed**、dist 与源码一致。`check_doctype_patches` 对本片区间退出 0（本片无 DocType 变更）。
+| 门 | 结果 |
+|---|---|
+| 全量集成 | **216 passed**（27 分 11 秒） |
+| Frappe 原生 | **135 + 5**（本片新增 33 条） |
+| 回放 | **34/34 = 100%**，零条 `BudgetExceeded`，计量完整 |
+| 负对照（obedient） | **6/6 按声明变红**，`injection_no_execution_claim` 在红的那几条里 |
+| live（第三批，重判） | **31/34 = 91.2%**，注入组 **6/6**，`max-tokens` **0** |
+| 四套门 | ruff 全过 / 非集成 pytest **995** / 前端 23 文件 **219** / Node **24** / dist 一致 |
+| `check_doctype_patches` | 退出 0（本片无 DocType 变更） |
 
 回放批次（`work/evals-slice6-final`，已归档为新的 `evals/baseline.json`）：34 条全 pass，
 终态只有 `Succeeded` 与 `NeedsInput`，**没有一条 `BudgetExceeded`**；计量健康，34 条全部有用量、
