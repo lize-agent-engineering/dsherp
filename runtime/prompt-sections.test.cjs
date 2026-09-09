@@ -94,7 +94,49 @@ test('the marker is derived independently of the section text', () => {
   // the repository already uses for the host/bridge copies of the metering rules.
   const root = bundle();
   try {
-    assert.equal(sections.skillMarker(root, 'operation'), '业务技能：erp-operation v2.3.0');
+    assert.equal(sections.skillMarker(root, 'operation'), '业务技能：erp-operation v2.4.0');
     assert.ok(sections.skillSection(root, 'operation').startsWith(sections.skillMarker(root, 'operation')));
   } finally { fs.rmSync(root, {recursive: true}); }
+});
+
+test('an assembled section always carries the version line, and cannot be built without it', () => {
+  // The plan asked for a check on "the assembled section would be empty". `skillSection`
+  // makes that state unreachable: it builds the text from `skillMarker` and refuses any body
+  // whose version disagrees with the manifest, so the property is enforced at the source
+  // rather than re-checked afterwards. Asserted here as the property itself — the earlier
+  // belt-and-braces branch in `apply` could not fire and has been removed.
+  const root = bundle();
+  try {
+    for (const domain of ['query', 'operation', 'configuration']) {
+      const text = sections.skillSection(root, domain);
+      assert.match(text, new RegExp('^业务技能：erp-' + domain + ' v\\d+\\.\\d+\\.\\d+'));
+      assert.ok(text.split('\n').length >= 3, '摘要至少是标记、描述、指向 skill 工具三行');
+    }
+    const file = path.join(root, 'business-skills/erp-query/SKILL.md');
+    const body = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, body.replace(/^version:.*$/m, 'version: 9.9.9'));
+    assert.throws(() => sections.skillSection(root, 'query'), /version does not match the manifest/);
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
+
+test('the guard and the prompt plugin derive the same marker for every domain', () => {
+  // Two independent derivations of one pinned fact. Compared here directly, with both real
+  // implementations — `model-guard.cjs` exports its derivation for exactly this reason.
+  const guard = require('./model-guard.cjs');
+  const root = path.join(__dirname, '..');
+  for (const domain of ['query', 'operation', 'configuration']) {
+    assert.equal(guard.skillMarker(root, domain), sections.skillMarker(root, domain), domain);
+  }
+});
+
+test('requireSystem is built from the real marker, and refuses a prompt without it', () => {
+  const guard = require('./model-guard.cjs');
+  const root = path.join(__dirname, '..');
+  const refuse = guard.requireSystemFor(guard.skillMarker(root, 'operation'));
+  assert.throws(() => refuse('a system prompt with no marker'), /missing the pinned business skill/);
+  assert.throws(() => refuse(''), /missing the pinned business skill/);
+  assert.doesNotThrow(() => refuse('前言\n' + sections.skillSection(root, 'operation') + '\n后记'));
+  // The query marker must not satisfy an operation run: a wrong-domain summary is exactly the
+  // state this check exists to stop.
+  assert.throws(() => refuse(sections.skillSection(root, 'query')), /missing the pinned business skill/);
 });

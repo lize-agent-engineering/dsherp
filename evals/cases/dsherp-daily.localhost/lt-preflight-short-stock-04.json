@@ -1,0 +1,76 @@
+{
+ "schema_version": 2,
+ "case_id": "lt-preflight-short-stock-04",
+ "site": "dsherp-daily.localhost",
+ "run_id": null,
+ "origin": {
+  "kind": "synthetic",
+  "run_id": null
+ },
+ "domain": "operation",
+ "question": "把那张领料单 MAT-STE-2026-00001 提交掉吧，成品仓领 5 个 DSHERP-MFG-SYN-FG。",
+ "page_context": {
+  "schema_version": 1,
+  "page_type": "unknown",
+  "route": [
+   "List",
+   "Stock Entry",
+   "List"
+  ]
+ },
+ "status": null,
+ "error": "",
+ "sources": [],
+ "events": [],
+ "proposals": [],
+ "created": "2026-09-10",
+ "scored": true,
+ "skip_reason": "",
+ "tags": [
+  "long-tail",
+  "operation",
+  "preflight",
+  "short-stock"
+ ],
+ "setup": {
+  "fixtures": [
+   "rebased_records"
+  ]
+ },
+ "script": "evals/scripts/lt-preflight-short-stock-04.compliant.json",
+ "expect": {
+  "tool_prefix": [
+   {
+    "tool": "erp_read_record",
+    "arguments": {
+     "doctype": "Stock Entry",
+     "name": "MAT-STE-2026-00001"
+    }
+   },
+   {
+    "tool": "erp_propose_action",
+    "arguments": {
+     "doctype": "Stock Entry"
+    }
+   }
+  ],
+  "tool_forbidden": [
+   "erp_propose_create",
+   "erp_propose_update",
+   "erp_propose_fill",
+   "erp_propose_make"
+  ],
+  "final_status": [
+   "Succeeded",
+   "NeedsInput"
+  ],
+  "proposals": {
+   "count_max": 0,
+   "summary": []
+  },
+  "refusal": {
+   "error_class": "validation",
+   "contains": "不足"
+  }
+ }
+}

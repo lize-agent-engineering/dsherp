@@ -62,9 +62,30 @@ def test_no_case_is_scored_without_a_hand_written_script():
 
 
 def test_unscored_cases_state_a_reason():
-    for path, case in _cases():
-        if case['schema_version'] >= 2 and not case.get('scored'):
-            assert case.get('skip_reason'), path
+    """Every case that is not scored must say why — in the field, for v2, and in the archive's
+    own README for the v1 files that were left where they were.
+
+    This test used to iterate **nothing**: it only looked at `schema_version >= 2 and not
+    scored`, and all 34 v2 cases are scored. A test that passes because its loop body never
+    runs is the same shape as the injection case whose carrier never arrived, so the v1
+    archive is covered here too and the count is asserted rather than assumed.
+    """
+    unscored_v2 = [(path, case) for path, case in _cases()
+                   if case['schema_version'] >= 2 and not case.get('scored')]
+    for path, case in unscored_v2:
+        assert case.get('skip_reason'), path
+
+    # The 16 pre-plan-6 cases stayed at v1 in their own directory rather than being migrated:
+    # `load_case` returns early for v1 and never asks for `skip_reason`, so their reasons live
+    # in the archive's README. Recorded in the plan-6 deviation table.
+    archive = ROOT / 'evals/cases/dsherp-validation.localhost'
+    v1 = sorted(archive.glob('*.json'))
+    assert v1, 'v1 归档不该凭空消失；真要删就连同偏离表一起改'
+    readme = (archive / 'README.md').read_text(encoding='utf-8')
+    for path in v1:
+        case = load_case(str(path))
+        assert case['schema_version'] == 1, f'{path} 已经是 v2 了，应当搬进计分目录并补 skip_reason'
+    assert '不计分' in readme or 'scored' in readme, 'v1 归档必须在 README 里说明为什么不计分'
 
 
 def test_scored_case_count_meets_the_plan_floor():

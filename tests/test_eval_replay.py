@@ -231,3 +231,35 @@ def test_rejudging_uses_todays_cases_and_marks_the_report_as_not_fresh():
     assert summary['cases'][0]['run_id'] == 'run-1', '重判的是那一次真实运行，不是新跑一次'
     assert summary['cases'][0]['model_calls'] == 3, '原始用量原样带过来'
     assert summary['rejudged_from']['pass_rate_before'] == 0.5
+
+
+def test_the_report_names_the_assembly_the_batch_ran_under():
+    """A report whose numbers cannot be tied to one assembly is a report nobody can reproduce.
+
+    The plan asked for `runtime_revision` / `prompt_version` / `skill_versions` / `model` at
+    the top level of `report.json`; they were only ever per case. A set rather than a single
+    value, so a batch that straddled a rotation says so instead of quietly reporting the first
+    one it saw — which is exactly the situation `--compare-baseline` must not paper over.
+    """
+    from evals import run as runner
+
+    def row(case_id, **over):
+        base = {'case_id': case_id, 'verdict': 'pass', 'tags': [], 'checks': [],
+                'runtime_revision': 'rev-1', 'prompt_version': '2', 'model': 'deepseek-v4-flash',
+                'skill_versions': '{"erp-query": "1.4.0"}'}
+        base.update(over)
+        return base
+
+    steady = runner.report([row('a'), row('b')], mode='replay', site='s', started='t')
+    assert steady['runtime_revision'] == 'rev-1'
+    assert steady['prompt_version'] == '2'
+    assert steady['model'] == 'deepseek-v4-flash'
+    assert steady['skill_versions'] == '{"erp-query": "1.4.0"}'
+
+    straddled = runner.report([row('a'), row('b', runtime_revision='rev-2')],
+                              mode='replay', site='s', started='t')
+    assert straddled['runtime_revision'] == ['rev-1', 'rev-2'], '跨轮换必须两个都写出来'
+
+    empty = runner.report([row('a', runtime_revision=None, model='')],
+                          mode='replay', site='s', started='t')
+    assert empty['runtime_revision'] == [] and empty['model'] == []

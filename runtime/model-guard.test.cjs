@@ -1,6 +1,6 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const {createGuard,watchFiles,verifyBusinessSkills}=require('./model-guard.cjs');
+const {createGuard,watchFiles,verifyBusinessSkills,skillMarker,requireSystemFor}=require('./model-guard.cjs');
 const fs=require('node:fs');
 const os=require('node:os');
 const path=require('node:path');
@@ -144,12 +144,12 @@ test('refuses before calling authorize when the system prompt is missing the pin
      async () => {
   // "Loading failed" must mean zero provider requests, not a request that happens to be
   // answered badly. The check therefore runs before authorize, which is what pays.
+  // The real derivation, not a stand-in: a hand-written closure would prove only that the
+  // test knows what it wrote. `skillMarker` reads the pinned manifest, and `requireSystemFor`
+  // is the very function `apply` installs.
+  const marker = skillMarker(path.join(__dirname, '..'), 'query');
   let authorizations = 0;
-  const requireSystem = system => {
-    if (!String(system || '').includes('业务技能：erp-query v')) {
-      throw new Error('System prompt is missing the pinned business skill summary');
-    }
-  };
+  const requireSystem = requireSystemFor(marker);
   const guard = createGuard(async () => { authorizations++; },
                             () => {}, async () => {}, requireSystem);
   await assert.rejects(consume(guard({...request, system: '你是当前企业的业务助手。'},
@@ -159,13 +159,15 @@ test('refuses before calling authorize when the system prompt is missing the pin
 });
 
 test('allows dispatch when the system prompt carries the pinned marker', async () => {
+  const root = path.join(__dirname, '..');
+  const marker = skillMarker(root, 'query');
   let authorizations = 0;
-  const requireSystem = system => {
-    if (!String(system || '').includes('业务技能：erp-query v')) throw new Error('missing');
-  };
   const guard = createGuard(async () => { authorizations++; },
-                            () => {}, async () => {}, requireSystem);
-  await consume(guard({...request, system: '你是助手。\n\n业务技能：erp-query v1.4.0'},
+                            () => {}, async () => {}, requireSystemFor(marker));
+  // The prompt the plugin actually assembles, so this passes only while the two derivations
+  // agree — the same section `prompt-sections.cjs` puts in front of the model.
+  const assembled = require('./prompt-sections.cjs').skillSection(root, 'query');
+  await consume(guard({...request, system: '你是助手。\n\n' + assembled},
                       async function*() { yield {type: 'finish'}; }));
   assert.equal(authorizations, 1);
 });

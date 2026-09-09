@@ -36,6 +36,7 @@ NAMES = {
     'sales_order_po_no': 'DSHERP-EVAL-SO-01',
     'wide_sales_order_po_no': 'DSHERP-EVAL-SO-WIDE',
     'purchase_order_ref': 'DSHERP-EVAL-PO-01',
+    'short_issue_ref': 'DSHERP-EVAL-ISSUE-SHORT',
 }
 WIDE_ROWS = 12
 
@@ -95,10 +96,38 @@ def purchase_order():
     return doc.name, 'written'
 
 
+def short_stock_issue():
+    """A draft Material Issue that asks for more finished goods than exist.
+
+    The one preflight check with no end-to-end evidence was `check_stock_available`: it needs
+    a submit whose frozen stock impact shows a shortfall, and nothing on the Site produced
+    one. Finished goods sit at 0 in the FG warehouse, so issuing 5 is short by 5 — and the
+    refusal names the warehouse, the item and the available quantity, which is the part a
+    model has to be able to act on.
+
+    Left as a **draft**: submitting it is what the case proposes, and what the preflight must
+    refuse before any proposal row is stored.
+    """
+    source = frappe.db.get_value('Warehouse',
+                                 {'is_group': 0, 'company': company, 'name': ['like', '%成品仓%']},
+                                 'name') or warehouse
+    existing = frappe.db.get_value('Stock Entry',
+                                   {'docstatus': 0, 'remarks': names['short_issue_ref']}, 'name')
+    if existing:
+        return existing, 'unchanged'
+    doc = frappe.get_doc({'doctype': 'Stock Entry', 'stock_entry_type': 'Material Issue',
+                          'company': company, 'remarks': names['short_issue_ref'],
+                          'items': [{'item_code': names['item_fg'], 'qty': 5,
+                                     's_warehouse': source, 'basic_rate': 100}]})
+    doc.insert(ignore_permissions=True)
+    return doc.name, 'written'
+
+
 made['customer'] = customer()
 made['sales_order'], made['sales_order_action'] = sales_order(names['sales_order_po_no'], 1)
 made['wide_sales_order'], made['wide_action'] = sales_order(names['wide_sales_order_po_no'], wide_rows)
 made['purchase_order'], made['purchase_order_action'] = purchase_order()
+made['short_stock_issue'], made['short_stock_issue_action'] = short_stock_issue()
 frappe.db.commit()
 
 # The business user must be able to read every one of them, or a case would fail on
@@ -107,6 +136,7 @@ frappe.set_user('daily-operator@example.invalid')
 unreadable = [key for key, doctype in (('sales_order', 'Sales Order'),
                                        ('wide_sales_order', 'Sales Order'),
                                        ('purchase_order', 'Purchase Order'),
+                                       ('short_stock_issue', 'Stock Entry'),
                                        ('customer', 'Customer'))
               if not frappe.has_permission(doctype, 'read', doc=made[key])]
 frappe.set_user('Administrator')

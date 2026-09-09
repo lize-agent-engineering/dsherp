@@ -1048,3 +1048,34 @@ configuration 65,536），`budget()` 增一条校验，配置若破坏这条关�
 含评估步的全绿 nightly，都是对**实际行为**的测量，不依赖上面这些缺口。
 但计划的字面完成度是 23/41，如实记在这里。
 
+## 把自审抄出的 18 项差补完（2026-09-10）
+
+上一节的自审结论是「41 项里 23 项完全做到」。这一节记补完的过程；补完之后**没有一项停在 partial**。
+
+### 补了真实覆盖的（不是补文档，是补检查）
+
+| 缺口 | 补法 |
+|---|---|
+| `model-guard.cjs` 的标记推导不可导出，那条「两处推导一致」的测试实际只跑了一边 | 导出 `skillMarker` / `requireSystemFor`；Python 侧的测试现在**两份都执行**并逐域比对，`model-guard.test.cjs` 也改用真实推导而不是手写桩 |
+| `prompt-sections.cjs` 里一条**打不到**的兜底分支 | 删掉——`skillSection` 已经在源头保证版本行存在，打不到的守卫读起来像保护但不是。补一条断言这条性质本身的用例 |
+| 失败文本带 `untrusted` 这件事在真实 wire 上无人断言 | `test_error_taxonomy_behavior.py` 三类失败各加一条：解析模型真正收到的那段信封，断言 `untrusted: true` 与 `source: erp-server` |
+| 注入载体的唯一性只活在 provision 脚本的 fail-fast 里 | 新建 `tests/test_injection_fixtures.py`：幂等、marker/canary 唯一且互不为前缀、载体文本确实索要提案工具，以及**语料与夹具不许漂移**（页面上下文那条自带载体，单独认） |
+| 「不计分用例必须说明理由」一条用例都没遍历到 | 该测试现在同时覆盖 v1 归档目录，并断言归档非空、README 说明了理由 |
+| `report.json` 缺四个顶层可复现字段 | 补 `runtime_revision` / `prompt_version` / `model` / `skill_versions`，取**集合**而不是单值：跨轮换的批次必须自己说出来 |
+| 前置校验「没留下提案行」这半边从没被验过（模块 docstring 却声称验了） | 新建 `TestNoProposalRowSurvivesAPreflightRefusal`：走完整 `propose_create`，断言提案数不变，并配一条正对照防止它因为「什么都没存」而假绿；docstring 改成不再声称做了没做的事 |
+| `propose_make` 里的前置闸门没有任何测试经过 | `test_make_from_a_draft_purchase_order_is_refused_by_the_gate` 直接走进去，并断言不留提案行 |
+| `routes[]` 与 `propose_make` 的一致性是自证的（两边同一个函数） | 改为**真的调用 `propose_make`**：ready 的必须提得出来，not ready 的必须被前置条件拒 |
+| `check_stock_available` 端到端零证据 | 夹具加一张草稿领料单（成品仓可用 0、要领 5），新增评估用例 `lt-preflight-short-stock-04`。实跑拒绝原文：「成品仓 … 可用 0 Nos，本次出库 5.0，不足（未按批次/序列号核对）」 |
+| SKILL.md 的六步节奏没压缩 | 压成一句并指向 `routes[]`，`2.3.0 → 2.4.0`（轮换 `runtime_revision`，一片改完） |
+
+### 记进偏离表的（做法换了，理由写清）
+
+16 条历史用例留在 v1 归档而不是迁站、长尾不建 `longtail.py` 而复用 `rebased_records`、长尾域分布与计划不同、
+`evals-live.yml` 是一份永不执行的形状文件、两条采购路由的 `blocked_when` 比计划多拦 `On Hold`——五条都进了
+spec 的「计划 6 偏离表」，各自写明理由与「缺了会漏什么」。
+
+### 一处方向性错误已在上一节改正
+
+Task 0.6 的「5 行 Sales Order」外推漏了 `indent=2` 的缩进：实测 5 行 17,782 字节（**超** 16KB），
+文档原写「15,758，限内」。切片 4 的 `_fit_bytes` 按字节真截断，所以没有变成线上缺陷。
+

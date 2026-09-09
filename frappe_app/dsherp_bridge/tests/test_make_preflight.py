@@ -168,6 +168,16 @@ class TestRoutesOnARecordRead(IntegrationTestCase):
                                 {'route_name': 'purchase_order_to_subcontracting_order',
                                  'method_path': 'erpnext.buying.doctype.purchase_order.purchase_order.make_subcontracting_order',
                                  'target_doctype': 'Subcontracting Order'}]}).insert(ignore_permissions=True)
+        # The route targets need policies of their own: `propose_make` checks the target is
+        # governed (`require_enabled`) before it ever reaches the precondition gate, so
+        # without these a test aimed at the gate stops one step short and proves nothing.
+        for target in ('Purchase Receipt', 'Subcontracting Order'):
+            if not frappe.db.exists('DS Doctype Policy', target):
+                frappe.get_doc({'doctype': 'DS Doctype Policy', 'target_doctype': target,
+                                'enabled': 1, 'allow_read': 1, 'allow_create': 1,
+                                'allow_update': 0, 'allow_submit': 0, 'allow_cancel': 0,
+                                'allow_fill': 0,
+                                'change_reason': 'make 前置测试的目标单据'}).insert(ignore_permissions=True)
         frappe.db.commit()
 
     def setUp(self):
@@ -247,18 +257,56 @@ class TestRoutesOnARecordRead(IntegrationTestCase):
 
     def test_routes_agree_with_what_propose_make_would_do(self):
         """A route reported ready that the proposal then refuses would be worse than no
-        report at all."""
+        report at all.
+
+        Asserted against `propose_make` itself, not against the same function `routes[]` was
+        built from. The earlier version called `unmet_requirements` a second time and compared
+        it with the first call — the two halves were the same code, so the agreement it
+        checked was its own.
+        """
+        from dsherp_bridge import operations
         order = self._purchase_order(submit=True)
-        routes = {route['route']: route['ready']
-                  for route in api.read_record('Purchase Order', order.name)['routes']}
-        from dsherp_bridge.doctype_policy import resolve_route
+        record = api.read_record('Purchase Order', order.name)
+        routes = {route['route']: route['ready'] for route in record['routes']}
+        self.assertTrue(routes, 'a submitted order must list its routes')
+        conversation = frappe.get_doc({'doctype': 'DS Conversation',
+                                       'title': 'routes'}).insert(ignore_permissions=True)
+        version = str(record['modified'])
+        seen = {}
         for name, ready in routes.items():
-            resolved = resolve_route('Purchase Order', name)
-            reasons = unmet_requirements(
-                frappe.get_doc('Purchase Order', order.name),
-                route_requirements('Purchase Order', resolved['route_name'],
-                                   resolved['method_path'], resolved['target_doctype']))
-            self.assertEqual(ready, not reasons, name)
+            try:
+                operations.propose_make(conversation.name, 'Purchase Order', order.name,
+                                        version, name)
+                seen[name] = True
+            except frappe.ValidationError as error:
+                # Only the precondition gate counts as "refused for not being ready"; any other
+                # validation error would mean the route is unusable for a different reason and
+                # this test would be reading the wrong signal.
+                self.assertIn('前置条件未满足', str(error), f'{name}: {error}')
+                seen[name] = False
+        self.assertEqual(seen, routes, 'routes[] 说的 ready 必须与 propose_make 的实际结果一致')
+        self.assertTrue(any(routes.values()), '这张单至少有一条路可走，否则这条用例什么都没验证')
+
+    def test_make_from_a_draft_purchase_order_is_refused_by_the_gate(self):
+        """The gate inside `propose_make`, exercised directly.
+
+        Until 2026-09-10 nothing in the repository went through it: `routes[]` was tested on
+        one side and `unmet_requirements` on the other, while the line that actually stops a
+        proposal (`operations.py`'s `前置条件未满足`) had no test walking into it.
+        """
+        from dsherp_bridge import operations
+        order = self._purchase_order()          # draft: docstatus 0
+        record = api.read_record('Purchase Order', order.name)
+        conversation = frappe.get_doc({'doctype': 'DS Conversation',
+                                       'title': 'draft'}).insert(ignore_permissions=True)
+        before = frappe.db.count('DS Operation Proposal')
+        with self.assertRaises(frappe.ValidationError) as caught:
+            operations.propose_make(conversation.name, 'Purchase Order', order.name,
+                                    str(record['modified']), 'purchase_order_to_purchase_receipt')
+        self.assertIn('前置条件未满足', str(caught.exception))
+        self.assertIn('已提交', str(caught.exception), '拒绝要说清缺的是哪个前置条件')
+        self.assertEqual(frappe.db.count('DS Operation Proposal'), before,
+                         '被前置条件拦下的 make 不能留下提案行')
 
 
 class TestHeldSourceIsNotReady(IntegrationTestCase):
