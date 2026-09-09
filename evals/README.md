@@ -35,6 +35,16 @@ docker compose -p dsherp-validation -f infra/compose.validation.yml restart back
 `backend` 会留下一个仍按旧预算下发的 beta——表现是容器领到的预算与站上不一致、
 运行以「没有答复」失败。
 
+**重启完 backend，接着把两个 frontend 也重启一遍。** nginx 只在启动时解析一次上游地址，
+backend 重启后容器 IP 会变，于是所有走 HTTP 的路径一律 404——`/desk`、`/login`、
+`/api/method/ping` 全中，而 `docker exec` 进去的原生测试照样绿。2026-09-10 实测过一次：
+集成套件红了 9 条 + 14 条 setup error，全是登录、SSO、平台那几类，与代码无关。
+
+```bash
+docker compose -p dsherp-validation -f infra/compose.validation.yml restart frontend platform-frontend
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:18082/api/method/ping   # 期望 200
+```
+
 一条免费的核对：跑一条回放用例，看它的 `model_call_reserved` 事件里 `max_output_tokens`
 是不是当前 `run_budget.py` 里的值。
 

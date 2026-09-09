@@ -865,6 +865,12 @@ live 那份 23.5% 拆完之后，三件事各自有各自的处置。**阈值一
 | 集成套件 | 容器内 `frappe.init()` 新进程 | **看得见**（216 条据此为准，`BUDGET_MESSAGE` 那条断言就是证明） |
 | 评估集（回放与 live） | HTTP → 长驻 gunicorn | **看不见**，直到 backend 重启 |
 
+另有一条同源的坑，2026-09-10 补记：**backend 重启后要把两个 frontend 也重启**。nginx 只在启动时
+解析一次上游，backend 换了 IP 之后所有走 HTTP 的路径一律 404（`/desk`、`/login`、
+`/api/method/ping` 全中），而 `docker exec` 进去的原生测试照样全绿——集成套件因此红了 9 条加
+14 条 setup error，全是登录、SSO、平台那几类，与代码无关。核对法：
+`curl -o /dev/null -w '%{http_code}' http://localhost:18082/api/method/ping` 期望 200。
+
 处置：重启 backend（**三个都要**：`backend`、`beta-backend`、`platform-backend`——集成套件的
 配置链路走 beta 站，只重启一个会留下一个仍按旧预算下发的 beta，表现是容器领到的预算与站上
 不一致、运行以「没有答复」失败，这条在收尾时真的红了一次），然后用一条**免费**的回放用例
