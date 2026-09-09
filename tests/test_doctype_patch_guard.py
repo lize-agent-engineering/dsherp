@@ -1,5 +1,5 @@
 """A DocType change ships with its migration or it does not ship."""
-from infra.check_doctype_patches import added_patch_lines, review
+from infra.check_doctype_patches import added_patch_lines, review, schema_version_moved
 
 
 DOCTYPE = "frappe_app/dsherp_bridge/dsherp_bridge/doctype/ds_model_run/ds_model_run.json"
@@ -42,6 +42,53 @@ def test_a_stored_schema_version_change_always_needs_a_backfill():
     assert review([DOCTYPE, "frappe_app/dsherp_bridge/patches.txt"],
                   {"dsherp_bridge": PATCH_ADDED}, "feat: 变更 payload",
                   schema_version_changed=True) == []
+
+
+def test_only_a_version_that_actually_moved_needs_a_backfill():
+    """Three shapes the guard refused although none of them needed a migration.
+
+    A backfill carries **stored** data forward, so the event to catch is an existing payload's
+    version changing to a different number. Everything else — a payload declared for the first
+    time at today's version, a rebuilt bundle, and a refactor that moves the string
+    `schema_version` around without touching the number — is not that event, and each one of
+    them refused a whole branch before this was narrowed.
+    """
+    bump = ("--- a/frappe_app/dsherp_bridge/context_api.py\n"
+            "+++ b/frappe_app/dsherp_bridge/context_api.py\n"
+            "-    if value.get('schema_version') != 1:\n"
+            "+    if value.get('schema_version') != 2:\n")
+    introduced = ("--- /dev/null\n"
+                  "+++ b/frappe_app/dsherp_bridge/tests/test_quota.py\n"
+                  "+PAGE = {'schema_version': 1, 'page_type': 'unknown', 'route': []}\n")
+    # Slice 4's real refactor: the key name moved into `grounds(...)`, the version did not.
+    refactor = ("--- a/frappe_app/dsherp_bridge/context_execution.py\n"
+                "+++ b/frappe_app/dsherp_bridge/context_execution.py\n"
+                "-                and source.get('schema_version')==arguments['version']\n"
+                "+                               version=arguments['version'],key='schema_version'):\n")
+    assert schema_version_moved(bump) is True
+    assert schema_version_moved(introduced) is False
+    assert schema_version_moved(refactor) is False
+    assert schema_version_moved("") is False
+
+
+def test_a_native_test_fixture_is_not_a_stored_payload():
+    """A native test builds a page context to hand to the code under test, so its fixture
+    contains `schema_version` too. Slices 4 and 6 each added such files and the guard refused
+    the whole branch over them, naming a migration that never happened — the same false
+    positive the built bundles produced, one directory over.
+
+    Asserted as the rule rather than as the presence of any particular fixture, so it holds on
+    every branch: the scan excludes the native test tree, and a fixture-shaped diff does not
+    trip the judgement even inside the scan."""
+    from infra.check_doctype_patches import PAYLOAD_SCOPE
+
+    assert any('tests' in item and item.startswith(':(exclude)') for item in PAYLOAD_SCOPE), \
+        '原生测试目录必须排除在存量 payload 的扫描之外'
+    assert any('public/dist' in item for item in PAYLOAD_SCOPE), '构建产物的排除不能被顺手删掉'
+    fixture = ("--- /dev/null\n"
+               "+++ b/frappe_app/dsherp_bridge/tests/test_read_tools.py\n"
+               "+PAGE = json.dumps({'schema_version': 1, 'page_type': 'unknown', 'route': []})\n")
+    assert schema_version_moved(fixture) is False
 
 
 def test_only_real_patch_lines_are_counted():
