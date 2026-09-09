@@ -126,7 +126,7 @@ def test_the_configuration_domain_picks_the_configuration_identity():
     assert runner.identity_for({'domain': 'configuration'}, {'operator': {'user': 'op'}})['user'] == 'op'
 
 
-def test_a_stored_profile_that_no_longer_authenticates_is_reissued(monkeypatch):
+def test_a_stored_profile_that_no_longer_authenticates_is_reissued(monkeypatch, service):
     """The file existing is not the question — whether the pair still works is. The Site
     re-issues on renewal, and the integration suite exercises credential issue on this very
     Site, so a stale profile is ordinary. Trusting the file turns that into 31 cases of
@@ -141,7 +141,7 @@ def test_a_stored_profile_that_no_longer_authenticates_is_reissued(monkeypatch):
     target.write_text(json.dumps(stale))
     monkeypatch.setattr(provision, '_authenticates', lambda profile: False)
     run = _Run(ISSUED)
-    profile = provision.main(['--out', 'work/test-eval-users.json'], run=run)
+    profile = provision.main(['--out', 'work/test-eval-users.json', '--service', service], run=run)
     assert run.calls, '认证失败时必须重新签发'
     assert profile['operator']['api_key'] == 'k-synthetic'
     target.unlink()
