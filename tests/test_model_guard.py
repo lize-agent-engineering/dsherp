@@ -22,10 +22,10 @@ def _complete_budget(domain,model):
         'queue_expires_seconds':600,'heartbeat_stale_seconds':60,
         'run_total_seconds':600 if operation else 300,'site_concurrency':1,
         'provider':'deepseek-official','model':model,
-        'model_max_calls':10 if operation else 8,
-        'model_max_input_bytes_per_call':131072,'model_max_input_bytes_total':524288,
-        'model_max_output_tokens_per_call':3072 if operation else 2048,
-        'model_max_output_tokens_total':30720 if operation else 16384}
+        'model_max_calls':15 if operation else 11,
+        'model_max_input_bytes_per_call':131072,'model_max_input_bytes_total':786432,
+        'model_max_output_tokens_per_call':8192,
+        'model_max_output_tokens_total':61440 if operation else 24576}
 
 
 @pytest.mark.parametrize('mode',['denied','drift','allow','skill','operation','loop'])

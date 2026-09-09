@@ -1,6 +1,10 @@
 """Single source of truth for run and model budgets from Site configuration."""
 import frappe
 
+# Official values, 2026-09-09, from the live batch of 34 cases on deepseek-v4-flash
+# (`docs/engineering/agent-quality-evidence.md`, Task 6.5). Three of them could not be derived
+# by the plan's `ceil(P95 × 1.5)`, because the observation was censored by the limit itself —
+# the sizing note sits on each one.
 DEFAULTS={
     'model_request_timeout_seconds':90,
     # 领取先给一个短确认租约：claim 的 HTTP 超时后服务端仍会提交 Running，那条运行
@@ -11,7 +15,10 @@ DEFAULTS={
     'queue_expires_seconds':600,
     'heartbeat_stale_seconds':60,
     'model_max_input_bytes_per_call':131072,
-    'model_max_input_bytes_total':524288,
+    # Observed max 487,976 on one operation run — 93% of the old 524,288. Nothing enforced
+    # headroom, and the next tool result would have ended a working run on budget.
+    # ceil(487,976 × 1.5) rounded up to 1024 = 732,160; taken to 768 KiB for a round number.
+    'model_max_input_bytes_total':786432,
 }
 # Tenant quotas, deliberately **not** part of `budget(domain)`. That dict is handed to the
 # container whole and compared key by key against the plan it claimed; two keys the container
@@ -22,23 +29,42 @@ DEFAULTS={
 # refusal on for everyone would be a gate against ordinary work rather than against abuse.
 QUOTA_DEFAULTS={'user_daily_model_calls':0,'site_monthly_tokens':0}
 DOMAINS={
+    # `model_max_output_tokens_per_call` is 8192 everywhere, and it is the one number here
+    # that is not derived from a percentile. deepseek-v4-flash is a reasoning model: its
+    # reasoning tokens are charged against the same allowance as the answer. Measured on
+    # 2026-09-09, five of the seven responses that reached the old ceiling had
+    # `reasoningTokens == outputTokens == the ceiling` — the model thought until the budget
+    # was gone and emitted no answer at all, and the run ended '没有答复'. Every one of those
+    # observations is censored by the ceiling, so a percentile of them measures the ceiling.
+    # 8192 leaves roughly 4k of reasoning beside a full answer; what makes it real is the
+    # acceptance criterion, not the arithmetic: a live batch with zero `max-tokens` turns.
     'query':{
         'run_total_seconds':300,
-        'model_max_calls':8,
-        'model_max_output_tokens_per_call':2048,
-        'model_max_output_tokens_total':16384,
+        # Observed max 7 of 8 — near the ceiling. ceil(7 × 1.5) = 11.
+        'model_max_calls':11,
+        'model_max_output_tokens_per_call':8192,
+        # Observed cumulative max 6,231. ceil(× 1.5) → 16,384 was already enough, but the
+        # per-call rise has to fit: raised in step so one long answer cannot exhaust the run.
+        'model_max_output_tokens_total':24576,
     },
     'configuration':{
         'run_total_seconds':300,
+        # Observed max 3 of 8; left as it is rather than tightened on four runs.
         'model_max_calls':8,
-        'model_max_output_tokens_per_call':3072,
-        'model_max_output_tokens_total':16384,
+        'model_max_output_tokens_per_call':8192,
+        'model_max_output_tokens_total':24576,
     },
     'operation':{
+        # Observed max 188,850 ms of 600,000. Deliberately **not** tightened to ceil(P95×1.5):
+        # 19 synthetic runs are not the distribution to cut a live timeout from, and the
+        # per-call output rise will make turns longer, not shorter.
         'run_total_seconds':600,
-        'model_max_calls':10,
-        'model_max_output_tokens_per_call':3072,
-        'model_max_output_tokens_total':30720,
+        # Observed max 10 — exactly the old ceiling, on two runs. Censored, so ceil(10 × 1.5).
+        'model_max_calls':15,
+        'model_max_output_tokens_per_call':8192,
+        # Observed cumulative max 13,533; ceil(× 1.5) = 20,300, but 15 calls at 8,192 need
+        # room to be spent on answers rather than refused halfway.
+        'model_max_output_tokens_total':61440,
     },
 }
 
