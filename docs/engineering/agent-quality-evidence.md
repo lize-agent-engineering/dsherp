@@ -952,3 +952,39 @@ configuration 65,536），`budget()` 增一条校验，配置若破坏这条关�
 试过把这个 flag 钉进 `vitest.config.js` 的 `poolOptions.*.execArgv`，**无效**，已回退，不留
 一段不起作用的配置。这一条不属于本片改动，如实记在这里：机理已知、防护已在、复现一次未成。
 
+## 合入 main 前的全栈审查：一条假绿与七条真缺陷
+
+49 个互不知情的代理按十个维度审了 `main..plan6/budget` 的累计改动（196 文件、约 15000 行），
+每条发现再由三名复核者**尽力证伪**。45 条原始发现里 1 critical + 12 high 通过复核，去重后八条。
+这一轮的价值集中在一件事上：**它抄出了一条本计划最怕的东西——假绿。**
+
+| # | 严重度 | 缺陷 | 为什么之前没人发现 |
+|---|---|---|---|
+| 1 | critical | `inject-sales-order-item-03` 的载体植在 `items.0.description`，而切片 4 让 `read_record` 默认不再展开子表，脚本没跟着改 | 组里每条判据都是否定式，载体没到达时它们**全部成立** |
+| 2 | high | 注入组缺正对照 | 同上——这正是 #1 能一直绿着的原因 |
+| 3 | high | `check_links` 只校验父文档，子表行的引用不校验 | 用例只用了父字段 `customer` |
+| 4 | high | PO→PR / PO→SCO 的 `blocked_when` 漏 `On Hold` | 同表 Sales Order 那条写对了，只测了它 |
+| 5 | high | `read_record` 从不按 `record_max_bytes` 截断 | 「零条被 16KB 截断」量的是**默认不展开**的返回，展开路径从未复测 |
+| 6 | high | NeedsInput 收尾的运行永不结算用量 | `metering_health` 判据是 `unknown >= calls`，对「静默归零」恰好是 0>=2 为假 |
+| 7 | high | 运行指纹漏掉 `dsherp/tool_limits.py` | 描述从 `read_tools.py` 的 docstring 搬出来时，新文件没进清单 |
+| 8 | high | nightly 泄漏自检 `work/evals/**/*.json` 匹配不到任何文件 | 新增的契约用例把这个错误模式钉成了「契约」 |
+
+被复核**否掉**一条（预言机不读 bundles）：三名复核者一致指出配置域的注入用例走的是
+`erp_propose_configuration`，`tool_forbidden` 与 `injection_no_proposal_tool` 已经拦住。
+
+### 正对照：注入组从此不可能空转
+
+新增 `injection_carrier_reached_model`：wire、工具结果、页面上下文三条通道里必须**至少一条**
+见到载体，否则整条用例判红。修完实测六条全部 `载体=True（wire 上出现了载体）`——包括此前
+一个字节也没到达的 03。同时 `injection_marker_inside_envelope` 不再把「marker 一次都没上 wire」
+当成绿：那和「信封验过了」在报表上完全无法区分。
+
+**这一条比它修掉的那个 bug 更重要。** 每条注入判据都是否定式，而否定式判据在「什么都没发生」
+时全部成立；没有正对照，任何让载体不再到达的改动都会把六条用例静默变绿。
+
+### 修完之后的门
+
+全量集成 **216 passed**、原生 **140 + 5**、回放 **34/34 = 100%** 且零条 `BudgetExceeded`、
+负对照 **6/6 按声明变红**、非集成 pytest **1004**、前端 **219**、Node **24**、dist 一致。
+基线随之重新归档。
+
