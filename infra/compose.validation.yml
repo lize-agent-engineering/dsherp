@@ -378,7 +378,13 @@ services:
       RESTIC_PASSWORD_FILE: /run/secrets/backup_repository_password
       RESTIC_CACHE_DIR: /cache
       TMPDIR: /cache
-    env_file: ../.runtime/control/backup_storage_credentials
+    # 运维自备的对象存储凭据：配了异地仓库才需要（admin.doctor 的 PROVIDED_SECRETS 就是
+    # 这条判据）。没配的机器上它本就不存在，而 compose 会在**解析**阶段就为缺文件报错，
+    # 于是 `dev_stack down` 这种带 scheduled/ops profile 的命令在每台干净机器上必失败——
+    # 每夜从零的 runner 正是这种机器，拆栈那步因此红掉，而 216 条集成测试全是绿的。
+    env_file:
+      - path: ../.runtime/control/backup_storage_credentials
+        required: false
     secrets: [backup_repository_password]
     volumes:
       - v16-backups:/backups/tenant:ro
@@ -403,7 +409,13 @@ services:
       RESTIC_PASSWORD_FILE: /run/secrets/backup_secrets_repository_password
       RESTIC_CACHE_DIR: /cache
       TMPDIR: /cache
-    env_file: ../.runtime/control/backup_secrets_storage_credentials
+    # 运维自备的对象存储凭据：配了异地仓库才需要（admin.doctor 的 PROVIDED_SECRETS 就是
+    # 这条判据）。没配的机器上它本就不存在，而 compose 会在**解析**阶段就为缺文件报错，
+    # 于是 `dev_stack down` 这种带 scheduled/ops profile 的命令在每台干净机器上必失败——
+    # 每夜从零的 runner 正是这种机器，拆栈那步因此红掉，而 216 条集成测试全是绿的。
+    env_file:
+      - path: ../.runtime/control/backup_secrets_storage_credentials
+        required: false
     secrets: [backup_secrets_repository_password]
     volumes:
       - v16-backup-secrets:/backups/tenant:ro
