@@ -91,6 +91,20 @@ launchctl bootstrap gui/$(id -u) .runtime/com.dsherp.agent-worker-v16.plist
 并且开跑前会打印用例清单与预计最多多少次付费调用。余额用尽表现为 provider 失败，
 报表里与真正的用例失败严格分开。
 
+## 改了用例判据之后：重判，不必重花钱
+
+用例的 `expect` 改的是**判定**，从不改运行。`oracle.judge` 是 `observed` 的纯函数，
+`run.observe` 能把 `observed` 从站上原样重建——所以改完 `expect` 的正确核对方式是拿
+**今天的用例与预言机**把已经跑过的那一批重判一遍：
+
+```bash
+.venv/bin/python evals/rejudge.py work/evals-live/report.json dsherp-daily.localhost \
+  work/evals-live-rejudged
+```
+
+它做不到的事：**只重判已经发生的运行**。改了提示词、技能或服务端之后，必须重跑真批次。
+重判出来的报表带 `rejudged_from`，别当成新测量读。
+
 ## `--compare-baseline` 的语义
 
 只升不降。任何**曾经 pass、这次不是 pass** 的用例都让退出码变 1，与平均通过率无关——
