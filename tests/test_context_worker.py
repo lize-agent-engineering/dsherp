@@ -260,9 +260,10 @@ def test_ops_monitor_refreshes_once_per_minute_and_reports_fetch_failure(monkeyp
         def emit(self,items,now):emitted.append(([item.key for item in items],now))
     monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:0)
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
-        worker.monitor_ops(client,Notifier(),state,now=0)
-        worker.monitor_ops(client,Notifier(),state,now=59)
-        worker.monitor_ops(client,Notifier(),state,now=60)
+        sites=[{'site':'a','client':client}]
+        worker.monitor_ops(sites,Notifier(),state,now=0)
+        worker.monitor_ops(sites,Notifier(),state,now=59)
+        worker.monitor_ops(sites,Notifier(),state,now=60)
     assert calls==['/api/method/dsherp_bridge.ops.ops_status']*2
     assert all(set(timeout.values())=={5.0} for timeout in timeouts)
     assert emitted==[([],0),(['ops_status_unavailable'],60)]
@@ -286,8 +287,9 @@ def test_ops_monitor_counts_orphans_only_without_inflight_runs(monkeypatch):
         def __init__(self):self.keys=[]
         def emit(self,items,now):self.keys.append([item.key for item in items])
     notifier=Notifier();state={}
-    worker.monitor_ops(object(),notifier,state,now=0)
-    worker.monitor_ops(object(),notifier,state,now=60)
+    sites=[{'site':'a','client':object()}]
+    worker.monitor_ops(sites,notifier,state,now=0)
+    worker.monitor_ops(sites,notifier,state,now=60)
     assert orphan_calls==[True]
     assert notifier.keys==[[],['orphan_containers']]
 
@@ -299,11 +301,14 @@ def test_ops_monitor_skips_snapshot_gauges_and_orphans_when_stale(monkeypatch):
     monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:pytest.fail('stale snapshot probed docker'))
     writes=[]
     for name in ('QUEUE_DEPTH','RUNNING_STUCK','BACKUP_AGE','LAST_CLAIM','ORPHAN_CONTAINERS'):
-        monkeypatch.setattr(getattr(worker,name),'set',lambda value,name=name:writes.append((name,value)))
+        monkeypatch.setattr(getattr(worker,name),'set',
+                            lambda value,name=name,**labels:writes.append((name,value)))
     class Notifier:
-        def emit(self,items,now):
-            assert [item.key for item in items]==['ops_snapshot_stale']
-    worker.monitor_ops(object(),Notifier(),{},now=1000)
+        def __init__(self):self.keys=[]
+        def emit(self,items,now):self.keys+= [item.key for item in items]
+    notifier=Notifier()
+    worker.monitor_ops([{'site':'a','client':object()}],notifier,{},now=1000)
+    assert notifier.keys==['ops_snapshot_stale']
     assert writes==[]
 
 
@@ -313,11 +318,11 @@ def test_ops_monitor_does_not_overwrite_optional_gauges_with_missing_values(monk
     monkeypatch.setattr(worker,'fetch_ops',lambda client:current)
     monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:0)
     backup=[];claims=[]
-    monkeypatch.setattr(worker.BACKUP_AGE,'set',backup.append)
-    monkeypatch.setattr(worker.LAST_CLAIM,'set',claims.append)
+    monkeypatch.setattr(worker.BACKUP_AGE,'set',lambda value,**labels:backup.append(value))
+    monkeypatch.setattr(worker.LAST_CLAIM,'set',lambda value,**labels:claims.append(value))
     class Notifier:
         def emit(self,items,now):pass
-    worker.monitor_ops(object(),Notifier(),{},now=1000)
+    worker.monitor_ops([{'site':'a','client':object()}],Notifier(),{},now=1000)
     assert backup==[] and claims==[]
 
 
@@ -331,7 +336,7 @@ def test_ops_monitor_skips_orphan_metric_when_probe_fails(monkeypatch):
     class Notifier:
         def emit(self,items,now):
             assert [item.key for item in items]==[]
-    worker.monitor_ops(object(),Notifier(),{},now=1000)
+    worker.monitor_ops([{'site':'a','client':object()}],Notifier(),{},now=1000)
     assert writes==[]
 
 
@@ -500,15 +505,15 @@ def test_coordinator_failed_probe_keeps_open_circuit_from_claiming(tmp_path):
         coordinator=Coordinator([{'site':'a','client':client,'business':{}}],lambda:SETTINGS,1,
             execute,breaker,lambda:probes.append(False) or False,tmp_path,clock=lambda:clock[0])
         assert coordinator.tick(now=0)==1;coordinator.wait_idle()
-        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN._value==1
+        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN.value()==1
         clock[0]=60
         assert coordinator.tick(now=60)==0 and probes==[False]
         assert executions==['first'] and claims==['second']
-        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN._value==1
+        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN.value()==1
         clock[0]=63
         assert coordinator.tick(now=63)==0 and probes==[False]
         assert executions==['first'] and claims==['second']
-        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN._value==1
+        assert breaker.state=='open' and worker.PROVIDER_CIRCUIT_OPEN.value()==1
 
 
 def test_circuit_open_period_starts_when_slow_run_finishes(tmp_path):
@@ -1264,3 +1269,91 @@ def test_provider_key_state_names_the_ledger_version_without_carrying_the_key(tm
 def _moment():
     from datetime import datetime
     return datetime(2026, 9, 8, 12, 0, 0)
+
+
+def test_ops_monitor_watches_every_site_and_labels_each_gauge(monkeypatch):
+    """One host serves up to three tenant Sites (ruling #2). Before this, only `sites[0]` was
+    asked, and four unlabeled gauges meant even that one reading had no Site on it."""
+    snapshots={'a.example':{'snapshot':{'queued':1,'queued_oldest_seconds':None,'running':1,
+                   'running_stuck':0,'backup_age_hours':2,'last_claim_age_seconds':10},'age_seconds':0},
+               'b.example':{'snapshot':{'queued':7,'queued_oldest_seconds':None,'running':0,
+                   'running_stuck':3,'backup_age_hours':30,'last_claim_age_seconds':20},'age_seconds':0}}
+    asked=[]
+    def fetch(client):
+        asked.append(client);return snapshots[client]
+    monkeypatch.setattr(worker,'fetch_ops',fetch)
+    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:pytest.fail('one Site still running'))
+    class Notifier:
+        def __init__(self):self.alerts=[]
+        def emit(self,items,now):self.alerts+=items
+    notifier=Notifier()
+    sites=[{'site':'a.example','client':'a.example'},{'site':'b.example','client':'b.example'}]
+    worker.monitor_ops(sites,notifier,{},now=1000)
+
+    assert asked==['a.example','b.example'], '每个站都要问，不是只问第一个'
+    assert worker.QUEUE_DEPTH.value(site='a.example')==1
+    assert worker.QUEUE_DEPTH.value(site='b.example')==7
+    assert worker.RUNNING_STUCK.value(site='b.example')==3
+    assert worker.BACKUP_AGE.value(site='b.example')==30
+    assert worker.LAST_CLAIM.value(site='a.example')==990
+    # The second Site's stuck run and stale backup are what nobody was watching.
+    raised={(alert.key,alert.site) for alert in notifier.alerts}
+    assert ('run_stuck','b.example') in raised and ('backup_stale','b.example') in raised
+    assert ('queue_backlog','b.example') in raised
+    assert not [alert for alert in notifier.alerts if alert.site=='a.example']
+
+
+def test_two_sites_hitting_the_same_rule_are_two_alerts_not_one(capsys):
+    """The notifier deduplicates by key; without the Site on the alert, the second tenant's
+    backlog is swallowed by the first tenant's cooldown and never reaches anyone."""
+    from dsherp import alerts as alerts_module
+    backlog={'snapshot':{'queued':9,'queued_oldest_seconds':None,'running':1,'running_stuck':0,
+                         'backup_age_hours':1,'last_claim_age_seconds':10},'age_seconds':0}
+    notifier=alerts_module.Notifier(cooldown=600)
+    found=(alerts_module.evaluate_snapshot(backlog,0,site='a.example')
+           +alerts_module.evaluate_snapshot(backlog,0,site='b.example'))
+    notifier.emit(found,now=0)
+    emitted=[json.loads(line) for line in capsys.readouterr().err.strip().splitlines()]
+    assert [row['site'] for row in emitted if row['key']=='queue_backlog']==['a.example','b.example']
+    # Still one per Site per cooldown window.
+    notifier.emit(found,now=100)
+    assert capsys.readouterr().err.strip()==''
+
+
+def test_orphans_are_only_counted_when_every_site_is_readable_and_idle(monkeypatch):
+    """A run container is `dsherp-context-<hex>` with no Site in the name, so one Site's live
+    run is another Site's phantom orphan unless all of them have been asked."""
+    idle={'snapshot':{'queued':0,'queued_oldest_seconds':None,'running':0,'running_stuck':0,
+                      'backup_age_hours':1,'last_claim_age_seconds':10},'age_seconds':0}
+    busy={**idle,'snapshot':{**idle['snapshot'],'running':1}}
+    stale={**idle,'age_seconds':901}
+    sites=[{'site':'a','client':'a'},{'site':'b','client':'b'}]
+
+    for second,expected in ((busy,[]),(stale,[]),(idle,[True])):
+        probes=[]
+        monkeypatch.setattr(worker,'fetch_ops',lambda client,second=second:idle if client=='a' else second)
+        monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:probes.append(True) or 2)
+        class Notifier:
+            def emit(self,items,now):pass
+        worker.monitor_ops(sites,Notifier(),{},now=1000)
+        assert probes==expected, second
+
+
+def test_a_once_drill_claims_from_the_second_site_when_the_first_is_empty(tmp_path):
+    """`--once` used to ask `sites[0]` only, so a queued run on tenant two was invisible."""
+    claimed=[]
+    def handler(request):
+        site=request.headers['X-Frappe-Site-Name']
+        if request.url.path.endswith('claim_run'):
+            if site=='a':return httpx.Response(200,json={'message':None})
+            claimed.append(site)
+            return httpx.Response(200,json={'message':{'run_id':'r1','question':'q','context':{},
+                'budget':{},'runtime_revision':'x','domain':'query'}})
+        return httpx.Response(200,json={'message':{'recorded':1,'last_seq':1,'status':'Succeeded'}})
+    with httpx.Client(base_url='http://a',transport=httpx.MockTransport(handler)) as first, \
+         httpx.Client(base_url='http://b',transport=httpx.MockTransport(handler)) as second:
+        first.headers['X-Frappe-Site-Name']='a';second.headers['X-Frappe-Site-Name']='b'
+        sites=[{'site':'a','client':first,'business':{'site':'a','business_url':'http://a'}},
+               {'site':'b','client':second,'business':{'site':'b','business_url':'http://b'}}]
+        picked=worker.claim_once(sites,SETTINGS,tmp_path,execute=lambda *a,**k:{'answer':'ok'})
+    assert picked=='b' and claimed==['b']

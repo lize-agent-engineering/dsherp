@@ -237,6 +237,7 @@ admin agent-firewall            # 只打印同一组规则（含 nft 写法与�
 | 宿主防火墙已应用且对应当前网桥 | `systemctl is-active dsherp-agent-firewall && sudo /usr/local/sbin/dsherp-agent-firewall check "${DSHERP_PROJECT}_agent"` | `active`，`ok on br-…`；`probe_agent_boundary.py` 的 `host_gateway_ssh`/`host_gateway_loopback_port` 均为 `False` |
 | worker 自己核验过隔离 | `curl -s 127.0.0.1:9109/metrics \| grep dsherp_host_isolation_ok` | `1`；journal 里没有 `host_isolation_failed` |
 | worker 存活 | `systemctl is-active dsherp-agent-worker` | `active` |
+| **每个租户站都在被看** | `curl -s 127.0.0.1:9109/metrics \| grep dsherp_queue_depth` | 每个租户站各一行 `dsherp_queue_depth{site="…"}`；少一行就是那个站没进 worker profile（第 7 步），它排队没人领也不会告警 |
 | 发布可核验 | `cat infra/releases/$TAG.json` | tag、提交、基底 digest、架构齐全 |
 
 ## 10. 升级与回滚（G2）

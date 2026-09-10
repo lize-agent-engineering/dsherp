@@ -29,11 +29,15 @@ RUNS_TOTAL=REGISTRY.counter('dsherp_runs_total','Finished runs',labels=('status'
 RUN_DURATION=REGISTRY.histogram('dsherp_run_duration_seconds','Run duration',(5,15,30,60,120,300))
 WORKER_ERRORS=REGISTRY.counter('dsherp_worker_errors_total','Continuable worker errors',labels=('error_class',))
 CONSECUTIVE_FAILURES=REGISTRY.gauge('dsherp_consecutive_run_failures','Consecutive failed runs')
-QUEUE_DEPTH=REGISTRY.gauge('dsherp_queue_depth','Queued runs')
-RUNNING_STUCK=REGISTRY.gauge('dsherp_running_stuck','Stuck running runs')
-BACKUP_AGE=REGISTRY.gauge('dsherp_backup_age_hours','Hours since last backup')
+# One host serves N business Sites (ruling #2: up to three in the first batch), so anything
+# read out of a Site's own ops snapshot is per Site. Without the label the last Site polled
+# overwrote the others and only one of them was ever really being watched.
+QUEUE_DEPTH=REGISTRY.gauge('dsherp_queue_depth','Queued runs',labels=('site',))
+RUNNING_STUCK=REGISTRY.gauge('dsherp_running_stuck','Stuck running runs',labels=('site',))
+BACKUP_AGE=REGISTRY.gauge('dsherp_backup_age_hours','Hours since last backup',labels=('site',))
+LAST_CLAIM=REGISTRY.gauge('dsherp_last_claim_timestamp_seconds','Unix time of last claim',labels=('site',))
+# Host-level on purpose: a run container is `dsherp-context-<hex>` and carries no Site.
 ORPHAN_CONTAINERS=REGISTRY.gauge('dsherp_orphan_containers','Orphan context containers')
-LAST_CLAIM=REGISTRY.gauge('dsherp_last_claim_timestamp_seconds','Unix time of last claim')
 PROVIDER_FAILURES=REGISTRY.counter('dsherp_provider_call_failures_total','Provider call failures')
 SLOTS_BUSY=REGISTRY.gauge('dsherp_slots_busy','Busy business runtime slots')
 PROVIDER_CIRCUIT_OPEN=REGISTRY.gauge('dsherp_provider_circuit_open','Provider circuit open state')
@@ -69,30 +73,43 @@ def fetch_ops(client):
         return None
 
 
-def monitor_ops(client,notifier,state,now=None):
+def monitor_ops(sites,notifier,state,now=None):
+    """Ask every Site, not just the first one.
+
+    Queue depth, stuck runs and backup age come from each Site's own ops snapshot, so the
+    second and third tenant used to have nobody watching them at all. Orphan containers stay
+    a host-level question and are only asked when *every* Site reported a fresh snapshot with
+    nothing running - otherwise one Site's live run reads as another Site's orphan."""
     if now is None:now=time.time()
     last=state.get('last_ops')
     if last is not None and now-last<60:
         return
     state['last_ops']=now
-    status=fetch_ops(client)
+    observed=[]
+    for item in sites:
+        site=item['site']
+        status=fetch_ops(item['client'])
+        current=alerts.fresh_snapshot(status)
+        if current is not None:
+            QUEUE_DEPTH.set(current.get('queued') or 0,site=site)
+            RUNNING_STUCK.set(current.get('running_stuck') or 0,site=site)
+            backup=current.get('backup_age_hours')
+            if backup is not None:BACKUP_AGE.set(backup,site=site)
+            claim_age=current.get('last_claim_age_seconds')
+            if claim_age is not None:LAST_CLAIM.set(now-claim_age,site=site)
+        observed.append((site,status,current))
+    all_fresh=bool(observed) and all(current is not None for _,_,current in observed)
     orphan=0
-    snapshot=None if status is None else status.get('snapshot')
-    age=None if status is None else status.get('age_seconds')
-    fresh=snapshot is not None and age is not None and age<=alerts.OPS_SNAPSHOT_MAX_AGE_SECONDS
-    if fresh:
-        QUEUE_DEPTH.set(snapshot.get('queued') or 0)
-        RUNNING_STUCK.set(snapshot.get('running_stuck') or 0)
-        backup=snapshot.get('backup_age_hours')
-        if backup is not None:BACKUP_AGE.set(backup)
-        claim_age=snapshot.get('last_claim_age_seconds')
-        if claim_age is not None:LAST_CLAIM.set(now-claim_age)
-        if snapshot.get('running')==0:
+    if all_fresh:
+        if all((current.get('running') or 0)==0 for _,_,current in observed):
             orphan=alerts.orphan_containers()
         if orphan is not None:ORPHAN_CONTAINERS.set(orphan)
-    notifier.emit(alerts.evaluate(status,{
-        'consecutive_run_failures':_consecutive,'orphan_containers':orphan,
-        'host_isolation_ok':_isolation_ok},now),now)
+    found=[]
+    for site,status,_ in observed:
+        found+=alerts.evaluate_snapshot(status,now,site=site)
+    found+=alerts.evaluate_host({'consecutive_run_failures':_consecutive,'orphan_containers':orphan,
+                                 'host_isolation_ok':_isolation_ok},observed=all_fresh)
+    notifier.emit(found,now)
 
 
 def monitor_backups(runtime_dir,expected_sites,notifier,state,now=None):
@@ -467,7 +484,11 @@ class Coordinator:
         self._next_site=0
         self._last_probe=None
         SLOTS_BUSY.set(0);PROVIDER_CIRCUIT_OPEN.set(0)
-        for site in sites:CLAIMS_TOTAL.inc(0,site=site['site'])
+        for site in sites:
+            # Materialise every per-Site series at start: a Site that has been quiet all day
+            # must scrape as 0, not as a missing line an alert rule cannot see.
+            CLAIMS_TOTAL.inc(0,site=site['site'])
+            QUEUE_DEPTH.set(0,site=site['site']);RUNNING_STUCK.set(0,site=site['site'])
 
     def _reap(self):
         with self._futures_lock:
@@ -725,6 +746,17 @@ def run_once(client,settings,state_root,*,business=None,execute=run_container):
     return True
 
 
+def claim_once(sites,settings,state_root,*,execute=run_container):
+    """One claim from whichever Site has work, in profile order.
+
+    `--once` used to ask only `sites[0]`, so a queued run on the second or third tenant was
+    invisible to every drill that uses it. Returns the Site that had work, or None."""
+    for item in sites:
+        if run_once(item['client'],settings,state_root,business=item['business'],execute=execute):
+            return item['site']
+    return None
+
+
 def poll_once(client,settings,state_root,*,business=None):
     try:
         return run_once(client,settings,state_root,business=business)
@@ -790,7 +822,7 @@ def serve_once(coordinator,sites,notifier,ops_state,now=None,backups=None):
     the heartbeat lives inside it, and losing it makes every site answer 503."""
     if now is None:now=time.monotonic()
     try:
-        monitor_ops(sites[0]['client'],notifier,ops_state)
+        monitor_ops(sites,notifier,ops_state)
     except Exception as error:
         WORKER_ERRORS.inc(error_class=type(error).__name__)
         worker_log.log('worker_error',stage='monitor_ops',error_class=type(error).__name__)
@@ -875,7 +907,7 @@ def main():
                                         holds=lambda:site_holds.held(runtime_dir))
                 backups={'runtime_dir':runtime_dir,'sites':lambda:expected_sites(resolved)}
                 if args.once:
-                    run_once(sites[0]['client'],settings,state_root,business=sites[0]['business'])
+                    claim_once(sites,settings,state_root)
                     return 0
                 STOPPING.clear()
                 sd_notify.ready()
