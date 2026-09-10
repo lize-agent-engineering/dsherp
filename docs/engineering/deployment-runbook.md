@@ -9,6 +9,7 @@
 | 项 | 值 | 备注 |
 |---|---|---|
 | 操作系统 | Linux x86_64 | 四个基础镜像 digest 均为多架构清单，含 `linux/amd64`（见[运行契约](runtime-baseline.md)） |
+| 主机规格 | **4 vCPU / 8 GiB 内存 / 100 GB 磁盘** | 见下一节「主机规格与依据」。低于 8 GiB 不要开工：数据库被 OOM 杀过两次 |
 | Docker | Engine 25+ 与 compose 插件 | `docker compose version` 必须可用 |
 | Python | 3.12（见仓库 `.python-version`） | 宿主 worker 用，不进容器 |
 | 宿主 glibc | **≥ 2.28**（RHEL/Rocky 8、Debian 10、Ubuntu 18.10 及以上） | `deepseek-harness-runtime-bin` 只发布 `manylinux_2_28` wheel，`uv pip sync requirements.lock` 在 glibc 2.17（CentOS 7）上无解。宿主 worker 本身不引入 SDK，但同一份锁装不上就起不了 CLI；容器内是 Debian bookworm，不受影响 |
@@ -20,6 +21,34 @@
 | 安装根 | 本文用 `/opt/dsherp`，但只是参数：`render_worker_units.py --root` 与 `bin/dsherp-admin` 都跟随实际目录。**不要放在 `/home` 下**：unit 的 `ProtectHome=read-only` 会把它锁成只读，能解锁 `.runtime`/`work` 的 `ReadWritePaths` 要 systemd ≥ 232 | 某些主机的 `/opt` 带 immutable 属性，root 也写不进，这时用 `/srv/dsherp` |
 
 约定：下文所有命令在仓库根执行，`$TAG` 为发布 tag，`$SLUG` 为租户短名（小写字母开头，`[a-z0-9-]`）。
+
+### 主机规格与依据
+
+G1 的交接包要给审计方，审计方得先知道开一台什么机器才能开工，所以规格写在这里而不是留给经验。
+
+| 用途 | 规格 |
+|---|---|
+| G1 白盒部署 + G10 24 小时浸泡 | 4 vCPU / **8 GiB** 内存 / 100 GB 磁盘 |
+| G3 异机恢复 | 4 vCPU / 8 GiB 内存 / 40 GB 磁盘 |
+
+**内存**。实测部分来自 2026-09-10 那次从零全绿的 nightly（[run 34403951406](https://github.com/lize-agent-engineering/dsherp/actions/runs/34403951406) 的 `docker-stats.txt` 工件），跑完一整轮集成之后的读数：
+
+| 容器 | 稳态 |
+|---|---|
+| db | 639.1 MiB |
+| 租户 backend | 259.2 MiB |
+| platform backend | 171.0 MiB |
+| redis | 22.6 MiB |
+| 两个 frontend 合计 | 9.9 MiB |
+| agent-egress | 5.6 MiB |
+
+合计 ≈ **1.1 GiB**。但这台跑的是本机四站验证栈的 8 个容器，**生产形态是 13 个服务**（见第 6 步的 `compose ps`），多出来的都还要算：两个 bench 的 scheduler 与 queue 共 4 个进程（同一个镜像、同一种进程，按上表 171–259 MiB 的量级估 ≈ +0.7 GiB）、拆开的第二个 redis、以及 caddy。据此生产稳态 ≈ **2 GiB**——这一段是**外推不是实测**，等 G1 真机跑起来要用真实读数替换。
+
+再往上：Agent 运行容器按 `dsherp/runtime_host.py:44` 限 `--memory 384m`，profile 的 `slots` 为 3，满载再 +1.15 GiB；加宿主 worker（实测 RSS 25 MiB）、restic、以及 OS 与 dockerd 自己，峰值 ≈ **3.5–4.5 GiB**。
+
+**为什么不是 4 GiB。** 峰值估算本身就已经顶到 4 GiB，而这不是唯一理由——「余量看着够」这个判断在这个项目上被自己的事故推翻过一次：`quality-gates-evidence.md:344-360` 记着数据库被 OOM 杀过两次。第一次是连续运行 25 小时后撞上 1 GiB 上限，当时按「重启后 468.6 MiB、一轮全量集成后 608.7 MiB，每夜从零只跑一轮，还有 40% 余量」放行；同一个库随后在 **3 小时 14 分**内被第二次 OOM 杀掉，证明那个 609 MiB 是刚重启、缓存还没填满时的读数，不代表稳态。G10 的判据恰好是「连续运行 24h」——把浸泡门开在一台只剩几百 MiB 余量的机器上，测的是内存够不够，不是系统稳不稳。8 GiB 让稳态落在一半以下，页缓存也有地方放。
+
+**磁盘**：一套镜像 ≈ 6.7 GB（dsherp-frappe 2.84 GB + dsherp-worker 3.39 GB + mariadb 357 MB + redis 28 MB + restic 44 MB）。G2 要求能回滚到旧 tag，因此**两套镜像同时在盘上**，×2 ≈ 13.4 GB；再加数据库卷、每站每日四件套备份与 restic 缓存、24h 浸泡期间的日志。100 GB 是留了成长空间的取值，40 GB 是异机恢复主机的下限（它只需要一套镜像加一次恢复的落地空间）。
 
 ## 账号模型
 
