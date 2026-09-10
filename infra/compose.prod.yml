@@ -332,7 +332,13 @@ services:
       RESTIC_PASSWORD_FILE: /run/secrets/backup_repository_password
       RESTIC_CACHE_DIR: /cache
       TMPDIR: /cache
-    env_file: ${DSHERP_SECRETS_DIR:-../.runtime/control}/backup_storage_credentials
+    # List form with `required: false`: a missing credentials file must not make
+    # `docker compose config` (and every `--profile ops` command) fail before it can
+    # say anything useful. `dsherp-admin doctor` is what reports the file is missing
+    # once an offsite repository is configured; restic then fails loudly on its own.
+    env_file:
+      - path: ${DSHERP_SECRETS_DIR:-../.runtime/control}/backup_storage_credentials
+        required: false
     secrets: [backup_repository_password]
     volumes:
       - tenant-backups:/backups/tenant:ro
@@ -355,7 +361,13 @@ services:
       RESTIC_PASSWORD_FILE: /run/secrets/backup_secrets_repository_password
       RESTIC_CACHE_DIR: /cache
       TMPDIR: /cache
-    env_file: ${DSHERP_SECRETS_DIR:-../.runtime/control}/backup_secrets_storage_credentials
+    # List form with `required: false`: a missing credentials file must not make
+    # `docker compose config` (and every `--profile ops` command) fail before it can
+    # say anything useful. `dsherp-admin doctor` is what reports the file is missing
+    # once an offsite repository is configured; restic then fails loudly on its own.
+    env_file:
+      - path: ${DSHERP_SECRETS_DIR:-../.runtime/control}/backup_secrets_storage_credentials
+        required: false
     secrets: [backup_secrets_repository_password]
     volumes:
       - tenant-backup-secrets:/backups/tenant:ro
