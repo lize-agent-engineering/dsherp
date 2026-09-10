@@ -150,6 +150,23 @@ admin provision-tenant "$SLUG"
 
 两条命令都是幂等步骤链：每一步先查现状，中断后重跑不会重复建站或重复装 App。`provision-tenant` 会同时关闭该站的密码登录（Frappe 原生 `disable_user_pass_login`）、启用 scheduler，并把运行凭据端点的来源白名单 `dsherp_agent_sources` 写成 agent 网络与 worker 网络两个网段（后者是宿主 worker 经回环进来时的对端地址；只写 agent 网段会让每个真实运行在 `finish_run` 上被拒）。平台 bench 与租户 bench 各用一个 redis 队列库（`/1` 与 `/0`）：队列名来自 bench 路径，两个 bench 在同一个库里会互相取走对方的作业。
 
+### 租户额度
+
+两条额度都**默认为 0 = 不限**，开站链路不写它们，所以在有人显式设置之前，一个租户身上唯一生效的成本上限是**单次 run 预算**（`dsherp_bridge.run_budget.DOMAINS`）。设置与查看：
+
+```sh
+admin tenant-quota "$SLUG"                                          # 只读：看当前生效值
+admin tenant-quota "$SLUG" --user-daily-model-calls N --site-monthly-tokens M
+```
+
+- `user_daily_model_calls`：每个用户每天的模型调用次数。计数来自 `reserve_model_call`，**在飞的运行也计入且不退还**——限流要的就是这个，用户不能靠挂着运行绕过。
+- `site_monthly_tokens`：本站本月已结算的输入+输出 token。只有运行结束才写，所以这是个**下限**，拒绝时的提示会说明在飞的部分尚未计入。
+- 边界按站点自己的本地日/月（`frappe.utils.now_datetime`）。`0` 是把某一条关掉的写法，可以随时写回。
+- 只给命令不给参数是只读；给了参数就是合并写入 `site_config` 的 `dsherp_quota`，另一条不动。
+- 用量对照：`admin usage YYYY-MM`。
+
+**具体取值待裁决**：本文不给推荐值——没有真实用量分布之前，给谁都拦是拦正常工作而不是拦滥用。接入第一个真实租户之前必须先定这两个数，否则那一天没有任何日/月维度的成本上限。
+
 命令输出里的 `runtime_identity` 是该站运行服务身份的 api_key/api_secret，**只在签发那一次出现**：重跑 `provision-tenant` 不会再签发也不会再显示（步骤报 `kept`）；丢了或要换就 `provision-tenant <slug> --rotate-runtime-key`，旧密钥随即作废。写入下一步的 worker profile 后即从终端历史中清除——更稳妥的做法是像演练脚本那样，用一段 Python 把 JSON 输出直接落成 0600 文件，密钥从不经过终端。
 
 ## 6. 起入口与出口

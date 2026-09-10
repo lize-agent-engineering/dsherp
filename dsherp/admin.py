@@ -574,6 +574,47 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
     return result
 
 
+# The two tenant quotas, in the same words as `dsherp_bridge.run_budget.QUOTA_DEFAULTS`.
+# 0 means unlimited and 0 is what a Site has until somebody writes something else, so until
+# this command is run the only cost ceiling in force on a tenant is the per-run budget.
+QUOTA_KEYS = ('user_daily_model_calls', 'site_monthly_tokens')
+QUOTA_READ = "print(json.dumps(frappe.conf.get('dsherp_quota') or {}))"
+
+
+def _validate_quota(values, source):
+    for key, value in values.items():
+        # The rule the Site itself enforces on read: `>= 0`, because 0 is how a quota is
+        # turned back off. A Site whose dsherp_quota is malformed refuses every message.
+        if key not in QUOTA_KEYS or type(value) is not int or value < 0:
+            raise Fault(f'{source} 里的额度 {key}={value!r} 无效：只能是 '
+                        f'{"、".join(QUOTA_KEYS)}，取值为 >= 0 的整数（0 表示不限）')
+
+
+def tenant_quota(resolved, slug, values=None, *, root=ROOT, runner=subprocess.run, bench_factory=None):
+    """Read or write one tenant's usage quotas; writing merges into `dsherp_quota`.
+
+    Judged on the Site before a run exists (`dsherp_bridge.context_api._check_quota`), so this
+    is the only place they are set. Both default to 0 = unlimited: without a real usage
+    distribution a refusal for everyone would be a gate against ordinary work rather than
+    against abuse, so the values are an operator decision, not a default this code invents."""
+    site = deploy_env.site_name(resolved, slug)
+    factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
+    tenant = factory('tenant')
+    if not tenant.site_exists(site):
+        raise Fault(f'站点 {site} 不存在；先 provision-tenant {slug}')
+    stored = json.loads(_last_line(tenant.python(site, QUOTA_READ, timeout=120)) or '{}')
+    if not isinstance(stored, dict):
+        raise Fault(f'{site} 的 dsherp_quota 不是对象；该站会拒绝每一次提问，先修 site_config')
+    _validate_quota(stored, f'{site} 的 site_config')
+    effective = {key: 0 for key in QUOTA_KEYS} | stored
+    if not values:
+        return {'site': site, 'quota': effective, 'state': 'read'}
+    _validate_quota(values, '命令行')
+    merged = effective | values
+    changed = ensure_site_config(tenant, site, {'dsherp_quota': merged})
+    return {'site': site, 'quota': merged, 'state': 'changed' if changed else 'kept'}
+
+
 # Where `bench drop-site` moves a Site directory (backup included). Named explicitly so
 # it is the same path the backend persists as a volume (compose) and the image prepared
 # for the bench user (Dockerfile): an archive left in the container's writable layer
@@ -1954,6 +1995,13 @@ def main(argv=None):
     retire.add_argument('--no-archive', action='store_true')
     sub.add_parser('provision-platform', help='幂等开通平台站')
     sub.add_parser('list-tenants', help='列出当前租户')
+    quota_parser = sub.add_parser('tenant-quota',
+                                  help='查看或设置某个租户站的用量额度（0 表示不限；不给参数就是只读）')
+    quota_parser.add_argument('slug')
+    quota_parser.add_argument('--user-daily-model-calls', type=int, default=None, metavar='N',
+                              help='每个用户每天的模型调用次数上限（在飞的运行也计入）；0 表示不限')
+    quota_parser.add_argument('--site-monthly-tokens', type=int, default=None, metavar='N',
+                              help='本站本月已结算 token 上限（在飞的运行尚未计入）；0 表示不限')
     sub.add_parser('render-ingress', help='按当前租户清单重新渲染入口配置')
     sub.add_parser('agent-firewall', help='打印把运行容器挡在宿主之外的 INPUT 规则；生产由 dsherp-agent-firewall.service 在开机时应用')
     backup_parser = sub.add_parser('backup', help='对平台站与全部租户站在稳定窗口内生成四件套与核验快照，暂存为备份集；--sync 随后异地同步')
@@ -2048,6 +2096,12 @@ def main(argv=None):
             return 0
         if arguments.command == 'list-tenants':
             _print(load_tenants(resolved))
+            return 0
+        if arguments.command == 'tenant-quota':
+            given = {'user_daily_model_calls': arguments.user_daily_model_calls,
+                     'site_monthly_tokens': arguments.site_monthly_tokens}
+            _print(tenant_quota(resolved, arguments.slug,
+                                {key: value for key, value in given.items() if value is not None}))
             return 0
         if arguments.command == 'agent-firewall':
             _print(agent_firewall_rules(resolved))

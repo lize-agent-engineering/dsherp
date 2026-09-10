@@ -127,6 +127,9 @@ class FakeBench:
             state = "kept" if self.config.get("scheduler") else "enabled"
             self.config["scheduler"] = True
             return json.dumps(state) + "\n"
+        if "frappe.conf.get('dsherp_quota')" in body:
+            self.calls.append(("quota-read", site))
+            return json.dumps(self.config.get("dsherp_quota") or {}) + "\n"
         if "'Role'" in body:
             state = "kept" if self.config.get("role") else "created"
             self.config["role"] = True
@@ -1456,3 +1459,65 @@ def test_a_site_that_is_not_reported_created_is_a_failure_not_a_silent_success(h
         admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
     assert "DSHERP_SITE_CREATED" in str(failure.value)
 
+
+def test_a_tenants_quota_starts_unlimited_and_says_so(host):
+    """Both quotas default to 0 = unlimited, and nothing in the provisioning chain writes them.
+    Until an operator sets them, the only cost ceiling on a tenant is the per-run budget - so
+    the read has to state that plainly rather than return an empty object."""
+    admin.ensure_secrets(PROD)
+    bench = FakeBench(existing_sites=["acme.tenant.example.com"])
+    result = admin.tenant_quota(PROD, "acme", bench_factory=lambda kind: bench)
+    assert result == {"site": "acme.tenant.example.com", "state": "read",
+                      "quota": {"user_daily_model_calls": 0, "site_monthly_tokens": 0}}
+
+
+def test_setting_one_quota_leaves_the_other_alone_and_is_idempotent(host):
+    admin.ensure_secrets(PROD)
+    bench = FakeBench(existing_sites=["acme.tenant.example.com"])
+    first = admin.tenant_quota(PROD, "acme", {"user_daily_model_calls": 200},
+                               bench_factory=lambda kind: bench)
+    assert first["state"] == "changed"
+    assert first["quota"] == {"user_daily_model_calls": 200, "site_monthly_tokens": 0}
+    assert bench.config["dsherp_quota"] == {"user_daily_model_calls": 200, "site_monthly_tokens": 0}
+
+    second = admin.tenant_quota(PROD, "acme", {"site_monthly_tokens": 5_000_000},
+                                bench_factory=lambda kind: bench)
+    assert second["quota"] == {"user_daily_model_calls": 200, "site_monthly_tokens": 5_000_000}
+    again = admin.tenant_quota(PROD, "acme", {"site_monthly_tokens": 5_000_000},
+                               bench_factory=lambda kind: bench)
+    assert again["state"] == "kept"
+    # 0 is the documented way to turn one back off, so it must be writable, not "unset".
+    off = admin.tenant_quota(PROD, "acme", {"user_daily_model_calls": 0},
+                             bench_factory=lambda kind: bench)
+    assert off["quota"]["user_daily_model_calls"] == 0 and off["state"] == "changed"
+
+
+def test_a_quota_the_site_would_refuse_is_refused_before_it_is_written(host):
+    """`run_budget.quota()` throws on an unknown key or a negative number, and it is called on
+    every message - so writing one would take the whole Site down, not just the quota."""
+    admin.ensure_secrets(PROD)
+    bench = FakeBench(existing_sites=["acme.tenant.example.com"])
+    for bad in ({"user_daily_model_calls": -1}, {"site_monthly_tokens": "1000"},
+                {"model_max_calls": 5}, {"user_daily_model_calls": True}):
+        with pytest.raises(admin.Fault):
+            admin.tenant_quota(PROD, "acme", bad, bench_factory=lambda kind: bench)
+    assert "dsherp_quota" not in bench.config
+
+
+def test_a_site_config_that_already_holds_a_bad_quota_is_reported_not_merged_into(host):
+    admin.ensure_secrets(PROD)
+    bench = FakeBench(existing_sites=["acme.tenant.example.com"],
+                      config={"dsherp_quota": {"user_daily_model_calls": -5}})
+    with pytest.raises(admin.Fault) as failure:
+        admin.tenant_quota(PROD, "acme", bench_factory=lambda kind: bench)
+    assert "site_config" in str(failure.value)
+
+
+def test_a_quota_for_a_site_that_does_not_exist_stops_before_any_write(host):
+    admin.ensure_secrets(PROD)
+    bench = FakeBench()
+    with pytest.raises(admin.Fault) as failure:
+        admin.tenant_quota(PROD, "acme", {"user_daily_model_calls": 1},
+                           bench_factory=lambda kind: bench)
+    assert "provision-tenant" in str(failure.value)
+    assert "dsherp_quota" not in bench.config
