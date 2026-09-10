@@ -281,6 +281,26 @@ def ensure_role(bench, site, role):
     return json.loads(bench.python(site, body).strip().splitlines()[-1])
 
 
+# `bench new-site` is `frappe.init(site, new_site=True)` followed by `_new_site(...)`
+# (frappe/commands/site.py). Calling those two directly is the same site, built the same way,
+# with one difference that matters: `--db-root-password` and `--admin-password` would go on
+# bench's argv, and bench appends its own argv to `sites/bench.log` on every invocation. That
+# log stays in the tenant volume and goes out in every backup. `Bench.script` puts them on
+# stdin instead, which is never logged - the same route `restore_drill._new_site` already uses.
+NEW_SITE = (
+    "payload=PAYLOAD\n"
+    f"os.chdir({SITES!r})\n"
+    "import frappe\n"
+    "from frappe.installer import _new_site\n"
+    # Without new_site=True the config reader refuses a Site directory that does not exist yet.
+    "frappe.init(payload['site'],new_site=True)\n"
+    # db_name None is what `bench new-site` passes without --db-name: Frappe derives it.
+    "_new_site(None,payload['site'],db_root_username='root',"
+    "db_root_password=payload['db_root_password'],admin_password=payload['admin_password'],"
+    "verbose=False,install_apps=payload['apps'],db_host='db',mariadb_user_host_login_scope='%')\n"
+    "print('DSHERP_SITE_CREATED '+json.dumps({'site':payload['site']}))\n")
+
+
 def ensure_site(bench, resolved, site, admin_password, db_root_password, apps=('erpnext',)):
     """Create the Site only when its directory is absent; never touch an existing one."""
     state = bench.site_state(site)
@@ -289,11 +309,14 @@ def ensure_site(bench, resolved, site, admin_password, db_root_password, apps=('
     if state == 'partial':
         raise Fault(f'{SITES}/{site} 存在但没有 site_config.json：上一次建站半途失败。'
                     '先检查库里是否留下同名数据库，再删除该目录重跑；不会自动清理')
-    install = [argument for app in apps for argument in ('--install-app', app)]
-    bench.run('bench', 'new-site', site, '--db-host', 'db', '--db-root-username', 'root',
-              '--db-root-password', db_root_password, '--admin-password', admin_password,
-              '--mariadb-user-host-login-scope', '%', *install, timeout=1800,
-              secrets=(db_root_password, admin_password))
+    payload = {'site': site, 'apps': list(apps),
+               'db_root_password': db_root_password, 'admin_password': admin_password}
+    output = bench.script(NEW_SITE.replace('PAYLOAD', json.dumps(payload)), timeout=1800,
+                          secrets=(db_root_password, admin_password))
+    # A snippet that printed nothing would read as success; `bench new-site` failed loudly.
+    if not _last_line(output).startswith('DSHERP_SITE_CREATED '):
+        raise Fault(f'建站脚本没有输出 DSHERP_SITE_CREATED：{site} 的状态未知，'
+                    f'先用 site_state 查这个目录再决定是否重跑；不会自动清理')
     return 'created'
 
 

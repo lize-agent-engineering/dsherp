@@ -52,6 +52,7 @@ class FakeBench:
     def __init__(self, existing_sites=(), installed=(), config=None):
         self.calls = []
         self.verbs = []
+        self.created = []
         self.oauth_callbacks = []
         self.existing = set(existing_sites)
         self.installed = set(installed)
@@ -67,6 +68,15 @@ class FakeBench:
         return self.site_state(site) == "present"
 
     def run(self, *arguments, stdin=None, timeout=900, secrets=()):
+        if arguments[:2] == (admin.BENCH_PYTHON, "-") and "DSHERP_SITE_CREATED" in (stdin or ""):
+            # `ensure_site` builds the Site through the bench interpreter so that the two
+            # passwords never reach bench's argv; the recorded shape stays "bench new-site".
+            payload = json.loads(stdin.split("payload=", 1)[1].split("\n", 1)[0])
+            self.created.append(payload)
+            self.calls.append(("run", "bench", "new-site", payload["site"]))
+            self.verbs.append("bench new-site " + payload["site"])
+            self.existing.add(payload["site"])
+            return "DSHERP_SITE_CREATED " + json.dumps({"site": payload["site"]}) + "\n"
         self.calls.append(("run",) + arguments[:3])
         self.verbs.append(" ".join(arguments))
         if arguments[:2] == ("sh", "-c") and "apps.txt" in arguments[2]:
@@ -102,6 +112,11 @@ class FakeBench:
             archive, _, name = path.rpartition("/")
             return "present\n" if name in self.config.get("archived", {}).get(archive, []) else ""
         return ""
+
+    def script(self, body, timeout=900, secrets=()):
+        # Same wrapping as the real Bench.script: the snippet reaches the container on stdin.
+        return self.run(admin.BENCH_PYTHON, "-", stdin="import json,os,sys\n" + body,
+                        timeout=timeout, secrets=secrets)
 
     def python(self, site, body, timeout=900):
         self.calls.append(("python", site, body.splitlines()[0][:40]))
@@ -199,6 +214,7 @@ def test_provisioning_a_new_tenant_creates_the_site_once_and_records_it(host):
     result = admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
     assert result["site"] == "acme.tenant.example.com"
     assert ("run", "bench", "new-site", "acme.tenant.example.com") in bench.calls
+    assert bench.created[0]["apps"] == ["erpnext"]
     assert dict(result["steps"])["site"] == "created"
     assert dict(result["steps"])["app"] == "created"
     assert dict(result["steps"])["password-login"] == "disabled"
@@ -848,8 +864,7 @@ def test_the_platform_site_is_created_without_erpnext_and_with_its_own_app():
     assert steps["member-role"] == "created"
     assert bench.verbs.index([v for v in bench.verbs if "apps.txt" in v][0]) < \
         bench.verbs.index([v for v in bench.verbs if "new-site" in v][0])
-    created = [verb for verb in bench.verbs if "new-site" in verb][0]
-    assert "--install-app erpnext" not in created
+    assert bench.created[0]["apps"] == [], "平台站不装 erpnext"
     assert any("install-app dsherp_platform" in verb for verb in bench.verbs)
     bench.calls.clear()
     bench.verbs.clear()
@@ -1365,3 +1380,79 @@ def test_doctor_asks_for_the_backup_key_material_only_once_repositories_are_conf
     assert not [finding for finding in admin.doctor(RELEASE) if "backup" in finding]
     (directory / "backup_storage_credentials").chmod(0o644)
     assert any("backup_storage_credentials" in finding and "权限" in finding for finding in admin.doctor(RELEASE))
+
+
+class RecordingBench(FakeBench):
+    """FakeBench that also keeps what each container command was given on stdin.
+
+    `bench` writes its own argv into `sites/bench.log` on every invocation, so what lands in
+    `arguments` is what a log-reading attacker gets. What lands in `stdin` never reaches a log.
+    """
+
+    def __init__(self, *args, **options):
+        super().__init__(*args, **options)
+        self.commands = []
+
+    def run(self, *arguments, stdin=None, timeout=900, secrets=()):
+        self.commands.append({"arguments": arguments, "stdin": stdin})
+        return super().run(*arguments, stdin=stdin, timeout=timeout, secrets=secrets)
+
+
+def _provisioning_command_lines(bench):
+    return [" ".join(str(part) for part in command["arguments"]) for command in bench.commands]
+
+
+def test_creating_a_tenant_site_never_puts_a_password_on_a_command_line(host):
+    """`bench` logs its own argv (sites/bench.log). Credentials go in on stdin, which does not.
+
+    The four dev provisioning scripts wipe bench.log in a `finally` for exactly this reason
+    (infra/provision_daily_site.py:16-21); the operator-facing path had not caught up, and
+    `ensure_site` is on the only route to every tenant.
+    """
+    admin.ensure_secrets(PROD)
+    db_root = admin.read_secret(PROD, "db_root_password")
+    tenant_admin = admin.read_secret(PROD, "tenant_admin_password")
+    assert db_root and tenant_admin and db_root != tenant_admin
+
+    bench = RecordingBench()
+    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+
+    for line in _provisioning_command_lines(bench):
+        for secret in (db_root, tenant_admin):
+            assert secret not in line, line.replace(secret, "<SECRET>")
+    # Not vacuous: the credential still has to reach the container, just not through argv.
+    assert [command for command in bench.commands
+            if db_root in (command["stdin"] or "") and tenant_admin in (command["stdin"] or "")]
+
+
+def test_creating_the_platform_site_never_puts_a_password_on_a_command_line(host):
+    admin.ensure_secrets(PROD)
+    db_root = admin.read_secret(PROD, "db_root_password")
+    platform_admin = admin.read_secret(PROD, "platform_admin_password")
+
+    bench = RecordingBench()
+    admin.provision_platform(PROD, bench_factory=lambda kind: bench)
+
+    for line in _provisioning_command_lines(bench):
+        for secret in (db_root, platform_admin):
+            assert secret not in line, line.replace(secret, "<SECRET>")
+    assert [command for command in bench.commands
+            if db_root in (command["stdin"] or "") and platform_admin in (command["stdin"] or "")]
+
+
+def test_a_site_that_is_not_reported_created_is_a_failure_not_a_silent_success(host):
+    """The stdin route has to prove the site was made: `bench new-site` failed loudly with a
+    non-zero exit, a snippet that printed nothing would otherwise read as success."""
+    admin.ensure_secrets(PROD)
+
+    class SilentBench(FakeBench):
+        def run(self, *arguments, stdin=None, timeout=900, secrets=()):
+            if arguments[:2] == (admin.BENCH_PYTHON, "-") and "DSHERP_SITE_CREATED" in (stdin or ""):
+                return "some other chatter\n"
+            return super().run(*arguments, stdin=stdin, timeout=timeout, secrets=secrets)
+
+    bench = SilentBench()
+    with pytest.raises(admin.Fault) as failure:
+        admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    assert "DSHERP_SITE_CREATED" in str(failure.value)
+
