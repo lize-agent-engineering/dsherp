@@ -669,3 +669,82 @@ def test_the_database_limit_accounts_for_the_buffers_mariadb_allocates_whatever_
     assert fixed * 3 <= limit, (
         f"固定缓冲区合计 {fixed} MiB，上限只有 {limit} MiB；"
         "打开表与数据字典才是随站点增长的部分，要给它们留出空间")
+
+
+def _provisioned(site, key="k", secret="s"):
+    """What `dsherp-admin provision-tenant --rotate-runtime-key` prints."""
+    return {"site": site, "steps": [["site", "created"], ["runtime-identity", "issued"]],
+            "runtime_identity": {"user": f"runtime@{site}", "api_key": key, "api_secret": secret,
+                                 "state": "issued"}}
+
+
+def test_provisioning_a_second_tenant_keeps_the_first_in_the_worker_profile(tmp_path):
+    """The runbook used to write this file with a one-element list and O_TRUNC. Ruling #2's
+    first batch is up to three tenant Sites on one host, so the second `provision-tenant` would
+    have removed the first Site from the worker's profile - that Site keeps queueing runs and
+    nobody claims them."""
+    from infra.write_worker_profile import write_worker_profile
+
+    first = write_worker_profile(_provisioned("acme.tenant.example.com"), root=tmp_path)
+    assert first["state"] == "added" and first["sites"] == ["acme.tenant.example.com"]
+    second = write_worker_profile(_provisioned("beta.tenant.example.com", "k2", "s2"), root=tmp_path)
+    assert second["state"] == "added"
+    assert second["sites"] == ["acme.tenant.example.com", "beta.tenant.example.com"]
+
+    profile = json.loads((tmp_path / ".runtime/context-worker-sites.json").read_text())
+    assert [site["site"] for site in profile["sites"]] == ["acme.tenant.example.com", "beta.tenant.example.com"]
+    assert [site["api_secret"] for site in profile["sites"]] == ["s", "s2"]
+    assert profile["slots"] == 3 and profile["metrics_port"] == 9109
+    assert (tmp_path / ".runtime/context-worker-sites.json").stat().st_mode & 0o777 == 0o600
+    # The worker has to accept what was just written, not discover it at 3am.
+    from dsherp.context_worker import normalize_profile
+    assert len(normalize_profile(profile)["sites"]) == 2
+
+
+def test_rotating_one_tenants_key_replaces_that_entry_and_leaves_the_others(tmp_path):
+    from infra.write_worker_profile import write_worker_profile
+
+    write_worker_profile(_provisioned("acme.tenant.example.com"), root=tmp_path)
+    write_worker_profile(_provisioned("beta.tenant.example.com", "k2", "s2"), root=tmp_path)
+    again = write_worker_profile(_provisioned("acme.tenant.example.com", "k3", "s3"), root=tmp_path)
+    assert again["state"] == "replaced"
+
+    profile = json.loads((tmp_path / ".runtime/context-worker-sites.json").read_text())
+    assert [site["site"] for site in profile["sites"]] == ["beta.tenant.example.com", "acme.tenant.example.com"]
+    assert {site["site"]: site["api_secret"] for site in profile["sites"]} == {
+        "acme.tenant.example.com": "s3", "beta.tenant.example.com": "s2"}
+
+
+def test_a_rerun_that_issued_no_key_is_refused_instead_of_writing_a_credentialless_site(tmp_path):
+    """`provision-tenant` without `--rotate-runtime-key` reports `runtime-identity: kept` and
+    prints no secret. Writing that would produce a profile the worker refuses to start on."""
+    from infra.write_worker_profile import write_worker_profile
+
+    write_worker_profile(_provisioned("acme.tenant.example.com"), root=tmp_path)
+    before = (tmp_path / ".runtime/context-worker-sites.json").read_bytes()
+    kept = {"site": "beta.tenant.example.com", "steps": [["runtime-identity", "kept"]]}
+    with pytest.raises(ValueError) as failure:
+        write_worker_profile(kept, root=tmp_path)
+    assert "--rotate-runtime-key" in str(failure.value)
+    assert (tmp_path / ".runtime/context-worker-sites.json").read_bytes() == before
+
+
+def test_an_unreadable_profile_is_reported_rather_than_replaced(tmp_path):
+    from infra.write_worker_profile import write_worker_profile
+
+    target = tmp_path / ".runtime/context-worker-sites.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("{ not json")
+    with pytest.raises(ValueError):
+        write_worker_profile(_provisioned("acme.tenant.example.com"), root=tmp_path)
+    assert target.read_text() == "{ not json"
+
+
+def test_the_runbook_writes_the_worker_profile_through_the_merging_script():
+    """The operator follows the runbook literally; an inline O_TRUNC there is the bug itself."""
+    runbook = (ROOT / "docs/engineering/deployment-runbook.md").read_text()
+    assert "infra/write_worker_profile.py" in runbook
+    # The bug was an inline snippet that opened the profile itself; prose about it is fine.
+    assert 'os.open(".runtime/context-worker-sites.json"' not in runbook
+    assert "systemctl restart dsherp-agent-worker" in runbook, "改了 profile 不重启 worker 等于没改"
+

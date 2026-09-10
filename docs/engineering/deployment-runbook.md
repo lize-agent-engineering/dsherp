@@ -172,18 +172,15 @@ worker 不进容器：它需要 docker 才能拉起一次性 Runtime 容器。
 venv 已在第 3 步建好。worker profile 直接由 CLI 输出落盘，密钥不经过终端也不经过编辑器：
 
 ```sh
-sudo -iu dsherp bash -c 'cd /opt/dsherp && umask 077 && DSHERP_ENV=prod ./bin/dsherp-admin provision-tenant '"$SLUG"' --rotate-runtime-key | .venv/bin/python - <<"PY"
-import json, os, sys
-d = json.load(sys.stdin); ident = d["runtime_identity"]
-profile = {"slots": 3, "metrics_port": 9109, "sites": [{"site": ident["user"].split("@", 1)[1],
-           "base_url": "http://127.0.0.1:8000", "business_url": "http://backend:8000",
-           "api_key": ident["api_key"], "api_secret": ident["api_secret"]}]}
-fd = os.open(".runtime/context-worker-sites.json", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-os.write(fd, json.dumps(profile).encode()); os.close(fd); print("profile written")
-PY'
+sudo -iu dsherp bash -c 'cd /opt/dsherp && umask 077 && DSHERP_ENV=prod ./bin/dsherp-admin provision-tenant '"$SLUG"' --rotate-runtime-key | .venv/bin/python infra/write_worker_profile.py'
+# {"path": "/opt/dsherp/.runtime/context-worker-sites.json", "site": "…", "state": "added", "sites": ["…"]}
 ```
 
 `--rotate-runtime-key` 作废该站的旧运行密钥并签发新的；第一次开站后 profile 也可以这样生成（当时签发的密钥只在那次输出里）。
+
+`write_worker_profile.py` 是**读-合并-写**：它把这个站并进已有 profile，同名站替换那一条，其余站原样保留，再按 worker 自己的 `normalize_profile` 校验一遍才落盘（0600，先写临时文件再 `os.replace`）。**每多开一个租户站就重跑这一条**，并核对输出里的 `sites` 列出了全部租户站——早先这里是一段单元素列表 + `O_TRUNC` 的内联脚本，开第二个租户会把第一个从 profile 里抹掉，那个站从此排队没人领、也不报错。这次的 `provision-tenant` 没签发密钥（步骤报 `runtime-identity: kept`）时脚本直接报错退出，不会写一条没有凭据的记录。
+
+**worker 只在启动时读一次 profile**：改完 profile 要 `sudo systemctl restart dsherp-agent-worker`（第一次装 worker 时还没有 unit，跳过），否则新租户站不会被领取。
 
 profile 形如：`base_url` 是宿主 worker 自己领取运行、发心跳用的地址——它在宿主上，而 compose 的网络全是 internal，所以 backend 只在 `127.0.0.1:8000` 发布一个回环端口给它（`DSHERP_BACKEND_LOOPBACK_PORT` 可改；为此 backend 额外接了一个非 internal 的 `worker` 网络——Docker 不会为只在 internal 网络上的容器发布端口，本地演练时正是在这里断过）；`business_url` 是运行容器在 agent 网络内访问业务站的服务名：
 
