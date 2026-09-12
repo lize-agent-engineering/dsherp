@@ -28,10 +28,18 @@ class _Counter:
 
 
 class _Gauge:
-    def __init__(self,lock):
-        self._lock=lock;self._value=0
-    def set(self,value):
-        with self._lock:self._value=value
+    def __init__(self,lock,labels):
+        self._lock=lock;self._labels=tuple(labels)
+        # An unlabeled gauge reads 0 from the first scrape. A labeled one has no series until
+        # something sets it, the same rule the labeled counters already follow; the worker
+        # materialises one per Site at start so a silent Site is a 0, not a missing line.
+        self._values={} if self._labels else {():0}
+    def set(self,value,**labels):
+        key=tuple(labels[name] for name in self._labels)
+        with self._lock:self._values[key]=value
+    def value(self,**labels):
+        key=tuple(labels[name] for name in self._labels)
+        with self._lock:return self._values.get(key,0)
 
 
 class _Histogram:
@@ -51,8 +59,8 @@ class Registry:
         self._lock=threading.Lock();self._metrics=[]
     def counter(self,name,help,labels=()):
         metric=_Counter(self._lock,labels);self._metrics.append((name,help,'counter',metric));return metric
-    def gauge(self,name,help):
-        metric=_Gauge(self._lock);self._metrics.append((name,help,'gauge',metric));return metric
+    def gauge(self,name,help,labels=()):
+        metric=_Gauge(self._lock,labels);self._metrics.append((name,help,'gauge',metric));return metric
     def histogram(self,name,help,buckets):
         metric=_Histogram(self._lock,buckets);self._metrics.append((name,help,'histogram',metric));return metric
     def render(self):
@@ -61,15 +69,13 @@ class Registry:
             for name,help,kind,metric in self._metrics:
                 lines.append(f'# HELP {name} {_escape_help(help)}')
                 lines.append(f'# TYPE {name} {kind}')
-                if kind=='counter':
+                if kind in ('counter','gauge'):
                     if metric._labels:
                         for key,value in metric._values.items():
                             labels=','.join(f'{label}="{_escape(item)}"' for label,item in zip(metric._labels,key))
                             lines.append(f'{name}{{{labels}}} {_number(value)}')
                     else:
                         lines.append(f'{name} {_number(metric._values.get((),0))}')
-                elif kind=='gauge':
-                    lines.append(f'{name} {_number(metric._value)}')
                 else:
                     for bound,count in zip(metric._buckets,metric._counts):
                         lines.append(f'{name}_bucket{{le="{_number(bound)}"}} {_number(count)}')

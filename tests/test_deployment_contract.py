@@ -5,6 +5,7 @@ Linux host comes up, but they do fail the moment an entry point drifts back to a
 unpinned image, a root container, a routable agent network or a mounted working copy.
 """
 import json
+import os
 import plistlib
 import re
 from pathlib import Path
@@ -669,3 +670,161 @@ def test_the_database_limit_accounts_for_the_buffers_mariadb_allocates_whatever_
     assert fixed * 3 <= limit, (
         f"固定缓冲区合计 {fixed} MiB，上限只有 {limit} MiB；"
         "打开表与数据字典才是随站点增长的部分，要给它们留出空间")
+
+
+def _provisioned(site, key="k", secret="s"):
+    """What `dsherp-admin provision-tenant --rotate-runtime-key` prints."""
+    return {"site": site, "steps": [["site", "created"], ["runtime-identity", "issued"]],
+            "runtime_identity": {"user": f"runtime@{site}", "api_key": key, "api_secret": secret,
+                                 "state": "issued"}}
+
+
+def test_provisioning_a_second_tenant_keeps_the_first_in_the_worker_profile(tmp_path):
+    """The runbook used to write this file with a one-element list and O_TRUNC. Ruling #2's
+    first batch is up to three tenant Sites on one host, so the second `provision-tenant` would
+    have removed the first Site from the worker's profile - that Site keeps queueing runs and
+    nobody claims them."""
+    from infra.write_worker_profile import write_worker_profile
+
+    first = write_worker_profile(_provisioned("acme.tenant.example.com"), root=tmp_path)
+    assert first["state"] == "added" and first["sites"] == ["acme.tenant.example.com"]
+    second = write_worker_profile(_provisioned("beta.tenant.example.com", "k2", "s2"), root=tmp_path)
+    assert second["state"] == "added"
+    assert second["sites"] == ["acme.tenant.example.com", "beta.tenant.example.com"]
+
+    profile = json.loads((tmp_path / ".runtime/context-worker-sites.json").read_text())
+    assert [site["site"] for site in profile["sites"]] == ["acme.tenant.example.com", "beta.tenant.example.com"]
+    assert [site["api_secret"] for site in profile["sites"]] == ["s", "s2"]
+    assert profile["slots"] == 3 and profile["metrics_port"] == 9109
+    assert (tmp_path / ".runtime/context-worker-sites.json").stat().st_mode & 0o777 == 0o600
+    # The worker has to accept what was just written, not discover it at 3am.
+    from dsherp.context_worker import normalize_profile
+    assert len(normalize_profile(profile)["sites"]) == 2
+
+
+def test_rotating_one_tenants_key_replaces_that_entry_and_leaves_the_others(tmp_path):
+    from infra.write_worker_profile import write_worker_profile
+
+    write_worker_profile(_provisioned("acme.tenant.example.com"), root=tmp_path)
+    write_worker_profile(_provisioned("beta.tenant.example.com", "k2", "s2"), root=tmp_path)
+    again = write_worker_profile(_provisioned("acme.tenant.example.com", "k3", "s3"), root=tmp_path)
+    assert again["state"] == "replaced"
+
+    profile = json.loads((tmp_path / ".runtime/context-worker-sites.json").read_text())
+    assert [site["site"] for site in profile["sites"]] == ["beta.tenant.example.com", "acme.tenant.example.com"]
+    assert {site["site"]: site["api_secret"] for site in profile["sites"]} == {
+        "acme.tenant.example.com": "s3", "beta.tenant.example.com": "s2"}
+
+
+def test_a_rerun_that_issued_no_key_is_refused_instead_of_writing_a_credentialless_site(tmp_path):
+    """`provision-tenant` without `--rotate-runtime-key` reports `runtime-identity: kept` and
+    prints no secret. Writing that would produce a profile the worker refuses to start on."""
+    from infra.write_worker_profile import write_worker_profile
+
+    write_worker_profile(_provisioned("acme.tenant.example.com"), root=tmp_path)
+    before = (tmp_path / ".runtime/context-worker-sites.json").read_bytes()
+    kept = {"site": "beta.tenant.example.com", "steps": [["runtime-identity", "kept"]]}
+    with pytest.raises(ValueError) as failure:
+        write_worker_profile(kept, root=tmp_path)
+    assert "--rotate-runtime-key" in str(failure.value)
+    assert (tmp_path / ".runtime/context-worker-sites.json").read_bytes() == before
+
+
+def test_an_unreadable_profile_is_reported_rather_than_replaced(tmp_path):
+    from infra.write_worker_profile import write_worker_profile
+
+    target = tmp_path / ".runtime/context-worker-sites.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("{ not json")
+    with pytest.raises(ValueError):
+        write_worker_profile(_provisioned("acme.tenant.example.com"), root=tmp_path)
+    assert target.read_text() == "{ not json"
+
+
+def test_the_runbook_writes_the_worker_profile_through_the_merging_script():
+    """The operator follows the runbook literally; an inline O_TRUNC there is the bug itself."""
+    runbook = (ROOT / "docs/engineering/deployment-runbook.md").read_text()
+    assert "infra/write_worker_profile.py" in runbook
+    # The bug was an inline snippet that opened the profile itself; prose about it is fine.
+    assert 'os.open(".runtime/context-worker-sites.json"' not in runbook
+    assert "systemctl restart dsherp-agent-worker" in runbook, "改了 profile 不重启 worker 等于没改"
+
+
+# Every compose file with every profile it declares. `docker compose config` is the only way
+# an operator (or the G1 auditor) can ask "does this file still parse and interpolate", and it
+# has to answer on a host that has no control-plane credentials yet - the state of the clean
+# host at step 0.
+COMPOSE_PROFILES = {
+    "infra/compose.prod.yml": ("ops",),
+    "infra/compose.validation.yml": ("scheduled", "control", "ops"),
+    "infra/compose.restore.yml": ("fetch",),
+}
+# The restore file's two `fetch` services exist only to pull from the offsite repository, so
+# without its credentials there is nothing for them to do; that one is a decided exception
+# rather than an oversight, and the assertion below pins *why* it fails so that any other
+# breakage in that file still surfaces here.
+CREDENTIALLESS_EXCEPTIONS = {("infra/compose.restore.yml", "fetch")}
+# Enough interpolation for the files to resolve; none of it is a secret and none of it exists.
+COMPOSE_ENVIRONMENT = {
+    "DSHERP_ENV": "prod", "DSHERP_PROJECT": "dsherp", "DSHERP_BASE_DOMAIN": "tenant.example.com",
+    "DSHERP_PLATFORM_SLUG": "platform", "DSHERP_IMAGE_TAG": "v0.3.0",
+    "DSHERP_IMAGE_REGISTRY": "registry.example.com/dsherp",
+    "DSHERP_RESTORE_IMAGE": "registry.example.com/dsherp/dsherp-frappe:v0.3.0",
+    "DSHERP_AGENT_UID": "1000", "DSHERP_AGENT_GID": "1000", "DSHERP_ACME_EMAIL": "ops@example.com",
+    "DSHERP_BACKUP_REPOSITORY": "s3:https://example.invalid/bucket",
+    "DSHERP_BACKUP_SECRETS_REPOSITORY": "s3:https://example.invalid/secrets",
+}
+
+
+def _compose_config(name, profile, environment):
+    import subprocess
+
+    command = ["docker", "compose", "-p", "dsherp-compose-contract"]
+    if profile:
+        command += ["--profile", profile]
+    command += ["-f", str(ROOT / name), "config"]
+    return subprocess.run(command, capture_output=True, text=True, timeout=120, env=environment)
+
+
+def test_every_compose_file_parses_with_every_profile_before_any_credentials_exist(tmp_path):
+    """PR #27 gave `compose.validation.yml` the `- path:`/`required: false` form and left the
+    other two alone, so `--profile ops` on the production file died at "env file ... not found"
+    before it could report anything about the file itself."""
+    import shutil
+    import subprocess
+
+    if shutil.which("docker") is None:
+        pytest.skip("no docker CLI to parse the compose files with")
+    if subprocess.run(["docker", "compose", "version"], capture_output=True).returncode != 0:
+        pytest.skip("no docker compose plugin to parse the compose files with")
+
+    environment = {**os.environ, **COMPOSE_ENVIRONMENT,
+                   "DSHERP_SECRETS_DIR": str(tmp_path / "control"),   # deliberately absent
+                   "DSHERP_RUNTIME_DIR": str(tmp_path / "state")}
+    failures = []
+    for name, profiles in COMPOSE_PROFILES.items():
+        for profile in ("", *profiles):
+            result = _compose_config(name, profile, environment)
+            output = (result.stderr or result.stdout).strip()
+            tail = output.splitlines()[-1] if output.splitlines() else ""
+            if (name, profile) in CREDENTIALLESS_EXCEPTIONS:
+                if result.returncode == 0 or ("env file" in tail and "credentials" in tail):
+                    continue
+                failures.append((name, profile, "只允许因为缺凭据文件而失败", tail))
+                continue
+            if result.returncode:
+                failures.append((name, profile or "<none>", "config 失败", tail))
+    assert not failures, failures
+
+
+def test_the_two_operational_compose_files_never_use_a_bare_env_file():
+    """The shape, not just today's exit code: a bare `env_file:` on a control-plane credentials
+    path is what fails the whole file - every service in it - when that file is not there."""
+    for name in ("infra/compose.prod.yml", "infra/compose.validation.yml"):
+        text = (ROOT / name).read_text()
+        bare = re.findall(r"^\s+env_file: (.+)$", text, re.MULTILINE)
+        assert not bare, (name, bare)
+    for name in ("infra/compose.prod.yml", "infra/compose.validation.yml"):
+        text = (ROOT / name).read_text()
+        for credential in ("backup_storage_credentials", "backup_secrets_storage_credentials"):
+            assert re.search(rf"- path: \S*{credential}\n\s+required: false", text), (name, credential)

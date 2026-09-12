@@ -9,6 +9,7 @@
 | 项 | 值 | 备注 |
 |---|---|---|
 | 操作系统 | Linux x86_64 | 四个基础镜像 digest 均为多架构清单，含 `linux/amd64`（见[运行契约](runtime-baseline.md)） |
+| 主机规格 | **4 vCPU / 8 GiB 内存 / 100 GB 磁盘** | 见下一节「主机规格与依据」。低于 8 GiB 不要开工：数据库被 OOM 杀过两次 |
 | Docker | Engine 25+ 与 compose 插件 | `docker compose version` 必须可用 |
 | Python | 3.12（见仓库 `.python-version`） | 宿主 worker 用，不进容器 |
 | 宿主 glibc | **≥ 2.28**（RHEL/Rocky 8、Debian 10、Ubuntu 18.10 及以上） | `deepseek-harness-runtime-bin` 只发布 `manylinux_2_28` wheel，`uv pip sync requirements.lock` 在 glibc 2.17（CentOS 7）上无解。宿主 worker 本身不引入 SDK，但同一份锁装不上就起不了 CLI；容器内是 Debian bookworm，不受影响 |
@@ -20,6 +21,34 @@
 | 安装根 | 本文用 `/opt/dsherp`，但只是参数：`render_worker_units.py --root` 与 `bin/dsherp-admin` 都跟随实际目录。**不要放在 `/home` 下**：unit 的 `ProtectHome=read-only` 会把它锁成只读，能解锁 `.runtime`/`work` 的 `ReadWritePaths` 要 systemd ≥ 232 | 某些主机的 `/opt` 带 immutable 属性，root 也写不进，这时用 `/srv/dsherp` |
 
 约定：下文所有命令在仓库根执行，`$TAG` 为发布 tag，`$SLUG` 为租户短名（小写字母开头，`[a-z0-9-]`）。
+
+### 主机规格与依据
+
+G1 的交接包要给审计方，审计方得先知道开一台什么机器才能开工，所以规格写在这里而不是留给经验。
+
+| 用途 | 规格 |
+|---|---|
+| G1 白盒部署 + G10 24 小时浸泡 | 4 vCPU / **8 GiB** 内存 / 100 GB 磁盘 |
+| G3 异机恢复 | 4 vCPU / 8 GiB 内存 / 40 GB 磁盘 |
+
+**内存**。实测部分来自 2026-09-10 那次从零全绿的 nightly（[run 34403951406](https://github.com/lize-agent-engineering/dsherp/actions/runs/34403951406) 的 `docker-stats.txt` 工件），跑完一整轮集成之后的读数：
+
+| 容器 | 稳态 |
+|---|---|
+| db | 639.1 MiB |
+| 租户 backend | 259.2 MiB |
+| platform backend | 171.0 MiB |
+| redis | 22.6 MiB |
+| 两个 frontend 合计 | 9.9 MiB |
+| agent-egress | 5.6 MiB |
+
+合计 ≈ **1.1 GiB**。但这台跑的是本机四站验证栈的 8 个容器，**生产形态是 13 个服务**（见第 6 步的 `compose ps`），多出来的都还要算：两个 bench 的 scheduler 与 queue 共 4 个进程（同一个镜像、同一种进程，按上表 171–259 MiB 的量级估 ≈ +0.7 GiB）、拆开的第二个 redis、以及 caddy。据此生产稳态 ≈ **2 GiB**——这一段是**外推不是实测**，等 G1 真机跑起来要用真实读数替换。
+
+再往上：Agent 运行容器按 `dsherp/runtime_host.py:44` 限 `--memory 384m`，profile 的 `slots` 为 3，满载再 +1.15 GiB；加宿主 worker（实测 RSS 25 MiB）、restic、以及 OS 与 dockerd 自己，峰值 ≈ **3.5–4.5 GiB**。
+
+**为什么不是 4 GiB。** 峰值估算本身就已经顶到 4 GiB，而这不是唯一理由——「余量看着够」这个判断在这个项目上被自己的事故推翻过一次：`quality-gates-evidence.md:344-360` 记着数据库被 OOM 杀过两次。第一次是连续运行 25 小时后撞上 1 GiB 上限，当时按「重启后 468.6 MiB、一轮全量集成后 608.7 MiB，每夜从零只跑一轮，还有 40% 余量」放行；同一个库随后在 **3 小时 14 分**内被第二次 OOM 杀掉，证明那个 609 MiB 是刚重启、缓存还没填满时的读数，不代表稳态。G10 的判据恰好是「连续运行 24h」——把浸泡门开在一台只剩几百 MiB 余量的机器上，测的是内存够不够，不是系统稳不稳。8 GiB 让稳态落在一半以下，页缓存也有地方放。
+
+**磁盘**：一套镜像 ≈ 6.7 GB（dsherp-frappe 2.84 GB + dsherp-worker 3.39 GB + mariadb 357 MB + redis 28 MB + restic 44 MB）。G2 要求能回滚到旧 tag，因此**两套镜像同时在盘上**，×2 ≈ 13.4 GB；再加数据库卷、每站每日四件套备份与 restic 缓存、24h 浸泡期间的日志。100 GB 是留了成长空间的取值，40 GB 是异机恢复主机的下限（它只需要一套镜像加一次恢复的落地空间）。
 
 ## 账号模型
 
@@ -121,6 +150,23 @@ admin provision-tenant "$SLUG"
 
 两条命令都是幂等步骤链：每一步先查现状，中断后重跑不会重复建站或重复装 App。`provision-tenant` 会同时关闭该站的密码登录（Frappe 原生 `disable_user_pass_login`）、启用 scheduler，并把运行凭据端点的来源白名单 `dsherp_agent_sources` 写成 agent 网络与 worker 网络两个网段（后者是宿主 worker 经回环进来时的对端地址；只写 agent 网段会让每个真实运行在 `finish_run` 上被拒）。平台 bench 与租户 bench 各用一个 redis 队列库（`/1` 与 `/0`）：队列名来自 bench 路径，两个 bench 在同一个库里会互相取走对方的作业。
 
+### 租户额度
+
+两条额度都**默认为 0 = 不限**，开站链路不写它们，所以在有人显式设置之前，一个租户身上唯一生效的成本上限是**单次 run 预算**（`dsherp_bridge.run_budget.DOMAINS`）。设置与查看：
+
+```sh
+admin tenant-quota "$SLUG"                                          # 只读：看当前生效值
+admin tenant-quota "$SLUG" --user-daily-model-calls N --site-monthly-tokens M
+```
+
+- `user_daily_model_calls`：每个用户每天的模型调用次数。计数来自 `reserve_model_call`，**在飞的运行也计入且不退还**——限流要的就是这个，用户不能靠挂着运行绕过。
+- `site_monthly_tokens`：本站本月已结算的输入+输出 token。只有运行结束才写，所以这是个**下限**，拒绝时的提示会说明在飞的部分尚未计入。
+- 边界按站点自己的本地日/月（`frappe.utils.now_datetime`）。`0` 是把某一条关掉的写法，可以随时写回。
+- 只给命令不给参数是只读；给了参数就是合并写入 `site_config` 的 `dsherp_quota`，另一条不动。
+- 用量对照：`admin usage YYYY-MM`。
+
+**具体取值待裁决**：本文不给推荐值——没有真实用量分布之前，给谁都拦是拦正常工作而不是拦滥用。接入第一个真实租户之前必须先定这两个数，否则那一天没有任何日/月维度的成本上限。
+
 命令输出里的 `runtime_identity` 是该站运行服务身份的 api_key/api_secret，**只在签发那一次出现**：重跑 `provision-tenant` 不会再签发也不会再显示（步骤报 `kept`）；丢了或要换就 `provision-tenant <slug> --rotate-runtime-key`，旧密钥随即作废。写入下一步的 worker profile 后即从终端历史中清除——更稳妥的做法是像演练脚本那样，用一段 Python 把 JSON 输出直接落成 0600 文件，密钥从不经过终端。
 
 ## 6. 起入口与出口
@@ -143,18 +189,15 @@ worker 不进容器：它需要 docker 才能拉起一次性 Runtime 容器。
 venv 已在第 3 步建好。worker profile 直接由 CLI 输出落盘，密钥不经过终端也不经过编辑器：
 
 ```sh
-sudo -iu dsherp bash -c 'cd /opt/dsherp && umask 077 && DSHERP_ENV=prod ./bin/dsherp-admin provision-tenant '"$SLUG"' --rotate-runtime-key | .venv/bin/python - <<"PY"
-import json, os, sys
-d = json.load(sys.stdin); ident = d["runtime_identity"]
-profile = {"slots": 3, "metrics_port": 9109, "sites": [{"site": ident["user"].split("@", 1)[1],
-           "base_url": "http://127.0.0.1:8000", "business_url": "http://backend:8000",
-           "api_key": ident["api_key"], "api_secret": ident["api_secret"]}]}
-fd = os.open(".runtime/context-worker-sites.json", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-os.write(fd, json.dumps(profile).encode()); os.close(fd); print("profile written")
-PY'
+sudo -iu dsherp bash -c 'cd /opt/dsherp && umask 077 && DSHERP_ENV=prod ./bin/dsherp-admin provision-tenant '"$SLUG"' --rotate-runtime-key | .venv/bin/python infra/write_worker_profile.py'
+# {"path": "/opt/dsherp/.runtime/context-worker-sites.json", "site": "…", "state": "added", "sites": ["…"]}
 ```
 
 `--rotate-runtime-key` 作废该站的旧运行密钥并签发新的；第一次开站后 profile 也可以这样生成（当时签发的密钥只在那次输出里）。
+
+`write_worker_profile.py` 是**读-合并-写**：它把这个站并进已有 profile，同名站替换那一条，其余站原样保留，再按 worker 自己的 `normalize_profile` 校验一遍才落盘（0600，先写临时文件再 `os.replace`）。**每多开一个租户站就重跑这一条**，并核对输出里的 `sites` 列出了全部租户站——早先这里是一段单元素列表 + `O_TRUNC` 的内联脚本，开第二个租户会把第一个从 profile 里抹掉，那个站从此排队没人领、也不报错。这次的 `provision-tenant` 没签发密钥（步骤报 `runtime-identity: kept`）时脚本直接报错退出，不会写一条没有凭据的记录。
+
+**worker 只在启动时读一次 profile**：改完 profile 要 `sudo systemctl restart dsherp-agent-worker`（第一次装 worker 时还没有 unit，跳过），否则新租户站不会被领取。
 
 profile 形如：`base_url` 是宿主 worker 自己领取运行、发心跳用的地址——它在宿主上，而 compose 的网络全是 internal，所以 backend 只在 `127.0.0.1:8000` 发布一个回环端口给它（`DSHERP_BACKEND_LOOPBACK_PORT` 可改；为此 backend 额外接了一个非 internal 的 `worker` 网络——Docker 不会为只在 internal 网络上的容器发布端口，本地演练时正是在这里断过）；`business_url` 是运行容器在 agent 网络内访问业务站的服务名：
 
@@ -211,6 +254,7 @@ admin agent-firewall            # 只打印同一组规则（含 nft 写法与�
 | 宿主防火墙已应用且对应当前网桥 | `systemctl is-active dsherp-agent-firewall && sudo /usr/local/sbin/dsherp-agent-firewall check "${DSHERP_PROJECT}_agent"` | `active`，`ok on br-…`；`probe_agent_boundary.py` 的 `host_gateway_ssh`/`host_gateway_loopback_port` 均为 `False` |
 | worker 自己核验过隔离 | `curl -s 127.0.0.1:9109/metrics \| grep dsherp_host_isolation_ok` | `1`；journal 里没有 `host_isolation_failed` |
 | worker 存活 | `systemctl is-active dsherp-agent-worker` | `active` |
+| **每个租户站都在被看** | `curl -s 127.0.0.1:9109/metrics \| grep dsherp_queue_depth` | 每个租户站各一行 `dsherp_queue_depth{site="…"}`；少一行就是那个站没进 worker profile（第 7 步），它排队没人领也不会告警 |
 | 发布可核验 | `cat infra/releases/$TAG.json` | tag、提交、基底 digest、架构齐全 |
 
 ## 10. 升级与回滚（G2）
