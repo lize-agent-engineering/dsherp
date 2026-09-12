@@ -53,6 +53,8 @@ class FakeBench:
         self.calls = []
         self.verbs = []
         self.created = []
+        self.dropped = []
+        self.restored = []
         self.oauth_callbacks = []
         self.existing = set(existing_sites)
         self.installed = set(installed)
@@ -77,6 +79,25 @@ class FakeBench:
             self.verbs.append("bench new-site " + payload["site"])
             self.existing.add(payload["site"])
             return "DSHERP_SITE_CREATED " + json.dumps({"site": payload["site"]}) + "\n"
+        if arguments[:2] == (admin.BENCH_PYTHON, "-") and "DSHERP_SITE_DROPPED" in (stdin or ""):
+            # `retire_tenant` drops through `_drop_site` on stdin for the same reason; the
+            # recorded shape stays "bench drop-site" and the archive bookkeeping is the same.
+            payload = json.loads(stdin.split("payload=", 1)[1].split("\n", 1)[0])
+            self.dropped.append(payload)
+            self.calls.append(("run", "bench", "drop-site", payload["site"]))
+            self.verbs.append("bench drop-site " + payload["site"])
+            self.existing.discard(payload["site"])
+            name = payload["site"] if not self.config.get("archive_collision") else payload["site"] + "1"
+            if not self.config.get("archive_lost"):
+                self.config.setdefault("archived", {}).setdefault(payload["archived_sites_path"], []).append(name)
+            return "DSHERP_SITE_DROPPED " + json.dumps({"site": payload["site"]}) + "\n"
+        if arguments[:2] == (admin.BENCH_PYTHON, "-") and "DSHERP_SITE_RESTORED" in (stdin or ""):
+            # `rollback` restores through `_restore` on stdin; recorded as "bench --site X restore".
+            payload = json.loads(stdin.split("payload=", 1)[1].split("\n", 1)[0])
+            self.restored.append(payload)
+            self.calls.append(("run", "bench", "--site", payload["site"]))
+            self.verbs.append(f"bench --site {payload['site']} restore {payload['database']}")
+            return "DSHERP_SITE_RESTORED " + json.dumps({"site": payload["site"]}) + "\n"
         self.calls.append(("run",) + arguments[:3])
         self.verbs.append(" ".join(arguments))
         if arguments[:2] == ("sh", "-c") and "apps.txt" in arguments[2]:
@@ -88,13 +109,6 @@ class FakeBench:
             self.existing.add(arguments[2])
         if arguments[:1] == ("bench",) and "install-app" in arguments:
             self.installed.add(arguments[-1])
-        if arguments[:2] == ("bench", "drop-site"):
-            self.existing.discard(arguments[2])
-            if "--archived-sites-path" in arguments:
-                archive = arguments[arguments.index("--archived-sites-path") + 1]
-                name = arguments[2] if not self.config.get("archive_collision") else arguments[2] + "1"
-                if not self.config.get("archive_lost"):
-                    self.config.setdefault("archived", {}).setdefault(archive, []).append(name)
         if arguments[:2] == ("sh", "-c") and "test -w" in arguments[2]:
             return "" if self.config.get("archive_unwritable") else "writable\n"
         if arguments[:2] == ("sh", "-c") and arguments[2].startswith("ls -1 "):
@@ -319,8 +333,7 @@ def test_retiring_moves_the_whole_site_into_the_persistent_archive_and_reports_t
     admin.provision_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
     bench.calls.clear(); bench.verbs.clear()
     result = admin.retire_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=_restic(bench))
-    drop = [verb for verb in bench.verbs if verb.startswith("bench drop-site")][0]
-    assert f"--archived-sites-path {admin.ARCHIVE}" in drop
+    assert [drop["archived_sites_path"] for drop in bench.dropped] == [admin.ARCHIVE]
     assert result["archive"] == f"{admin.ARCHIVE}/acme.tenant.example.com"
     assert [name for name in result["backups"] if name.endswith("-database.sql.gz")], result["backups"]
     assert dict(result["steps"])["archive"] == result["archive"]
@@ -663,7 +676,7 @@ def test_a_rollback_requires_the_previous_images_running_and_keeps_maintenance_o
 
     class RestoreBreaks(SnapshotBench):
         def run(self, *arguments, **kwargs):
-            if arguments[:2] == ("bench", "--site") and arguments[3] == "restore":
+            if arguments[:2] == (admin.BENCH_PYTHON, "-") and "DSHERP_SITE_RESTORED" in (kwargs.get("stdin") or ""):
                 raise admin.Fault("容器命令失败（backend）：bench --site restore\ndump corrupt")
             return super().run(*arguments, **kwargs)
 
@@ -805,9 +818,10 @@ def test_a_rollback_restores_the_archived_set_with_files_and_compares_with_the_p
                           singles={"System Settings": {"enable_scheduler": "1", "modified": "later", "modified_by": "Administrator"}})
     bench.snapshots = [after_restore, after_restore]
     report = admin.rollback(BACK, "v0.4.0", bench_factory=lambda kind: bench, runner=RUNNING_OLD)
-    restore = [verb for verb in bench.verbs if " restore " in verb and "acme" in verb][0]
-    assert "--with-public-files" in restore and "--with-private-files" in restore and "--force" in restore
-    assert admin.ARCHIVED_RELEASES + "/v0.4.0/acme.tenant.example.com/20260906_120000-acme_tenant_example_com-database.sql.gz" in restore
+    restore = [payload for payload in bench.restored if payload["site"] == "acme.tenant.example.com"][0]
+    archived = admin.ARCHIVED_RELEASES + "/v0.4.0/acme.tenant.example.com/20260906_120000-acme_tenant_example_com-"
+    assert restore["database"] == archived + "database.sql.gz"
+    assert restore["files"] == archived + "files.tar" and restore["private_files"] == archived + "private-files.tar"
     assert report["clean"] is True and report["sites"]["acme.tenant.example.com"]["comparison"]["clean"] is True
     # restore re-applied the scheduler flag: the one difference is declared by 'frappe.restore'
     comparison = report["sites"]["acme.tenant.example.com"]["comparison"]
@@ -827,8 +841,8 @@ def test_a_rollback_that_does_not_reproduce_the_pre_upgrade_data_is_not_clean_an
                             backups={"acme.tenant.example.com": "/home/frappe/frappe-bench/sites/acme.tenant.example.com/private/backups/x-database.sql.gz"})
     assert report["clean"] is False
     assert report["sites"]["acme.tenant.example.com"]["comparison"]["differences"][0]["field"] == "item_name"
-    restore = [verb for verb in bench.verbs if " restore " in verb and "acme" in verb][-1]
-    assert "/private/backups/x-database.sql.gz" in restore
+    restore = [payload for payload in bench.restored if payload["site"] == "acme.tenant.example.com"][-1]
+    assert restore["database"] == "/home/frappe/frappe-bench/sites/acme.tenant.example.com/private/backups/x-database.sql.gz"
 
 
 def test_a_rollback_without_a_release_record_or_with_a_missing_backup_file_is_refused_before_touching_data():
@@ -1521,3 +1535,46 @@ def test_a_quota_for_a_site_that_does_not_exist_stops_before_any_write(host):
                            bench_factory=lambda kind: bench)
     assert "provision-tenant" in str(failure.value)
     assert "dsherp_quota" not in bench.config
+
+
+class RecordingSnapshotBench(RecordingBench, SnapshotBench):
+    """SnapshotBench (release/rollback/retire verbs) that also records every stdin."""
+
+
+def test_retiring_a_tenant_never_puts_the_root_password_on_a_command_line(host):
+    """`bench drop-site ... --db-root-password X` lands in sites/bench.log, which lives in the
+    tenant volume and goes out in every backup: retiring one tenant would leak the control
+    plane's root password into every later backup. Same route as `ensure_site`: stdin."""
+    admin.ensure_secrets(RELEASE)
+    db_root = admin.read_secret(RELEASE, "db_root_password")
+    bench = RecordingSnapshotBench([SAME])
+    bench.existing = set()
+    admin.provision_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    bench.commands.clear()
+
+    result = admin.retire_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=_restic(bench))
+
+    assert dict(result["steps"])["site"] == "dropped"
+    for line in _provisioning_command_lines(bench):
+        assert db_root not in line, line.replace(db_root, "<SECRET>")
+    # Not vacuous: the drop still needs the root password, just not through argv.
+    assert [command for command in bench.commands if db_root in (command["stdin"] or "")]
+
+
+def test_a_rollback_never_puts_the_root_password_on_a_command_line():
+    """`bench --site X restore ... --db-root-password X` is the same leak on the recovery path."""
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    db_root = admin.read_secret(RELEASE, "db_root_password")
+    bench = RecordingSnapshotBench([SAME, SAME, SAME, SAME])
+    admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench, runner=RUNNING_NEW, from_tag="v0.3.0")
+    bench.snapshots = [SAME, SAME]
+    bench.commands.clear()
+
+    report = admin.rollback(BACK, "v0.4.0", bench_factory=lambda kind: bench, runner=RUNNING_OLD)
+
+    assert sorted(site for site, step in report["steps"] if step == "restored") == \
+        ["acme.tenant.example.com", "platform.tenant.example.com"]
+    for line in _provisioning_command_lines(bench):
+        assert db_root not in line, line.replace(db_root, "<SECRET>")
+    assert [command for command in bench.commands if db_root in (command["stdin"] or "")]

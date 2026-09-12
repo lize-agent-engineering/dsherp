@@ -299,6 +299,40 @@ NEW_SITE = (
     "db_root_password=payload['db_root_password'],admin_password=payload['admin_password'],"
     "verbose=False,install_apps=payload['apps'],db_host='db',mariadb_user_host_login_scope='%')\n"
     "print('DSHERP_SITE_CREATED '+json.dumps({'site':payload['site']}))\n")
+# `bench drop-site` is `_drop_site(...)` from the sites directory (frappe/commands/site.py);
+# `--db-root-password` had the same argv problem, and a retired tenant's bench.log went out in
+# every later backup of the volume.
+DROP_SITE = (
+    "payload=PAYLOAD\n"
+    f"os.chdir({SITES!r})\n"
+    "import frappe\n"
+    "from frappe.commands.site import _drop_site\n"
+    "_drop_site(payload['site'],db_root_username='root',db_root_password=payload['db_root_password'],"
+    "archived_sites_path=payload['archived_sites_path'],force=False,no_backup=True)\n"
+    "print('DSHERP_SITE_DROPPED '+json.dumps({'site':payload['site']}))\n")
+# `bench --site X restore` is `frappe.init(site)` then `_restore(...)` under the site_restore
+# lock; force=True is what `--force` set: no interactive downgrade prompt in a container.
+RESTORE_SITE = (
+    "payload=PAYLOAD\n"
+    f"os.chdir({SITES!r})\n"
+    "import frappe\n"
+    "from frappe.commands.site import _restore\n"
+    "from frappe.utils.synchronization import filelock\n"
+    "frappe.init(payload['site'])\n"
+    "with filelock('site_restore',timeout=1):\n"
+    "    _restore(site=payload['site'],sql_file_path=payload['database'],db_root_username='root',"
+    "db_root_password=payload['db_root_password'],force=True,"
+    "with_public_files=payload.get('files'),with_private_files=payload.get('private_files'))\n"
+    "print('DSHERP_SITE_RESTORED '+json.dumps({'site':payload['site']}))\n")
+
+
+def _marked_script(bench, template, payload, marker, hint, *, timeout, secrets):
+    """Run a credential-carrying snippet and require its marker on the last line: the bench
+    command it replaces failed loudly, a snippet that printed nothing would read as success."""
+    output = bench.script(template.replace('PAYLOAD', json.dumps(payload)), timeout=timeout, secrets=secrets)
+    if not _last_line(output).startswith(marker + ' '):
+        raise Fault(f'脚本没有输出 {marker}：{hint}')
+    return output
 
 
 def ensure_site(bench, resolved, site, admin_password, db_root_password, apps=('erpnext',)):
@@ -311,12 +345,9 @@ def ensure_site(bench, resolved, site, admin_password, db_root_password, apps=('
                     '先检查库里是否留下同名数据库，再删除该目录重跑；不会自动清理')
     payload = {'site': site, 'apps': list(apps),
                'db_root_password': db_root_password, 'admin_password': admin_password}
-    output = bench.script(NEW_SITE.replace('PAYLOAD', json.dumps(payload)), timeout=1800,
-                          secrets=(db_root_password, admin_password))
-    # A snippet that printed nothing would read as success; `bench new-site` failed loudly.
-    if not _last_line(output).startswith('DSHERP_SITE_CREATED '):
-        raise Fault(f'建站脚本没有输出 DSHERP_SITE_CREATED：{site} 的状态未知，'
-                    f'先用 site_state 查这个目录再决定是否重跑；不会自动清理')
+    _marked_script(bench, NEW_SITE, payload, 'DSHERP_SITE_CREATED',
+                   f'{site} 的状态未知，先用 site_state 查这个目录再决定是否重跑；不会自动清理',
+                   timeout=1800, secrets=(db_root_password, admin_password))
     return 'created'
 
 
@@ -664,8 +695,10 @@ def _retire_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_fa
         set_id = outcome['set_id']
         steps.append(('set', set_id))
     db_root = read_secret(resolved, 'db_root_password', root)
-    tenant.run('bench', 'drop-site', site, '--db-root-username', 'root', '--db-root-password', db_root,
-               '--no-backup', '--archived-sites-path', ARCHIVE, timeout=1800, secrets=(db_root,))
+    _marked_script(tenant, DROP_SITE, {'site': site, 'archived_sites_path': ARCHIVE, 'db_root_password': db_root},
+                   'DSHERP_SITE_DROPPED',
+                   f'站点 {site} 的状态未知；不要重跑下线命令，先检查 {SITES}/{site} 与 {ARCHIVE}，租户清单未改',
+                   timeout=1800, secrets=(db_root,))
     steps.append(('site', 'dropped'))
     added = sorted(set(_listing(tenant, ARCHIVE)) - before)
     # Frappe suffixes a counter when the same Site was archived before.
@@ -1296,13 +1329,8 @@ def _rollback(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=
         flags = _quiesce(bench, site)
         step = 'restore'
         try:
-            arguments = ['bench', '--site', site, 'restore', pieces['database']]
-            if 'files' in pieces:
-                arguments += ['--with-public-files', pieces['files']]
-            if 'private_files' in pieces:
-                arguments += ['--with-private-files', pieces['private_files']]
-            arguments += ['--db-root-username', 'root', '--db-root-password', db_root, '--force']
-            bench.run(*arguments, timeout=3600, secrets=(db_root,))
+            _marked_script(bench, RESTORE_SITE, {**pieces, 'site': site, 'db_root_password': db_root},
+                           'DSHERP_SITE_RESTORED', f'站点 {site} 的状态未知', timeout=3600, secrets=(db_root,))
             report['steps'].append((site, 'restored'))
             step = 'snapshot'
             restored = take_snapshot(resolved, site, bench=bench, hash_columns=_hash_columns_of(expected))
