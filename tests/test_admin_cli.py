@@ -55,6 +55,7 @@ class FakeBench:
         self.created = []
         self.dropped = []
         self.restored = []
+        self.purged = []
         self.oauth_callbacks = []
         self.existing = set(existing_sites)
         self.installed = set(installed)
@@ -91,6 +92,16 @@ class FakeBench:
             if not self.config.get("archive_lost"):
                 self.config.setdefault("archived", {}).setdefault(payload["archived_sites_path"], []).append(name)
             return "DSHERP_SITE_DROPPED " + json.dumps({"site": payload["site"]}) + "\n"
+        if arguments[:2] == (admin.BENCH_PYTHON, "-") and "DSHERP_JOBS_PURGED" in (stdin or ""):
+            # `retire_tenant` purges the dropped Site's queued jobs from the bench alone (there is
+            # no Site left to connect to); recorded as "bench purge-jobs <site>". The queue is
+            # `config["queued_jobs"]`: site -> count, and only the named Site's entry goes.
+            payload = json.loads(stdin.split("payload=", 1)[1].split("\n", 1)[0])
+            self.purged.append((payload["site"], payload["site"] in self.existing))
+            self.calls.append(("run", "bench", "purge-jobs", payload["site"]))
+            self.verbs.append("bench purge-jobs " + payload["site"])
+            count = self.config.setdefault("queued_jobs", {}).pop(payload["site"], 0)
+            return "DSHERP_JOBS_PURGED " + json.dumps({"site": payload["site"], "count": count}) + "\n"
         if arguments[:2] == (admin.BENCH_PYTHON, "-") and "DSHERP_SITE_RESTORED" in (stdin or ""):
             # `rollback` restores through `_restore` on stdin; recorded as "bench --site X restore".
             payload = json.loads(stdin.split("payload=", 1)[1].split("\n", 1)[0])
@@ -369,6 +380,50 @@ def test_retiring_reports_a_collision_suffixed_archive_and_fails_loudly_when_non
         admin.retire_tenant(RELEASE, "beta", bench_factory=lambda kind: bench, runner=_restic(bench))
     # The Site is gone but nothing else was touched: the operator must look before the list changes.
     assert [row["slug"] for row in admin.load_tenants(RELEASE)] == ["beta"]
+
+
+def test_retiring_purges_the_jobs_the_site_left_in_the_shared_queue_once_it_is_gone(host):
+    """drop-site leaves the Site's queued jobs in the bench's redis queue, where every Site on
+    the bench shares Frappe's 600-job insert cap and nothing can purge them by Site name any
+    more (`bench purge-jobs --site X` inits X first). Retiring purges them after the drop,
+    from the bench alone: no surviving Site is needed, and nothing queued later is missed."""
+    admin.ensure_secrets(RELEASE)
+    bench = _retire_bench()
+    admin.provision_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    admin.provision_tenant(RELEASE, "beta", bench_factory=lambda kind: bench, runner=fake_networks)
+    bench.calls.clear(); bench.verbs.clear()
+    bench.config["queued_jobs"] = {"acme.tenant.example.com": 11, "beta.tenant.example.com": 2}
+    result = admin.retire_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=_restic(bench))
+    assert dict(result["steps"])["jobs"] == "purged:11"
+    # The other tenant's jobs are still there: only the retired Site's were purged.
+    assert bench.config["queued_jobs"] == {"beta.tenant.example.com": 2}
+    # Purged after the drop, with the Site already gone from the bench.
+    assert bench.purged == [("acme.tenant.example.com", False)]
+    verbs = [call for call in bench.calls if call[0] == "run"]
+    assert verbs.index(("run", "bench", "drop-site", "acme.tenant.example.com")) < \
+        verbs.index(("run", "bench", "purge-jobs", "acme.tenant.example.com"))
+    steps = [name for name, _ in result["steps"]]
+    assert steps.index("site") < steps.index("jobs") < steps.index("archive")
+
+
+def test_retiring_stops_before_the_tenant_list_when_the_queue_purge_fails(host):
+    """The Site is gone by then, so the command cannot be re-run: the operator gets the manual
+    purge command and the list stays as it was, like every other post-drop failure."""
+    class PurgeBreaks(SnapshotBench):
+        def run(self, *arguments, **kwargs):
+            if arguments[:2] == (admin.BENCH_PYTHON, "-") and "DSHERP_JOBS_PURGED" in (kwargs.get("stdin") or ""):
+                raise admin.Fault("容器命令失败（backend）：python -\nredis.exceptions.ConnectionError")
+            return super().run(*arguments, **kwargs)
+
+    admin.ensure_secrets(RELEASE)
+    bench = PurgeBreaks([SAME])
+    bench.existing = set()
+    admin.provision_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    with pytest.raises(admin.Fault, match="purge_pending_jobs") as failure:
+        admin.retire_tenant(RELEASE, "acme", bench_factory=lambda kind: bench, runner=_restic(bench))
+    assert "不要重跑" in str(failure.value) and "ConnectionError" in str(failure.value)
+    assert [drop["site"] for drop in bench.dropped] == ["acme.tenant.example.com"]
+    assert [row["slug"] for row in admin.load_tenants(RELEASE)] == ["acme"]
 
 
 def test_retiring_a_site_that_does_not_exist_is_refused_rather_than_treated_as_cleanup(host):

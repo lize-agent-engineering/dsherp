@@ -659,13 +659,35 @@ def _listing(bench, path):
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
+# A dropped Site's queued jobs stay in the bench's shared redis queue (QUEUE_DB): drop-site
+# never looks at the queue, the jobs fail when a worker picks them up (their Site is gone),
+# and they count against Frappe's 600-job insert cap for every Site still on the bench. The
+# purge runs after the drop rather than before it, because only then is it complete: the
+# backup window reopens the Site when it closes, and the scheduler or a request can enqueue
+# for it during the whole off-site upload that precedes the drop; once the Site is gone
+# nothing can enqueue for it any more. After the drop `bench purge-jobs --site X` is no
+# longer usable (it calls frappe.init(X) first: IncorrectSitePath), so this is what that
+# command does without --site: frappe.init('') reads only common_site_config.json, which
+# holds the queue address. No surviving Site is needed, so the last tenant on a bench
+# retires the same way.
+PURGE_JOBS = (
+    "payload=PAYLOAD\n"
+    f"os.chdir({SITES!r})\n"
+    "import frappe\n"
+    "from frappe.utils.doctor import purge_pending_jobs\n"
+    "frappe.init('')\n"
+    "count=purge_pending_jobs(site=payload['site'])\n"
+    "print('DSHERP_JOBS_PURGED '+json.dumps({'site':payload['site'],'count':count}))\n")
+
+
 def retire_tenant(resolved, slug, **keywords):
     return _with_operations_lock('retire-tenant', _retire_tenant, resolved, slug, **keywords)
 
 
 def _retire_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_factory=None, archive=True):
     """Prove the archive is writable, back up, drop (which moves the whole Site directory
-    under ARCHIVE), read the archive back, and only then take the tenant off the list."""
+    under ARCHIVE), purge the jobs the Site left in the bench's queue, read the archive
+    back, and only then take the tenant off the list."""
     site = deploy_env.site_name(resolved, slug)
     factory = bench_factory or (lambda kind: Bench(resolved, kind, root=root, runner=runner))
     tenant = factory('tenant')
@@ -700,6 +722,16 @@ def _retire_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_fa
                    f'站点 {site} 的状态未知；不要重跑下线命令，先检查 {SITES}/{site} 与 {ARCHIVE}，租户清单未改',
                    timeout=1800, secrets=(db_root,))
     steps.append(('site', 'dropped'))
+    try:
+        output = _marked_script(tenant, PURGE_JOBS, {'site': site}, 'DSHERP_JOBS_PURGED',
+                                f'站点 {site} 的队列清理结果未知', timeout=300, secrets=())
+    except Fault as error:
+        manual = (f"bench --site <任一存活站点> execute frappe.utils.doctor.purge_pending_jobs "
+                  f"--kwargs '{{\"site\":\"{site}\"}}'")
+        raise Fault(f'站点 {site} 已删除，但清理它留在队列里的任务失败；不要重跑下线命令，先在 backend 里执行 '
+                    f'{manual}，再检查 {ARCHIVE}，租户清单未改\n{error}') from error
+    count = json.loads(_last_line(output).split(' ', 1)[1])['count']
+    steps.append(('jobs', f'purged:{count}'))
     added = sorted(set(_listing(tenant, ARCHIVE)) - before)
     # Frappe suffixes a counter when the same Site was archived before.
     candidates = [name for name in added if name == site or (name.startswith(site) and name[len(site):].isdigit())]
