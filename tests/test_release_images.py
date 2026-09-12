@@ -53,8 +53,9 @@ def test_a_dirty_or_missing_commit_is_refused():
             release_images.build_commands(_settings(), git_commit=commit)
 
 
-def _labelled(image_id, architecture="amd64", **labels):
+def _labelled(image_id, architecture="amd64", layers=("sha256:" + "1" * 64,), **labels):
     return {"Id": image_id, "Architecture": architecture, "Os": "linux",
+            "RootFS": {"Type": "layers", "Layers": list(layers)},
             "Config": {"Labels": {"org.opencontainers.image.revision": "abc1234",
                                   "org.opencontainers.image.version": "v0.3.0", **labels}}}
 
@@ -73,7 +74,8 @@ def test_the_release_manifest_records_tag_commit_base_and_every_built_architectu
     assert payload["base_image"] == deploy_env.BASE_IMAGE
     assert payload["platform"] == "linux/amd64"
     assert payload["images"]["registry.example.com/dsherp/dsherp-frappe:v0.3.0"] == {
-        "id": "sha256:aa", "architecture": "amd64", "os": "linux"
+        "id": "sha256:aa", "architecture": "amd64", "os": "linux",
+        "diff_ids": ["sha256:" + "1" * 64],
     }
     assert payload["images"]["registry.example.com/dsherp/dsherp-worker:v0.3.0"]["id"] == "sha256:bb"
 
@@ -206,9 +208,9 @@ def test_a_bundle_ships_the_images_and_the_manifest_together(tmp_path):
     """Review round 3: the manifest enters git after the tag, so a host that fetches source by
     tag lacks it. The bundle a build machine hands over carries the manifest next to the images,
     and the tar is proven to hold exactly the images the manifest names."""
-    manifest = _manifest_file(tmp_path / "infra" / "releases" / "v0.3.0.json", {IMAGES[0]: A, IMAGES[1]: B})
+    manifest = _layered_manifest(tmp_path / "infra" / "releases" / "v0.3.0.json", {IMAGES[0]: A, IMAGES[1]: B}, LAYERS)
     calls = []
-    written = release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving(calls, {IMAGES[0]: A, IMAGES[1]: B}))
+    written = release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving_oci(calls, dict(LAYERS)))
     assert calls == [["docker", "save", "-o", str(tmp_path / "out" / "dsherp-v0.3.0.tar"), *IMAGES]]
     assert written == {"images": tmp_path / "out" / "dsherp-v0.3.0.tar", "manifest": tmp_path / "out" / "v0.3.0.json"}
     assert (tmp_path / "out" / "v0.3.0.json").read_text() == manifest.read_text()
@@ -222,20 +224,19 @@ def test_a_bundle_ships_the_images_and_the_manifest_together(tmp_path):
 
 
 def test_a_bundle_whose_tar_does_not_hold_the_manifests_images_is_not_handed_over(tmp_path):
-    manifest = _manifest_file(tmp_path / "infra" / "releases" / "v0.3.0.json", {IMAGES[0]: A, IMAGES[1]: B})
-    with pytest.raises(RuntimeError, match="sha256:" + B):
-        release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving([], {IMAGES[0]: A, IMAGES[1]: "c" * 64}))
-    assert not (tmp_path / "out" / "v0.3.0.json").exists()
+    manifest = _layered_manifest(tmp_path / "infra" / "releases" / "v0.3.0.json", {IMAGES[0]: A, IMAGES[1]: B}, LAYERS)
     with pytest.raises(RuntimeError, match=IMAGES[1]):
-        release_images.bundle(tmp_path / "out3", IMAGES, manifest, runner=_saving([], {IMAGES[0]: A}))  # image missing from tar
+        release_images.bundle(tmp_path / "out3", IMAGES, manifest,
+                              runner=_saving_oci([], {IMAGES[0]: LAYERS[IMAGES[0]]}))  # image missing from tar
+    assert not (tmp_path / "out3" / "v0.3.0.json").exists()
 
 
 def test_a_bundle_never_overwrites_an_earlier_one_and_never_lands_in_the_build_context(tmp_path):
-    manifest = _manifest_file(tmp_path / "infra" / "releases" / "v0.3.0.json", {IMAGES[0]: A, IMAGES[1]: B})
+    manifest = _layered_manifest(tmp_path / "infra" / "releases" / "v0.3.0.json", {IMAGES[0]: A, IMAGES[1]: B}, LAYERS)
     calls = []
-    release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving(calls, {IMAGES[0]: A, IMAGES[1]: B}))
+    release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving_oci(calls, dict(LAYERS)))
     with pytest.raises(RuntimeError, match="dsherp-v0.3.0.tar"):
-        release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving(calls, {IMAGES[0]: A, IMAGES[1]: B}))
+        release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving_oci(calls, dict(LAYERS)))
     assert len(calls) == 1  # refused before docker save
     with pytest.raises(ValueError, match="build context"):
         release_images.bundle(release_images.ROOT / "dist", IMAGES, manifest, runner=_saving(calls, {}))
@@ -258,3 +259,89 @@ def test_the_cli_bundles_after_the_manifest_is_written(tmp_path, monkeypatch):
     release_images.main(["--platform", "linux/amd64", "--bundle", str(tmp_path / "dist")])
     assert seen["bundle"] == (str(tmp_path / "dist"), IMAGES, tmp_path / "infra" / "releases" / "v0.3.0.json")
     assert len(seen["built"]) == 2
+
+
+def _saving_oci(calls, contents):
+    """A Docker 29 `docker save`: an OCI tar whose config blob digest is **not** the image id.
+
+    Docker keeps a schema2 config and reports its digest as `.Id`; `docker save` writes an OCI
+    layout whose config is a different document, so the same image gets a different digest on
+    the two sides. `docker save` has no `--format`, so this is the only shape a real build
+    produces. What both formats agree on is `rootfs.diff_ids`.
+    """
+    import hashlib
+    import io
+    import tarfile
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        out = command[command.index("-o") + 1]
+        with tarfile.open(out, "w") as tar:
+            def add(name, data):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+
+            entries = []
+            for image, diff_ids in contents.items():
+                config = json.dumps({"rootfs": {"type": "layers", "diff_ids": diff_ids}}).encode()
+                digest = hashlib.sha256(config).hexdigest()
+                add(f"blobs/sha256/{digest}", config)
+                entries.append({"Config": f"blobs/sha256/{digest}", "RepoTags": [image]})
+            add("oci-layout", b'{"imageLayoutVersion":"1.0.0"}')
+            add("index.json", b'{"schemaVersion":2,"manifests":[]}')
+            add("manifest.json", json.dumps(entries).encode())
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    return runner
+
+
+LAYERS = {IMAGES[0]: ["sha256:" + "1" * 64, "sha256:" + "2" * 64], IMAGES[1]: ["sha256:" + "3" * 64]}
+
+
+def _layered_manifest(path, ids, layers):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"tag": "v0.3.0", "images": {
+        image: {"id": "sha256:" + digest, "diff_ids": layers[image]} for image, digest in ids.items()}}))
+    return path
+
+
+def test_a_bundle_is_handed_over_when_the_tar_holds_the_same_layers(tmp_path):
+    """Until 2026-09-13 the bundle compared the tar's config digest with the local image id.
+    On Docker 29 those never match (OCI vs schema2), so **every** real bundle was refused and
+    G1 had no way to produce a handover set — while the images themselves were correct.
+    """
+    manifest = _layered_manifest(tmp_path / "infra" / "releases" / "v0.3.0.json",
+                                 {IMAGES[0]: A, IMAGES[1]: B}, LAYERS)
+    written = release_images.bundle(tmp_path / "out", IMAGES, manifest,
+                                    runner=_saving_oci([], dict(LAYERS)))
+    assert written["manifest"].read_text() == manifest.read_text()
+
+
+def test_a_bundle_whose_tar_holds_other_layers_is_still_refused(tmp_path):
+    """The negative control the fix must not cost: a tar that is not these images stays refused.
+    Without it, 'compare the layers' could be satisfied by comparing nothing at all."""
+    manifest = _layered_manifest(tmp_path / "infra" / "releases" / "v0.3.0.json",
+                                 {IMAGES[0]: A, IMAGES[1]: B}, LAYERS)
+    swapped = {IMAGES[0]: LAYERS[IMAGES[0]], IMAGES[1]: ["sha256:" + "9" * 64]}
+    with pytest.raises(RuntimeError, match=IMAGES[1]):
+        release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving_oci([], swapped))
+    assert not (tmp_path / "out" / "v0.3.0.json").exists()
+
+
+def test_a_manifest_without_recorded_layers_is_refused(tmp_path):
+    """A manifest from before this change cannot be checked against an OCI tar; say so rather
+    than fall back to the comparison that never held."""
+    manifest = _manifest_file(tmp_path / "infra" / "releases" / "v0.3.0.json", {IMAGES[0]: A, IMAGES[1]: B})
+    with pytest.raises(RuntimeError, match="diff_ids"):
+        release_images.bundle(tmp_path / "out", IMAGES, manifest, runner=_saving_oci([], dict(LAYERS)))
+
+
+def test_a_tar_whose_config_blob_is_absent_is_refused_with_a_readable_reason(tmp_path):
+    """`_saving` writes the pre-Docker-29 shape: a manifest.json naming configs the tar does not
+    carry as blobs. Reading it used to raise KeyError from tarfile; a handover refusal has to
+    say what is wrong with the archive."""
+    manifest = _layered_manifest(tmp_path / "infra" / "releases" / "v0.3.0.json",
+                                 {IMAGES[0]: A, IMAGES[1]: B}, LAYERS)
+    with pytest.raises(RuntimeError, match="not a readable docker save"):
+        release_images.bundle(tmp_path / "out", IMAGES, manifest,
+                              runner=_saving([], {IMAGES[0]: A, IMAGES[1]: B}))

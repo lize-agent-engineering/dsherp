@@ -122,7 +122,15 @@ def write_manifest(resolved, *, git_commit, platform, inspected, root=ROOT):
         if labels.get(REVISION_LABEL) != git_commit or labels.get(VERSION_LABEL) != resolved["image_tag"]:
             raise ValueError(f"{name} is labelled {labels.get(VERSION_LABEL)!r} at {labels.get(REVISION_LABEL)!r}, "
                              f"not {resolved['image_tag']!r} at {git_commit!r}; do not record it")
-        payload["images"][name] = {"id": row["Id"], "architecture": row["Architecture"], "os": row["Os"]}
+        # What a `docker save` tar can be checked against, whatever format it is written in;
+        # see `_saved_layers`. An image that reports no layers cannot be verified later, so it
+        # is not recorded at all rather than recorded unverifiably.
+        diff_ids = list((row.get("RootFS") or {}).get("Layers") or [])
+        if not diff_ids:
+            raise ValueError(f"{name} reports no layers; a manifest that cannot be checked against "
+                             f"a bundle is not written")
+        payload["images"][name] = {"id": row["Id"], "architecture": row["Architecture"],
+                                   "os": row["Os"], "diff_ids": diff_ids}
     target = Path(root) / "infra" / "releases" / f"{resolved['image_tag']}.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
@@ -132,17 +140,32 @@ def write_manifest(resolved, *, git_commit, platform, inspected, root=ROOT):
 IMAGE_DIGEST = re.compile("[0-9a-f]{64}")
 
 
-def _saved_digests(archive):
-    """repo:tag -> 'sha256:<config digest>' for every image a `docker save` tar holds."""
+def _saved_layers(archive):
+    """repo:tag -> the layer `diff_ids` of every image a `docker save` tar holds.
+
+    Not the config digest: Docker reports `.Id` as the digest of the schema2 config it stores,
+    while `docker save` (no `--format` since Docker 29) writes an OCI layout whose config is a
+    different document with a different digest — for the very same image. Comparing those
+    refused every real bundle. The layer `diff_ids` are the uncompressed layer contents, which
+    both formats record identically, so they identify the image across the two.
+    """
     import tarfile
     with tarfile.open(archive) as tar:
         entries = json.loads(tar.extractfile("manifest.json").read())
-    digests = {}
-    for entry in entries:
-        found = IMAGE_DIGEST.search(entry.get("Config") or "")
-        for repo_tag in entry.get("RepoTags") or []:
-            digests[repo_tag] = "sha256:" + found.group(0) if found else None
-    return digests
+        layers = {}
+        for entry in entries:
+            config = entry.get("Config") or ""
+            try:
+                member = tar.extractfile(config) if config else None
+            except KeyError:
+                member = None
+            if member is None:
+                raise RuntimeError(f"{archive} names config {config!r} for {entry.get('RepoTags')} but "
+                                   f"does not hold it; the tar is not a readable docker save")
+            rootfs = json.loads(member.read()).get("rootfs") or {}
+            for repo_tag in entry.get("RepoTags") or []:
+                layers[repo_tag] = list(rootfs.get("diff_ids") or [])
+    return layers
 
 
 def bundle(target, images, manifest, runner=subprocess.run, root=ROOT):
@@ -166,13 +189,17 @@ def bundle(target, images, manifest, runner=subprocess.run, root=ROOT):
     if result.returncode:
         raise RuntimeError("docker save failed, no bundle was made: " + (result.stderr or "").strip())
     recorded = json.loads(manifest.read_text()).get("images") or {}
-    held = _saved_digests(archive)
+    held = _saved_layers(archive)
     for image in images:
-        wanted = (recorded.get(image) or {}).get("id")
+        wanted = (recorded.get(image) or {}).get("diff_ids")
         if image not in held:
             raise RuntimeError(f"{archive} does not hold {image}; not handing it over")
+        if not wanted:
+            raise RuntimeError(f"The manifest records no diff_ids for {image}; it predates the layer "
+                               f"check and cannot be verified against an OCI tar. Rebuild the release")
         if held[image] != wanted:
-            raise RuntimeError(f"{archive} holds {image} as {held[image]} but the manifest records {wanted}; not handing it over")
+            raise RuntimeError(f"{archive} holds {image} with layers {held[image]} but the manifest "
+                               f"records {wanted}; not handing it over")
     copy.write_text(manifest.read_text())
     return {"images": archive, "manifest": copy}
 
