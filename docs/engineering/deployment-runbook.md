@@ -1,6 +1,6 @@
 # dsherp 部署 runbook（单 Linux 主机 + Compose + 自建镜像）
 
-适用范围：一台干净的 **Linux x86_64** 主机，从仓库 tag、镜像仓库地址与密钥文件出发，拉起 platform 站 + 1 个租户站 + 宿主 worker。这是[生产化总体设计](../superpowers/specs/2026-09-03-production-hardening-design.md) G1 的执行文档；每一步都对应仓库内一条可重复执行的命令，**开通与运维链路上不需要人工 `docker exec` 进容器改东西**（唯一从容器里取文件的地方是没有公网域名时把 Caddy 的内置 CA 根证书 `docker cp` 出来做验收，见文末那一节）。
+适用范围：一台干净的 **Linux x86_64** 主机，从仓库 tag、镜像仓库地址与密钥文件出发，拉起 platform 站 + 1 个租户站 + 宿主 worker。这是[生产化总体设计](../superpowers/specs/2026-09-03-production-hardening-design.md) G1 的执行文档；每一步都对应仓库内一条可重复执行的命令，**开通链路（第 1–9 步）不需要人工 `docker exec` 进容器改东西**。两处例外都在其后的运维链路上、且都点了名：没有公网域名时把 Caddy 的内置 CA 根证书 `docker cp` 出来做验收（见文末那一节）；第 11 节从归档恢复一个已下线租户时的 `compose exec … bench restore`（第 12 节的 `restore-site` 不需要）。
 
 本文不覆盖数据治理与容灾（计划 4）、CI（计划 5）与 Agent 质量（计划 6）。真实租户接入需终验通过后另行授权。
 
@@ -47,6 +47,7 @@ SLUG=acme           # 租户短名，小写字母开头，[a-z0-9-]
 | `backup_storage_ca.pem`（私有 CA 时） | 第 3 步 | restic 连不上自签 TLS 的对象存储 |
 | `repositories.env`（两个 restic 仓库 URL） | 第 3 步填进 `prod.env` | 备份没有去处 |
 | **provider key**（`DEEPSEEK_API_KEY` 与 base URL） | 第 7 步写 `/opt/dsherp/.env` | **worker 启动即 `ValueError` 退出，单元永远 `activating`** |
+| 四个基础镜像的 tar（**仅当目标主机既到不了 Docker Hub 也没有可达镜像站**） | 第 4、6 步 compose 按 digest 拉 | 第 4 步起不了数据面。先按「装 Docker 与配置镜像通路」探一遍，探不通才需要这一件 |
 
 以及三件不是文件的东西：主机本身（规格见下）、一个有 sudo 的运维账号、以及站点域名怎么解析到这台
 主机（没有公网域名时见文末「内置 CA」一节）。**怎么传、落在哪由运维定**，本文一律写作运维账号家
@@ -143,7 +144,7 @@ sudo -u dsherp git -C /opt/dsherp describe --tags   # 期望 $TAG；clone 后是
 
 ## 2. 构建并推送镜像（构建机上执行一次）
 
-发布镜像必须指定架构；`release_images.py` 会把 tag、提交、基底 digest 与架构写进 `infra/releases/$TAG.json`。它先核实构建上下文就是声称的来源：必须是 git checkout，工作树干净（`infra/releases/` 下上一次写出的清单除外）且 `$TAG` 指向 HEAD；没有 `.git` 的树直接拒绝。构建后再核对两个镜像的 `org.opencontainers.image.version/revision` 标签与 tag、提交一致，不一致不写清单。`.dockerignore` 把 `.runtime/`、`infra/env/`、`.venv/` 等宿主状态挡在构建上下文之外。构建机上先完成第 3 步的 `prod.env` 与第 7 步的 `.venv`（脚本要从 `prod.env` 读 tag/registry，并需要 venv 里的依赖），再：
+发布镜像必须指定架构；`release_images.py` 会把 tag、提交、基底 digest 与架构写进 `infra/releases/$TAG.json`。它先核实构建上下文就是声称的来源：必须是 git checkout，工作树干净（`infra/releases/` 下上一次写出的清单除外）且 `$TAG` 指向 HEAD；没有 `.git` 的树直接拒绝。构建后再核对两个镜像的 `org.opencontainers.image.version/revision` 标签与 tag、提交一致，不一致不写清单。`.dockerignore` 把 `.runtime/`、`infra/env/`、`.venv/` 等宿主状态挡在构建上下文之外。构建机上先完成第 3 步的 `prod.env` 与 `.venv`（两样都在第 3 步；脚本要从 `prod.env` 读 tag/registry，并需要 venv 里的依赖），再：
 
 ```sh
 DSHERP_ENV=prod .venv/bin/python -m infra.release_images --platform linux/amd64
@@ -157,13 +158,13 @@ docker push "$DSHERP_IMAGE_REGISTRY/dsherp-worker:$TAG"
 DSHERP_ENV=prod .venv/bin/python -m infra.release_images --platform linux/amd64 --bundle ../dsherp-dist/
 ```
 
-产出 `../dsherp-dist/dsherp-$TAG.tar`（约 1 GB，gzip 后仍以 `.tar.gz` 交付也可以，`docker load` 透明解压）与 `../dsherp-dist/$TAG.json`。**怎么传、落在哪由运维定**，本文用 scp 到运维账号家目录下一个自建目录（下文写作 `~/handover/`），与两份对象存储凭据、CA、`repositories.env` 放一起。目标主机上：
+产出 `../dsherp-dist/dsherp-$TAG.tar`（**未压缩约 3.4 GB**，gzip 后约 1.0 GB，以 `.tar.gz` 交付也可以，`docker load` 透明解压）与 `../dsherp-dist/$TAG.json`。**怎么传、落在哪由运维定**，本文用 scp 到运维账号家目录下一个自建目录（下文写作 `~/handover/`），与两份对象存储凭据、CA、`repositories.env` 放一起。目标主机上：
 
 ```sh
 sudo docker load -i ~/handover/dsherp-$TAG.tar        # 运维账号不在 docker 组（只有 dsherp 在），要 sudo
 ```
 
-这一条是全流程最慢的一段（3.4 GB，2026-09-14 G1 第二轮实测 3 分 35 秒）。它与第 3 步不互相依赖，赶时间时
+这一条是全流程最慢的一段（3.4 GB 未压缩，2026-09-14 G1 第二轮实测 3 分 35 秒）。它与第 3 步不互相依赖，赶时间时
 可以放后台（`nohup … &`）与第 3、4 步并行，**第 5 步开站之前确认它已经结束**——镜像没进来 bench 起不了。
 
 **清单落盘要等第 3 步**：它的目标目录来自 `prod.env` 里的 `DSHERP_RUNTIME_DIR`，而 `prod.env` 第 3 步才建；并且 `.runtime/` 必须归 dsherp，用 `sudo` 直接 `cp` 会留下一个 root 拥有的文件，正是「账号模型」一节说的那类静默错误。所以第 3 步 `secrets init` 之后再做这一条：
@@ -185,11 +186,7 @@ sudo install -o dsherp -g dsherp -m 644 ~/handover/$TAG.json "$DSHERP_RUNTIME_DI
 
 `bin/dsherp-admin` 与 `infra/release_images.py` 都跑在 `.venv` 里，所以 venv 是所有 CLI 步骤的前提（第 7 步的 worker 复用同一个）：
 
-```sh
-sudo -iu dsherp bash -c 'cd /opt/dsherp && uv venv --python 3.12.11 .venv && uv pip sync --python .venv/bin/python --require-hashes requirements.lock'
-```
-
-uv 不在主机上时（干净主机都不在），钉一个版本装：
+**先装 uv**（干净主机上一定没有），钉一个版本：
 
 ```sh
 UV=0.12.13    # 2026-09-14 G1 第二轮用的版本；用 releases/latest 会随时间漂移，复跑就不是同一份工具
@@ -202,11 +199,24 @@ sudo -iu dsherp bash -c "set -e; cd /tmp
   ~/.local/bin/uv --version"
 ```
 
-`~/.local/bin` 要自己建，tar 里带一层同名子目录（`--strip-components=1`）；`sudo -iu` 的登录 shell 会把这个目录加进 PATH。主机下载慢时在别的机器下载后 scp 过去；CPython 发布包同理，可用 `UV_PYTHON_INSTALL_MIRROR=file:///path` 让 uv 从本地目录安装。
+`~/.local/bin` 要自己建，tar 里带一层同名子目录（`--strip-components=1`）；`sudo -iu` 的登录 shell 会把这个目录加进 PATH。
+主机下载慢时在别的机器下载后 scp 过去，**落到运维账号家目录下任意位置即可**（下面统一写作 `~/handover/`），
+再用 `sudo install -o dsherp -g dsherp -m 755 ~/handover/uv /home/dsherp/.local/bin/uv`——运维家目录通常 0750，
+`sudo -iu dsherp` 进去读不到，所以不要让 dsherp 自己去那里取。
+
+**再建 venv**：
+
+```sh
+sudo -iu dsherp bash -c 'cd /opt/dsherp && uv venv --python 3.12.11 .venv && uv pip sync --python .venv/bin/python --require-hashes requirements.lock'
+```
+
+这一步要出网：`uv venv --python 3.12.11` 从 GitHub 下 CPython（可用 `UV_PYTHON_INSTALL_MIRROR=file:///path` 改成本地目录），
+`uv pip sync` 从 PyPI 取 `requirements.lock` 里的 wheel。两条都不通的主机本文没有给离线办法，
+**开工前先确认这台机器到 github.com 与 pypi.org 是通的**。
 
 ```sh
 sudo -u dsherp cp infra/env/prod.env.example infra/env/prod.env
-sudo -u dsherp $EDITOR infra/env/prod.env      # 没有交互终端时用 sed 逐项改，下一段列了必改项
+sudo -u dsherp "${EDITOR:-nano}" infra/env/prod.env   # 干净主机上 $EDITOR 通常没定义，所以给了默认值；没有交互终端时用 sed 逐项改
 sudo -u dsherp chmod 600 infra/env/prod.env
 sudo -iu dsherp bash -c 'cd /opt/dsherp && DSHERP_ENV=prod ./bin/dsherp-admin secrets init && DSHERP_ENV=prod ./bin/dsherp-admin doctor'   # 见下：新主机此时 rc=1，属预期
 ```
@@ -223,9 +233,23 @@ sudo -iu dsherp bash -c 'cd /opt/dsherp && DSHERP_ENV=prod ./bin/dsherp-admin se
 | `DSHERP_ACME_EMAIL` | Let's Encrypt 的联系邮箱。**内置 CA 下不会被用到**，但字段要有值 |
 | `DSHERP_BACKUP_REPOSITORY` / `_SECRETS_REPOSITORY` | 两个 restic 仓库 URL。交接材料里的 `repositories.env` 就是这两行，照抄过来（这个文件名本文其余地方不出现，它只是这两个值的载体） |
 | `DSHERP_RUNTIME_DIR` / `DSHERP_SECRETS_DIR` | 安装根不是 `/opt/dsherp` 时才改 |
-| `DSHERP_HTTP_PORT` / `HTTPS_PORT` 与资源项 | 共用主机才改 |
+| `DSHERP_HTTP_PORT` / `HTTPS_PORT` | 共用主机才改 |
+| 资源项 | **模板里没有这几行，要自己加**，不加就用 compose 的默认值：`DSHERP_DB_BUFFER_POOL`（默认 `1G`）、`DSHERP_GUNICORN_WORKERS`（`2`）、`DSHERP_GUNICORN_THREADS`（`4`）。笔记本规格的演练机才需要调小 |
 
-`secrets init` 只生成缺失的密钥，永不覆盖已有文件；文件权限必须是 0600，否则命令直接失败。
+`secrets init` 在 prod 下生成**五份**控制面密钥，都落在 `$DSHERP_SECRETS_DIR`（默认 `/opt/dsherp/.runtime/control`）、
+0600 归 dsherp：`db_root_password`、`platform_admin_password`、`tenant_admin_password`、
+`backup_repository_password`、`backup_secrets_repository_password`。它**只生成缺失的那几份，永不覆盖已有文件**；
+权限不是 0600 命令直接失败。
+
+**平台站 Desk 怎么登进去**（第 15 节的成员绑定是人工步骤，要用到）：用户名 `Administrator`，口令就是
+`platform_admin_password` 的内容——它不经过终端历史，读的时候也别让它经过：
+
+```sh
+sudo -iu dsherp cat /opt/dsherp/.runtime/control/platform_admin_password
+```
+
+租户站的 Administrator 口令同理在 `tenant_admin_password`，但生产租户站已关掉密码登录（第 5 步），
+那把口令只在 bench 内部用。**这五份口令连同两份对象存储身份与 CA，就是下一段说的「必须另存在对象存储之外」的材料。**
 
 **此处 `doctor` 不会是空 findings，这是预期**，rc=1 也是。新主机上会剩两类，按下面的顺序自己消解：
 
@@ -291,7 +315,7 @@ wait_healthy 3            # 三个服务 healthy 后再继续
 
 用函数而不是 `$COMPOSE` 变量：zsh 默认不对变量做分词，同一行在 bash 与 zsh 下行为不同。函数体里是 `"$@"` 而不是 `$*`：`$*` 会把带空格的参数拆开，`compose ps --format "{{.Service}} {{.Status}}"` 会报 `no such service: {{.Status}}`（2026-09-14 G1 第二轮实测撞上；两种写法已在同一台主机上各跑一次对照）。
 
-`wait_healthy` 不是 runbook 的判据，是给「healthy 后再继续」一个上限：本文各处都只说「healthy 后再继续」，没说等多久算失败。第 4 步期望 3、第 6 步期望 13；实测冷启动第 4 步约 45 秒、第 6 步 17 秒，300 秒的默认上限留了大余量。超时它会打印完整 `compose ps` 并返回非零——**超时就是部署出了问题，不要把上限调大接着等**。
+`wait_healthy` 不是 runbook 的判据，是给「healthy 后再继续」一个上限：本文各处都只说「healthy 后再继续」，没说等多久算失败。第 4 步期望 3、第 6 步期望 13。第二轮实测：第 4 步的 `compose up` 本身 45 秒返回（含经镜像站拉 mariadb/redis），**返回不等于 healthy**，三个服务都变绿还要再等约 100 秒；第 6 步从最后一个 `up` 到 13/13 是 17 秒。300 秒的默认上限留了大余量。超时它会打印完整 `compose ps` 并返回非零——**超时就是部署出了问题，不要把上限调大接着等**。
 
 `DSHERP_RUNTIME_DIR` 与 `DSHERP_SECRETS_DIR`（租户清单、Caddyfile、密钥所在目录）**只写在 `infra/env/prod.env` 里，不要 export**：compose 的 `${…}` 插值与 CLI 都读这份文件，这是两者读到同一目录的唯一保证。本地演练时曾因只在 shell 里 export 而漏掉一次，compose 回落到 `../.runtime/control` 用开发密钥初始化了新库，CLI 随即以生产密钥被拒——`doctor` 现在对此报错。
 
@@ -303,6 +327,12 @@ wait_healthy 5            # db + 两个 redis + 两个 backend；开站要连它
 admin provision-platform
 admin provision-tenant "$SLUG"
 ```
+
+两条都会打印一条 JSON：`provision-platform` 六步（`bench` / `site` / `app` / `scheduler` / `member-role` / `site-config`），
+`provision-tenant` 十六步（建站、装 App、scheduler、运行身份、站点配置、关密码登录、系统设置、企业、OAuth Client、
+Social Login Key、平台 OAuth、租户清单、平台端点、入口、healthcheck）。**每一步都要有状态词**（`created`/`changed:…`/`kept`），
+最后一条是 `healthcheck <站名>`——没走到 healthcheck 就是没开完。2026-09-14 G1 第二轮在一台 8 核 VM 上实测
+30 秒与 1 分 32 秒；量级不对（比如几秒就返回）就去看 bench 容器的日志。
 
 两条命令都是幂等步骤链：每一步先查现状，中断后重跑不会重复建站或重复装 App。`provision-tenant` 会同时关闭该站的密码登录（Frappe 原生 `disable_user_pass_login`）、启用 scheduler，并把运行凭据端点的来源白名单 `dsherp_agent_sources` 写成 agent 网络与 worker 网络两个网段（后者是宿主 worker 经回环进来时的对端地址；只写 agent 网段会让每个真实运行在 `finish_run` 上被拒）。平台 bench 与租户 bench 各用一个 redis 队列库（`/1` 与 `/0`）：队列名来自 bench 路径，两个 bench 在同一个库里会互相取走对方的作业。
 
@@ -360,10 +390,15 @@ profile 形如：`base_url` 是宿主 worker 自己领取运行、发心跳用�
 
 ```json
 {"slots": 3, "metrics_port": 9109,
+ "alert_webhook": "https://…（可选，见下）",
  "sites": [{"site": "<slug>.<base domain>", "base_url": "http://127.0.0.1:8000",
             "business_url": "http://backend:8000",
             "api_key": "<第 5 步输出>", "api_secret": "<第 5 步输出>"}]}
 ```
+
+`alert_webhook` 是**可选的顶层键**（不是站里的），要告警出主机就自己往这个文件里加一行——`write_worker_profile.py`
+是读-合并-写，重跑开站不会把它抹掉。worker 的告警（第 12 节那张表）与 `dsherp-backup-failure@.service` 都投递到它；
+不配就只写 journal。**改完要 `sudo systemctl restart dsherp-agent-worker`**：worker 只在启动时读一次 profile。
 
 **provider 凭据是 worker 起动的硬前提**，不是可选项：unit 的 `ExecStart` 带 `--provider-env /opt/dsherp/.env`，两个键任一为空或文件不存在，worker 就在启动时 `ValueError: Explicit provider file must contain API key and base URL` 退出，`Restart=always` 每 10 秒重试一次，单元永远到不了 `active`（2026-09-14 G1 第二轮做过可逆实验：移走该文件即复现，放回即 `active`）。所以它必须和镜像、密钥文件一起交接——见「交接清单」。
 
@@ -435,17 +470,28 @@ admin agent-firewall            # 只打印同一组规则（含 nft 写法与�
 | worker 自己核验过隔离 | `curl -s 127.0.0.1:9109/metrics \| grep dsherp_host_isolation_ok` | `1`；journal 里没有 `host_isolation_failed` |
 | worker 存活 | `systemctl is-active dsherp-agent-worker` | `active` |
 | **每个租户站都在被看** | `curl -s 127.0.0.1:9109/metrics \| grep dsherp_queue_depth` | 每个租户站各一行 `dsherp_queue_depth{site="…"}`；少一行就是那个站没进 worker profile（第 7 步），它排队没人领也不会告警 |
-| 发布可核验 | `cat "$DSHERP_RUNTIME_DIR/manifests/$DSHERP_IMAGE_TAG.json"` | tag、提交、基底 digest、架构、两个镜像的 `id` 与 `diff_ids` 齐全；`docker inspect` 两个 bench 容器的 `.Image` 应等于清单里 frappe 镜像的 `id`。**不要用 `infra/releases/$TAG.json`**：清单只能在 tag 之后提交，按 tag 取源码的目标主机上没有这个文件（第 2 步「清单必须随镜像一起交付」一段已说明） |
+| 发布可核验 | `cat "$DSHERP_RUNTIME_DIR/manifests/$DSHERP_IMAGE_TAG.json"` | tag、提交、基底 digest、架构、两个镜像的 `id` 与 `diff_ids` 齐全；两个 bench 容器跑的就是清单里那个 frappe 镜像——`sudo docker inspect --format '{{.Name}} {{.Image}}' dsherp-backend-1 dsherp-platform-backend-1`
+的两个值都应等于清单 `images` 里 frappe 那一项的 `id`（容器名是 `<DSHERP_PROJECT>-<服务>-1`）。**不要用 `infra/releases/$TAG.json`**：清单只能在 tag 之后提交，按 tag 取源码的目标主机上没有这个文件（第 2 步「清单必须随镜像一起交付」一段已说明） |
 
 ## 10. 升级与回滚（G2）
 
-发布前提：没有运行在飞（`release` 会检查每站的 Queued/Running/Cancelling 计数，非零即拒绝），所以先停 worker：`sudo systemctl stop dsherp-agent-worker`。发布期间每个站被置为维护模式并暂停调度（`maintenance_mode`/`pause_scheduler` 写进 site_config，结束时恢复原值），用户在此期间看到 503。
-
-升级前先把主机上的源码树换到 `$NEW_TAG`（按第 1 步的取源方式重新导出或 checkout，并重跑第 7 步的 `.venv` 同步）：`bin/dsherp-admin`、compose 文件和下面的预检都来自这棵树，不换就是在用旧 tag 的工具发布新 tag。再按第 2 步把新 tag 的清单交付到主机；**第一次发布**还要把 `--from` 那个旧 tag 的清单一并交付——首次发布没有 `current.json`，它的回滚只能以旧 tag 清单为锚，`release` 会在改动任何站点之前核对旧清单可用，拿不到就拒绝发布。
+**从这一节起，凡是写作 `./bin/dsherp-admin …` 的裸命令，都按第 4 步的 `admin()` 包装执行**
+（`. ~/dsherpenv.sh` 之后用 `admin <子命令>`）：`prod.env` 是 0600 归 dsherp，运维账号直接跑读不到它；
+加 `sudo` 跑又会把 `.runtime/` 下的产物写成 root 所有——正是「账号模型」一节点名的那类静默错误。
+下文为了让每条命令自己读得懂，仍然把子命令写全。本节另外要自己赋两个变量：
 
 ```sh
-$EDITOR infra/env/prod.env          # DSHERP_IMAGE_TAG 改为新 tag
+NEW_TAG=v0.4.1 ; OLD_TAG=v0.4.0        # 取值见发布记录 <runtime>/releases/current.json
+```
+
+发布前提：没有运行在飞（`release` 会检查每站的 Queued/Running/Cancelling 计数，非零即拒绝），所以先停 worker：`sudo systemctl stop dsherp-agent-worker`。发布期间每个站被置为维护模式并暂停调度（`maintenance_mode`/`pause_scheduler` 写进 site_config，结束时恢复原值），用户在此期间看到 503。
+
+升级前先把主机上的源码树换到 `$NEW_TAG`（按第 1 步的取源方式重新导出或 checkout，并重跑第 3 步的 `.venv` 同步）：`bin/dsherp-admin`、compose 文件和下面的预检都来自这棵树，不换就是在用旧 tag 的工具发布新 tag。再按第 2 步把新 tag 的清单交付到主机；**第一次发布**还要把 `--from` 那个旧 tag 的清单一并交付——首次发布没有 `current.json`，它的回滚只能以旧 tag 清单为锚，`release` 会在改动任何站点之前核对旧清单可用，拿不到就拒绝发布。
+
+```sh
+sudo -u dsherp "${EDITOR:-nano}" infra/env/prod.env   # DSHERP_IMAGE_TAG 改为新 tag；该文件 0600 归 dsherp，运维账号直接改不动
 compose pull && compose up -d       # 两个 bench 都换到新镜像
+# 用 --bundle 交付（DSHERP_IMAGE_REGISTRY=local）时没有 registry 可 pull：改成先 `sudo docker load -i dsherp-$NEW_TAG.tar` 再 `compose up -d`
 DSHERP_ENV=prod ./bin/dsherp-admin release "$NEW_TAG" --from "$OLD_TAG"   # 第一次发布必须给 --from；之后从 current.json 取
 sudo systemctl start dsherp-agent-worker
 ```
@@ -460,7 +506,7 @@ sudo systemctl start dsherp-agent-worker
 
 ```sh
 # 回滚：改回旧 tag、起旧镜像，再撤销那次发布——它会恢复 release 归档的升级前备份并与升级前快照比对
-$EDITOR infra/env/prod.env          # DSHERP_IMAGE_TAG 改回发布记录里的 previous_tag
+sudo -u dsherp "${EDITOR:-nano}" infra/env/prod.env   # DSHERP_IMAGE_TAG 改回发布记录里的 previous_tag
 compose up -d
 DSHERP_ENV=prod ./bin/dsherp-admin rollback "$NEW_TAG"    # 参数是要撤销的发布 tag；退出码 0=数据与升级前一致
 ```
@@ -480,13 +526,22 @@ DSHERP_ENV=prod ./bin/dsherp-admin render-ingress && compose up -d caddy
 
 ```sh
 admin provision-tenant "$SLUG"      # 空站 + App + 身份 + 平台记录
-compose exec -T backend bench --site "$SLUG.$DSHERP_BASE_DOMAIN" restore \
+# 口令的命令替换必须发生在 dsherp 的 shell 里，所以整条经 sudo -iu dsherp 执行：
+sudo -iu dsherp bash -c 'cd /opt/dsherp && docker compose --env-file infra/env/prod.env \
+  -f infra/compose.prod.yml exec -T backend bench --site "'"$SLUG.$DSHERP_BASE_DOMAIN"'" restore \
   "<archive>/private/backups/<时间戳>-…-database.sql.gz" \
   --with-public-files "<archive>/private/backups/<时间戳>-…-files.tar" \
   --with-private-files "<archive>/private/backups/<时间戳>-…-private-files.tar" \
-  --db-root-username root --db-root-password "$(cat $DSHERP_SECRETS_DIR/db_root_password)" --force
+  --db-root-username root \
+  --db-root-password "$(cat '"$DSHERP_SECRETS_DIR"'/db_root_password)" --force'
 admin provision-tenant "$SLUG"      # 幂等重跑：核对运行身份、站点配置与 healthcheck
 ```
+
+**为什么要套 `sudo -iu dsherp`**：`$(cat …/db_root_password)` 在**调用它的那个 shell** 里展开，而这个文件 0600 归 dsherp。
+以运维账号跑，命令替换会静默得到空串，`bench restore` 拿着空口令连库报认证失败，看起来像库坏了。
+**并且这条命令会把库 root 口令放进容器的 argv**——本文其它地方的口令一律只走 stdin，这是唯一的例外，
+因为 `bench restore` 没有别的入口。`release`/`rollback`/`restore-site` 走的是 `frappe.commands.site._restore` 的
+stdin 路径，不经过 argv：**能用第 12 节的 `restore-site` 就别用这一条。**
 
 归档目录里还有整站的 `site_config.json`（含库口令与加密密钥），它与库转储同目录同权限——这是计划 4 的异地备份要分开存放的对象，归档不能原样同步出主机。
 
@@ -496,7 +551,14 @@ admin provision-tenant "$SLUG"      # 幂等重跑：核对运行身份、站点
 
 **判据**：任一站点（平台站与全部租户站）在任一时刻都有一份 24 小时内的异地备份可恢复；RTO 8 小时。年龄按备份**数据本身的时点**算，不是上传完成时刻。
 
-**验收行**（第 9 节的表之外，这一节自己的）：
+**验收行**（第 9 节的表之外，这一节自己的）。**跑之前本节要先做完三件事**：装好两个定时单元、`backup-init`、
+以及**至少成功跑过一次备份**——`dsherp_backup_*` 那三个指标读的是 `<runtime>/backups/status.json`，没备份过就没有这个文件，
+三条全红是必然的（第 7 步那几条 `backup_status_missing`/`backup_stale` 告警也是同一个原因）。手动跑第一次：
+
+```sh
+DSHERP_ENV=prod ./bin/dsherp-admin backup --sync      # 不等定时器，立刻产一个集并同步到异地
+```
+
 
 ```sh
 systemctl list-timers 'dsherp-backup*'          # 两个定时器都在，下一次触发时间合理
@@ -506,13 +568,13 @@ curl -s 127.0.0.1:9109/metrics | grep dsherp_backup_
 
 `dsherp_backup_sites_rpo_ok` 应等于 `dsherp_backup_sites_expected`，`dsherp_backup_offsite_oldest_hours` 小于 24 且不为 -1，`dsherp_backup_last_run_ok` 为 1。
 
-**周期**：`dsherp-backup.timer` 每天 02:00 与 14:00（Asia/Shanghai）跑 `dsherp-admin backup --sync`；`dsherp-backup-drill.timer` 每周日 04:00 跑 `dsherp-admin restore-drill`。两者失败时 systemd 触发 `dsherp-backup-failure@.service`，它直接写 journal 并投递 profile 里的 `alert_webhook`——worker 停止时这条路仍在。装单元：
+**周期**：`dsherp-backup.timer` 每天 02:00 与 14:00 跑 `dsherp-admin backup --sync`；`dsherp-backup-drill.timer` 每周日 04:00 跑 `dsherp-admin restore-drill`。两个 `OnCalendar` 都把 `Asia/Shanghai` 写死在 unit 里（`infra/render_worker_units.py`），**与主机时区无关**——`systemctl list-timers` 显示的是主机本地时间，对不上不是配错了。两者失败时 systemd 触发 `dsherp-backup-failure@.service`，它直接写 journal 并投递 profile 里的 `alert_webhook`——worker 停止时这条路仍在。装单元：
 
 第 7 步那一次渲染已经把这五个备份单元写进 `.runtime/` 了（渲染器一次出 7 个文件），所以这条重渲只是
 让本节自成一步；两种参数写法对备份单元的产物相同，`--target/--group` 只影响 worker 那一个文件。
 
 ```sh
-DSHERP_ENV=prod .venv/bin/python -m infra.render_worker_units --root /opt/dsherp --user dsherp
+sudo -iu dsherp bash -c 'cd /opt/dsherp && DSHERP_ENV=prod .venv/bin/python -m infra.render_worker_units --root /opt/dsherp --user dsherp'
 sudo install -m 644 /opt/dsherp/.runtime/dsherp-backup*.service /opt/dsherp/.runtime/dsherp-backup*.timer /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now dsherp-backup.timer dsherp-backup-drill.timer
 ```
@@ -548,7 +610,20 @@ DSHERP_ENV=prod .venv/bin/python -c "from dsherp import backup, deploy_env; impo
 
 **每周恢复验证**：`restore-drill [站…]` 在独立 compose 项目 `dsherp-restore` 里进行——`internal` 网络、无端口、无 worker/调度/队列/入口，只有两个取回容器能出网，且各自只挂自己那一半。流程：按各站最新完整集记录的 `(image_tag, image_id)` 分组 → 用该 tag 起栈并核对运行镜像 id 与集记录一致 → 取回两侧 → 核对配对与全部摘要（三件数据、`snapshot.json`、`site_config`）→ 进程内建站与恢复（root 与 admin 口令、`encryption_key` 只走解释器 stdin，不上命令行，`bench.log` 不再新增明文口令）→ 注入 `encryption_key`（只这一项；`db_password`、`host_name`、`dsherp_agent_sources` 等属于原主机，不带）→ **不 migrate**（升级是随后显式的 `release`）→ 与集内快照比对 → 对 `__Auth` 抽样解密。成功 `down -v` 只删本次演练自己的容器与卷；失败保留栈与 `<runtime>/backups/drills/<id>/` 诊断包（上限 14 天，但失败当时就告警、就处理），下一次演练拒绝启动直到 `--discard-failed`。
 
-**异机恢复（G3）**：在新主机按第 1–9 步拉起，带入上面五份密钥材料，`backup-init` 应报 `kept`，然后逐站：
+**异机恢复（G3）**：新主机上的步骤与第 1–9 步**不一样**，两处差别都会让人做错，写清楚：
+
+1. **只做第 1–4 步，跳过第 5 步的开站**。`restore-site` 的契约是目标站在本机必须不存在，而且它**自己会按正常路径开站**
+   （开站 → 恢复 → 还回加密密钥 → 与备份窗口内的快照比对 → 再开一次以派生本机配置）。先跑 `provision-platform` /
+   `provision-tenant` 会让每一个要恢复的站都被拒。第 6 步的入口与第 7 步的 worker 放到恢复完成之后再做。
+2. **五份密钥材料要在第 3 步 `secrets init` 之前就位**。`secrets init` 只生成缺失的那几份、**永不覆盖已有文件**，
+   所以先跑它就会给你两把全新的仓库口令，而远端仓库认的是旧的那两把——之后再把材料放进去也不会被采纳，
+   `backup-init` 报不出 `kept`，要到这一步才发现。正确顺序是：建好 `prod.env` → 把五份材料 `install` 进
+   `$DSHERP_SECRETS_DIR`（0600 归 dsherp）→ 才 `secrets init`（它会把五份都报成 `kept`）→ `doctor`。
+3. 恢复前 `prod.env` 的 `DSHERP_IMAGE_TAG` 必须是**备份集记录的那个 tag**：`restore-site` 会比对本机 bench 容器的镜像 id
+   与集里记的 `image_id`，不一致直接拒绝并告诉你该用哪个 tag。
+4. 本机记录里没有异地已有的集时先 `backup-sync`，它会从已核验的远端清单收养并补齐镜像身份；没有镜像身份的集一律拒绝恢复。
+
+然后逐站：
 
 ```sh
 DSHERP_ENV=prod ./bin/dsherp-admin restore-site acme.tenant.example.com     # 也可 --set <备份集 id>；`backup --sync` 同步失败即以退出码 1 结束，定时单元的 OnFailure 会触发通知
@@ -604,14 +679,18 @@ DSHERP_ENV=prod ./bin/dsherp-admin credentials acme.tenant.example.com --issue s
 升级顺序：**先 `bench migrate` 再切流量**。没迁移的站点没有 `DS Business Credential`，机器凭据一律被
 拒（刻意 fail-closed）；两个 App 的 patch 会把既有 key 与既有绑定纳入一个窗口。
 
+（本节与第 12、13 节的示例站名写作 `acme.tenant.example.com` 只是**举例**；本文这台机器上是
+`$SLUG.$DSHERP_BASE_DOMAIN`，没有公网域名时就是 `acme.localhost`。）
+
 三类长期凭据用 `rotate` 轮换，账簿在 `<runtime>/rotations.json`（只记类别、目标、第几次、生效时间与
 值的指纹，不记值）。第 7 步的 `provision-tenant <slug> --rotate-runtime-key` 换的是同一把 runtime 密钥，
 它也记这一本账（所以装完之后 `doctor` 不会再对那个站报「从未登记过轮换」）：
 
 ```sh
-DSHERP_ENV=prod ./bin/dsherp-admin rotate provider --file /srv/dsherp/.env < new-key.txt
-DSHERP_ENV=prod ./bin/dsherp-admin rotate runtime acme.tenant.example.com --profile /srv/dsherp/worker.json
-DSHERP_ENV=prod ./bin/dsherp-admin rotate oauth-client acme
+DSHERP_ENV=prod ./bin/dsherp-admin rotate provider --file /opt/dsherp/.env < new-key.txt
+DSHERP_ENV=prod ./bin/dsherp-admin rotate runtime "$SLUG.$DSHERP_BASE_DOMAIN" \
+    --profile /opt/dsherp/.runtime/context-worker-sites.json
+DSHERP_ENV=prod ./bin/dsherp-admin rotate oauth-client "$SLUG"
 ```
 
 - `provider`：新 key 只从标准输入读，只改 worker 单元读的那个 `.env` 里的那一行；**改完重启 worker 单元**。
