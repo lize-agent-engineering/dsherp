@@ -204,6 +204,29 @@ def bundle(target, images, manifest, runner=subprocess.run, root=ROOT):
     return {"images": archive, "manifest": copy}
 
 
+def require_classic_image_store(runner=subprocess.run):
+    """Refuse to build on a machine using the containerd image store.
+
+    The manifest records `docker inspect .Id`, and that is not the same document under the two
+    image stores: the containerd snapshotter reports the OCI **index** digest, the classic store
+    the **config** digest. A target host configured per the runbook uses the classic store, so a
+    manifest written here on containerd names an id that host can never match, and
+    `release`/`rollback` refuse it as "not the same artifact". Docker 29 installs with the
+    snapshotter on, so this is a fresh machine's default — caught before a long build and a
+    gigabyte of transfer rather than at deploy time.
+    """
+    result = runner(["docker", "info", "--format", "{{json .DriverStatus}}"],
+                    text=True, capture_output=True, timeout=60)
+    if result.returncode:
+        raise RuntimeError("读不到 docker 的镜像存储驱动，无法确认清单里的镜像 id 能被目标主机核对："
+                           + ((result.stderr or result.stdout or "").strip() or "docker info 失败"))
+    if "io.containerd.snapshotter" in (result.stdout or ""):
+        raise RuntimeError(
+            "构建机开着 containerd 镜像存储：此时 docker inspect .Id 是 OCI index 摘要，而按 runbook 配置的"
+            "目标主机（经典存储）docker load 后得到 config 摘要，两者不等，release/rollback 会拒绝这份清单。"
+            "先写 /etc/docker/daemon.json 的 {\"features\":{\"containerd-snapshotter\":false}} 再 systemctl restart docker")
+
+
 def inspect(images):
     result = subprocess.run(["docker", "image", "inspect", *images], text=True, capture_output=True, timeout=120)
     if result.returncode:
@@ -219,6 +242,7 @@ def main(argv=None):
     parser.add_argument("--bundle", metavar="DIR", default=None,
                         help="also docker save the images and copy the manifest there, to hand over together")
     arguments = parser.parse_args(argv)
+    require_classic_image_store()
     resolved = deploy_env.settings(dict(os.environ, DSHERP_ENV="prod"))
     commit = source(ROOT, resolved["image_tag"], git_commit=arguments.git_commit)
     for command in build_commands(resolved, git_commit=commit, platform=arguments.platform):

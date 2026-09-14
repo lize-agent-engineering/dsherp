@@ -345,3 +345,42 @@ def test_a_tar_whose_config_blob_is_absent_is_refused_with_a_readable_reason(tmp
     with pytest.raises(RuntimeError, match="not a readable docker save"):
         release_images.bundle(tmp_path / "out", IMAGES, manifest,
                               runner=_saving([], {IMAGES[0]: A, IMAGES[1]: B}))
+
+
+def _docker_info(driver_status):
+    def runner(command, **kwargs):
+        if command[:2] == ["docker", "info"]:
+            return type("Result", (), {"returncode": 0, "stdout": driver_status, "stderr": ""})()
+        raise AssertionError("nothing else should run: " + " ".join(command))
+    return runner
+
+
+CONTAINERD = '[["driver-type","io.containerd.snapshotter.v1"]]'
+CLASSIC = '[["Backing Filesystem","extfs"],["Supports d_type","true"]]'
+
+
+def test_a_containerd_build_machine_is_refused_before_anything_is_built():
+    """2026-09-14, found by the G1 audit: the manifest records `docker inspect .Id`, and that is
+    not the same document under the two image stores — the containerd snapshotter reports the
+    OCI **index** digest, the classic store the **config** digest. A target host configured per
+    the runbook uses the classic store, so a manifest written on a containerd build machine
+    names an id that host can never match and `release`/`rollback` refuse it (measured:
+    build machine `29b9bc09…` vs target host `1e86647d…` for the same image).
+
+    Docker 29 installs with the containerd snapshotter **on**, so this is the default state of a
+    fresh build machine. Refused here rather than after a 20-minute build and a 1 GB transfer.
+    """
+    with pytest.raises(RuntimeError, match="containerd"):
+        release_images.require_classic_image_store(runner=_docker_info(CONTAINERD))
+
+
+def test_a_classic_build_machine_passes():
+    """The control: without it 'refuse containerd' could be satisfied by refusing everything."""
+    release_images.require_classic_image_store(runner=_docker_info(CLASSIC))
+
+
+def test_an_unreadable_image_store_is_refused_rather_than_assumed_classic():
+    def failing(command, **kwargs):
+        return type("Result", (), {"returncode": 1, "stdout": "", "stderr": "cannot connect"})()
+    with pytest.raises(RuntimeError, match="读不到"):
+        release_images.require_classic_image_store(runner=failing)
