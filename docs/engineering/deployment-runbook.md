@@ -14,8 +14,10 @@
 | Python | 3.12（见仓库 `.python-version`） | 宿主 worker 用，不进容器 |
 | 宿主 glibc | **≥ 2.28**（RHEL/Rocky 8、Debian 10、Ubuntu 18.10 及以上） | `deepseek-harness-runtime-bin` 只发布 `manylinux_2_28` wheel，`uv pip sync requirements.lock` 在 glibc 2.17（CentOS 7）上无解。宿主 worker 本身不引入 SDK，但同一份锁装不上就起不了 CLI；容器内是 Debian bookworm，不受影响 |
 | Node | 见 `.nvmrc` | 仅构建前端产物时需要；发布镜像已内含 dist |
+| **镜像存储驱动** | **构建机与目标主机都必须用经典存储（`overlay2`）**，不要开 containerd 镜像存储。检测 `docker info --format '{{.DriverStatus}}'` 出现 `io.containerd.snapshotter.v1` 即为开启；关闭：`/etc/docker/daemon.json` 写 `{"features":{"containerd-snapshotter":false}}` 后 `systemctl restart docker`（`docker load` 之前做，无迁移问题） | **Docker 29 官方源全新安装默认是开着的**。开着时 `docker inspect .Id` 返回 OCI index 摘要而非 config 摘要：构建机开着就会把 index 摘要写进清单，而按本表配置的目标主机 `docker load` 后得到 config 摘要，两者不等，`release`/`rollback` 的镜像 id 核对会如实拒绝（2026-09-14 G1 验证实测：构建机 `29b9bc09…` vs 目标主机 `1e86647d…`）。清单同时记录 `diff_ids`，它与存储驱动无关 |
 | git | **构建机**必须是干净的 git checkout，且 `$TAG` 指向 HEAD——没有 `.git` 的源码树一律拒绝构建（导出树无法证明导出后没被改过）；**目标主机**可以没有 git：它只 `docker load` 镜像，源码树只用来跑 CLI | 脏工作树、tag 不在 HEAD、无 `.git`，构建都会被拒绝；`--git-commit` 只是交叉核对 |
 | 镜像来源 | 私有 registry，或在本机 `docker load` 导入的镜像 tar | `compose.prod.yml` 用 `pull_policy: if_not_present` |
+| **目标主机取基础镜像的通路** | **必需**：bundle 只装两个 dsherp 镜像，`mariadb`/`redis`/`caddy`/`restic` 仍由 compose 按 digest 拉。目标主机必须能到 Docker Hub，或在 `/etc/docker/daemon.json` 配 `registry-mirrors` 指向可达的镜像站 | 2026-09-14 G1 验证实测：国内主机到 `registry-1.docker.io` / `auth.docker.io` / `index.docker.io` / `production.cloudflare.docker.com` **全部 TCP 超时**，部署停在第 4 步。按 digest 拉取时内容由 Docker 校验，走镜像站与直连等价。**离线主机**须另行 `docker save` 这四个基础镜像一并交付——`--bundle` 不含它们 |
 | 账号 | 一个非 root 系统账号（本文用 `dsherp`），在 `docker` 组内 | worker 与容器都不以 root 运行 |
 | systemd | ≥ 242 才能启用 unit 里的全部沙箱指令（`ProtectSystem=strict` 232+、`ReadWritePaths` 232+、`RestrictSUIDSGID` 242+）；更老的版本会忽略这些行并在 journal 告警，进程照常受 `Restart`/`WatchdogSec` 管，但沙箱**静默退化**——219 上 `ProtectSystem=strict` 被解析成 `no` | CentOS 7 的 systemd 219 实测：保留 notify/看门狗/Restart/PrivateTmp/NoNewPrivileges/ProtectHome，丢掉其余五条 |
 | 安装根 | 本文用 `/opt/dsherp`，但只是参数：`render_worker_units.py --root` 与 `bin/dsherp-admin` 都跟随实际目录。**不要放在 `/home` 下**：unit 的 `ProtectHome=read-only` 会把它锁成只读，能解锁 `.runtime`/`work` 的 `ReadWritePaths` 要 systemd ≥ 232 | 某些主机的 `/opt` 带 immutable 属性，root 也写不进，这时用 `/srv/dsherp` |
@@ -105,14 +107,16 @@ uv 不在主机上时：从 https://github.com/astral-sh/uv/releases 取 `uv-x86
 sudo -u dsherp cp infra/env/prod.env.example infra/env/prod.env
 sudo -u dsherp $EDITOR infra/env/prod.env
 sudo -u dsherp chmod 600 infra/env/prod.env
-sudo -iu dsherp bash -c 'cd /opt/dsherp && DSHERP_ENV=prod ./bin/dsherp-admin secrets init && DSHERP_ENV=prod ./bin/dsherp-admin doctor'   # doctor 必须输出空 findings
+sudo -iu dsherp bash -c 'cd /opt/dsherp && DSHERP_ENV=prod ./bin/dsherp-admin secrets init && DSHERP_ENV=prod ./bin/dsherp-admin doctor'   # 见下：新主机此时 rc=1 且剩若干「从未登记过轮换」，属预期
 ```
 
 `prod.env` 必须改的项：`DSHERP_BASE_DOMAIN`、`DSHERP_PLATFORM_SLUG`、`DSHERP_IMAGE_REGISTRY`、`DSHERP_IMAGE_TAG`、`DSHERP_ACME_EMAIL`；**`DSHERP_AGENT_UID`/`GID` 必须等于 `id -u dsherp` / `id -g dsherp`**（会话目录由 worker 以 dsherp 创建、由容器以这对 uid/gid 写入，代码不做 chown；`useradd --system` 给的 uid 通常小于 1000，示例里的 1000 只是占位）；安装根不是 `/opt/dsherp` 时改 `DSHERP_RUNTIME_DIR`/`DSHERP_SECRETS_DIR`；共用主机才改 `DSHERP_HTTP_PORT`/`HTTPS_PORT` 与资源项。
 
 `secrets init` 只生成缺失的密钥，永不覆盖已有文件；文件权限必须是 0600，否则命令直接失败。
 
-后文 shell 步骤里用到的 `$DSHERP_PROJECT`、`$DSHERP_BASE_DOMAIN` 等变量来自同一份文件：`set -a; . infra/env/prod.env; set +a`。这与「目录变量不要单独 export」不冲突——source 整个文件得到的值和 compose 读到的完全一致，单独 export 一个不同的值才是问题。
+**此处 `doctor` 不会是空 findings，这是预期。** 新主机上必然剩下 `凭据轮换：… 从未登记过轮换`（rc=1）——轮换账簿要等第 7 步 `provision-tenant --rotate-runtime-key` 与 §14 的 `rotate` 命令才有内容，而此时既没有站也没有 profile。**此时应当为空的是别的**：缺密钥、权限宽于 0600、回落到开发密钥这三类 finding 一条都不该有；只要剩下的全是「从未登记过轮换」就继续。（2026-09-14 G1 验证实测：放齐 5 份备份材料后剩 2 条，全部装完后 4 条，均不阻断后续步骤。）
+
+后文 shell 步骤里用到的 `$DSHERP_PROJECT`、`$DSHERP_BASE_DOMAIN` 等变量来自同一份文件：`set -a; . <(sudo cat infra/env/prod.env); set +a   # 该文件 0600 归 dsherp；直接 source 会 Permission denied 且 set +a 后 $? 仍是 0，变量静默为空`。这与「目录变量不要单独 export」不冲突——source 整个文件得到的值和 compose 读到的完全一致，单独 export 一个不同的值才是问题。
 
 
 备份相关的密钥与凭据（配置了异地仓库后必需，`doctor` 会检查）：`secrets init` 生成两个仓库口令
@@ -126,7 +130,7 @@ sudo -iu dsherp bash -c 'cd /opt/dsherp && DSHERP_ENV=prod ./bin/dsherp-admin se
 compose 在解析时就要求每个 `configs:`/`secrets:` 文件存在，所以入口配置要先渲染一次（此时只有 platform 一个站块）：
 
 ```sh
-set -a; . infra/env/prod.env; set +a
+set -a; . <(sudo cat infra/env/prod.env); set +a   # 同上：0600 归 dsherp，直接 source 会静默失败
 admin() { sudo -iu dsherp bash -c "cd /opt/dsherp && DSHERP_ENV=prod ./bin/dsherp-admin $*"; }
 compose() { sudo -iu dsherp bash -c "cd /opt/dsherp && docker compose --env-file infra/env/prod.env -f infra/compose.prod.yml $*"; }
 admin render-ingress
@@ -214,7 +218,7 @@ provider 凭据写入 `/opt/dsherp/.env`（`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_U
 
 ```sh
 sudo -u dsherp mkdir -p /opt/dsherp/.runtime /opt/dsherp/work
-sudo -iu dsherp bash -c 'cd /opt/dsherp && .venv/bin/python infra/render_worker_units.py --root /opt/dsherp --user dsherp --group dsherp --target /opt/dsherp/.runtime/dsherp-agent-worker.service'   # 打印 worker 与 firewall 两个 unit 的路径
+sudo -iu dsherp bash -c 'cd /opt/dsherp && .venv/bin/python -m infra.render_worker_units --root /opt/dsherp --user dsherp --group dsherp --target /opt/dsherp/.runtime/dsherp-agent-worker.service'   # 打印 worker 与 firewall 两个 unit 的路径
 sudo install -m 755 /opt/dsherp/infra/systemd/dsherp-agent-firewall.sh /usr/local/sbin/dsherp-agent-firewall
 sudo install -m 644 /opt/dsherp/.runtime/dsherp-agent-firewall.service /etc/systemd/system/dsherp-agent-firewall.service
 sudo install -m 644 /opt/dsherp/.runtime/dsherp-agent-worker.service /etc/systemd/system/dsherp-agent-worker.service
@@ -255,7 +259,7 @@ admin agent-firewall            # 只打印同一组规则（含 nft 写法与�
 | worker 自己核验过隔离 | `curl -s 127.0.0.1:9109/metrics \| grep dsherp_host_isolation_ok` | `1`；journal 里没有 `host_isolation_failed` |
 | worker 存活 | `systemctl is-active dsherp-agent-worker` | `active` |
 | **每个租户站都在被看** | `curl -s 127.0.0.1:9109/metrics \| grep dsherp_queue_depth` | 每个租户站各一行 `dsherp_queue_depth{site="…"}`；少一行就是那个站没进 worker profile（第 7 步），它排队没人领也不会告警 |
-| 发布可核验 | `cat infra/releases/$TAG.json` | tag、提交、基底 digest、架构齐全 |
+| 发布可核验 | `cat "$RUNTIME/manifests/$TAG.json"` | tag、提交、基底 digest、架构齐全。**不要用 `infra/releases/$TAG.json`**：清单只能在 tag 之后提交，按 tag 取源码的目标主机上没有这个文件（本节开头已说明） |
 
 ## 10. 升级与回滚（G2）
 
@@ -521,6 +525,24 @@ docker restart dsherp-validation-backend-1 dsherp-validation-beta-backend-1 dshe
 只对 `ci.yml` 与 `nightly.yml` 计算连续 30 天绿，从第一个含原生测试步的绿色 nightly 起算
 （日期与 run 链接记在[计划 5 证据](quality-gates-evidence.md)）。周报型的
 `supply-chain.yml` 不代表代码状态，不计入。
+
+## 没有公网域名时的入口证书（内置 CA）
+
+ACME HTTP-01 要求 Let's Encrypt 能从公网打到本机 80 端口。**局域网或无公网域名的主机签不出证书**，
+此时走 Caddy 的内置 CA：把 `DSHERP_BASE_DOMAIN` 设为 `localhost`，站点即 `platform.localhost` 与
+`<slug>.localhost`。Caddyfile 模板对 `.localhost` 主机名自动回落到内置 CA（无需另加开关），
+签发者为 `Caddy Local Authority - ECC Intermediate`，叶证书有效期 12 小时、自动续。
+
+后果与核验方式：系统信任库里没有这个根，所以 §9 验收表的 `curl -sI https://<站>/login` 原样执行会
+**rc=60**（`unable to get local issuer certificate`）。取根证书后再验：
+
+```sh
+sudo docker cp dsherp-caddy-1:/data/caddy/pki/authorities/local/root.crt /tmp/caddy-root.crt
+curl -sI --cacert /tmp/caddy-root.crt https://acme.localhost/login   # 期望 200 + CSP 头
+```
+
+这条路径**不满足 G4「公网入口走 TLS」里 ACME 签发那一条**，只用于没有公网域名的验收环境；
+正式环境仍走 ACME。（2026-09-14 G1 验证按此执行，两个站均 200 + 完整 CSP。）
 
 ## 与其他服务共用的主机
 
