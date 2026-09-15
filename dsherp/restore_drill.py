@@ -393,12 +393,16 @@ def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.ru
         report_path = admin.runtime_dir(resolved, root) / 'backups' / f'restore-{site}.json'
         try:
             for side in ('data', 'secrets'):
-                arguments = ['restore', row[f'{side}_snapshot'], '--target', f'/incoming/{side}']
+                # The volume is mounted whole at /volume; the target is its `incoming/<side>`
+                # subtree, which the bench sees as <BACKUPS>/incoming/<side>. Mounting the
+                # volume at /incoming and restoring to /incoming/<side> put the files at the
+                # volume root's <side>/ - where nothing looked (first cold start, 2026-09-15).
+                arguments = ['restore', row[f'{side}_snapshot'], '--target', f'/volume/incoming/{side}']
                 # The sync service is read-only by construction (root + DAC_READ_SEARCH). A
                 # restore is the one place it writes: into the bench's own volume, giving each
                 # file back the ownership it had so the bench can read it.
                 backup.restic(resolved, side, arguments, root=root, runner=runner, timeout=3600,
-                              mounts=[f'{volumes[side]}:/incoming'], caps=('CHOWN', 'FOWNER', 'DAC_OVERRIDE'))
+                              mounts=[f'{volumes[side]}:/volume'], caps=('CHOWN', 'FOWNER', 'DAC_OVERRIDE'))
             set_doc, data_root, expected, config = verify_fetched(bench, site, row['set_id'],
                                                                   base=bases['data'], secrets_base=bases['secrets'])
             # The fetched manifest is the authority on which build made the set; the record

@@ -474,9 +474,18 @@ def test_the_secret_half_is_fetched_onto_the_secrets_volume_and_both_halves_are_
         if "restore" in command:
             side = next(w for w in command if w.startswith("backup-sync-")).removeprefix("backup-sync-")
             mounts[side] = command[command.index("-v") + 1]
-    assert mounts["data"].endswith("tenant-backups:/incoming")
-    assert mounts["secrets"].endswith("tenant-backup-secrets:/incoming")
+    assert mounts["data"].endswith("tenant-backups:/volume")
+    assert mounts["secrets"].endswith("tenant-backup-secrets:/volume")
     assert mounts["data"] != mounts["secrets"]
+    # The volume is mounted whole; the restore lands in its incoming/<side> subtree, which is
+    # the path the bench is then asked to read (mounting at /incoming put the files at the
+    # volume root's data/ instead - the first cold start found nothing where it looked).
+    targets = {}
+    for command in restic.calls:
+        if "restore" in command:
+            side = next(w for w in command if w.startswith("backup-sync-")).removeprefix("backup-sync-")
+            targets[side] = command[command.index("--target") + 1]
+    assert targets == {"data": "/volume/incoming/data", "secrets": "/volume/incoming/secrets"}
     # The sync container is root with only DAC_READ_SEARCH (it reads the bench's 0700 sets and
     # the operator's 0600 password). A restore writes INTO the bench's volume and must hand
     # the files back with the bench's ownership: three write-side capabilities for these two
