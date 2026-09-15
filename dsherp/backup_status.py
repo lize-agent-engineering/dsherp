@@ -18,7 +18,10 @@ from dsherp.alerts import Alert
 FORMAT = 1
 PHASES = ('backup', 'sync', 'check', 'drill')
 SITE_PHASES = ('backup', 'offsite', 'verified')
-SET_STATES = ('staged', 'data_uploaded', 'secrets_uploaded', 'complete', 'verified')
+# `superseded`: pruned from local staging before it ever reached the repositories, because a
+# newer set had; terminal, never sent, never counted for RPO.
+SET_STATES = ('staged', 'data_uploaded', 'secrets_uploaded', 'complete', 'verified', 'superseded')
+UNSYNCED_STATES = ('staged', 'data_uploaded', 'secrets_uploaded')
 PROTECTED_STATES = ('complete', 'verified')
 
 
@@ -100,13 +103,28 @@ def sets_of(status, site):
 
 
 def protected_sets(status, site):
-    """The set ids no prune may delete: this Site's newest complete and newest verified."""
+    """The set ids no prune may delete: this Site's newest complete and newest verified, plus
+    every set the repositories do not hold yet that is newer than the newest one they do.
+    Local retention is a disk rule; a copy that exists nowhere else is not disk, it is the
+    backup (2026-09-15: three backups with offsite broken deleted the oldest staged set)."""
     protected = set()
+    rows = sets_of(status, site)
     for state in PROTECTED_STATES:
-        candidates = [row for row in sets_of(status, site) if row.get('state') == state]
+        candidates = [row for row in rows if row.get('state') == state]
         if candidates:
             protected.add(candidates[-1]['set_id'])
+    newest_offsite = max((row['stamp'] for row in rows if row.get('state') in PROTECTED_STATES), default='')
+    protected |= {row['set_id'] for row in rows
+                  if row.get('state') in UNSYNCED_STATES and row['stamp'] > newest_offsite}
     return protected
+
+
+def superseded_sets(status, site):
+    """Un-synced sets older than this Site's newest offsite set: a newer copy is safe over
+    there, so these may be pruned locally - and then closed, not left pending forever."""
+    rows = sets_of(status, site)
+    newest_offsite = max((row['stamp'] for row in rows if row.get('state') in PROTECTED_STATES), default='')
+    return {row['set_id'] for row in rows if row.get('state') in UNSYNCED_STATES and row['stamp'] < newest_offsite}
 
 
 # What the invariant means in numbers (design §1): a Site whose newest complete off-site set

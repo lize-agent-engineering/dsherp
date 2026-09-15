@@ -198,6 +198,74 @@ def test_local_pruning_keeps_three_sets_and_never_the_protected_ones(host):
     assert report["pruned"][site]
 
 
+def test_local_pruning_of_a_superseded_unsynced_set_closes_its_record_instead_of_leaving_it_pending(host):
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    site = "acme.tenant.example.com"
+    older = [f"2026090{day}_020000-acme_tenant_example_com-aaaaaa" for day in range(1, 6)]
+    bench.local_sets = {site: list(older)}
+    status = backup_status.empty()
+    backup_status.record_set(status, {"set_id": older[0], "site": site, "kind": "scheduled", "stamp": older[0][:15],
+                                      "image_tag": "v0.4.0", "image_id": "sha256:id"}, "staged")
+    backup_status.record_set(status, {"set_id": older[1], "site": site, "kind": "scheduled", "stamp": older[1][:15],
+                                      "image_tag": "v0.4.0", "image_id": "sha256:id"}, "complete")
+    backup_status.save(backup.status_path(RELEASE, admin.ROOT), status)
+    _backup(bench)
+    after = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    assert older[0] in [text for text in " ".join(bench.staged).split()] or any(older[0] in t for t in bench.staged)
+    assert after["sets"][older[0]]["state"] == "superseded", "pruned before it was ever offsite, but a newer one is"
+    assert after["sets"][older[1]]["state"] == "complete"
+
+
+def test_sync_closes_a_pending_record_whose_staging_is_gone_when_a_newer_set_is_offsite(host):
+    """The first production sync (rc4) could upload nothing; three later backups pruned its
+    sets locally while the record still said `staged`, and every sync after that erred on
+    directories that no longer existed."""
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    site = "acme.tenant.example.com"
+    status = backup_status.empty()
+    gone = "20260901_020000-acme_tenant_example_com-aaaaaa"
+    newer = "20260905_020000-acme_tenant_example_com-bbbbbb"
+    for set_id, state in ((gone, "staged"), (newer, "complete")):
+        backup_status.record_set(status, {"set_id": set_id, "site": site, "kind": "scheduled", "stamp": set_id[:15],
+                                          "image_tag": "v0.4.0", "image_id": "sha256:id"}, state,
+                                 data_snapshot="d" if state == "complete" else None,
+                                 secrets_snapshot="s" if state == "complete" else None)
+    backup_status.save(backup.status_path(RELEASE, admin.ROOT), status)
+    restic = _restic(bench)
+    # The stub keys snapshots by set id; the newer set is present on both sides, the gone one nowhere.
+    for side, digest in (("data", "d"), ("secrets", "s")):
+        restic.state[side][newer] = {"id": digest, "path": f"/backups/tenant/sets/{site}/{newer}",
+                                     "tags": [f"site={site}", f"set={newer}", "kind=scheduled"]}
+    report = backup.backup_sync(RELEASE, runner=restic)
+    after = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    assert after["sets"][gone]["state"] == "superseded"
+    assert gone not in report["pending"] and any(gone in w for w in report["warnings"])
+    assert not any(gone in e for e in report["errors"])
+
+
+def test_sync_removes_stale_repository_locks_before_it_touches_either_repository(host):
+    """A sync killed mid-way (the first production one died on permission errors) leaves a
+    restic lock; every later forget/check then fails with 'repository is already locked'
+    until someone runs `restic unlock` by hand. `unlock` only removes locks restic itself
+    judges stale, so it is safe to run first every time."""
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    seen = []
+    inner = _restic(bench)
+    def spy(arguments, **kwargs):
+        verb = next((a for a in arguments if a in ("unlock", "backup", "forget", "check", "snapshots", "cat", "init")), None)
+        if verb: seen.append(verb)
+        return inner(arguments, **kwargs)
+    backup.backup_sync(RELEASE, runner=spy)
+    assert seen.count("unlock") == 2
+    first_touch = next(i for i, v in enumerate(seen) if v in ("backup", "forget", "check"))
+    assert all(v in ("unlock", "cat", "snapshots") for v in seen[:first_touch]), seen
+
+
 def test_a_corrupt_status_file_stops_pruning_but_not_the_backup(host):
     _prepare()
     path = backup.status_path(RELEASE, admin.ROOT)
