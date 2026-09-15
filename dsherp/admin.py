@@ -515,6 +515,13 @@ def provision_platform(resolved, *, root=ROOT, runner=subprocess.run, bench_fact
     steps.append(('member-role', ensure_role(platform, site, 'DSHERP Member')))
     changed = ensure_site_config(platform, site, {'host_name': f"{resolved['scheme']}://{site}"})
     steps.append(('site-config', 'changed:' + ','.join(changed) if changed else 'kept'))
+    # The same wall clock as every tenant. The platform judges a borrowed credential's
+    # window (accept_credential) against its own now_datetime(), and the business Site
+    # stamps that window in its zone: on Frappe's default zone the platform sat 2.5 hours
+    # behind the tenant and refused every first SSO login (2026-09-15, G1 stack).
+    bootstrapped = ensure_system_settings(platform, site, {}, defaults={
+        'language': resolved['site_language'], 'time_zone': resolved['site_time_zone']})
+    steps.append(('system-settings', 'bootstrapped:' + ','.join(bootstrapped) if bootstrapped else 'kept'))
     return {'site': site, 'steps': steps}
 
 

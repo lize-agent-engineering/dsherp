@@ -38,6 +38,21 @@ BACKUP_AGE=REGISTRY.gauge('dsherp_backup_age_hours','Hours since last backup',la
 LAST_CLAIM=REGISTRY.gauge('dsherp_last_claim_timestamp_seconds','Unix time of last claim',labels=('site',))
 # Host-level on purpose: a run container is `dsherp-context-<hex>` and carries no Site.
 ORPHAN_CONTAINERS=REGISTRY.gauge('dsherp_orphan_containers','Orphan context containers')
+# Names of the run containers this process is running right now (one entry per slot).
+_LIVE_CONTAINERS=set()
+_LIVE_LOCK=threading.Lock()
+
+
+def live_containers():
+    with _LIVE_LOCK:return frozenset(_LIVE_CONTAINERS)
+
+
+@contextmanager
+def live_container(name):
+    with _LIVE_LOCK:_LIVE_CONTAINERS.add(name)
+    try:yield
+    finally:
+        with _LIVE_LOCK:_LIVE_CONTAINERS.discard(name)
 PROVIDER_FAILURES=REGISTRY.counter('dsherp_provider_call_failures_total','Provider call failures')
 SLOTS_BUSY=REGISTRY.gauge('dsherp_slots_busy','Busy business runtime slots')
 PROVIDER_CIRCUIT_OPEN=REGISTRY.gauge('dsherp_provider_circuit_open','Provider circuit open state')
@@ -78,8 +93,8 @@ def monitor_ops(sites,notifier,state,now=None):
 
     Queue depth, stuck runs and backup age come from each Site's own ops snapshot, so the
     second and third tenant used to have nobody watching them at all. Orphan containers stay
-    a host-level question and are only asked when *every* Site reported a fresh snapshot with
-    nothing running - otherwise one Site's live run reads as another Site's orphan."""
+    a host-level question, asked only when *every* Site reported a fresh snapshot, and the
+    worker's own live containers are never counted (see `live_container`)."""
     if now is None:now=time.time()
     last=state.get('last_ops')
     if last is not None and now-last<60:
@@ -101,8 +116,10 @@ def monitor_ops(sites,notifier,state,now=None):
     all_fresh=bool(observed) and all(current is not None for _,_,current in observed)
     orphan=0
     if all_fresh:
-        if all((current.get('running') or 0)==0 for _,_,current in observed):
-            orphan=alerts.orphan_containers()
+        # A Site's snapshot is a five-minute cron: a run claimed after its last refresh is a
+        # live container while `running` still reads 0. The worker launched every run
+        # container on this host itself, so it - not the snapshot - says which are live.
+        orphan=alerts.orphan_containers(exclude=live_containers())
         if orphan is not None:ORPHAN_CONTAINERS.set(orphan)
     found=[]
     for site,status,_ in observed:
@@ -432,7 +449,8 @@ def run_container(task,settings,directory,timeout=170):
             json.dump({**task,**settings},file)
         name='dsherp-context-'+uuid.uuid4().hex
         try:
-            result=subprocess.run(docker_command(ROOT,secret,directory,name),capture_output=True,text=True,timeout=timeout)
+            with live_container(name):
+                result=subprocess.run(docker_command(ROOT,secret,directory,name),capture_output=True,text=True,timeout=timeout)
             # Only the runner's value-free stack diagnostic, never raw SDK stderr, provider
             # exceptions, request bodies or credentials. A run that exits 0 can still carry
             # one (an event flush that failed), so this does not depend on the exit code.

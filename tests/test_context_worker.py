@@ -8,6 +8,7 @@ import httpx
 import pytest
 from dsherp.context_mcp import BusinessRuntimeError,ToolFailure
 import dsherp.context_worker as worker
+from dsherp import alerts
 from dsherp.context_worker import profile_business,run_once
 SETTINGS={'DEEPSEEK_API_KEY':'synthetic','DEEPSEEK_BASE_URL':'http://synthetic','deployment_digest':'a1'*32}
 NEEDS_INPUT={'status':'NeedsInput','answer':'请指定仓库'}
@@ -258,7 +259,7 @@ def test_ops_monitor_refreshes_once_per_minute_and_reports_fetch_failure(monkeyp
         return response
     class Notifier:
         def emit(self,items,now):emitted.append(([item.key for item in items],now))
-    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:0)
+    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda exclude=frozenset():0)
     with httpx.Client(base_url='http://local',transport=httpx.MockTransport(handler)) as client:
         sites=[{'site':'a','client':client}]
         worker.monitor_ops(sites,Notifier(),state,now=0)
@@ -275,30 +276,48 @@ def test_fetch_ops_rejects_error_response_even_if_it_has_message():
         assert worker.fetch_ops(client) is None
 
 
-def test_ops_monitor_counts_orphans_only_without_inflight_runs(monkeypatch):
-    snapshots=[{'snapshot':{'queued':0,'queued_oldest_seconds':None,'running':1,'running_stuck':0,
-        'backup_age_hours':1,'last_claim_age_seconds':10},'age_seconds':0},{'snapshot':{'queued':0,
-        'queued_oldest_seconds':None,'running':0,'running_stuck':0,'backup_age_hours':1,
-        'last_claim_age_seconds':10},'age_seconds':0}]
-    orphan_calls=[]
-    monkeypatch.setattr(worker,'fetch_ops',lambda client:snapshots.pop(0))
-    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:orphan_calls.append(True) or 2)
+def test_ops_monitor_never_calls_the_workers_own_live_container_an_orphan(monkeypatch):
+    """The Site's ops snapshot is a 5-minute cron; a run claimed after the last refresh is a
+    container that exists while the snapshot still says running=0. On the G1 stack
+    (2026-09-15 07:59:23Z) that read as `orphan_containers` fifteen seconds into the first
+    real run. The worker launched that container itself: it is the one party that knows."""
+    snapshot={'snapshot':{'queued':0,'queued_oldest_seconds':None,'running':0,'running_stuck':0,
+        'backup_age_hours':1,'last_claim_age_seconds':10},'age_seconds':0}
+    monkeypatch.setattr(worker,'fetch_ops',lambda client:snapshot)
+    listed=['dsherp-context-'+'a'*32]
+    monkeypatch.setattr(worker.alerts,'orphan_containers',
+                        lambda exclude=frozenset():sum(1 for name in listed if name not in exclude))
     class Notifier:
         def __init__(self):self.keys=[]
         def emit(self,items,now):self.keys.append([item.key for item in items])
     notifier=Notifier();state={}
     sites=[{'site':'a','client':object()}]
-    worker.monitor_ops(sites,notifier,state,now=0)
+    with worker.live_container(listed[0]):
+        worker.monitor_ops(sites,notifier,state,now=0)
+    assert notifier.keys==[[]], '自己正在跑的容器不是孤儿'
+    assert worker.ORPHAN_CONTAINERS.value()==0
+
+    # The same container after the run ended without the worker owning it: that is an orphan.
     worker.monitor_ops(sites,notifier,state,now=60)
-    assert orphan_calls==[True]
     assert notifier.keys==[[],['orphan_containers']]
+    assert worker.ORPHAN_CONTAINERS.value()==1
+
+
+def test_orphan_probe_excludes_named_containers():
+    def fake(arguments,**_):
+        class Result:
+            stdout='dsherp-context-'+'a'*32+'\ndsherp-context-'+'b'*32+'\n'
+            def check_returncode(self):return None
+        return Result()
+    assert alerts.orphan_containers(runner=fake)==2
+    assert alerts.orphan_containers(runner=fake,exclude={'dsherp-context-'+'a'*32})==1
 
 
 def test_ops_monitor_skips_snapshot_gauges_and_orphans_when_stale(monkeypatch):
     stale={'snapshot':{'queued':9,'running':0,'running_stuck':3,'backup_age_hours':99,
         'last_claim_age_seconds':999},'age_seconds':901}
     monkeypatch.setattr(worker,'fetch_ops',lambda client:stale)
-    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:pytest.fail('stale snapshot probed docker'))
+    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda exclude=frozenset():pytest.fail('stale snapshot probed docker'))
     writes=[]
     for name in ('QUEUE_DEPTH','RUNNING_STUCK','BACKUP_AGE','LAST_CLAIM','ORPHAN_CONTAINERS'):
         monkeypatch.setattr(getattr(worker,name),'set',
@@ -316,7 +335,7 @@ def test_ops_monitor_does_not_overwrite_optional_gauges_with_missing_values(monk
     current={'snapshot':{'queued':0,'running':0,'running_stuck':0,'backup_age_hours':None,
         'last_claim_age_seconds':None},'age_seconds':0}
     monkeypatch.setattr(worker,'fetch_ops',lambda client:current)
-    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:0)
+    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda exclude=frozenset():0)
     backup=[];claims=[]
     monkeypatch.setattr(worker.BACKUP_AGE,'set',lambda value,**labels:backup.append(value))
     monkeypatch.setattr(worker.LAST_CLAIM,'set',lambda value,**labels:claims.append(value))
@@ -330,7 +349,7 @@ def test_ops_monitor_skips_orphan_metric_when_probe_fails(monkeypatch):
     current={'snapshot':{'queued':0,'running':0,'running_stuck':0,'backup_age_hours':1,
         'last_claim_age_seconds':10},'age_seconds':0}
     monkeypatch.setattr(worker,'fetch_ops',lambda client:current)
-    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:None)
+    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda exclude=frozenset():None)
     writes=[]
     monkeypatch.setattr(worker.ORPHAN_CONTAINERS,'set',writes.append)
     class Notifier:
@@ -1282,7 +1301,7 @@ def test_ops_monitor_watches_every_site_and_labels_each_gauge(monkeypatch):
     def fetch(client):
         asked.append(client);return snapshots[client]
     monkeypatch.setattr(worker,'fetch_ops',fetch)
-    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:pytest.fail('one Site still running'))
+    monkeypatch.setattr(worker.alerts,'orphan_containers',lambda exclude=frozenset():0)
     class Notifier:
         def __init__(self):self.alerts=[]
         def emit(self,items,now):self.alerts+=items
@@ -1320,19 +1339,20 @@ def test_two_sites_hitting_the_same_rule_are_two_alerts_not_one(capsys):
     assert capsys.readouterr().err.strip()==''
 
 
-def test_orphans_are_only_counted_when_every_site_is_readable_and_idle(monkeypatch):
-    """A run container is `dsherp-context-<hex>` with no Site in the name, so one Site's live
-    run is another Site's phantom orphan unless all of them have been asked."""
+def test_orphans_are_counted_only_when_every_site_is_readable(monkeypatch):
+    """A run container is `dsherp-context-<hex>` with no Site in the name. Whether a Site
+    reports a run in flight no longer matters - the worker excludes its own live containers
+    by name - but a stale snapshot still means the host is not being asked at all."""
     idle={'snapshot':{'queued':0,'queued_oldest_seconds':None,'running':0,'running_stuck':0,
                       'backup_age_hours':1,'last_claim_age_seconds':10},'age_seconds':0}
     busy={**idle,'snapshot':{**idle['snapshot'],'running':1}}
     stale={**idle,'age_seconds':901}
     sites=[{'site':'a','client':'a'},{'site':'b','client':'b'}]
 
-    for second,expected in ((busy,[]),(stale,[]),(idle,[True])):
+    for second,expected in ((busy,[frozenset()]),(stale,[]),(idle,[frozenset()])):
         probes=[]
         monkeypatch.setattr(worker,'fetch_ops',lambda client,second=second:idle if client=='a' else second)
-        monkeypatch.setattr(worker.alerts,'orphan_containers',lambda:probes.append(True) or 2)
+        monkeypatch.setattr(worker.alerts,'orphan_containers',lambda exclude=frozenset():probes.append(exclude) or 2)
         class Notifier:
             def emit(self,items,now):pass
         worker.monitor_ops(sites,Notifier(),{},now=1000)

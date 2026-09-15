@@ -515,6 +515,83 @@ admin agent-firewall            # 只打印同一组规则（含 nft 写法与�
 | 发布可核验 | `cat "$DSHERP_RUNTIME_DIR/manifests/$DSHERP_IMAGE_TAG.json"` | tag、提交、基底 digest、架构、两个镜像的 `id` 与 `diff_ids` 齐全；两个 bench 容器跑的就是清单里那个 frappe 镜像——`sudo docker inspect --format '{{.Name}} {{.Image}}' dsherp-backend-1 dsherp-platform-backend-1`
 的两个值都应等于清单 `images` 里 frappe 那一项的 `id`（容器名是 `<DSHERP_PROJECT>-<服务>-1`）。**不要用 `infra/releases/$TAG.json`**：清单只能在 tag 之后提交，按 tag 取源码的目标主机上没有这个文件（第 2 步「清单必须随镜像一起交付」一段已说明） |
 
+### 第一条真实运行（冒烟）
+
+§9 的表只证明「都起来了」，没有一条运行走过 **成员登录 → 提交 → worker 领取 → 运行容器 → 模型 → 工具读取 → 结算**。
+这条链只有在真机上跑一次才知道通不通——2026-09-15 第一次跑就抄出两个只在真机暴露的缺陷（平台站没时区、活跑的容器被当孤儿），
+所以把它写成验收的一部分。**生产形态下没有任何无头的提交入口**：业务 API key 只借给平台、grant 只存在于浏览器会话，
+下面这条路就是成员真实走的那条，用 curl 走一遍。
+
+**前置：一个能登进业务站的成员。** 这一段暴露了「接真实租户」第一天就会撞上的四件事，按顺序：
+
+1. **业务站上的业务用户**——本仓库**没有**建它的 CLI（`provision-tenant` 只建运行身份 `runtime@<站>`）。目前只能经 `admin.Bench` 跑一段脚本
+   （口令与密钥都只走 stdin）：
+   ```sh
+   sudo -iu dsherp bash -c 'cd /opt/dsherp && DSHERP_ENV=prod .venv/bin/python -' <<'PY'
+   from dsherp import admin, deploy_env
+   r=deploy_env.settings(); t=admin.Bench(r,'tenant')
+   print(t.python('acme.localhost',"""
+   user='smoke@acme.localhost'
+   if not frappe.db.exists('User',user):
+       frappe.get_doc({'doctype':'User','email':user,'first_name':'冒烟业务用户','enabled':1,'user_type':'System User',
+           'send_welcome_email':0,'language':'zh','time_zone':'Asia/Shanghai',
+           'roles':[{'role':'Sales User'}]}).insert()   # 要读什么 DocType 就给对应的 ERPNext 角色；System Manager 并不自带 Customer 读权限
+   frappe.db.commit();print('ok')
+   """))
+   PY
+   ```
+2. **平台成员**（平台站允许口令登录）：角色必须是 `DSHERP Member`（租户 OAuth Client 的 `allowed_roles`）。同样经 `admin.Bench` 建，
+   口令随机生成、落 0600 文件、用 `doc.new_password=` 写入。
+3. **成员绑定 DS Membership**（第 15 节说的人工步骤，在平台站 Desk 建，或经 `admin.Bench`）：`enterprise=<slug>`、`platform_user=<成员>`、
+   `erp_user=<业务用户>`、`enabled=1`。**`api_key`/`api_secret` 是必填但此时没有值，先填占位串**；然后：
+   ```sh
+   admin credentials acme.localhost --issue smoke@acme.localhost     # 在业务站签发首个 12 小时窗口并交给平台（报告里 api_key 脱敏）
+   ```
+   **不做这一步，第一次 SSO 必败**：平台校验成员身份时先用手里的凭据去业务站证明一次，占位串证明不了，退而要求「上次证明过的
+   业务用户」，而新绑定从没证明过——`PermissionError`。
+4. **业务站的 DocType 策略**：新开通的租户站 `DS Doctype Policy` 是**空的**，agent 什么都读不了（会得到 `error_class=permission` 并如实
+   报告「无法列出」）。至少给要读的 DocType 一行，且 **`change_reason` 必填、每次修改都要新的原因**（裁决 #3）：
+   ```sh
+   sudo -iu dsherp bash -c 'cd /opt/dsherp && DSHERP_ENV=prod .venv/bin/python -' <<'PY'
+   from dsherp import admin, deploy_env
+   r=deploy_env.settings(); t=admin.Bench(r,'tenant')
+   print(t.python('acme.localhost',"""
+   frappe.get_doc({'doctype':'DS Doctype Policy','target_doctype':'Customer','enabled':1,'allow_read':1,
+       'allow_create':0,'allow_update':0,'allow_submit':0,'allow_cancel':0,'allow_fill':0,
+       'change_reason':'冒烟：只读 Customer'}).insert(ignore_permissions=True)
+   frappe.db.commit();print('ok')
+   """))
+   PY
+   ```
+   策略放行之后**原生 ERP 权限仍是最终裁决**——业务用户没有 `Sales User` 之类角色时，agent 会得到 `does not have doctype access via role permission`。
+
+**走 SSO 并提交**（以运维账号在主机上，口令/CSRF 都经 `@file`，cookie 分主机存）：
+
+```sh
+CA=/tmp/caddy-root.crt; PJ=platform.cookies; AJ=acme.cookies
+curl -s --cacert $CA -c $PJ -b $PJ -X POST https://platform.localhost/api/method/login \
+     --data-urlencode usr=<成员> --data-urlencode "pwd@member.pw"                        # {"message":"Logged In"}
+LOC=$(curl -s --cacert $CA -c $AJ -b $AJ -o /dev/null -w '%{redirect_url}' https://acme.localhost/api/method/dsherp_bridge.sso.start)
+curl -s --cacert $CA -c $PJ -b $PJ -o auth.html "$LOC"                                    # OAuth 同意页（skip_authorization=0）
+# 从 auth.html 取 <form method="POST" action="…approve?…"> 的 action（要 html.unescape）与 hidden csrf_token，各存一个文件
+CB=$(curl -s --cacert $CA -c $PJ -b $PJ -o /dev/null -w '%{redirect_url}' -X POST "https://platform.localhost$(cat approve.url)" --data-urlencode "csrf_token@approve.csrf")
+curl -s --cacert $CA -c $AJ -b $AJ -o /dev/null -w 'callback http=%{http_code} → %{redirect_url}\n' "$CB"   # 302 → /desk/dsherp-agent
+curl -s --cacert $CA -b $AJ -X POST https://acme.localhost/api/method/frappe.auth.get_logged_user           # {"message":"smoke@acme.localhost"}
+curl -s --cacert $CA -b $AJ -c $AJ https://acme.localhost/desk/dsherp-agent -o desk.html                   # 取 frappe.csrf_token 存 csrf.txt
+printf 'X-Frappe-CSRF-Token: %s\n' "$(cat csrf.txt)" > hdr.txt
+curl -s --cacert $CA -b $AJ -c $AJ -H @hdr.txt -X POST https://acme.localhost/api/method/dsherp_bridge.context_api.send_message \
+     --data-urlencode 'question=系统里现在有哪些客户？请列出客户名称。' \
+     --data-urlencode 'context={"schema_version":1,"page_type":"unknown","route":[]}' \
+     --data-urlencode "request_id=smoke-$(date +%s)" --data-urlencode 'domain=query'   # 返回会话，message.id 是会话 id，active_run 是 run id
+# 轮询 …context_api.get_session?session_id=<id> 直到 active_run 为空；最后一条 message 的 status/answer/sources 就是结果
+```
+
+**期望**：最后一条 `status: Succeeded` 且 `sources` 非空（读到了记录）；worker journal 依次 `claimed → container_finished (Succeeded) → finish`；
+`curl -s 127.0.0.1:9109/metrics` 里 `dsherp_provider_call_failures_total 0`、`dsherp_orphan_containers 0`。
+**问题必须让 agent 去读记录**：「只回答一个词」这种问题模型会不调工具直接答，服务端按设计拒绝这种成功
+（`成功结果必须包含实际读取或服务端记录的工具失败`，HTTP 417），运行落 `Failed`——那不是管线坏了。
+2026-09-15 实测：四条运行共 12 次模型调用（单条最多 5，预算 11），第四条 41 秒 `Succeeded`，答案列出了那一个客户并附 `sources`。
+
 ## 10. 升级与回滚（G2）
 
 **从这一节起，凡是写作 `./bin/dsherp-admin …` 的裸命令，都按第 4 步的 `admin()` 包装执行**
