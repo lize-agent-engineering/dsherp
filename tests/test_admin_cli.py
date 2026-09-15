@@ -1018,6 +1018,48 @@ def test_rotating_the_runtime_key_is_explicit_and_returns_the_new_secret_once():
     assert rotated["runtime_identity"]["api_secret"] == "s"
 
 
+def test_a_rotation_done_through_provisioning_lands_in_the_ledger():
+    """The runbook's step 7 rotates a Site's execution identity with this flag. A rotation
+    that is not written down leaves `doctor` asking for one that already happened - and makes
+    the age it reports for that key wrong."""
+    from dsherp import rotation
+
+    admin.ensure_secrets(PROD)
+    _tenant_row()
+    bench = FakeBench()
+    ledger = admin.runtime_dir(PROD) / "rotations.json"
+    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench, runner=fake_networks)
+    assert rotation.read(ledger) == [], "issuing the first key for a new Site is not a rotation"
+    assert [row for row in admin.doctor(PROD) if "runtime acme.tenant.example.com" in row]
+
+    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench,
+                           rotate_runtime_key=True, runner=fake_networks)
+    rows = rotation.read(ledger)
+    assert [(row["kind"], row["target"], row["version"]) for row in rows] == [
+        ("runtime", "acme.tenant.example.com", 1)]
+    assert rows[0]["fingerprint"] == rotation.fingerprint("s"), "the ledger names the value it recorded"
+    assert not [row for row in admin.doctor(PROD) if "runtime acme.tenant.example.com" in row]
+
+    admin.provision_tenant(PROD, "acme", bench_factory=lambda kind: bench,
+                           rotate_runtime_key=True, runner=fake_networks)
+    assert [row["version"] for row in rotation.read(ledger)] == [1, 2], "每次轮换各记一条"
+
+
+def test_the_platform_site_is_not_asked_to_rotate_an_identity_it_never_has():
+    """`provision_platform` never writes `dsherp_runtime_user`, so `rotate runtime` on the
+    platform Site cannot succeed. Listing it as a target produced a finding no command could
+    clear."""
+    admin.ensure_secrets(PROD)
+    _tenant_row()
+    targets = admin.rotation_targets(PROD)
+    assert targets["runtime"] == ["acme.tenant.example.com"]
+    assert PROD["platform_site"] not in targets["runtime"]
+    assert not [row for row in admin.doctor(PROD) if PROD["platform_site"] in row and "轮换" in row]
+    with pytest.raises(admin.Fault) as error:
+        admin.rotate(PROD, "runtime", bench_factory=lambda kind: FakeBench())
+    assert "站点" in str(error.value)
+
+
 def test_a_tenant_that_chose_its_own_language_keeps_it_on_rerun():
     admin.ensure_secrets(PROD)
     bench = FakeBench(config={"language": "en", "time_zone": "Europe/Berlin"})

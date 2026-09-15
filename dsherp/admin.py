@@ -554,6 +554,12 @@ def provision_tenant(resolved, slug, *, root=ROOT, runner=subprocess.run, bench_
     runtime_user = f'runtime@{site}'
     identity = ensure_runtime_identity(tenant, site, runtime_user, rotate=rotate_runtime_key)
     steps.append(('runtime-identity', identity['state']))
+    if identity['state'] == 'rotated':
+        # A rotation that happened but was never written down is a ledger that lies about the
+        # key's age. This is the documented way to rotate a Site's execution identity (the
+        # runbook's step 7 uses exactly this flag), so `doctor` must stop asking for a
+        # rotation the operator already performed through it.
+        _record_rotation(resolved, root, 'runtime', site, identity['api_secret'])
     changed = ensure_site_config(tenant, site, {
         'dsherp_runtime_user': runtime_user,
         'host_name': deploy_env.public_origin(resolved, slug),
@@ -1873,6 +1879,18 @@ def _profile_pair(path, site, pair):
     return [row['site'] for row in rows]
 
 
+def _record_rotation(resolved, root, kind, target, value):
+    """One line in the rotation ledger. Only the fingerprint is written, never the value."""
+    from dsherp import rotation
+    ledger = runtime_dir(resolved, root) / 'rotations.json'
+    rows = rotation.read(ledger)
+    item = rotation.entry(kind=kind, target=target, value=value, previous=None,
+                          version=rotation.next_version(rows, kind, target),
+                          at=datetime.datetime.now())
+    rotation.record(ledger, item)
+    return item
+
+
 def _write_private_json(path, payload):
     temporary = path.with_name('.' + path.name + f'.{os.getpid()}')
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -1932,7 +1950,11 @@ def rotate(resolved, kind, *, target=None, value=None, file=None, profile=None, 
                 'file': str(path),
                 'next': '重启 worker 单元让新 key 生效：systemctl restart dsherp-context-worker'}
     if kind == 'runtime':
-        site = target or resolved['platform_site']
+        # No default: the platform Site used to be it, and it is the one Site that never has
+        # an execution identity.
+        if not target:
+            raise Fault('runtime 轮换要指明站点：rotate runtime <站点名>（平台站没有运行身份）')
+        site = target
         bench = _user_site_bench(resolved, root, factory, site)
         # Whoever the Site says its execution identity is. Deriving the name from the Site
         # would rotate a user that does not exist on a Site provisioned any other way, and
@@ -2031,8 +2053,12 @@ def _value_of(path, key):
 def rotation_targets(resolved, root=ROOT):
     """What this deployment has that needs rotating, by kind."""
     rows = load_tenants(resolved, root)
+    # Tenant Sites only: `provision_platform` never writes `dsherp_runtime_user`, so the
+    # platform Site has no execution identity to rotate. Listing it produced a finding that
+    # no command could ever clear - `rotate runtime` on it fails with "this Site has no
+    # dsherp_runtime_user" - and a permanently red check is one nobody reads.
     return {'provider': ['host'],
-            'runtime': [row['site'] for row in rows] + [resolved['platform_site']],
+            'runtime': [row['site'] for row in rows],
             'oauth-client': [row['slug'] for row in rows]}
 
 
