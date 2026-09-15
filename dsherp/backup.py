@@ -714,6 +714,25 @@ def backup_sync(resolved, *, root=ROOT, runner=subprocess.run, clock=time.time, 
                                               'stamp': parsed['stamp']}, 'staged',
                                      data_snapshot=held.get('data'), secrets_snapshot=held.get('secrets'))
             report['warnings'].append(f'异地有记录里没有的备份集 {set_id}：已收养并按待核对处理')
+        # A drop that began last run and did not reach the second repository: finish it.
+        # Retention decided this set goes; an interruption does not turn that into "send it
+        # again" - the staging it would be sent from is what retention deleted first.
+        def finish_drop(set_id, why):
+            held = listing.get(set_id, {})
+            try:
+                for side in ('data', 'secrets'):
+                    ids = held.get(f'{side}_ids') or ([held[side]] if held.get(side) else [])
+                    if ids:
+                        restic(resolved, side, ['forget', *ids], root=root, runner=runner, timeout=1800)
+                status['sets'].pop(set_id, None)
+                report['forgotten'].append(set_id)
+                report['warnings'].append(f'备份集 {set_id} {why}：已删完两侧、移除记录')
+            except Fault as error:
+                report['ok'] = False
+                report['errors'].append(f'备份集 {set_id} 的淘汰仍未完成：{error}'[:400])
+        for set_id, row in list(status['sets'].items()):
+            if row.get('state') == 'dropping':
+                finish_drop(set_id, '上一轮的淘汰只删了一侧')
         for set_id, row in status['sets'].items():
             held = listing.get(set_id, {})
             if row.get('state') not in ('complete', 'verified'):
@@ -739,6 +758,9 @@ def backup_sync(resolved, *, root=ROOT, runner=subprocess.run, clock=time.time, 
                 if not held.get('data') and not held.get('secrets'):
                     status['sets'][set_id]['state'] = 'superseded'
                     report['warnings'].append(f'备份集 {set_id} 从未到达异地、本机暂存已被更新的完整集顶替：按 superseded 关闭，不再重试')
+                # A set with one half still offsite is not closed here: a monthly copy is
+                # not worthless because a newer set exists. It is re-sent if staging still
+                # holds it, and otherwise stays an error a person has to look at.
         pending = [dict(row, set_id=set_id) for set_id, row in status['sets'].items()
                    if row.get('state') in backup_status.UNSYNCED_STATES]
         try:
@@ -756,12 +778,20 @@ def backup_sync(resolved, *, root=ROOT, runner=subprocess.run, clock=time.time, 
                 decision = backup_retention.select(remote)
                 doomed = [row for row in remote
                           if decision.get(row['set_id']) == 'drop' and row.get('data') and row.get('secrets')]
+                # The decision is written down before the first `forget`: a run that dies
+                # between the two repositories leaves a half-gone set that the next run
+                # finishes, not one it mistakes for a copy that needs re-sending.
+                for row in doomed:
+                    if row['set_id'] in status['sets']:
+                        status['sets'][row['set_id']]['state'] = 'dropping'
+                if doomed:
+                    save_status(resolved, status, root)
                 for side in ('data', 'secrets'):
                     ids = [snapshot for row in doomed for snapshot in row.get(f'{side}_ids', [row[side]])]
                     if ids:
                         restic(resolved, side, ['forget', *ids], root=root, runner=runner, timeout=1800)
                         restic(resolved, side, ['prune'], root=root, runner=runner, timeout=1800)
-                report['forgotten'] = [row['set_id'] for row in doomed]
+                report['forgotten'] += [row['set_id'] for row in doomed]
                 for row in doomed:
                     status['sets'].pop(row['set_id'], None)
             except Fault as error:
