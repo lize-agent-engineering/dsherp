@@ -83,8 +83,34 @@ def test_sets_of_a_site_can_be_listed_with_their_protections():
     status["sets"]["20260906_140000-beta_tenant_example_com-dddddd"]["site"] = "beta.tenant.example.com"
     rows = backup_status.sets_of(status, "acme.tenant.example.com")
     assert [row["set_id"][:8] for row in rows] == ["20260901", "20260905", "20260906"]
+    # The newest verified, the newest complete - and the staged one, which is newer than
+    # anything the repositories hold and so exists nowhere else yet.
     assert backup_status.protected_sets(status, "acme.tenant.example.com") == {
-        "20260901_020000-acme_tenant_example_com-aaaaaa", "20260905_020000-acme_tenant_example_com-bbbbbb"}
+        "20260901_020000-acme_tenant_example_com-aaaaaa", "20260905_020000-acme_tenant_example_com-bbbbbb",
+        "20260906_020000-acme_tenant_example_com-cccccc"}
+
+
+def test_a_set_that_never_reached_the_repositories_is_protected_until_a_newer_complete_one_exists():
+    """Local retention keeps three sets. With offsite down for three backups, the oldest
+    un-synced set used to be deleted while still `staged`: the record kept saying pending and
+    every sync erred on a directory that was gone (2026-09-15, first production sync). A set
+    the repositories do not hold is only expendable once a newer set has made it there."""
+    status = backup_status.empty()
+    site = "acme.tenant.example.com"
+    def add(set_id, state):
+        backup_status.record_set(status, {"set_id": set_id, "site": site, "kind": "scheduled",
+                                          "stamp": set_id[:15], "image_tag": "v0.4.0", "image_id": "sha256:abc"}, state)
+    add("20260901_020000-acme_tenant_example_com-aaaaaa", "complete")
+    add("20260902_020000-acme_tenant_example_com-bbbbbb", "staged")
+    add("20260903_020000-acme_tenant_example_com-cccccc", "data_uploaded")
+    assert backup_status.protected_sets(status, site) == {
+        "20260901_020000-acme_tenant_example_com-aaaaaa",
+        "20260902_020000-acme_tenant_example_com-bbbbbb", "20260903_020000-acme_tenant_example_com-cccccc"}
+    add("20260904_020000-acme_tenant_example_com-dddddd", "complete")
+    # Superseded: a newer set is safely offsite, so the two older un-synced ones may go.
+    assert backup_status.protected_sets(status, site) == {"20260904_020000-acme_tenant_example_com-dddddd"}
+    assert backup_status.superseded_sets(status, site) == {
+        "20260902_020000-acme_tenant_example_com-bbbbbb", "20260903_020000-acme_tenant_example_com-cccccc"}
 
 
 from dsherp.backup_status import empty, evaluate, record_run, record_set, record_site   # noqa: E402

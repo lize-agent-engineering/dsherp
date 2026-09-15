@@ -306,6 +306,11 @@ def backup(resolved, *, root=ROOT, runner=subprocess.run, bench_factory=None, sy
             if state == 'ok':
                 protect = backup_status.protected_sets(status, site) | {outcome['set_id']}
                 report['pruned'][site] = prune_local(bench, site, protect=protect)
+                # A pruned set that never reached the repositories is closed here, at the
+                # moment its staging goes: a record left `staged` would be re-sent forever.
+                for set_id in report['pruned'][site]:
+                    if set_id in backup_status.superseded_sets(status, site):
+                        status['sets'][set_id]['state'] = 'superseded'
             report['sites'][site] = {'seconds': round(time.monotonic() - started, 1)}
             save_status(resolved, status, root)
         backup_status.record_run(status, 'backup', at=backup_status.now_iso(clock), ok=report['ok'],
@@ -719,8 +724,23 @@ def backup_sync(resolved, *, root=ROOT, runner=subprocess.run, clock=time.time, 
             row['data_snapshot'], row['secrets_snapshot'] = held.get('data'), held.get('secrets')
             report['ok'] = False
             report['errors'].append(f'备份集 {set_id} 在异地不再完整（{row["state"]}）：已退回待补齐')
+        # A run killed mid-way leaves restic's lock behind and every later forget/check
+        # refuses; `unlock` removes only locks restic judges stale, so it is safe first.
+        for side in ('data', 'secrets'):
+            try:
+                restic(resolved, side, ['unlock'], root=root, runner=runner, timeout=120)
+            except Fault as error:
+                report['warnings'].append(f'{side} 仓库 unlock 失败：{error}'[:300])
+        # Records older versions left `staged` after pruning their staging: a newer set of
+        # that Site is offsite and the repositories hold nothing of this one - close it.
+        for site in {row.get('site') for row in status['sets'].values()}:
+            for set_id in backup_status.superseded_sets(status, site):
+                held = listing.get(set_id, {})
+                if not held.get('data') and not held.get('secrets'):
+                    status['sets'][set_id]['state'] = 'superseded'
+                    report['warnings'].append(f'备份集 {set_id} 从未到达异地、本机暂存已被更新的完整集顶替：按 superseded 关闭，不再重试')
         pending = [dict(row, set_id=set_id) for set_id, row in status['sets'].items()
-                   if row.get('state') not in ('complete', 'verified')]
+                   if row.get('state') in backup_status.UNSYNCED_STATES]
         try:
             outcome = upload_sets(resolved, pending, root=root, runner=runner, clock=clock, status=status)
             report['complete'], report['pending'] = outcome['complete'], outcome['pending']
