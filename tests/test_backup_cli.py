@@ -3,6 +3,7 @@ quiesced, drained) produces the four pieces and the G2 snapshot, stages them as 
 two volumes, and records exactly what happened."""
 import fcntl
 import json
+import subprocess
 
 import pytest
 
@@ -361,6 +362,30 @@ def test_backup_init_is_idempotent_and_refuses_without_repositories(host):
     restic = _restic(bench, initialised=False)
     assert backup.backup_init(RELEASE, runner=restic) == {"data": "created", "secrets": "created"}
     assert backup.backup_init(RELEASE, runner=restic) == {"data": "kept", "secrets": "kept"}
+
+
+def test_backup_init_names_a_password_mismatch_instead_of_a_bare_init_failure(host):
+    """`cat config` fails on a repository this host's password cannot open, so the fallback
+    `init` runs - and restic refuses because the repository exists. 2026-09-15 that surfaced
+    as 'init 失败: repository master key and config already initialized', which reads like a
+    broken remote; the real fact is that the repository was created under another password
+    (the recovery-host case: bring the original one in, or this is not your repository)."""
+    from tests.test_admin_cli import _restic
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    def other_password(arguments, **kwargs):
+        verb = next((a for a in arguments if a in ("cat", "init")), None)
+        if verb == "cat":
+            return subprocess.CompletedProcess(arguments, 1, "", "wrong password or no key found")
+        if verb == "init":
+            return subprocess.CompletedProcess(arguments, 1, "",
+                "Fatal: create key in repository at s3:https://x/y failed: repository master key and config already initialized")
+        return _restic(bench)(arguments, **kwargs)
+    with pytest.raises(admin.Fault) as error:
+        backup.backup_init(RELEASE, runner=other_password)
+    text = str(error.value)
+    assert "已存在" in text and "口令" in text and "backup_repository_password" in text
+    assert "already initialized" not in text.splitlines()[0]
 
 
 def test_retiring_a_tenant_drops_it_only_after_its_final_set_is_complete_in_both_repositories(host):

@@ -127,7 +127,14 @@ def test_the_two_sync_services_are_one_shot_pinned_capability_free_and_see_only_
         assert "cap_drop: [ALL]" in block and "no-new-privileges:true" in block and "read_only: true" in block, name
         for mount in mounts:
             assert mount in block, (name, mount)
-        assert "backup-cache:/cache" in block and "networks: [provider]" in block, name
+        assert "networks: [provider]" in block, name
+        # The staged sets are the bench's own 0700 directories (uid 1000 in the frappe image).
+        # `${DSHERP_AGENT_UID}` matched only on hosts where the agent account happened to be
+        # 1000; the first production host gave it 997 and restic could not read one set.
+        assert 'user: "1000:1000"' in block and 'user: "${DSHERP_AGENT_UID}' not in block, name
+        # Cache/TMPDIR on tmpfs: a named volume starts root-owned and restic (non-root)
+        # cannot create its temp pack files there ("unable to save snapshot", 2026-09-15).
+        assert "target: /cache" in block and "type: tmpfs" in block and "backup-cache" not in block, name
         assert "ports:" not in block, name
         assert f"/run/secrets/{password}" in block, name
         assert re.search(rf"secrets:.*\b{password}\b", block), name
@@ -136,7 +143,7 @@ def test_the_two_sync_services_are_one_shot_pinned_capability_free_and_see_only_
     assert "backup-secrets:" not in data and "backup_secrets_repository_password" not in data
     assert "tenant-backups:" not in secrets_block and "backup_storage_credentials" not in secrets_block
     volumes = PROD_COMPOSE.split("\nvolumes:\n", 1)[1].split("\n\n", 1)[0]
-    assert "  backup-cache:" in volumes
+    assert "  backup-cache:" not in volumes, "the cache is tmpfs now, not a root-owned named volume"
     secrets_section = PROD_COMPOSE.split("\nsecrets:\n", 1)[1]
     for name in ("backup_repository_password", "backup_secrets_repository_password"):
         assert f"  {name}:" in secrets_section and "${DSHERP_SECRETS_DIR" in secrets_section
