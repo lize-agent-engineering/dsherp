@@ -393,6 +393,10 @@ def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.ru
         report_path = admin.runtime_dir(resolved, root) / 'backups' / f'restore-{site}.json'
         try:
             for side in ('data', 'secrets'):
+                # The bench makes the landing directory, so it is the bench's: restic (root)
+                # would create `incoming/<side>` itself as root 0700, and the bench could then
+                # neither read what was restored beneath nor remove it (2026-09-15).
+                bench.run('sh', '-c', f'mkdir -p {bases[side]}/{side}', timeout=120)
                 # The volume is mounted whole at /volume; the target is its `incoming/<side>`
                 # subtree, which the bench sees as <BACKUPS>/incoming/<side>. Mounting the
                 # volume at /incoming and restoring to /incoming/<side> put the files at the

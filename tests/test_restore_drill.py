@@ -498,6 +498,10 @@ def test_the_secret_half_is_fetched_onto_the_secrets_volume_and_both_halves_are_
     for command in restic.calls:
         if "restore" not in command:
             assert "--cap-add" not in command, "only a restore gets to write"
+    # The landing directories are the bench's own, made before restic (root) writes into them.
+    made = [verb for verb in cold.verbs if verb.startswith("sh -c mkdir -p ")]
+    assert any("/home/frappe/backups/incoming/data" in verb for verb in made)
+    assert any("/home/frappe/backup-secrets/incoming/secrets" in verb for verb in made)
     removed = [verb for verb in cold.verbs if verb.startswith("sh -c rm -rf ")]
     assert any("/home/frappe/backups/incoming/data" in verb for verb in removed)
     assert any("/home/frappe/backup-secrets/incoming/secrets" in verb for verb in removed)
