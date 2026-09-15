@@ -858,6 +858,13 @@ BACKUP_PIECES = ('database.sql.gz', 'site_config_backup.json', 'files.tar', 'pri
 # The only thing a restore itself writes: it re-applies the scheduler flag it read first
 # (the Single's modified stamps are never compared).
 RESTORE_EXPECTATIONS = [{'patch': 'frappe.restore', 'doctype': 'System Settings', 'fields': ['enable_scheduler']}]
+# What `bench migrate` itself writes, patch or no patch: its last step ("Updating installed
+# applications") recomputes System Settings.setup_complete from whether a non-Administrator
+# user exists. A Site that gained its first user since the previous release flips 0→1 on
+# the next migrate; the first real release (2026-09-15) kept the platform Site in maintenance
+# over exactly that. Declared for that one field only - anything else on the Single is
+# still somebody's undeclared change.
+MIGRATE_EXPECTATIONS = [{'patch': 'frappe.migrate', 'doctype': 'System Settings', 'fields': ['setup_complete']}]
 # `active` is what release/rollback refuse to start on (any unfinished run). `running` is the
 # narrower question a backup window asks: is an executor actually in flight? Queued runs are
 # frozen by the hold and must not keep a window waiting forever (review round 2, item 1).
@@ -945,6 +952,10 @@ def _quiesce(bench, site):
 def _release_site(bench, site, flags):
     _set_flag(bench, site, 'maintenance_mode', flags.get('maintenance_mode', 0))
     _set_flag(bench, site, 'pause_scheduler', flags.get('pause_scheduler', 0))
+    # Frappe caches guest pages: a /login fetched during maintenance is the "Updating" page,
+    # and lifting the flag does not evict it. Without this the Site keeps answering 503
+    # after it is formally open (first real release, 2026-09-15).
+    bench.run('bench', '--site', site, 'clear-cache', timeout=120)
 
 
 def _hash_columns_of(snapshot):
@@ -1267,7 +1278,7 @@ def _release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=N
             step = 'expectations'
             declared = _expected_changes(bench, site)
             executed = sorted(set(after.get('patches', [])) - set(before.get('patches', [])))
-            applicable = [entry for entry in declared if entry['patch'] in executed]
+            applicable = [entry for entry in declared if entry['patch'] in executed] + MIGRATE_EXPECTATIONS
             step = 'compare'
             comparison = compare_snapshots(before, after, applicable)
         except Exception as error:

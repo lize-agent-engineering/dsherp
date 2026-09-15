@@ -128,10 +128,10 @@ def test_the_two_sync_services_are_one_shot_pinned_capability_free_and_see_only_
         for mount in mounts:
             assert mount in block, (name, mount)
         assert "networks: [provider]" in block, name
-        # The staged sets are the bench's own 0700 directories (uid 1000 in the frappe image).
-        # `${DSHERP_AGENT_UID}` matched only on hosts where the agent account happened to be
-        # 1000; the first production host gave it 997 and restic could not read one set.
-        assert 'user: "1000:1000"' in block and 'user: "${DSHERP_AGENT_UID}' not in block, name
+        # The sets are the bench's (uid 1000, 0700) and the password is the operator's
+        # (0600, service-account uid); compose bind-mounts secrets with host ownership, so
+        # no non-root uid reads both. Root + DAC_READ_SEARCH, nothing else back.
+        assert "user:" not in block and "cap_add: [DAC_READ_SEARCH]" in block, name
         # Cache/TMPDIR on tmpfs: a named volume starts root-owned and restic (non-root)
         # cannot create its temp pack files there ("unable to save snapshot", 2026-09-15).
         assert "target: /cache" in block and "type: tmpfs" in block and "backup-cache" not in block, name
