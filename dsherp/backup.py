@@ -478,9 +478,22 @@ def backup_init(resolved, *, root=ROOT, runner=subprocess.run):
         try:
             restic(resolved, side, ['cat', 'config'], root=root, runner=runner, timeout=300)
             outcome[side] = 'kept'
+            continue
         except Fault:
+            pass
+        try:
             restic(resolved, side, ['init'], root=root, runner=runner, timeout=600)
-            outcome[side] = 'created'
+        except Fault as error:
+            if 'already initialized' not in str(error):
+                raise
+            # The repository exists but this host's password does not open it. Naming that
+            # is the whole diagnosis: a bare "init failed" reads like a broken remote.
+            password = 'backup_repository_password' if side == 'data' else 'backup_secrets_repository_password'
+            raise Fault(f'{side} 仓库已存在，但本机的 {password} 打不开它。'
+                        f'恢复主机要先带入原主机的那份口令（放进密钥目录后再 secrets init）；'
+                        f'如果这不是本部署的仓库，先核对 DSHERP_BACKUP{"_SECRETS" if side == "secrets" else ""}_REPOSITORY。'
+                        f'\nrestic 原话：{str(error).strip().splitlines()[-1]}') from error
+        outcome[side] = 'created'
     return outcome
 
 

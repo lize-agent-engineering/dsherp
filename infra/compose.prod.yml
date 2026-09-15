@@ -323,7 +323,12 @@ services:
     image: restic/restic:0.18.0@sha256:4cf4a61ef9786f4de53e9de8c8f5c040f33830eb0a10bf3d614410ee2fcb6120
     restart: "no"
     entrypoint: ["restic"]
-    user: "${DSHERP_AGENT_UID}:${DSHERP_AGENT_GID}"
+    # The bench user inside the frappe image, NOT the agent identity: capabilities are
+    # dropped, so root would not bypass file permissions either, and the staged sets are
+    # the bench's own 0700 directories. `${DSHERP_AGENT_UID}` only equalled 1000 by
+    # coincidence on development hosts; the first production host (`useradd --system`
+    # gave 997) could not read a single set (2026-09-15).
+    user: "1000:1000"
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -343,7 +348,12 @@ services:
     volumes:
       - tenant-backups:/backups/tenant:ro
       - platform-backups:/backups/platform:ro
-      - backup-cache:/cache
+      # restic's cache and TMPDIR. A named volume starts root-owned and a non-root restic
+      # cannot even create its temp pack files there ("unable to save snapshot", 2026-09-15);
+      # tmpfs is writable by any uid, sized so a check --read-data-subset cannot exhaust RAM.
+      - type: tmpfs
+        target: /cache
+        tmpfs: {size: 1073741824}
     networks: [provider]
     logging: *logging
 
@@ -352,7 +362,12 @@ services:
     image: restic/restic:0.18.0@sha256:4cf4a61ef9786f4de53e9de8c8f5c040f33830eb0a10bf3d614410ee2fcb6120
     restart: "no"
     entrypoint: ["restic"]
-    user: "${DSHERP_AGENT_UID}:${DSHERP_AGENT_GID}"
+    # The bench user inside the frappe image, NOT the agent identity: capabilities are
+    # dropped, so root would not bypass file permissions either, and the staged sets are
+    # the bench's own 0700 directories. `${DSHERP_AGENT_UID}` only equalled 1000 by
+    # coincidence on development hosts; the first production host (`useradd --system`
+    # gave 997) could not read a single set (2026-09-15).
+    user: "1000:1000"
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -372,7 +387,12 @@ services:
     volumes:
       - tenant-backup-secrets:/backups/tenant:ro
       - platform-backup-secrets:/backups/platform:ro
-      - backup-cache:/cache
+      # restic's cache and TMPDIR. A named volume starts root-owned and a non-root restic
+      # cannot even create its temp pack files there ("unable to save snapshot", 2026-09-15);
+      # tmpfs is writable by any uid, sized so a check --read-data-subset cannot exhaust RAM.
+      - type: tmpfs
+        target: /cache
+        tmpfs: {size: 1073741824}
     networks: [provider]
     logging: *logging
 
@@ -401,7 +421,6 @@ volumes:
   platform-sites:
   platform-logs:
   platform-archive:
-  backup-cache:
   tenant-backups:
   tenant-backup-secrets:
   platform-backups:

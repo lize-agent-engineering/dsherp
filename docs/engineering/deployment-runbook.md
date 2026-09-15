@@ -110,9 +110,11 @@ sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y do
 for m in docker.m.daocloud.io docker.1ms.run docker.xuanyuan.me dockerproxy.net docker.1panel.live; do
   printf '%s %s\n' "$m" "$(curl -s -o /dev/null -m 8 -w '%{http_code}' https://$m/v2/)"
 done
-# 401 或 200 都算通（401 是 registry 的正常鉴权应答）；再验一次真能取到 manifest：
-curl -s -o /dev/null -w '%{http_code}\n' -H 'Accept: application/vnd.oci.image.index.v1+json' \
-  https://<选中的站>/v2/library/redis/manifests/latest
+# 401 或 200 都算通（401 是 registry 的正常鉴权应答）。**镜像站按镜像名设白名单**：2026-09-15 实测 docker.xuanyuan.me
+# 对 library/redis 通、对 restic/restic 返回 403，第一次备份就停在拉不到 restic 上。所以要对本文真要拉的四个镜像各探一次：
+for img in library/mariadb library/redis library/caddy restic/restic; do
+  printf '%-16s %s\n' "$img" "$(curl -s -o /dev/null -m 15 -w '%{http_code}' -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' https://<选中的站>/v2/$img/manifests/latest)"
+done   # 四个都要 200 或 401；有 403/404 的站只能当补充，不能当唯一
 
 sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
 {
@@ -120,7 +122,7 @@ sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
   "registry-mirrors": ["https://<你探到的第一个>", "https://<你探到的第二个>"]
 }
 JSON
-sudo systemctl restart docker
+sudo systemctl restart docker      # 只改 registry-mirrors 时用 `sudo systemctl reload docker`（SIGHUP 热重载，容器不重启；2026-09-15 实测 13/13 不掉）
 sudo docker info --format 'driver={{.Driver}} mirrors={{.RegistryConfig.Mirrors}}'   # 期望 driver=overlay2
 ```
 
@@ -698,7 +700,13 @@ sudo install -m 644 /opt/dsherp/.runtime/dsherp-backup*.service /opt/dsherp/.run
 sudo systemctl daemon-reload && sudo systemctl enable --now dsherp-backup.timer dsherp-backup-drill.timer
 ```
 
-**一次性初始化**：`DSHERP_ENV=prod ./bin/dsherp-admin backup-init`（幂等，两个仓库都建好后报 `kept`）。
+**一次性初始化**：`DSHERP_ENV=prod ./bin/dsherp-admin backup-init`（幂等，两个仓库都建好后报 `kept`）。报「仓库已存在，但本机的
+`backup_repository_password` 打不开它」时，远端是**别的口令**建的：恢复主机要先带入原主机的那份口令（见 G3 那段的顺序）；
+如果远端只是以前试手留下的空仓库（只有 `config` 与 `keys/`、没有快照），清掉再 `backup-init`——2026-09-15 第一次就是这种情形。
+
+同步容器以 **uid 1000（frappe 镜像里的 bench 用户）** 跑，不是 `DSHERP_AGENT_UID`：备份集是 bench 写的 0700 目录，只有它能读。
+这两个 uid 在开发机上碰巧都是 1000，第一台生产主机（`useradd --system` 给了 997）上第一次 `backup --sync` 一个集都读不到——
+`v0.4.0-rc4` 及之前的 `compose.prod.yml` 有这个问题，rc5 起修正；restic 的缓存与临时目录也从 root 所有的具名卷改成了 tmpfs。
 
 **备份集**：一次备份产出一个集，`<UTC 时间戳>-<站名下划线形式>-<6 位随机>`。数据侧在 `tenant-backups`/`platform-backups` 卷的 `sets/<站>/<集>/`：三件数据（`database.sql.gz`、`files.tar`、`private-files.tar`）、`snapshot.json`（G2 口径的核验快照）、`set.json`（各件 sha256、快照摘要、窗口起止、**当时运行的镜像 tag 与镜像 id**、Frappe 版本）。密钥侧在 `tenant-backup-secrets`/`platform-backup-secrets` 卷的 `<站>/<集>/`：`site_config_backup.json`（0600，目录 0700）与 `pair.json`（把数据侧各摘要抄一份 + `config_sha256` + `set.json` 的摘要）。两侧互证同一个集。
 
