@@ -56,7 +56,13 @@ ROW_PARTITION = {
     'tabPrint Format': "standard = 'No'",
     'tabWeb Form': 'is_standard = 0',
 }
-VOLATILE_COLUMNS = ('_comments', '_assign', '_liked_by', '_user_tags', '_seen')
+# Frappe's own bookkeeping, written as a side effect of somebody being logged in, never by
+# a patch or a restore: the desk decorations, and User's activity stamps. The backup window
+# holds claims but lets the worker keep heartbeating as `runtime@<site>`, so the dump and
+# the snapshot taken seconds apart differ in that user's last_active - the one undeclared
+# difference the first cold-start recovery found (2026-09-15).
+VOLATILE_COLUMNS = ('_comments', '_assign', '_liked_by', '_user_tags', '_seen',
+                    'last_active', 'last_login', 'last_ip')
 SECRET_COLUMN = re.compile('(secret|password|token)$')
 MARKER = 'DSHERP_SNAPSHOT '
 
