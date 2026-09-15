@@ -361,7 +361,7 @@ def send_set(resolved, set_doc, *, root=ROOT, runner=subprocess.run, fatal=False
     return {'ok': ok, 'reason': outcome['failed'].get(set_doc['set_id'])}
 
 
-def _compose_run(resolved, root, service, arguments, ca=None, mounts=()):
+def _compose_run(resolved, root, service, arguments, ca=None, mounts=(), caps=()):
     file = Path(root) / admin.COMPOSE[resolved['env']]
     command = ['docker', 'compose', '-p', resolved['project']]
     env_file = deploy_env.env_file(resolved['env'], root)
@@ -373,6 +373,8 @@ def _compose_run(resolved, root, service, arguments, ca=None, mounts=()):
                     '-e', 'RESTIC_CACERT=/run/secrets/backup_storage_ca.pem']
     for mount in mounts:
         command += ['-v', mount]
+    for cap in caps:
+        command += ['--cap-add', cap]
     return command + [service, *arguments]
 
 
@@ -404,14 +406,15 @@ def _remove_run_containers(resolved, side, *, runner=subprocess.run):
     return containers
 
 
-def restic(resolved, side, arguments, *, root=ROOT, runner=subprocess.run, timeout=3600, mounts=()):
+def restic(resolved, side, arguments, *, root=ROOT, runner=subprocess.run, timeout=3600, mounts=(), caps=()):
     """One restic call against one repository, through its own one-shot compose service. The
-    repository URL, its password and its storage identity come from compose, never from argv."""
+    repository URL, its password and its storage identity come from compose, never from argv.
+    `caps` adds capabilities for this run only - a restore writes into the bench's volume."""
     if side not in ('data', 'secrets'):
         raise ValueError('Unknown repository side: ' + repr(side))
     ca = admin.secrets_dir(resolved, root) / 'backup_storage_ca.pem'
     command = _compose_run(resolved, root, f'backup-sync-{side}', arguments, ca=ca if ca.exists() else None,
-                           mounts=mounts)
+                           mounts=mounts, caps=caps)
     try:
         result = runner(command, text=True, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as error:
