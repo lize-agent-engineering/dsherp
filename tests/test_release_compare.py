@@ -187,3 +187,15 @@ def test_hash_only_rows_are_compared_only_when_both_snapshots_hashed_the_same_co
     valued = snap({'tabItem': (['name', 'v'], {'A': {'name': 'A', 'v': 1}})})
     widened = snap({'tabItem': (['name', 'v', 'w'], {'A': {'name': 'A', 'v': 1, 'w': None}})})
     assert rc.compare(valued, widened)['clean'] is True
+
+
+def test_a_users_activity_stamps_are_not_data():
+    """The worker authenticates as runtime@<site> throughout a backup window; Frappe bumps that
+    User's last_active on every request. A dump and a snapshot seconds apart differ there and
+    nowhere else - that is not drift."""
+    row = {"name": "runtime@acme.localhost", "enabled": 1, "last_active": "2026-09-15 17:45:15",
+           "last_login": "2026-09-15 09:00:00", "last_ip": "10.0.0.1"}
+    bumped = {**row, "last_active": "2026-09-15 17:45:21", "last_login": "2026-09-15 17:45:21", "last_ip": "10.0.0.2"}
+    assert rc.row_hash(row) == rc.row_hash(bumped)
+    assert rc.row_hash(row) != rc.row_hash({**row, "enabled": 0}), "real fields still count"
+
