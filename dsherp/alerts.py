@@ -77,7 +77,9 @@ def evaluate(status,metrics,now,site=None):
     return evaluate_snapshot(status,now,site)+evaluate_host(metrics,observed=fresh_snapshot(status) is not None)
 
 
-def orphan_containers(runner=subprocess.run):
+def orphan_containers(runner=subprocess.run,exclude=frozenset()):
+    """Run containers on this host that nobody owns. `exclude` is what the calling worker is
+    running right now: those are live, whatever a Site's five-minute ops snapshot still says."""
     try:
         result=runner(['docker','ps','--filter','name=dsherp-context-','--format','{{.Names}}'],
             capture_output=True,text=True,check=False,timeout=10)
@@ -85,7 +87,7 @@ def orphan_containers(runner=subprocess.run):
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError) as error:
         worker_log.log('orphan_probe_failed',error_class=type(error).__name__)
         return None
-    return sum(1 for line in result.stdout.splitlines() if line.strip())
+    return sum(1 for line in result.stdout.splitlines() if line.strip() and line.strip() not in exclude)
 
 
 class Notifier:

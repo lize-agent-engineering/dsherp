@@ -1045,6 +1045,25 @@ def test_a_rotation_done_through_provisioning_lands_in_the_ledger():
     assert [row["version"] for row in rotation.read(ledger)] == [1, 2], "每次轮换各记一条"
 
 
+def test_the_platform_site_keeps_the_same_wall_clock_as_the_tenants():
+    """The platform judges a borrowed credential's window against its own `now_datetime()`
+    while the business Site stamps that window in ITS time zone. A platform Site left on
+    Frappe's default zone refuses every first SSO login: 2026-09-15 on the G1 stack the
+    tenant said 15:57 (Asia/Shanghai), the platform 13:27 (no zone), and accept_credential
+    rejected a 12-hour window as 'not within the allowed window'."""
+    admin.ensure_secrets(PROD)
+    bench = FakeBench()
+    result = admin.provision_platform(PROD, bench_factory=lambda kind: bench)
+    assert dict(result["steps"])["system-settings"] == "bootstrapped:language,time_zone"
+    assert bench.config["time_zone"] == PROD["site_time_zone"] == "Asia/Shanghai"
+    assert bench.config["language"] == PROD["site_language"]
+
+    chosen = FakeBench(config={"language": "en", "time_zone": "Europe/Berlin"})
+    again = admin.provision_platform(PROD, bench_factory=lambda kind: chosen)
+    assert dict(again["steps"])["system-settings"] == "kept", "已选过的不覆盖"
+    assert chosen.config["time_zone"] == "Europe/Berlin"
+
+
 def test_the_platform_site_is_not_asked_to_rotate_an_identity_it_never_has():
     """`provision_platform` never writes `dsherp_runtime_user`, so `rotate runtime` on the
     platform Site cannot succeed. Listing it as a target produced a finding no command could
