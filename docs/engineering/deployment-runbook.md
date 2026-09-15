@@ -765,11 +765,19 @@ DSHERP_ENV=prod .venv/bin/python -c "from dsherp import backup, deploy_env; impo
    与集里记的 `image_id`，不一致直接拒绝并告诉你该用哪个 tag。
 4. 本机记录里没有异地已有的集时先 `backup-sync`，它会从已核验的远端清单收养并补齐镜像身份；没有镜像身份的集一律拒绝恢复。
 
-然后逐站：
+然后逐站，**平台站先于租户站**（开租户站要在平台站上登记企业与 OAuth Client）：
 
 ```sh
-DSHERP_ENV=prod ./bin/dsherp-admin restore-site acme.tenant.example.com     # 也可 --set <备份集 id>；`backup --sync` 同步失败即以退出码 1 结束，定时单元的 OnFailure 会触发通知
+DSHERP_ENV=prod ./bin/dsherp-admin restore-site platform.localhost
+DSHERP_ENV=prod ./bin/dsherp-admin restore-site acme.localhost               # 也可 --set <备份集 id>
 ```
+
+恢复完成后接着做第 6 步（入口与出口）与第 7 步（worker）——`restore-site` 最后会以普通形态再 `provision` 一次，把
+`dsherp_agent_sources` 等宿主相关配置按**本机**网段重新派生，所以 worker profile 要在这台机器上重新生成。
+
+**2026-09-15 实测（agenerp2，rc13 CLI + rc8 镜像）**：起数据面 → `backup-sync` 收养两个集 → 平台站 86.4 秒 clean → acme 282.4 秒 clean
+（553 表/307 行、0 差异、解密核验 2 项）→ 13/13 healthy 用时 **7 分 56 秒**，worker `active` 用时 **8 分 54 秒**。恢复出来的
+客户、策略、角色、运行记录、成员绑定逐项与源主机一致。这条路 rc12 之前从没在真机上走通过（四层都是假 bench 盖住的）。
 
 `restore-site` 的契约：目标站在本机**必须不存在**（不覆盖、不自动清理）；本机记录里没有镜像身份的集直接拒绝（灾后重建的记录先 `backup-sync`，同步会从已核验的远端清单回填 `image_tag/image_id`）；先读回并核对两侧清单与全部摘要；本机运行的镜像 tag 与 id 必须等于该集记录的那次构建，取回清单后再以清单为准核对一次（不符即拒绝，先把 `prod.env` 改到那个 tag 再 `compose up -d`）；随后以关闭形态建站（建站即维护模式、企业由 Ready 转为 Provisioning、不发布入口；管理员停用或标为失败的企业保持原状）、恢复、注入 `encryption_key`、与集内快照比对、抽样解密，再以常规 `provision-*` 让主机相关配置按**这台**主机重算并把企业标为 Ready、发布入口；只有比对干净才解除维护。任一步失败站点保持维护模式，报告在 `<runtime>/backups/restore-<站>.json`。成功后若本机还没有 `releases/current.json`，会按该集记录的 tag 与本机运行镜像写一份，下一次 `release` 才知道从哪来。升级到更新的 tag 是随后显式的 `release`。
 
