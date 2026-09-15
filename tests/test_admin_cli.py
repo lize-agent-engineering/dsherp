@@ -775,7 +775,9 @@ def test_only_patches_this_migrate_executed_may_declare_changes_and_the_after_sn
     report = admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: stale, runner=RUNNING_NEW, from_tag="v0.3.0")
     assert report["clean"] is False
     comparison = report["sites"]["acme.tenant.example.com"]["comparison"]
-    assert comparison["differences"][0]["declared"] is False and comparison["expectations"] == []
+    assert comparison["differences"][0]["declared"] is False
+    # Only migrate's own standing declaration is in play: the patch did not execute this time.
+    assert [entry["patch"] for entry in comparison["expectations"]] == ["frappe.migrate"]
     assert report["sites"]["acme.tenant.example.com"]["patches_executed"] == []
     bodies = [call for call in stale.calls if call[0] == "python-body"]
     after_body = [body for _, site, body in bodies if site == "acme.tenant.example.com"][1]
@@ -824,6 +826,47 @@ def test_a_release_reports_undeclared_drift_and_honours_a_patch_declaration():
     report = admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: declared, runner=RUNNING_NEW, from_tag="v0.3.0")
     assert report["clean"] is True
     assert report["sites"]["acme.tenant.example.com"]["comparison"]["differences"][0]["declared"] == "dsherp_bridge.patches.rename_items"
+
+
+def test_a_release_declares_the_setup_complete_flag_frappe_derives_on_every_migrate():
+    """`bench migrate` ends with "Updating installed applications", where Frappe recomputes
+    System Settings.setup_complete from whether a non-Administrator user exists. On the first
+    real release (2026-09-15, rc4→rc5) the platform Site had gained its first member since
+    provisioning, the flag went 0→1, and the comparator - correctly - called it undeclared
+    and kept the Site in maintenance. It is Frappe's, not a patch's: declared once, here."""
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    before = _snap({"tabItem": {"A": {"name": "A", "item_name": "a"}}},
+                   singles={"System Settings": {"setup_complete": "0", "modified": "t0", "modified_by": "Administrator"}})
+    after = _snap({"tabItem": {"A": {"name": "A", "item_name": "a"}}},
+                  singles={"System Settings": {"setup_complete": "1", "modified": "t1", "modified_by": "Administrator"}})
+    bench = SnapshotBench([before, after, SAME, SAME])
+    report = admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench, runner=RUNNING_NEW, from_tag="v0.3.0")
+    assert report["clean"] is True, report["sites"]["acme.tenant.example.com"]["comparison"]["differences"]
+    diffs = report["sites"]["acme.tenant.example.com"]["comparison"]["differences"]
+    assert [d["declared"] for d in diffs if d["field"] == "setup_complete"] == ["frappe.migrate"]
+    # Anything else on that Single is still somebody's undeclared change.
+    other = _snap({"tabItem": {"A": {"name": "A", "item_name": "a"}}},
+                  singles={"System Settings": {"setup_complete": "1", "enable_scheduler": "0", "modified": "t2", "modified_by": "Administrator"}})
+    _fresh_host("v0.4.0")
+    bench = SnapshotBench([after, other, SAME, SAME])
+    report = admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench, runner=RUNNING_NEW, from_tag="v0.3.0")
+    assert report["clean"] is False
+
+
+def test_reopening_a_site_clears_its_cache_so_the_maintenance_page_does_not_outlive_maintenance():
+    """Frappe caches a guest page. A `/login` requested while the Site was in maintenance
+    cached the "Updating" page, and lifting maintenance_mode did not evict it: the first
+    real release left the platform Site answering 503 after resume-site until an operator
+    ran clear-cache by hand (2026-09-15)."""
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = SnapshotBench([SAME, SAME, SAME, SAME])
+    admin.resume_site(RELEASE, "acme.tenant.example.com", bench_factory=lambda kind: bench)
+    verbs = bench.verbs
+    lifted = next(i for i, v in enumerate(verbs) if "set-config" in v and "maintenance_mode 0" in v)
+    cleared = [i for i, v in enumerate(verbs) if v == "bench --site acme.tenant.example.com clear-cache"]
+    assert cleared and cleared[0] > lifted, verbs
 
 
 def test_a_release_refuses_a_tag_the_environment_does_not_run_active_runs_or_an_incomplete_backup_set():

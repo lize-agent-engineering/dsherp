@@ -18,7 +18,7 @@
 | git | **构建机**必须是干净的 git checkout，且 `$TAG` 指向 HEAD——没有 `.git` 的源码树一律拒绝构建（导出树无法证明导出后没被改过）；**目标主机**可以没有 git：它只 `docker load` 镜像，源码树只用来跑 CLI | 脏工作树、tag 不在 HEAD、无 `.git`，构建都会被拒绝；`--git-commit` 只是交叉核对 |
 | 镜像来源 | 私有 registry，或在本机 `docker load` 导入的镜像 tar | `compose.prod.yml` 用 `pull_policy: if_not_present` |
 | **目标主机取基础镜像的通路** | **必需**：bundle 只装两个 dsherp 镜像，`mariadb`/`redis`/`caddy`/`restic` 仍由 compose 按 digest 拉。目标主机必须能到 Docker Hub，或在 `/etc/docker/daemon.json` 配 `registry-mirrors`——**探测方法、可用地址与 JSON 写法见「装 Docker 与配置镜像通路」** | 2026-09-14 G1 两轮验证实测：国内主机到 `registry-1.docker.io` / `auth.docker.io` / `production.cloudflare.docker.com` 连不上，部署停在第 4 步。第二轮测出了机理——**DNS 被污染**：经 8.8.8.8 解析 `registry-1.docker.io` 得到 Facebook 的地址（`2a03:2880:f117:83:face:b00c:0:25de` / `173.252.105.21`），连的根本不是 Docker Hub，表现为 4.5 秒后 `Connection timed out`。**两轮都没测过换 DNS 或写 hosts 能不能绕开**，也没测过真实地址是否同时被 TCP 封锁，所以别把镜像站当作唯一解法，只是当前已知可行的那条。按 digest 拉取时内容由 Docker 校验，走镜像站与直连等价。**离线主机**须另行 `docker save` 这四个基础镜像一并交付——`--bundle` 不含它们 |
-| 账号 | 一个非 root 系统账号（本文用 `dsherp`），在 `docker` 组内 | 宿主 worker、四个 bench 容器（uid 1000）、db/redis（uid 999）与 Agent 运行容器（`DSHERP_AGENT_UID`）都不以 root 运行。**例外是 caddy**：官方镜像主进程在容器内是 uid 0（要绑 80/443），它没有挂载宿主任何可写路径——2026-09-14 G1 第二轮实测记录，不是本项目的配置 |
+| 账号 | 一个非 root 系统账号（本文用 `dsherp`），在 `docker` 组内 | 宿主 worker、四个 bench 容器（uid 1000）、db/redis（uid 999）与 Agent 运行容器（`DSHERP_AGENT_UID`）都不以 root 运行。**两个例外**：caddy（官方镜像主进程 uid 0，要绑 80/443，不挂宿主任何可写路径；2026-09-14 实测记录）；两个 restic 同步容器（root + 仅 `DAC_READ_SEARCH`，原因见第 12 节） |
 | systemd | ≥ 242 才能启用 unit 里的全部沙箱指令（`ProtectSystem=strict` 232+、`ReadWritePaths` 232+、`RestrictSUIDSGID` 242+）；更老的版本会忽略这些行并在 journal 告警，进程照常受 `Restart`/`WatchdogSec` 管，但沙箱**静默退化**——219 上 `ProtectSystem=strict` 被解析成 `no` | CentOS 7 的 systemd 219 实测：保留 notify/看门狗/Restart/PrivateTmp/NoNewPrivileges/ProtectHome，丢掉其余五条 |
 | 安装根 | 本文用 `/opt/dsherp`，但只是参数：`render_worker_units.py --root` 与 `bin/dsherp-admin` 都跟随实际目录。**不要放在 `/home` 下**：unit 的 `ProtectHome=read-only` 会把它锁成只读，能解锁 `.runtime`/`work` 的 `ReadWritePaths` 要 systemd ≥ 232 | 某些主机的 `/opt` 带 immutable 属性，root 也写不进，这时用 `/srv/dsherp` |
 
@@ -617,7 +617,16 @@ DSHERP_ENV=prod ./bin/dsherp-admin release "$NEW_TAG" --from "$OLD_TAG"   # 第�
 sudo systemctl start dsherp-agent-worker
 ```
 
+2026-09-15 第一次真机发布（rc4→rc5）两站各 36 秒 / 19 秒走完全部六步；平台站被判「1 条未声明差异」保持维护：`System Settings.setup_complete`
+0→1——那是 `migrate` 最后一步「Updating installed applications」按「站上有没有非管理员用户」派生的（平台站在上一次发布之后才有了
+第一个成员），Frappe 自己的行为、不属于任何 patch。rc6 起把这一个字段登记为 migrate 自带的声明；其它任何字段仍算未声明。
+
 退出码：0 = 各站数据与升级前一致（或差异都被本次执行的 patch 声明），站点已重新开放；1 = 有未声明差异，**有差异的站保持维护模式**，人核对报告后要么 `rollback`，要么确认接受再 `resume-site <站>`；2 = 中途失败，失败的站保持维护模式并有带 `failed` 的部分报告。
+
+**接受未声明差异后（`resume-site`）`current.json` 不会被写**：发布记录只在 clean 时落 `current.json`，所以下一次 `release` 仍要给
+`--from <这次的 tag>`。另外 rc5 及之前 `resume-site` 解除维护后站点可能继续回 503：Frappe 把维护期间被请求过的访客页
+（`/login` 的「Updating」）缓存了，解除标志不会驱逐它；rc6 起解除维护时顺带 `clear-cache`，之前的版本手工
+`bench --site <站> clear-cache` 即可。
 
 `release` 先做预检：两个异地仓库已配置（生产未配置即拒绝，见第 12 节）、`prod.env` 的 tag 就是要发布的 tag、两个 bench 服务各恰好一个运行容器（多于一个拒绝，不会只查第一个）且**运行容器**镜像全名就是该 tag 的发布镜像（读容器而不是读环境文件）、该 tag 的发布清单可用且两个容器的镜像 id 与清单记录一致（清单缺失、读不出、tag 不符、没有该镜像的记录或 id 不是 `sha256:` 开头的非空串，都在改动任何站点之前拒绝——不会退化成"没有预期 id 就不核对"；清单查找顺序见第 2 步，`--manifest FILE` 可直接指定）、`--from` 与 `current.json` 的记录一致（有记录时给出不同的 `--from` 会被拒绝：记录对就不要给，记录错就先改对或删掉）、`current.json` 里的镜像记录完整（否则将来的回滚用不了，现在就拒绝）或——没有 `current.json` 时——旧 tag 的清单可用、每站没有在飞运行、这个 tag 还没有升级前基线（基线只写一次，重来要换 tag 或先 `forget-release`，后者只删发布记录目录下的合法子目录）。然后写发布记录（新旧 tag、两个容器的镜像与镜像 id），再对每个站（租户站与平台站）按序：静默 → `bench backup --with-files` → 把四件套备份集复制到 `/home/frappe/frappe-bench/archived/releases/<tag>/<站>/`（`tenant-archive`/`platform-archive` 卷；Frappe 自己会在 23 小时后清掉 `private/backups`）→ 升级前快照 → `bench migrate` → 升级后快照（按升级前的列集求哈希）→ 从 Patch Log 算出本次实际执行的 patch，只采纳它们声明的预期变化 → 比对 → 只有干净才恢复站点标志。全部干净后把 `current.json` 记为新 tag。报告在 `.runtime/releases/release-<tag>-<时间戳>.json`（`release-<tag>.json` 是最新一份），快照与备份记录在 `.runtime/releases/<tag>/{release.json,<站>/before.json,after.json,backup.json}`。
 
@@ -704,9 +713,11 @@ sudo systemctl daemon-reload && sudo systemctl enable --now dsherp-backup.timer 
 `backup_repository_password` 打不开它」时，远端是**别的口令**建的：恢复主机要先带入原主机的那份口令（见 G3 那段的顺序）；
 如果远端只是以前试手留下的空仓库（只有 `config` 与 `keys/`、没有快照），清掉再 `backup-init`——2026-09-15 第一次就是这种情形。
 
-同步容器以 **uid 1000（frappe 镜像里的 bench 用户）** 跑，不是 `DSHERP_AGENT_UID`：备份集是 bench 写的 0700 目录，只有它能读。
-这两个 uid 在开发机上碰巧都是 1000，第一台生产主机（`useradd --system` 给了 997）上第一次 `backup --sync` 一个集都读不到——
-`v0.4.0-rc4` 及之前的 `compose.prod.yml` 有这个问题，rc5 起修正；restic 的缓存与临时目录也从 root 所有的具名卷改成了 tmpfs。
+同步容器要读两种属主不同的文件：备份集是 bench 写的（uid 1000，0700），仓库口令是 `secrets init` 以服务账号写的（0600，第一台
+生产主机上是 997），而 compose 把 secret 按宿主属主原样 bind 进容器、不认 uid/gid/mode（v5.5.1 实测）。**没有一个非 root uid
+能同时读到两者**：`v0.4.0-rc4` 以 agent uid 跑读不到集，rc5 改成 1000 又读不到口令。rc6 起以 root + 仅 `DAC_READ_SEARCH`
+（只读越权）跑，其余能力全丢、根文件系统只读、缓存与临时目录在 tmpfs——它是前置表「容器不以 root 运行」的第二个例外，与 caddy 一样
+点名记在这里。
 
 **备份集**：一次备份产出一个集，`<UTC 时间戳>-<站名下划线形式>-<6 位随机>`。数据侧在 `tenant-backups`/`platform-backups` 卷的 `sets/<站>/<集>/`：三件数据（`database.sql.gz`、`files.tar`、`private-files.tar`）、`snapshot.json`（G2 口径的核验快照）、`set.json`（各件 sha256、快照摘要、窗口起止、**当时运行的镜像 tag 与镜像 id**、Frappe 版本）。密钥侧在 `tenant-backup-secrets`/`platform-backup-secrets` 卷的 `<站>/<集>/`：`site_config_backup.json`（0600，目录 0700）与 `pair.json`（把数据侧各摘要抄一份 + `config_sha256` + `set.json` 的摘要）。两侧互证同一个集。
 
