@@ -246,6 +246,44 @@ def test_sync_closes_a_pending_record_whose_staging_is_gone_when_a_newer_set_is_
     assert not any(gone in e for e in report["errors"])
 
 
+def test_a_drop_interrupted_between_the_two_repositories_is_finished_next_run_not_demoted_to_pending(host):
+    """`forget` runs side by side. The 2026-09-15 17:05 sync forgot four sets' data copies,
+    then hit a stale lock on the secrets repository: the next run saw four sets 'no longer
+    complete', demoted them to pending, and tried to re-send staging that retention had
+    already deleted - four permanent errors for sets the policy had decided to drop."""
+    from tests.test_admin_cli import _restic
+    import hashlib
+    _prepare()
+    bench = StagingBench([SAME, SAME])
+    site = "acme.tenant.example.com"
+    monthly = [f"{2025 + month // 12}{month % 12 + 1:02d}01_020000-acme_tenant_example_com-aaaaaa" for month in range(0, 20)]
+    def seed(restic):
+        status = backup_status.empty()
+        for set_id in monthly:
+            ids = {side: hashlib.sha256((set_id + side).encode()).hexdigest() for side in ("data", "secrets")}
+            backup_status.record_set(status, {"set_id": set_id, "site": site, "kind": "scheduled", "stamp": set_id[:15],
+                                              "image_tag": "v0.4.0", "image_id": "sha256:id"}, "complete",
+                                     data_snapshot=ids["data"], secrets_snapshot=ids["secrets"])
+            for side in ("data", "secrets"):
+                restic.state[side][set_id] = {"id": ids[side], "path": backup.set_paths(RELEASE, site, set_id)[side]}
+        backup_status.save(backup.status_path(RELEASE, admin.ROOT), status)
+    broken = _restic(bench, fail=(("secrets", "forget"),))
+    seed(broken)
+    first = backup.backup_sync(RELEASE, runner=broken, clock=lambda: 1_788_660_100.0)
+    assert not first["ok"] and any("forget" in e for e in first["errors"])
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    dropping = [set_id for set_id, row in status["sets"].items() if row.get("state") == "dropping"]
+    assert dropping and monthly[1] in dropping, "a set whose drop began is recorded as dropping, not complete"
+
+    healed = _restic(bench)
+    healed.state.update({"data": broken.state["data"], "secrets": broken.state["secrets"]})
+    second = backup.backup_sync(RELEASE, runner=healed, clock=lambda: 1_788_660_200.0)
+    status = backup_status.load(backup.status_path(RELEASE, admin.ROOT))
+    assert monthly[1] not in status["sets"], "the interrupted drop is finished, the record removed"
+    assert not any("不再完整" in e for e in second["errors"]), second["errors"]
+    assert monthly[1] not in second["pending"]
+
+
 def test_sync_removes_stale_repository_locks_before_it_touches_either_repository(host):
     """A sync killed mid-way (the first production one died on permission errors) leaves a
     restic lock; every later forget/check then fails with 'repository is already locked'

@@ -20,7 +20,9 @@ PHASES = ('backup', 'sync', 'check', 'drill')
 SITE_PHASES = ('backup', 'offsite', 'verified')
 # `superseded`: pruned from local staging before it ever reached the repositories, because a
 # newer set had; terminal, never sent, never counted for RPO.
-SET_STATES = ('staged', 'data_uploaded', 'secrets_uploaded', 'complete', 'verified', 'superseded')
+# `dropping`: retention chose it and its `forget` began; whatever copy remains is finished
+# off on the next run, never re-sent (the drop was the decision, not the interruption).
+SET_STATES = ('staged', 'data_uploaded', 'secrets_uploaded', 'complete', 'verified', 'superseded', 'dropping')
 UNSYNCED_STATES = ('staged', 'data_uploaded', 'secrets_uploaded')
 PROTECTED_STATES = ('complete', 'verified')
 
