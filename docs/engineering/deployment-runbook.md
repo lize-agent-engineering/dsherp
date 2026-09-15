@@ -25,7 +25,7 @@
 约定：下文所有命令在仓库根执行。这两个 shell 变量**要自己赋值**，本文不会替你赋，每开一个新 ssh 会话都要重来一遍：
 
 ```sh
-TAG=v0.4.0-rc3      # 发布 tag
+TAG=v0.4.0-rcN      # 交付给你的那个发布 tag，照抄清单文件名里的
 SLUG=acme           # 租户短名，小写字母开头，[a-z0-9-]
 ```
 
@@ -48,6 +48,7 @@ SLUG=acme           # 租户短名，小写字母开头，[a-z0-9-]
 | `repositories.env`（两个 restic 仓库 URL） | 第 3 步填进 `prod.env` | 备份没有去处 |
 | **provider key**（`DEEPSEEK_API_KEY` 与 base URL） | 第 7 步写 `/opt/dsherp/.env` | **worker 启动即 `ValueError` 退出，单元永远 `activating`** |
 | 四个基础镜像的 tar（**仅当目标主机既到不了 Docker Hub 也没有可达镜像站**） | 第 4、6 步 compose 按 digest 拉 | 第 4 步起不了数据面。先按「装 Docker 与配置镜像通路」探一遍，探不通才需要这一件 |
+| CPython 3.12.11 的 python-build-standalone 包（**主机到 GitHub 慢时**，31 MB） | 第 3 步 `uv python install` 走本地镜像 | 不交付也能在线下，但慢网上这一项就能吃掉 60 分钟里的 36 分钟（2026-09-15 实测） |
 
 以及三件不是文件的东西：主机本身（规格见下）、一个有 sudo 的运维账号、以及站点域名怎么解析到这台
 主机（没有公网域名时见文末「内置 CA」一节）。**怎么传、落在哪由运维定**，本文一律写作运维账号家
@@ -87,18 +88,20 @@ G1 的交接包要给审计方，审计方得先知道开一台什么机器才�
 
 ```sh
 # A. Docker 官方源（本文用的这条；2026-09-14 G1 第二轮实测装出 29.8.0 + compose v5.5.1，33 秒）
-export DEBIAN_FRONTEND=noninteractive
-sudo apt-get update && sudo apt-get install -y ca-certificates curl
+sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
 sudo chmod a+r /etc/apt/keyrings/docker.asc
 echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
   | sudo tee /etc/apt/sources.list.d/docker.list
-sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
 # B. 发行版自带（Ubuntu 22.04 的 jammy-updates 已是 docker.io 29.1.3 + docker-compose-v2 2.40.3，也满足）
-sudo apt-get update && sudo apt-get install -y docker.io docker-compose-v2
+sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2
 ```
+
+`DEBIAN_FRONTEND` 要写在 `sudo` **之后**：默认 sudoers 不透传环境变量，`export` 了再 `sudo apt-get` 等于没设
+（2026-09-15 实测 `sudo env | grep DEBIAN_FRONTEND` 为空，apt 打了 6 行 `debconf: unable to initialize frontend`）。
 
 **再写 `/etc/docker/daemon.json`，一次写完两件事**——关 containerd 镜像存储（前置表「镜像存储驱动」一行，不关会让第 10 步的镜像 id 核对如实拒绝）与配镜像站（前置表「取基础镜像的通路」一行）：
 
@@ -114,14 +117,14 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Accept: application/vnd.oci.image.i
 sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
 {
   "features": {"containerd-snapshotter": false},
-  "registry-mirrors": ["https://docker.m.daocloud.io", "https://docker.1ms.run"]
+  "registry-mirrors": ["https://<你探到的第一个>", "https://<你探到的第二个>"]
 }
 JSON
 sudo systemctl restart docker
 sudo docker info --format 'driver={{.Driver}} mirrors={{.RegistryConfig.Mirrors}}'   # 期望 driver=overlay2
 ```
 
-`registry-mirrors` 只对 Docker Hub 的镜像生效，本文要拉的 `mariadb`/`redis`/`caddy`/`restic` 正好都是；按 digest 拉时内容由 Docker 自己校验，走镜像站与直连等价。**上面两个地址是 2026-09-14 实测可用，不是承诺**：公开镜像站随时会关或限流，所以先探再写。一个都不通就只能按前置表的「离线主机」那条走——在有通路的机器上 `docker save` 这四个基础镜像一并交付。
+`registry-mirrors` 只对 Docker Hub 的镜像生效，本文要拉的 `mariadb`/`redis`/`caddy`/`restic` 正好都是；按 digest 拉时内容由 Docker 自己校验，走镜像站与直连等价。**地址必须填你自己探到的**：公开镜像站说没就没——2026-09-14 能用的 `docker.1ms.run` 到 2026-09-15 就 `000` 了，那天能用的是 `docker.m.daocloud.io` 与 `docker.xuanyuan.me`。manifest 那条探测返回 **401 也算通**（registry 要 bearer token，docker 客户端会自己去拿），200 更好。一个都不通就只能按前置表的「离线主机」那条走——在有通路的机器上 `docker save` 这四个基础镜像一并交付。
 
 ## 账号模型
 
@@ -161,7 +164,7 @@ DSHERP_ENV=prod .venv/bin/python -m infra.release_images --platform linux/amd64 
 产出 `../dsherp-dist/dsherp-$TAG.tar`（**未压缩约 3.4 GB**，gzip 后约 1.0 GB，以 `.tar.gz` 交付也可以，`docker load` 透明解压）与 `../dsherp-dist/$TAG.json`。**怎么传、落在哪由运维定**，本文用 scp 到运维账号家目录下一个自建目录（下文写作 `~/handover/`），与两份对象存储凭据、CA、`repositories.env` 放一起。目标主机上：
 
 ```sh
-sudo docker load -i ~/handover/dsherp-$TAG.tar        # 运维账号不在 docker 组（只有 dsherp 在），要 sudo
+sudo docker load -i ~/handover/dsherp-$TAG.tar.gz     # 交付的是 gzip 过的就写 .tar.gz，docker load 透明解压；运维账号不在 docker 组（只有 dsherp 在），要 sudo
 ```
 
 这一条是全流程最慢的一段（3.4 GB 未压缩，2026-09-14 G1 第二轮实测 3 分 35 秒）。它与第 3 步不互相依赖，赶时间时
@@ -189,17 +192,25 @@ sudo install -o dsherp -g dsherp -m 644 ~/handover/$TAG.json "$DSHERP_RUNTIME_DI
 **先装 uv**（干净主机上一定没有），钉一个版本：
 
 ```sh
-UV=0.12.13    # 2026-09-14 G1 第二轮用的版本；用 releases/latest 会随时间漂移，复跑就不是同一份工具
-sudo -iu dsherp bash -c "set -e; cd /tmp
-  curl -fsSLO https://github.com/astral-sh/uv/releases/download/$UV/uv-x86_64-unknown-linux-gnu.tar.gz
-  curl -fsSLO https://github.com/astral-sh/uv/releases/download/$UV/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
-  sha256sum -c uv-x86_64-unknown-linux-gnu.tar.gz.sha256
-  mkdir -p ~/.local/bin
-  tar -xzf uv-x86_64-unknown-linux-gnu.tar.gz --strip-components=1 -C ~/.local/bin uv-x86_64-unknown-linux-gnu/uv
-  ~/.local/bin/uv --version"
+UV=0.12.13    # 2026-09-14/15 G1 第二、三轮用的版本；用 releases/latest 会随时间漂移，复跑就不是同一份工具
+sudo -iu dsherp bash -s <<EOF
+set -e; cd /tmp
+curl -fsSLO --retry 3 https://github.com/astral-sh/uv/releases/download/$UV/uv-x86_64-unknown-linux-gnu.tar.gz
+curl -fsSLO --retry 3 https://github.com/astral-sh/uv/releases/download/$UV/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c uv-x86_64-unknown-linux-gnu.tar.gz.sha256
+mkdir -p ~/.local/bin
+tar -xzf uv-x86_64-unknown-linux-gnu.tar.gz --strip-components=1 -C ~/.local/bin uv-x86_64-unknown-linux-gnu/uv
+~/.local/bin/uv --version
+EOF
 ```
 
-`~/.local/bin` 要自己建，tar 里带一层同名子目录（`--strip-components=1`）；`sudo -iu` 的登录 shell 会把这个目录加进 PATH。
+**为什么是 heredoc 喂 `bash -s`，而不是 `bash -c "多行"`**：`sudo -i` 会把命令参数里的换行转义成 `\<换行>`，
+到了 bash 里那是**续行符**，后面几行全变成第一条 `cd` 的参数——2026-09-15 G1 第三轮按当时文档的
+`sudo -iu dsherp bash -c "set -e; cd /tmp<换行>…"` 原样执行，立刻 `bash: line 1: cd: too many arguments`
+（sudo 1.9.9，与 ssh 无关，交互终端同样失败）。heredoc 走 stdin，不经过 sudo 的参数转义；上面这段
+2026-09-15 在一台没有 uv 的 Ubuntu 22.04 上原样跑过，rc=0、`uv 0.12.13`。`--retry 3` 是因为到 GitHub 的
+连接会被随机重置。`~/.local/bin` 要自己建，tar 里带一层同名子目录（`--strip-components=1`）；`sudo -iu` 的
+登录 shell 会把这个目录加进 PATH。
 主机下载慢时在别的机器下载后 scp 过去，**落到运维账号家目录下任意位置即可**（下面统一写作 `~/handover/`），
 再用 `sudo install -o dsherp -g dsherp -m 755 ~/handover/uv /home/dsherp/.local/bin/uv`——运维家目录通常 0750，
 `sudo -iu dsherp` 进去读不到，所以不要让 dsherp 自己去那里取。
@@ -210,9 +221,30 @@ sudo -iu dsherp bash -c "set -e; cd /tmp
 sudo -iu dsherp bash -c 'cd /opt/dsherp && uv venv --python 3.12.11 .venv && uv pip sync --python .venv/bin/python --require-hashes requirements.lock'
 ```
 
-这一步要出网：`uv venv --python 3.12.11` 从 GitHub 下 CPython（可用 `UV_PYTHON_INSTALL_MIRROR=file:///path` 改成本地目录），
-`uv pip sync` 从 PyPI 取 `requirements.lock` 里的 wheel。两条都不通的主机本文没有给离线办法，
-**开工前先确认这台机器到 github.com 与 pypi.org 是通的**。
+这一步要出网：`uv venv --python 3.12.11` 从 GitHub 下 CPython（31 MB），`uv pip sync` 从 PyPI 取 `requirements.lock` 里的 wheel。
+**到 GitHub 慢就直接决定了 60 分钟过不过**：2026-09-15 G1 第三轮那台主机到 GitHub 只有 22–80 KiB/s，光下 CPython 就
+36 分 36 秒，占了整轮 59 分 32 秒的 61%——同一份文档前一轮 9 分 34 秒跑完，差的全是这一项。所以**开工前先量一下**：
+
+```sh
+curl -sSL -o /dev/null -r 0-4194303 -m 60 -w 'github.com http=%{http_code} 取 4 MiB 用 %{time_total}s 速度 %{speed_download} B/s\n' \
+  https://github.com/astral-sh/uv/releases/download/0.12.13/uv-x86_64-unknown-linux-gnu.tar.gz
+```
+
+期望 `http=206`。**4 MiB 超过 20 秒（约 200 KiB/s 以下）就别在线下 CPython**，改走下面的本地镜像
+（2026-09-15 那台主机这条探测是 57 秒、73 KiB/s，对应 CPython 全量要 7–24 分钟）。镜像这一步放在 `uv venv` 之前做，
+之后 `uv venv --python 3.12.11` 直接用装好的解释器、不再联网：
+
+```sh
+# 在一台到 GitHub 快的机器上取这一个文件（uv 0.12.13 对 3.12.11 要的就是它，路径里的 20251007 是 python-build-standalone 的发布号）：
+#   https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.12.11%2B20251007-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz
+# 传到主机后按「<镜像根>/<发布号>/<原文件名>」摆好（uv 用这个目录替换 GitHub 的 releases/download 前缀）：
+sudo mkdir -p /opt/pymirror/20251007
+sudo install -m 644 ~/handover/cpython-3.12.11+20251007-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz /opt/pymirror/20251007/
+sudo -iu dsherp bash -c 'UV_PYTHON_INSTALL_MIRROR=file:///opt/pymirror uv python install 3.12.11'   # 2026-09-15 实测 2.8 秒
+```
+
+`uv python install -v` 会打印它实际取的 URL（`Downloading file:///opt/pymirror/20251007/…`），取错文件名它会报 404 而不是静默回落到网上。
+PyPI 那一半没有离线办法：`uv pip sync --require-hashes` 要的 wheel 只能从 PyPI 取，**pypi.org 不通就别开工**。
 
 ```sh
 sudo -u dsherp cp infra/env/prod.env.example infra/env/prod.env
@@ -231,10 +263,10 @@ sudo -iu dsherp bash -c 'cd /opt/dsherp && DSHERP_ENV=prod ./bin/dsherp-admin se
 | `DSHERP_AGENT_UID` / `GID` | **必须等于 `id -u dsherp` / `id -g dsherp`**：会话目录由 worker 以 dsherp 创建、由容器以这对 uid/gid 写入，代码不做 chown；`useradd --system` 给的 uid 通常小于 1000，示例里的 1000 只是占位 |
 | `DSHERP_PLATFORM_SLUG` | 平台站短名。**默认值 `platform` 就是对的**，除非本机已有别的站占了这个名字——内置 CA 一节与本文各处都写作 `platform.$DSHERP_BASE_DOMAIN` |
 | `DSHERP_ACME_EMAIL` | Let's Encrypt 的联系邮箱。**内置 CA 下不会被用到**，但字段要有值 |
-| `DSHERP_BACKUP_REPOSITORY` / `_SECRETS_REPOSITORY` | 两个 restic 仓库 URL。交接材料里的 `repositories.env` 就是这两行，照抄过来（这个文件名本文其余地方不出现，它只是这两个值的载体） |
+| `DSHERP_BACKUP_REPOSITORY` / `_SECRETS_REPOSITORY` | 两个 restic 仓库 URL。交接材料里的 `repositories.env` 就是这两行：先 `sed -i '/^DSHERP_BACKUP_/d'` 删掉模板里的占位行，再 `cat ~/handover/repositories.env \| sudo -u dsherp tee -a infra/env/prod.env`——s3 URL 里可能带 `user:pass@`，别让它经过命令行参数（这个文件名本文其余地方不出现，它只是这两个值的载体） |
 | `DSHERP_RUNTIME_DIR` / `DSHERP_SECRETS_DIR` | 安装根不是 `/opt/dsherp` 时才改 |
 | `DSHERP_HTTP_PORT` / `HTTPS_PORT` | 共用主机才改 |
-| 资源项 | **模板里没有这几行，要自己加**，不加就用 compose 的默认值：`DSHERP_DB_BUFFER_POOL`（默认 `1G`）、`DSHERP_GUNICORN_WORKERS`（`2`）、`DSHERP_GUNICORN_THREADS`（`4`）。笔记本规格的演练机才需要调小 |
+| 资源项 | **模板里没有这几行，要自己加**，不加就用 compose 的默认值：`DSHERP_DB_BUFFER_POOL`（默认 `1G`）、`DSHERP_GUNICORN_WORKERS`（`2`）、`DSHERP_GUNICORN_THREADS`（`4`）、`DSHERP_PLATFORM_GUNICORN_WORKERS`（`1`）。笔记本规格的演练机才需要调小 |
 
 `secrets init` 在 prod 下生成**五份**控制面密钥，都落在 `$DSHERP_SECRETS_DIR`（默认 `/opt/dsherp/.runtime/control`）、
 0600 归 dsherp：`db_root_password`、`platform_admin_password`、`tenant_admin_password`、
@@ -323,10 +355,17 @@ wait_healthy 3            # 三个服务 healthy 后再继续
 
 ```sh
 compose up -d platform-backend backend
-wait_healthy 5            # db + 两个 redis + 两个 backend；开站要连它们
+wait_healthy 4            # db + 两个 redis + 租户 backend；platform-backend 此时必然 unhealthy，见下
 admin provision-platform
 admin provision-tenant "$SLUG"
 ```
+
+**为什么是 4 不是 5**：`platform-backend` 的探针带着平台站的 `Host` 打到 `/api/method/ping` 并要求 200——平台 bench 只服务一个站，
+所以探针一路打到站点层（compose 里的注释就是这么写的）。**平台站要到 `provision-platform` 跑完才存在**，在那之前它一定是
+`unhealthy`；`provision-platform` 完成后约 1 分钟它自己变绿（2026-09-15 G1 第三轮：15:16:22 开完站，15:17:34 起探针连续通过），
+第 6 步的 `wait_healthy 13` 会把它算进去。租户 `backend` 的探针不带 Host、`<500` 即通过，所以没站也绿。
+此前这里写的是 `wait_healthy 5`——第三轮原样执行必然跑满 300 秒超时（`4/5 healthy`），而文档又叮嘱「超时就是出了问题」，
+一个按文档做事的人会在这里停下排查一个不存在的问题。
 
 两条都会打印一条 JSON：`provision-platform` 六步（`bench` / `site` / `app` / `scheduler` / `member-role` / `site-config`），
 `provision-tenant` 十六步（建站、装 App、scheduler、运行身份、站点配置、关密码登录、系统设置、企业、OAuth Client、
@@ -361,7 +400,7 @@ admin tenant-quota "$SLUG" --user-daily-model-calls N --site-monthly-tokens M
 admin render-ingress          # 现在含租户站块
 compose up -d scheduler queue platform-scheduler platform-queue   # 定时任务与后台队列
 compose up -d frontend platform-frontend agent-egress caddy
-wait_healthy 13 && compose ps   # 13 个服务全部 Up 且全部 healthy（四个 bench 进程是存活探针）
+wait_healthy 13 && compose ps   # 13 个服务全部 Up 且全部 healthy（scheduler/queue 四个是进程存活探针；platform-backend 到这一步已经因为平台站存在而变绿）
 ```
 
 本地演练时曾漏起四个 scheduler/queue 服务而 `ps` 看起来"全绿"——`compose ps` 只列出已创建的服务，核对时要数服务数，不只看颜色。13 个是：`agent-egress backend caddy db frontend platform-backend platform-frontend platform-queue platform-scheduler queue redis-cache redis-queue scheduler`。
@@ -403,6 +442,9 @@ profile 形如：`base_url` 是宿主 worker 自己领取运行、发心跳用�
 **provider 凭据是 worker 起动的硬前提**，不是可选项：unit 的 `ExecStart` 带 `--provider-env /opt/dsherp/.env`，两个键任一为空或文件不存在，worker 就在启动时 `ValueError: Explicit provider file must contain API key and base URL` 退出，`Restart=always` 每 10 秒重试一次，单元永远到不了 `active`（2026-09-14 G1 第二轮做过可逆实验：移走该文件即复现，放回即 `active`）。所以它必须和镜像、密钥文件一起交接——见「交接清单」。
 
 ```sh
+# 交接的就是一个两行的 env 文件时（交接清单里的 provider.env），直接放过去：
+sudo install -o dsherp -g dsherp -m 600 ~/handover/provider.env /opt/dsherp/.env
+# 只交接了 key 本身时，自己写：
 sudo -iu dsherp bash -c 'umask 077 && cat > /opt/dsherp/.env' <<'ENV'
 DEEPSEEK_API_KEY=<交接的 key>
 DEEPSEEK_BASE_URL=https://api.deepseek.com
@@ -428,7 +470,7 @@ systemctl show dsherp-agent-worker -p WatchdogUSec -p WatchdogTimestamp   # Watc
 sudo journalctl -u dsherp-agent-worker -n 20   # 不应有 "Unknown lvalue"/"Failed to parse"：有就是 systemd 太老，沙箱没生效
 ```
 
-**新装主机的 worker journal 里必然有告警，不是装坏了**：起来 80 毫秒内就写 `ops_snapshot_stale`（warning）与 `backup_status_missing`（**critical**），随后每约 10 分钟还会多一条 `backup_stale`（critical）。三条都是「§12 的备份还没做」的必然结果——备份状态文件不存在、运维快照没人写过。跑完 §12 的 `backup-init` 与第一次备份后它们自行消失；在那之前不要按告警去改配置。
+**新装主机的 worker journal 里必然有告警，不是装坏了**：起来 100 毫秒左右就写两条 **critical**——`backup_status_missing`（备份状态文件缺失）与 `backup_stale`（site=<租户站>，备份过期），有时还有一条 `ops_snapshot_stale`（warning）。都是「§12 的备份还没做」的必然结果——备份状态文件不存在、运维快照没人写过。跑完 §12 的 `backup-init` 与第一次备份后它们自行消失；在那之前不要按告警去改配置。（2026-09-14 第二轮看到三条、2026-09-15 第三轮只看到两条 critical，差别在 `ops_snapshot_stale` 出不出现，与判据无关。）
 
 unit 由 dsherp 渲染到自己的目录，再由 root 安装——渲染器写不了 `/etc/systemd/system`。防火墙脚本同样由 root 从仓库复制到 `/usr/local/sbin`：它以 root 运行，不能直接执行服务账号可写的文件。
 
