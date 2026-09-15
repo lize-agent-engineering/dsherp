@@ -477,6 +477,18 @@ def test_the_secret_half_is_fetched_onto_the_secrets_volume_and_both_halves_are_
     assert mounts["data"].endswith("tenant-backups:/incoming")
     assert mounts["secrets"].endswith("tenant-backup-secrets:/incoming")
     assert mounts["data"] != mounts["secrets"]
+    # The sync container is root with only DAC_READ_SEARCH (it reads the bench's 0700 sets and
+    # the operator's 0600 password). A restore writes INTO the bench's volume and must hand
+    # the files back with the bench's ownership: three write-side capabilities for these two
+    # runs only. On the first cold-start recovery (2026-09-15) it could not even
+    # `mkdir /incoming/data`.
+    for command in restic.calls:
+        if "restore" in command:
+            added = {command[i + 1] for i, w in enumerate(command) if w == "--cap-add"}
+            assert added == {"CHOWN", "FOWNER", "DAC_OVERRIDE"}, command
+    for command in restic.calls:
+        if "restore" not in command:
+            assert "--cap-add" not in command, "only a restore gets to write"
     removed = [verb for verb in cold.verbs if verb.startswith("sh -c rm -rf ")]
     assert any("/home/frappe/backups/incoming/data" in verb for verb in removed)
     assert any("/home/frappe/backup-secrets/incoming/secrets" in verb for verb in removed)

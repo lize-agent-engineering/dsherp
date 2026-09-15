@@ -394,8 +394,11 @@ def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.ru
         try:
             for side in ('data', 'secrets'):
                 arguments = ['restore', row[f'{side}_snapshot'], '--target', f'/incoming/{side}']
+                # The sync service is read-only by construction (root + DAC_READ_SEARCH). A
+                # restore is the one place it writes: into the bench's own volume, giving each
+                # file back the ownership it had so the bench can read it.
                 backup.restic(resolved, side, arguments, root=root, runner=runner, timeout=3600,
-                              mounts=[f'{volumes[side]}:/incoming'])
+                              mounts=[f'{volumes[side]}:/incoming'], caps=('CHOWN', 'FOWNER', 'DAC_OVERRIDE'))
             set_doc, data_root, expected, config = verify_fetched(bench, site, row['set_id'],
                                                                   base=bases['data'], secrets_base=bases['secrets'])
             # The fetched manifest is the authority on which build made the set; the record
