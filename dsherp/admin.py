@@ -1019,6 +1019,27 @@ def bench_service_of(resolved, site):
     return SERVICES[resolved['env']]['platform' if site == resolved['platform_site'] else 'tenant']
 
 
+def _require_source_tree_at(tag, root, runner):
+    """The CLI, the compose file and every check below come from the source tree on this
+    host; releasing `tag` from a tree checked out at another tag runs the new images with
+    the old tooling. `git fetch` failing quietly did exactly that on 2026-09-15 (rc7 tree,
+    rc8 images) and nothing said so. A tree without `.git` (an archive) cannot be checked
+    and is let through; a checkout that answers with another tag is refused."""
+    if not (Path(root) / '.git').exists():
+        return
+    try:
+        described = runner(['git', '-C', str(root), 'describe', '--tags', '--exact-match'],
+                           text=True, capture_output=True, timeout=30, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return
+    if described.returncode != 0:
+        return
+    actual = (described.stdout or '').strip()
+    if actual and actual != tag:
+        raise Fault(f'主机上的源码树在 {actual}，不是要发布的 {tag}：先按第 1 步把树换到 {tag}（git checkout {tag}）并重跑 venv 同步，'
+                    '否则是在用旧 tag 的 CLI 与 compose 文件发布新镜像')
+
+
 def _running_images(resolved, runner, root):
     """What the two bench services actually run, from the containers, not from prod.env."""
     file = Path(root) / COMPOSE[resolved['env']]
@@ -1195,6 +1216,7 @@ def _release(resolved, tag, *, root=ROOT, runner=subprocess.run, bench_factory=N
                     '先改环境文件并 compose up -d，再发布')
     if from_tag is not None and not deploy_env.TAG.fullmatch(from_tag):
         raise Fault('--from 必须是一个 tag')
+    _require_source_tree_at(tag, root, runner)
     from dsherp import backup as backup_module
     backup_module.require_repositories(resolved)
     images = _running_images(resolved, runner, root)

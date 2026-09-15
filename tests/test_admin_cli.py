@@ -869,6 +869,25 @@ def test_reopening_a_site_clears_its_cache_so_the_maintenance_page_does_not_outl
     assert cleared and cleared[0] > lifted, verbs
 
 
+def test_a_release_refuses_when_the_source_tree_is_checked_out_at_another_tag(host):
+    """The 2026-09-15 rc7→rc8 release ran with the rc8 images and the rc7 tree: `git fetch`
+    had failed quietly, the checkout never happened, and release checked images only."""
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    def tree_at(tag):
+        def runner(command, **kwargs):
+            if command[:2] == ["git", "-C"] and "describe" in command:
+                return type("Result", (), {"returncode": 0, "stdout": tag + "\n", "stderr": ""})()
+            return RUNNING_NEW(command, **kwargs)
+        return runner
+    with pytest.raises(admin.Fault, match="源码树在 v0.3.9"):
+        admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: SnapshotBench([SAME, SAME, SAME, SAME]),
+                      runner=tree_at("v0.3.9"), from_tag="v0.3.0")
+    report = admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: SnapshotBench([SAME, SAME, SAME, SAME]),
+                           runner=tree_at("v0.4.0"), from_tag="v0.3.0")
+    assert report["clean"] is True
+
+
 def test_a_release_refuses_a_tag_the_environment_does_not_run_active_runs_or_an_incomplete_backup_set():
     admin.ensure_secrets(RELEASE)
     _tenant_row()
