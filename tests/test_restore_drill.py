@@ -496,22 +496,25 @@ def test_the_secret_half_is_fetched_onto_the_secrets_volume_and_both_halves_are_
             added = {command[i + 1] for i, w in enumerate(command) if w == "--cap-add"}
             assert added == {"CHOWN", "FOWNER", "DAC_OVERRIDE"}, command
     for command in restic.calls:
-        if "restore" not in command:
-            assert "--cap-add" not in command, "only a restore gets to write"
+        if "restore" not in command and "--entrypoint" not in command:
+            assert "--cap-add" not in command, "only a restore, or the clean-up after it, gets to write"
     # The landing directories are the bench's own, made before restic (root) writes into them.
     made = [verb for verb in cold.verbs if verb.startswith("sh -c mkdir -p ")]
     assert any("/home/frappe/backups/incoming/data" in verb for verb in made)
     assert any("/home/frappe/backup-secrets/incoming/secrets" in verb for verb in made)
-    removed = [verb for verb in cold.verbs if verb.startswith("sh -c rm -rf ")]
-    assert any("/home/frappe/backups/incoming/data" in verb for verb in removed)
-    assert any("/home/frappe/backup-secrets/incoming/secrets" in verb for verb in removed)
+    # Cleared from the sync container (root there), not by the bench: restic restores the
+    # snapshot's `/backups` component root-owned and the bench cannot remove beneath it.
+    cleared = [c for c in restic.calls if "--entrypoint" in c and "rm -rf" in " ".join(c)]
+    assert {c[c.index("-v") + 1] for c in cleared} == {mounts["data"], mounts["secrets"]}
+    assert all("DAC_OVERRIDE" in c and "restore" not in c for c in cleared)
+    assert not [verb for verb in cold.verbs if verb.startswith("sh -c rm -rf ")], "the bench no longer tries"
 
 
 def test_the_halves_are_removed_even_when_the_cold_start_fails(host):
     cold, restic, sets = _cold_start(host, decrypt_failed=[["User", "Administrator", "api_secret"]])
     with pytest.raises(admin.Fault):
         restore_drill.restore_site(RELEASE, SITE, bench_factory=lambda kind: cold, runner=restic, provision=lambda **options: None)
-    removed = [verb for verb in cold.verbs if verb.startswith("sh -c rm -rf ")]
+    removed = [c for c in restic.calls if "--entrypoint" in c and "rm -rf" in " ".join(c)]
     assert len(removed) == 2
 
 

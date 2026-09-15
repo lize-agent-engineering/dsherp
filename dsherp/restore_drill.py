@@ -438,7 +438,10 @@ def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.ru
                          reopen=False)
             restored = admin.take_snapshot(resolved, site, bench=bench, hash_columns=admin._hash_columns_of(expected))
             comparison = admin.compare_snapshots(expected, restored, admin.RESTORE_EXPECTATIONS)
-            report.update({'comparison': comparison['summary'], 'clean': comparison['clean']})
+            # The whole comparison, differences included: "look at the report, then decide"
+            # is only possible when the report says what differs (first cold start, 2026-09-15:
+            # one undeclared difference and no way to tell which).
+            report.update({'comparison': comparison, 'clean': comparison['clean']})
             if not comparison['clean']:
                 raise Fault(f'{site} 恢复后与备份窗口内的快照有 {comparison["summary"]["undeclared"]} 处未声明差异；'
                             '站点保持维护模式，先看报告再决定')
@@ -461,8 +464,11 @@ def restore_site(resolved, site, *, set_id=None, root=ROOT, runner=subprocess.ru
             raise
         finally:
             # No copy of either half is left behind on the volumes, whichever way it went.
+            # Cleared from the sync container: restic restored `/backups` root-owned, and the
+            # bench cannot remove a tree whose parent it does not own.
             for side in ('data', 'secrets'):
-                bench.run('sh', '-c', f'rm -rf {bases[side]}/{side}', timeout=600)
+                backup.shell_in_sync(resolved, side, f'rm -rf /volume/incoming/{side}', root=root, runner=runner,
+                                     mounts=[f'{volumes[side]}:/volume'], caps=('DAC_OVERRIDE', 'FOWNER'))
         # The next release on this host needs to know what runs here; a rebuilt host has no
         # record. One that already has one keeps it - a release wrote it, and it knows better.
         current = admin._current_path(resolved, root)

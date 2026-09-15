@@ -361,7 +361,7 @@ def send_set(resolved, set_doc, *, root=ROOT, runner=subprocess.run, fatal=False
     return {'ok': ok, 'reason': outcome['failed'].get(set_doc['set_id'])}
 
 
-def _compose_run(resolved, root, service, arguments, ca=None, mounts=(), caps=()):
+def _compose_run(resolved, root, service, arguments, ca=None, mounts=(), caps=(), entrypoint=None):
     file = Path(root) / admin.COMPOSE[resolved['env']]
     command = ['docker', 'compose', '-p', resolved['project']]
     env_file = deploy_env.env_file(resolved['env'], root)
@@ -375,7 +375,24 @@ def _compose_run(resolved, root, service, arguments, ca=None, mounts=(), caps=()
         command += ['-v', mount]
     for cap in caps:
         command += ['--cap-add', cap]
+    if entrypoint:
+        command += ['--entrypoint', entrypoint]
     return command + [service, *arguments]
+
+
+def shell_in_sync(resolved, side, script, *, root=ROOT, runner=subprocess.run, timeout=600, mounts=(), caps=()):
+    """A shell command in the sync container instead of restic - the one process on this host
+    that is root inside the bench's volumes. restic restores its snapshot's own path
+    components (`/backups`) as they were: root-owned; the bench then cannot remove what
+    it can read, so the landing area is cleared from here (first cold start, 2026-09-15)."""
+    if side not in ('data', 'secrets'):
+        raise ValueError('Unknown repository side: ' + repr(side))
+    command = _compose_run(resolved, root, f'backup-sync-{side}', ['-c', script], mounts=mounts, caps=caps, entrypoint='sh')
+    result = runner(command, text=True, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+    if result.returncode:
+        tail = '\n'.join((result.stderr or result.stdout or '').strip().splitlines()[-6:])
+        raise Fault(f'同步容器（{side}）执行 shell 失败：\n{tail}')
+    return result.stdout
 
 
 def _redactions(resolved, root):
