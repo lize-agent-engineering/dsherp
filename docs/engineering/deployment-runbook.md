@@ -606,6 +606,7 @@ NEW_TAG=v0.4.1 ; OLD_TAG=v0.4.0        # 取值见发布记录 <runtime>/release
 ```
 
 发布前提：没有运行在飞（`release` 会检查每站的 Queued/Running/Cancelling 计数，非零即拒绝），所以先停 worker：`sudo systemctl stop dsherp-agent-worker`。发布期间每个站被置为维护模式并暂停调度（`maintenance_mode`/`pause_scheduler` 写进 site_config，结束时恢复原值），用户在此期间看到 503。
+**每站静默后还要等 61 秒才开始备份**：Frappe 的 web 层把 site_config 缓存在每个 gunicorn 进程里、TTL 60 秒（`frappe/config.py` 的 `site_cache(ttl=60)`，只在请求路径生效；scheduler 与队列进程读文件），外部没有任何办法让它提前失效——不等，仍持旧值的进程会在备份与升级前快照进行时继续放行用户的写入。同一机制在解除维护那一边也有：`release`/`resume-site` 返回后**最多 60 秒内** API 仍可能回 `{"exc_type":"SessionStopped"}`（rc13 第五次真机发布实测：解除后 46 秒登录仍被拒，2 分钟后正常），那是 Frappe 的，等一分钟即可。
 
 升级前先把主机上的源码树换到 `$NEW_TAG`（按第 1 步的取源方式重新导出或 checkout，并重跑第 3 步的 `.venv` 同步）：`bin/dsherp-admin`、compose 文件和下面的预检都来自这棵树，不换就是在用旧 tag 的工具发布新 tag。再按第 2 步把新 tag 的清单交付到主机；**第一次发布**还要把 `--from` 那个旧 tag 的清单一并交付——首次发布没有 `current.json`，它的回滚只能以旧 tag 清单为锚，`release` 会在改动任何站点之前核对旧清单可用，拿不到就拒绝发布。
 
@@ -617,7 +618,7 @@ DSHERP_ENV=prod ./bin/dsherp-admin release "$NEW_TAG" --from "$OLD_TAG"   # 第�
 sudo systemctl start dsherp-agent-worker
 ```
 
-2026-09-15 第一次真机发布（rc4→rc5）两站各 36 秒 / 19 秒走完全部六步；平台站被判「1 条未声明差异」保持维护：`System Settings.setup_complete`
+2026-09-15 第一次真机发布（rc4→rc5）两站各 36 秒 / 19 秒走完全部六步（rc14 起每站再加 61 秒静默等待；rc8→rc13 那次为 60.8 秒 / 38.0 秒）；平台站被判「1 条未声明差异」保持维护：`System Settings.setup_complete`
 0→1——那是 `migrate` 最后一步「Updating installed applications」按「站上有没有非管理员用户」派生的（平台站在上一次发布之后才有了
 第一个成员），Frappe 自己的行为、不属于任何 patch。rc6 起把这一个字段登记为 migrate 自带的声明；其它任何字段仍算未声明。
 

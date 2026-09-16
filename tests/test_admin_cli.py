@@ -25,6 +25,9 @@ def host(tmp_path, monkeypatch):
     for tag in ("v0.3.0", "v0.4.0"):
         assert not (admin.ROOT / "infra" / "releases" / f"{tag}.json").exists(), "test tags must not collide with real manifests"
         _manifest(tmp_path / "state" / "manifests" / f"{tag}.json", tag)
+    # A quiesce waits out the web tier's site_config cache (a real minute per Site); the
+    # test that cares asserts the wait through its own stub, everything else must not pay it.
+    monkeypatch.setattr(admin, "_settle", lambda seconds: None)
     return tmp_path
 
 
@@ -807,6 +810,31 @@ def test_a_release_quiesces_backs_up_archives_snapshots_migrates_compares_and_re
     assert json.loads((releases / "before.json").read_text())["tables"] == SAME["tables"]
     assert (releases / "after.json").exists() and json.loads((releases / "backup.json").read_text())["database"] == site["backup"]["database"]
     assert Path(report["path"]).name.startswith("release-v0.4.0-") and (Path(report["path"]).parent / "release-v0.4.0.json").exists()
+
+
+def test_a_quiesce_waits_out_the_web_tier_site_config_cache_before_the_backup(monkeypatch):
+    """Frappe's web tier reads site_config through a per-process in-memory cache with a 60 s
+    TTL (frappe/config.py `_cached_get_site_config = site_cache(ttl=60)`, request path only).
+    Setting maintenance_mode therefore leaves every gunicorn worker that has the old value
+    cached serving writes for up to a minute — while the release is already backing up and
+    snapshotting. On the fifth real release (2026-09-16, rc8→rc13) the mirror image showed up:
+    a login 46 s after the flags were lifted still got SessionStopped. The quiesce has to wait
+    the TTL out before it treats the Site as quiet, on release and on rollback alike."""
+    admin.ensure_secrets(RELEASE)
+    _tenant_row()
+    bench = SnapshotBench([SAME, SAME, SAME, SAME])
+    naps = []
+    monkeypatch.setattr(admin, "_settle", lambda seconds: (naps.append(seconds), bench.verbs.append(f"sleep {seconds}")))
+    admin.release(RELEASE, "v0.4.0", bench_factory=lambda kind: bench, runner=RUNNING_NEW, from_tag="v0.3.0")
+    acme = [v for v in bench.verbs if "acme.tenant.example.com" in v or v.startswith("sleep")]
+    steps = ["set-config" if "set-config" in v else "sleep" if v.startswith("sleep") else "backup" if " backup " in v else None for v in acme]
+    steps = [s for s in steps if s]
+    assert steps[:4] == ["set-config", "set-config", "sleep", "backup"], steps
+    assert naps and all(n >= admin.SITE_CONFIG_CACHE_SECONDS >= 60 for n in naps), naps
+    naps.clear()
+    bench.snapshots = [SAME, SAME]
+    admin.rollback(BACK, "v0.4.0", bench_factory=lambda kind: bench, runner=RUNNING_OLD)
+    assert naps and all(n >= admin.SITE_CONFIG_CACHE_SECONDS for n in naps), naps
 
 
 def test_a_release_reports_undeclared_drift_and_honours_a_patch_declaration():

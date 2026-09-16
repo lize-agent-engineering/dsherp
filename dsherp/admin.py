@@ -938,14 +938,28 @@ def _set_flag(bench, site, key, value):
     bench.run('bench', '--site', site, 'set-config', '--parse', key, str(int(value)), timeout=120)
 
 
+# Frappe's web tier reads site_config through a per-process, in-memory cache with this TTL
+# (frappe/config.py: `_cached_get_site_config = site_cache(ttl=60)`, used on the request path
+# only; the scheduler and queue workers read the file). Nothing outside a gunicorn worker can
+# evict it, so a flag flipped in site_config.json is only enforced by every worker once the
+# TTL has run out.
+SITE_CONFIG_CACHE_SECONDS = 60
+_settle = time.sleep
+
+
 def _quiesce(bench, site):
-    """No run may be in flight and no cron may fire while the data is being judged."""
+    """No run may be in flight, no cron may fire and no web request may write while the data
+    is being judged. The last one takes a wait: until the web tier's site_config cache has
+    expired, a worker that still holds maintenance_mode=0 keeps serving writes that the
+    backup and the before-snapshot would then disagree about (seen inverted on the fifth
+    real release, 2026-09-16: a login 46 s after the flags were lifted still got SessionStopped)."""
     flags = _site_flags(bench, site)
     if flags['active']:
         raise Fault(f"站点 {site} 仍有 {flags['active']} 个运行未结束（Queued/Running/Cancelling）；"
                     '先停 worker（systemctl stop dsherp-agent-worker）并等它们结束，再发布或回滚')
     _set_flag(bench, site, 'maintenance_mode', 1)
     _set_flag(bench, site, 'pause_scheduler', 1)
+    _settle(SITE_CONFIG_CACHE_SECONDS + 1)
     return flags
 
 
@@ -954,7 +968,9 @@ def _release_site(bench, site, flags):
     _set_flag(bench, site, 'pause_scheduler', flags.get('pause_scheduler', 0))
     # Frappe caches guest pages: a /login fetched during maintenance is the "Updating" page,
     # and lifting the flag does not evict it. Without this the Site keeps answering 503
-    # after it is formally open (first real release, 2026-09-15).
+    # after it is formally open (first real release, 2026-09-15). The site_config cache above
+    # is the other half: API calls can still get SessionStopped for up to
+    # SITE_CONFIG_CACHE_SECONDS after this returns; that is Frappe's, and only a wait cures it.
     bench.run('bench', '--site', site, 'clear-cache', timeout=120)
 
 
